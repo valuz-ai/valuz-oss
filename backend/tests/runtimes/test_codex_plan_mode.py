@@ -322,10 +322,24 @@ async def test_full_access_still_parks_request_user_input() -> None:
     assert resp == {
         "answers": {"q1": {"answers": ["Quick"]}, "q2": {"answers": ["Markdown"]}}
     }
-    parked = [e for e in rt.event_sink.events if e.type == "requires_action"]
-    assert len(parked) == 1
-    assert parked[0].data["subject"] == "clarifying_questions"
-    assert parked[0].data["available_decisions"] == ["answer", "reject"]
+    # The transcript anchor: an AskUserQuestion tool_use BEFORE the
+    # requires_action (the frontend pairs the most recent AskUserQuestion
+    # tool block with the following clarifying pending — without it the
+    # conversation shows only a parked spinner and the notification tray
+    # is the only answerable surface; field-verified), and a tool_result
+    # closing the pair after resolution so the card folds.
+    types = [e.type for e in rt.event_sink.events]
+    assert types == ["tool_use", "requires_action", "tool_result"]
+    anchor, parked, closed = rt.event_sink.events
+    assert anchor.data["name"] == "AskUserQuestion"
+    assert anchor.data["id"] == "it_1"  # codex's itemId, stable across replay
+    assert anchor.data["input"]["questions"][0]["question"] == (
+        "How deep should the analysis go?"
+    )
+    assert parked.data["subject"] == "clarifying_questions"
+    assert parked.data["available_decisions"] == ["answer", "reject"]
+    assert closed.data["id"] == "it_1"
+    assert closed.data["is_error"] is False
 
 
 async def test_submit_action_forwards_answers_to_the_future() -> None:

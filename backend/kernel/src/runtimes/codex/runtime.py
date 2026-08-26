@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -1307,6 +1308,29 @@ class CodexRuntime:
             # Plan-mode ``request_user_input``: no rule matcher (there is
             # no "always answer the same question" semantic — mirrors
             # Claude's AskUserQuestion), verb set is answer/reject.
+            #
+            # Emit an ``AskUserQuestion`` tool_use ANCHOR first: the
+            # conversation page renders the interactive clarifying card
+            # by overriding the tool block named ``AskUserQuestion``
+            # (Claude's SDK emits one natively; codex's
+            # ``request_user_input`` is a bare server→client request
+            # with no thread item in our stream — without the anchor the
+            # transcript parks on a spinner and the notification tray is
+            # the only answerable surface; field-verified). The pairing
+            # walk maps the most recent AskUserQuestion tool block to
+            # the following ``clarifying_questions`` requires_action,
+            # so ORDER MATTERS: tool_use, then requires_action.
+            item_id = str(params.get("itemId") or pending_id)
+            await self.event_sink.emit(
+                Event(
+                    type="tool_use",
+                    data={
+                        "id": item_id,
+                        "name": "AskUserQuestion",
+                        "input": {"questions": payload.get("questions", [])},
+                    },
+                )
+            )
             await self.event_sink.emit(
                 Event(
                     type="requires_action",
@@ -1319,7 +1343,25 @@ class CodexRuntime:
                     },
                 )
             )
-            return await self._park_on_future(pending_id)
+            decision, message, answers = await self._park_on_future(pending_id)
+            # Close the anchor pair so the card folds like Claude's once
+            # answered (and doesn't dangle as a forever-running tool on
+            # reject / timeout / interrupt).
+            if decision == "answer":
+                content = json.dumps(answers or {}, ensure_ascii=False)
+            else:
+                content = message or "declined"
+            await self.event_sink.emit(
+                Event(
+                    type="tool_result",
+                    data={
+                        "id": item_id,
+                        "content": content,
+                        "is_error": decision != "answer",
+                    },
+                )
+            )
+            return (decision, message, answers)
 
         # Derive the rule preview the user would commit if they pick
         # ``approve_for_session``. ``_extract_matcher_inputs`` reduces
