@@ -11,15 +11,34 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ChevronRight, ListChecks, Play } from "lucide-react";
-import { toast } from "sonner";
-import { Button, EmptyState, PageLoader, StatusPill } from "@valuz/ui";
 import {
+  Archive,
+  ArrowLeft,
+  ChevronRight,
+  CircleCheck,
+  ListChecks,
+  Play,
+  Trash2,
+} from "lucide-react";
+import { toast } from "sonner";
+import {
+  Button,
+  DeleteConfirmDialog,
+  EmptyState,
+  PageLoader,
+  StatusPill,
+} from "@valuz/ui";
+import {
+  getEntityOrigin,
   playbooksApi,
+  recordEntityOrigin,
+  resolveApiBase,
+  sessionsApi,
   useEntityOrigin,
   useTranslation,
   type PlaybookDetail,
   type PlaybookRun,
+  type PlaybookStatus,
 } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { formatCreatedAt } from "@valuz/app/components";
@@ -58,6 +77,7 @@ export const PlaybookDetailPage = () => {
   const [detail, setDetail] = useState<PlaybookDetail | null>(null);
   const [runs, setRuns] = useState<PlaybookRun[]>([]);
   const [running, setRunning] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   useEffect(() => {
     setHideHeader(true);
@@ -91,28 +111,92 @@ export const PlaybookDetailPage = () => {
 
   // Where the back arrow goes: whoever linked here says so, otherwise the
   // playbook library.
+  // Back returns to the exact view the user came from — ``from`` carries a
+  // full path (query included, so a workspace reopens on its own tab).
   const backTarget = searchParams.get("from") ?? "/playbooks";
-  const backLabel =
-    backTarget === "/playbooks" ? t(k("playbook.title")) : t(k("common.back"));
+  const backLabel = t(k("common.back"));
 
   const sortedRuns = useMemo(
     () => [...runs].sort((a, b) => b.created_at - a.created_at),
     [runs],
   );
 
-  const handleRun = useCallback(async () => {
-    if (!detail) return;
+  // Running a playbook is "open a session and tell the agent to execute it";
+  // there is no run endpoint. Same sequence the library list performs.
+  const handleRun = async () => {
+    const definition = detail?.definition;
+    if (!definition || definition.status === "retired") return;
     setRunning(true);
     try {
-      const run = await playbooksApi.run(detail.definition.id, {});
-      if (run.session_id) navigate(`/conversation/${run.session_id}`);
-      else await loadAll();
+      const fresh = await playbooksApi.get(definition.id);
+      const executor = fresh.current_version.default_executor;
+      const agentSlug =
+        typeof executor.agent_slug === "string"
+          ? executor.agent_slug
+          : undefined;
+      const baseUrl =
+        resolveApiBase(
+          {
+            playbookId: definition.id,
+            projectId: definition.project_id ?? undefined,
+          },
+          "",
+        ) || undefined;
+      const session = await sessionsApi.create(
+        {
+          project_id: definition.project_id ?? "chat-default",
+          agent_slug: agentSlug,
+        },
+        baseUrl ? { baseUrl } : undefined,
+      );
+      const origin =
+        definition.exec_origin ??
+        getEntityOrigin(definition.id, "playbook") ??
+        (definition.project_id
+          ? getEntityOrigin(definition.project_id, "project")
+          : undefined);
+      if (origin) recordEntityOrigin(session.id, origin);
+      await sessionsApi.sendMessage(
+        session.id,
+        [
+          `Run the saved Playbook ${JSON.stringify(definition.name)}.`,
+          `Use the playbook tool with action="run", definition_id="${definition.id}", version=${definition.current_version}.`,
+          "Execute the returned content in this turn and finish the PlaybookRun with the same tool.",
+        ].join("\n"),
+      );
+      navigate(`/conversation/${session.id}`);
     } catch (error) {
-      toast.error(String(error));
+      toast.error(t(k("playbook.runFailed"), { error: String(error) }));
     } finally {
       setRunning(false);
     }
-  }, [detail, loadAll, navigate]);
+  };
+
+  const setStatus = async (status: PlaybookStatus) => {
+    const definition = detail?.definition;
+    if (!definition) return;
+    try {
+      await playbooksApi.updateDefinition(definition.id, {
+        expected_revision: definition.revision,
+        status,
+      });
+      await loadAll();
+    } catch (error) {
+      toast.error(String(error));
+    }
+  };
+
+  const handleDelete = async () => {
+    const definition = detail?.definition;
+    if (!definition) return;
+    try {
+      await playbooksApi.deleteDefinition(definition.id, definition.revision);
+      navigate(backTarget);
+    } catch (error) {
+      toast.error(String(error));
+      throw error;
+    }
+  };
 
   if (loading) return <PageLoader />;
   if (!detail) {
@@ -154,11 +238,47 @@ export const PlaybookDetailPage = () => {
                 })}
               </span>
               <span>·</span>
-              <span>{formatCreatedAt(detail.definition.updated_at)}</span>
+              <span>{formatCreatedAt(detail.definition.updated_at, t)}</span>
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 pt-1">
-            <Button size="sm" onClick={handleRun} loading={running}>
+            {/* Three states, shown the way the library row shows them: a
+                draft offers both, an active one only retire, a retired one
+                only activate. */}
+            {detail.definition.status !== "active" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void setStatus("active")}
+              >
+                <CircleCheck className="h-3.5 w-3.5" />
+                {t(k("playbook.activateAction"))}
+              </Button>
+            ) : null}
+            {detail.definition.status !== "retired" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void setStatus("retired")}
+              >
+                <Archive className="h-3.5 w-3.5" />
+                {t(k("playbook.retireAction"))}
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              loading={running}
+              disabled={detail.definition.status === "retired"}
+              onClick={() => void handleRun()}
+            >
               <Play className="h-3.5 w-3.5" />
               {t(k("playbook.run"))}
             </Button>
@@ -166,7 +286,7 @@ export const PlaybookDetailPage = () => {
         </div>
 
         {/* Two columns, each scrolling on its own — runs left, content right. */}
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] overflow-hidden border-t border-surface-border/70">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(380px,32%)] overflow-hidden border-t border-surface-border/70">
           <div className="flex min-w-0 flex-col overflow-hidden pt-5">
             <h2 className="mb-3 shrink-0 pr-8 text-sm font-medium text-ink-meta">
               {t(k("playbook.executionHistory"))}
@@ -187,7 +307,7 @@ export const PlaybookDetailPage = () => {
                   >
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate text-sm text-ink-heading">
-                        {formatCreatedAt(run.created_at)}
+                        {formatCreatedAt(run.created_at, t)}
                       </span>
                       <span className="truncate text-xs text-ink-meta">
                         {t(k("playbook.versionLabel"), {
@@ -217,7 +337,7 @@ export const PlaybookDetailPage = () => {
             <h2 className="mb-3 shrink-0 text-sm font-medium text-ink-meta">
               {t(k("playbook.content"))}
             </h2>
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-[#f7f8fa] bg-surface-soft/40 p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
               <p className="whitespace-pre-wrap text-sm leading-6 text-ink-body">
                 {detail.current_version.content}
               </p>
@@ -225,6 +345,13 @@ export const PlaybookDetailPage = () => {
           </div>
         </div>
       </div>
+
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        itemName={detail.definition.name}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 };
