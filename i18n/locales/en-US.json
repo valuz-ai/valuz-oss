@@ -169,7 +169,23 @@
     "versionReuseHint": "Reusing v{source}; saving creates v{version} without overwriting history.",
     "versionSaveHint": "Editing the Prompt creates v{version}; changing only the name, status, or project does not add a version.",
     "versionColumn": "Version",
-    "actionColumn": "Actions"
+    "actionColumn": "Actions",
+    "detailTitle": "Playbook detail",
+    "versionLabel": "v{version}",
+    "run": "Run",
+    "executionHistory": "Execution history",
+    "noExecutions": "No executions yet",
+    "content": "Playbook content",
+    "notFound": "This playbook no longer exists",
+    "runStatus": {
+      "queued": "Queued",
+      "planning": "Planning",
+      "running": "Running",
+      "waiting_approval": "Awaiting approval",
+      "completed": "Completed",
+      "failed": "Failed",
+      "stopped": "Stopped"
+    }
   },
   "backend": {
     "schedule": {
@@ -304,9 +320,16 @@
   "composer": {
     "modeChat": "Chat",
     "modeTask": "Task",
+    "modeChatTip": "Chat — the agent answers here: ask, follow up, refine",
     "sendTask": "Launch task",
     "taskPlaceholder": "Describe the task goal — the lead agent will take over and run it in the background.",
-    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page."
+    "modeTaskTip": "Task — a lead agent owns the goal: plans, dispatches, aggregates",
+    "planMode": "Plan mode",
+    "planModeHint": "Plan first — execute after approval",
+    "planModeTurnOff": "Turn plan mode off",
+    "planChip": "Plan",
+    "planChipTooltip": "Plan mode on — click to turn off",
+    "planPlaceholder": "Describe your task to generate a plan first..."
   },
   "conversation": {
     "addAttachment": "Add attachment",
@@ -532,6 +555,12 @@
     "decisionHandled": "Handled",
     "approvalApprove": "Approve",
     "approvalReject": "Reject",
+    "planApproveAndRun": "Approve & start executing",
+    "planKeepPlanning": "Keep planning",
+    "planKeepPlanningPlaceholder": "Revision notes (optional, sent to the agent)",
+    "planProposalTitle": "Proposed plan",
+    "planProposalHint": "Reply to keep refining the plan",
+    "planApprovedRun": "Plan approved — start executing.",
     "approvalApproveWithChanges": "Edit & Approve",
     "approvalApproveForSession": "Always for this session",
     "approvalApproveForSessionDisabled": "Session-scoped rule not supported here",
@@ -1195,7 +1224,7 @@
     "importFailed": "Import failed — make sure the file is a valid .valuzpack",
     "importDone": "Imported · {members} member(s)",
     "nameConflict": "A project with this name already exists",
-    "nameConflictHint": "Import will be skipped to avoid overwriting the existing project. Rename it first if you want to import this one.",
+    "nameConflictHint": "A project with this name already exists — rename it to import.",
     "confirm": "Confirm import",
     "done": "Done",
     "cancel": "Cancel",
@@ -1254,7 +1283,8 @@
     "bindChatShort": "Link",
     "deleteChat": "Delete group",
     "deleteChatDone": "Group deleted",
-    "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good."
+    "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good.",
+    "nameSection": "Project name"
   },
   "schedule": {
     "create": "Create Schedule",
@@ -1393,6 +1423,8 @@
       "verificationDesc": "Review facts, numbers, and source consistency after each assistant message; this may add latency and model usage.",
       "taskCoverageLabel": "Check task completeness",
       "taskCoverageDesc": "After the main answer finishes, check whether it covers the request; important omissions may be added in one continuation.",
+      "ptcLabel": "Programmatic Tool Calling (PTC)",
+      "ptcDesc": "Let agents batch data-tool calls (Valuz Data/Search) by writing code; raw payloads stay out of the conversation — only printed summaries return.",
       "memoryTitle": "Memory",
       "saveFailed": "Failed to save personalization settings"
     },
@@ -2958,7 +2990,7 @@
     "badgeLocked": "Not directly installable",
     "modalTypeSkill": "Skill",
     "modalTypeAgent": "Agent",
-    "modalTypeTeam": "Agent team",
+    "modalTypeTeam": "Team",
     "modalTypeConnector": "Connector",
     "connectorNoDescription": "No description available",
     "connected": "Added",
@@ -3233,6 +3265,7 @@
     "apiKeyConfig": "API key configuration",
     "toolCalls": "Tool calls",
     "contextPanel": "Context panel",
-    "overlays": "Overlays"
+    "overlays": "Overlays",
+    "playbookDetail": "Playbook detail"
   }
 }

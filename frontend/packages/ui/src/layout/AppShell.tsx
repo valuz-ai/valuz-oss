@@ -82,6 +82,11 @@ interface AppShellProps extends PropsWithChildren {
    * separator. Disabled by default so master-detail layouts keep their
    * existing fixed sizing unless the host explicitly opts in. */
   rightPanelResizable?: boolean;
+  /** Opening width of the resizable right card. A fixed ``"345px"`` suits a
+   *  master-detail or conversation page; a page whose panel is a working
+   *  surface (workspace, company hub) passes a share like ``"35%"`` so the
+   *  split reads the same on every window. */
+  rightPanelDefaultSize?: string;
   /** Controlled half-window preset for the resizable right card. Returning to
    * false restores the last user-selected normal layout. */
   rightPanelMaximized?: boolean;
@@ -105,17 +110,22 @@ const isActivePath = (activePath: string, itemPath: string) => {
 const rememberedNormalPanelLayouts = new Map<string, Layout>();
 
 function ResizableShellPanels({
+  defaultSize,
   mainPanel,
   maximized,
   resizeLabel,
   rightPanel,
 }: {
+  defaultSize: string;
   mainPanel: ReactNode;
   maximized: boolean;
   resizeLabel?: string;
   rightPanel: ReactNode;
 }) {
-  const layoutId = "app-shell-panels";
+  // Keyed by the size the page asked for: a conversation card (fixed px) and
+  // a workspace panel (a share of the window) are different layouts, and one
+  // shared key let whichever page opened first dictate the other's width.
+  const layoutId = `app-shell-panels:${defaultSize}`;
   const [initialNormalLayout] = useState<Layout | null>(
     () => rememberedNormalPanelLayouts.get(layoutId) ?? null,
   );
@@ -169,7 +179,7 @@ function ResizableShellPanels({
           />
           <ResizablePanel
             id="shell-right"
-            defaultSize="345px"
+            defaultSize={defaultSize}
             minSize="320px"
             maxSize="70%"
             style={{ overflow: "visible" }}
@@ -199,6 +209,7 @@ export const AppShell = ({
   navItems = [],
   notice,
   right,
+  rightPanelDefaultSize = "345px",
   rightPanelMaximized = false,
   rightPanelResizable = false,
   rightPanelResizeLabel,
@@ -299,87 +310,94 @@ export const AppShell = ({
         shellClassName ?? "soft-gradient",
       )}
     >
-    {topBar}
-    <div className="flex min-h-0 flex-1">
-      {sidebar ?? (
-        <aside className="flex w-[240px] shrink-0 flex-col">
-          <div className="space-y-4 px-4 pb-2 pt-5">
-            {brandSlot ? <div>{brandSlot}</div> : null}
-            <div className="space-y-1">
-              <div className="gradient-brand inline-flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold text-white">
-                {(appTitle ?? title ?? "V").slice(0, 1).toUpperCase()}
-              </div>
-              <div className="font-heading text-base font-medium text-ink-heading">
-                {appTitle ?? title ?? "Valuz Agent"}
+      {topBar}
+      <div className="flex min-h-0 flex-1">
+        {sidebar ?? (
+          <aside className="flex w-[240px] shrink-0 flex-col">
+            <div className="space-y-4 px-4 pb-2 pt-5">
+              {brandSlot ? <div>{brandSlot}</div> : null}
+              <div className="space-y-1">
+                <div className="gradient-brand inline-flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold text-white">
+                  {(appTitle ?? title ?? "V").slice(0, 1).toUpperCase()}
+                </div>
+                <div className="font-heading text-base font-medium text-ink-heading">
+                  {appTitle ?? title ?? "Valuz Agent"}
+                </div>
               </div>
             </div>
-          </div>
 
-          <nav
-            aria-label="Project sections"
-            className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-3"
-          >
-            <div className="label-mono px-3 pb-1 pt-2">Project</div>
-            {navItems.map((item) => {
-              const active = isActivePath(activePath, item.path);
-              return (
-                <LinkComponent
-                  key={item.path}
-                  to={item.path}
-                  className={cn(
-                    "flex h-auto items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm transition-all",
-                    active
-                      ? "bg-card text-ink-heading shadow-md"
-                      : "text-ink-label hover:bg-surface-muted",
-                  )}
-                >
-                  <span className="flex flex-col gap-0.5 text-left">
-                    <span
-                      className={cn(
-                        "truncate text-sm",
-                        active ? "font-medium" : "font-normal",
-                      )}
-                    >
-                      {item.label}
+            <nav
+              aria-label="Project sections"
+              className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-3"
+            >
+              <div className="label-mono px-3 pb-1 pt-2">Project</div>
+              {navItems.map((item) => {
+                const active = isActivePath(activePath, item.path);
+                return (
+                  <LinkComponent
+                    key={item.path}
+                    to={item.path}
+                    className={cn(
+                      "flex h-auto items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm transition-all",
+                      active
+                        ? "bg-card text-ink-heading shadow-md"
+                        : "text-ink-label hover:bg-surface-muted",
+                    )}
+                  >
+                    <span className="flex flex-col gap-0.5 text-left">
+                      <span
+                        className={cn(
+                          "truncate text-sm",
+                          active ? "font-medium" : "font-normal",
+                        )}
+                      >
+                        {item.label}
+                      </span>
+                      <span className="text-2xs leading-4 text-ink-meta">
+                        {item.description}
+                      </span>
                     </span>
-                    <span className="text-2xs leading-4 text-ink-meta">
-                      {item.description}
-                    </span>
-                  </span>
-                </LinkComponent>
-              );
-            })}
-          </nav>
-        </aside>
-      )}
+                  </LinkComponent>
+                );
+              })}
+            </nav>
+          </aside>
+        )}
 
-      {/* Content + right panel as floating white cards */}
-      <div
-        className={cn(
-          "flex min-w-0 flex-1 p-4 pt-0",
-          !useResizablePanels && "gap-2",
-          // sidebar=false signals "explicitly hidden" — give main the same
-          // left padding as the right edge so the bordered card doesn't
-          // bleed into the window edge. null/undefined falls back to the
-          // default sidebar which already occupies the left strip.
-          sidebar === false ? "pl-4" : "pl-0",
-        )}
-      >
-        {useResizablePanels ? (
-          <ResizableShellPanels
-            mainPanel={mainPanel}
-            maximized={rightPanelMaximized}
-            resizeLabel={rightPanelResizeLabel}
-            rightPanel={rightPanelCard}
-          />
-        ) : (
-          <>
-            {mainPanel}
-            {rightPanelCard}
-          </>
-        )}
+        {/* Content + right panel as floating white cards */}
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 p-4 pt-0",
+            !useResizablePanels && "gap-2",
+            // sidebar=false signals "explicitly hidden" — give main the same
+            // left padding as the right edge so the bordered card doesn't
+            // bleed into the window edge. null/undefined falls back to the
+            // default sidebar which already occupies the left strip.
+            sidebar === false ? "pl-4" : "pl-0",
+          )}
+        >
+          {useResizablePanels ? (
+            <ResizableShellPanels
+              // Remount when the page asks for a different size class: the
+              // group registers ``shell-right`` once and ``defaultSize`` only
+              // lands on that first registration, so a later switch (a page
+              // declaring "35%" after the shell already opened at the default)
+              // would otherwise be ignored.
+              key={rightPanelDefaultSize}
+              mainPanel={mainPanel}
+              defaultSize={rightPanelDefaultSize}
+              maximized={rightPanelMaximized}
+              resizeLabel={rightPanelResizeLabel}
+              rightPanel={rightPanelCard}
+            />
+          ) : (
+            <>
+              {mainPanel}
+              {rightPanelCard}
+            </>
+          )}
+        </div>
       </div>
-    </div>
     </div>
   );
 };

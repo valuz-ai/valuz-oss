@@ -27,6 +27,40 @@ export type SessionPermissionMode = "default" | "auto_review" | "full_access";
  */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
+/**
+ * Session working mode (kernel ``Session.mode``,
+ * docs/design/session-modes.md). ``plan`` = the runtime plans before
+ * touching anything (Claude lowers to SDK ``permissionMode="plan"`` +
+ * the ``ExitPlanMode`` approval card); ``goal`` = the runtime loops
+ * until a goal condition is met (task lead/member sessions). Only
+ * ``claude_agent`` / ``codex`` sessions accept non-default modes.
+ *
+ * Mutable mid-session via ``PATCH /v1/sessions/{id}/mode``. The runtime
+ * can also exit a mode on its own (approved plan / completed goal) —
+ * surfaced live as a ``session.mode_changed`` SSE frame
+ * (``{mode, by: "user" | "runtime"}``).
+ */
+export type SessionMode = "default" | "plan" | "goal";
+
+/**
+ * Runtimes whose plan-mode lowering is wired end-to-end today.
+ * ``claude_agent`` lowers natively (typed SDK
+ * ``set_permission_mode("plan")`` + the ``ExitPlanMode`` approval
+ * card); ``codex`` via ``turn/start.collaborationMode`` (plan proposal
+ * arrives as ``session.plan_proposed`` and approval is client-driven).
+ * deepagents / deepseek_harness have no native primitive and the
+ * server 400s them. UI affordances gate on this list so users never
+ * see a toggle the backend would reject.
+ */
+export const PLAN_MODE_RUNTIMES: readonly string[] = ["claude_agent", "codex"];
+
+/** Whether the composer should offer the plan-mode toggle for a runtime. */
+export function supportsPlanMode(
+  runtimeProvider: string | null | undefined,
+): boolean {
+  return runtimeProvider != null && PLAN_MODE_RUNTIMES.includes(runtimeProvider);
+}
+
 export interface SessionListItem {
   id: string;
   project_id: string;
@@ -61,6 +95,13 @@ export interface SessionListItem {
    * render the EffortSelector's current value without a second fetch.
    */
   effort: EffortLevel | null;
+  /**
+   * Session working mode. Surfaced on the list shape so the composer's
+   * Plan chip reflects the session's current mode without a second
+   * fetch. Optional because older backends omit it — treat a missing
+   * value as ``"default"``.
+   */
+  mode?: SessionMode;
   /**
    * Owning task id if this session belongs to a task run (lead session
    * or dispatched sub-Run). ``null`` = a user-initiated standalone

@@ -7,6 +7,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-25
+
+### Added
+
+- **Playbooks** — a reusable, agent-native instruction library. A Playbook is a
+  prompt-only Definition with an immutable Version chain and an append-only Run
+  history, optionally associated with a Project. The global Playbook library
+  groups by project and offers an expandable instruction editor, status
+  controls, immutable-history reuse, guarded deletion, and current-project
+  management from the right panel; the agent gets full parity through
+  list/get/list_versions/create/update/set_status tools. Automations can pin an
+  exact Playbook definition version, and the relationship is shown in the API,
+  MCP, UI, and tool cards. Ships with reusable Project / Evidence / Playbook
+  facades for editions and migration 0038 (#1001 #1002 @St0neWan9).
+- **Playbooks are a resource kind** — `playbook` joins `ResourceKind` with
+  `list` and `get`, mirroring `automation`, so overlays can sync or share one
+  through the facade instead of reaching into `modules.playbooks`. The
+  definition's current version is the portable body; the version chain and run
+  history stay local (#1003 @St0neWan9).
+- **Programmatic Tool Calling (PTC)** — an opt-in code face over the Valuz Data
+  connectors on all four runtimes. With the Settings switch on and a qualifying
+  data connector in the session, the model can write a program that imports
+  generated, typed wrapper functions and chains N tool calls plus computation
+  in one `execute_code` run; only the program's stdout and created-file list
+  return to the model context, so raw payloads never ride through the
+  conversation. Native tool schemas stay untouched and a managed prompt policy
+  teaches the dispatch rule. Includes the execute_code kernel with loopback
+  proxy and codegen, per-turn convergence, the dsh bridge to kernel ToolDefs
+  via `/mcp/toolkit`, a frozen self-exec fallback so the packaged app is its
+  own interpreter, and one private `.ptc/{runs,work}` cwd namespace
+  (#1049 @jiaoqsh).
+- **An attachment belongs to a turn, not a session** — `session_id` is nullable,
+  files are filed under the attachment's own id, and a turn names the ids it
+  claims. `POST /v1/sessions/reservations` mints an id and writes nothing, so
+  uploads and parsing start while the person is still typing and the session
+  is created at Send. On a cloud project this removes the ~3.5s sandbox wait
+  that used to sit between attaching a file and anything happening
+  (#1009 #1012 @Ready22Race).
+- **Conversation extension points for overlay editions** — generated-UI actions
+  are routed to a host action sink (`registerGenUIActionSink` /
+  `dispatchGenUIAction`) so a click inside a rendered workbench no longer dies
+  silently (#1004 @St0neWan9); a `conversation.selection-actions` slot floats
+  overlay-registered actions over a selected span of an assistant reply, each
+  segment carrying `data-assistant-message-id` (#1005 @St0neWan9); and the slot
+  context receives `insertDraft` so an action can stage a request in the same
+  composer without auto-sending (#1006 @St0neWan9).
+- **Optional chat/task composer mode for embedded hosts** — `ConversationView`
+  / `ComposerPane` accept `onSendTask(goal)`; when provided, the composer's mode
+  toggle renders and a task-mode Send hands the draft to the callback. Absent,
+  behaviour is byte-identical (#1011 @St0neWan9).
+- **A deployment can decide parser routing, not only the account** — a managed
+  deployment provides and pays for parsing as an operator capability, so
+  routing no longer depends on a per-user settings row that the person cannot
+  see and that the login flow never wrote (#1008 @Ready22Race).
+- **The agent can open a document it found** — `doc_read(document_id, offset?)`
+  returns the parsed markdown, so a `doc_search` hit no longer sends the agent
+  to a different corpus that answers "not found" for a document that plainly
+  exists (#1046 @Ready22Race).
+- **Edition-provided project activity source** — `useActivityFeed` consults an
+  edition-registered source first for project-scoped feeds (head page,
+  pagination, and head poll alike), so an edition-injected project reached
+  through a narrow proxy grant shows its real history instead of an empty one.
+  No source, or a source that declines, keeps the stock path
+  (#1051 @St0neWan9).
+
+### Changed
+
+- **Both post-run checks share one situational gate** — Citation/Audit and
+  Task Coverage keep independent user toggles, but a turn that attempted
+  `generate_ui`, brought in no external information, or produced no assistant
+  prose now skips both, and internal runs disable both.
+  `should_run_task_coverage()` gains the previously missing has-assistant-text
+  condition (#1021 @St0neWan9).
+- **A built-in connector can be disconnected** — disconnecting switches it off
+  instead of deleting it, so a built-in whose grant died no longer sits
+  "connected" with every action greyed out and every call answering 401.
+  Observed in production on `valuz-search` / `valuz-data` after a credential
+  rotation (#1048 @St0neWan9).
+- **The knowledge document detail is redesigned** — the detail takes the wider
+  side (3:7) while a document is open and closes with its page instead of
+  outliving it in the layout; one meta strip (type, size, import time, index
+  status) replaces ~15 stacked rows; the parsed result renders through the
+  system file viewer (`ArtifactRenderer`); actions move onto the title row as
+  ghost icon buttons, including a new "view the original file" action; and
+  re-index refreshes the tree in place instead of resetting the page
+  (#1032 #1033 #1034 @Ready22Race).
+- **The sidebar mascot is gone** — the illustration anchored at the bottom of
+  the nav was covered by the links as soon as the project list grew, which read
+  as a layout bug. The `mascotSrc` prop chain that only fed it is removed; the
+  conversation empty state keeps its own (#1042 @St0neWan9).
+
+### Fixed
+
+- **A send claims exactly the files it consumed** — the claimed ids were read
+  from a render value captured before the upload landed, then from a function
+  updater that React need not run synchronously, and creating the session
+  re-keyed the hook's load so every staged row was dropped. The composer's
+  staging set is now split from a session's history, `markPendingConsumed`
+  reads from a ref and returns what it stamped, a turn that names nothing says
+  so, and one claim feeds both the bubble and the bind
+  (#1015 #1017 #1018 #1022 @Ready22Race).
+- **An unfinished parse no longer stops the person** — the "submit anyway?"
+  dialog is removed; the turn binds the attachment regardless of parse state
+  and ships `source_path` when the extract is not ready (#1016 @Ready22Race).
+- **Staged uploads go to the backend the session will run on** — a file
+  attached in a cloud project silently landed on the local backend, into a
+  database the claiming turn could never read; all three `useSessionAttachments`
+  call sites now pass the base URL (#1013 @Ready22Race).
+- **A composer holds its own files, and hands them over explicitly** — staging
+  is owner-scoped on the server, so a file attached in the quick chat appeared
+  in a project chat's composer too. Each composer now tracks what it attached
+  by id, and the one cross-page custody transfer (project draft →
+  `/conversation/new`) carries the rows explicitly instead of relying on the
+  leak (#1023 #1024 @Ready22Race).
+- **The receiving conversation shows the files it was sent with** — the
+  optimistic turn seeded `attachments: []`, the page loaded attachments on
+  mount before the bind, an in-flight file had no home between staging and
+  bound, and a conversation arriving after a post-then-navigate never read
+  again. The handoff now carries the rows, the panel refreshes when a turn
+  starts, and a sent-but-unconfirmed file has somewhere to be
+  (#1007 #1020 #1026 #1027 @Ready22Race).
+- **Panel drafts pre-select and pin their host project** — an embedded panel
+  declaring `createDefaults.projectId` was overwritten by the fresh-draft
+  bootstrap and showed a temporary conversation instead; a host-pinned real
+  project now also locks the location bar (#1014 @St0neWan9).
+- **A document's calls go to the library that owns it** — the detail poll, its
+  preview refetch, and `reindex` did not carry the library id, so on a cloud
+  library the panel froze on a swallowed 404 and re-index never showed new
+  content (#1028 @Ready22Race).
+- **The reindex dispatcher is awaited** — a broker-backed dispatcher had to
+  answer "mine" before it knew, on a throwaway loop that closed before the
+  publish, and the caller's `return` stood in-process parsing down for good
+  (#1030 @Ready22Race).
+- **Binding a knowledge base no longer switches its retrieval off** — four
+  calls in `_format_kb_scope` kept a stale one-argument shape after the
+  datastore went owner-scoped; the first `kb` binding raised, the caller
+  swallowed, and the whole per-turn `<additional-context>` announcement died
+  with it (#1035 @Ready22Race).
+- **"Open the original file" works for a library the user pointed at** — a
+  knowledge base's own `root_path` was missing from the owner allowlist, so
+  every document in it resolved as `forbidden`; the detail panel also stops
+  scrolling the shell (#1052 @Ready22Race). A file that resolves but does not
+  exist now produces an error instead of handing a dead path to the OS
+  (#1053 @Ready22Race).
+- **Runtime-context markers are materialized for the runtime, and named when
+  they are not** — `materialize_runtime_context` was applied only to the
+  session handed to the factory, so the model credential was filled while every
+  MCP header shipped the literal 40-character placeholder and the host gate
+  answered 403 (#1044 @Ready22Race). The turn now checks for unfilled markers
+  on both the bound and unbound paths, reports which contributor answered, and
+  the kernel says what it filled and when a cached runtime reused instead
+  (#1039 #1040 #1041 #1043 @Ready22Race).
+- **The internal MCP gate's refusals name themselves** — all three 403 exits
+  answered a bare `Forbidden`; each now logs its discriminating facts and the
+  rejected credential's first 8 characters, which distinguish every credential
+  shape in play without being secret (#1036 #1038 @Ready22Race).
+- **Claude MCP hook outputs are normalized** — `PostToolUse` replacements keep
+  the MCP content-block outer shape, and mappings, scalars, JSON `null`, and
+  plain arrays are serialized into text blocks, so an empty `kb_search` /
+  `docs_list` result no longer makes Claude Code call `Array.reduce` on an
+  object (#1045 @homeant).
+- **An async parser backend without a scheduler still runs** — a cloud parser
+  that is async-implemented without being ASYNC_POLL has no `_scheduler`, and
+  the sync worker thread raised on every PDF instead of driving it on its own
+  loop (#1047 @Ready22Race).
+- **Organization library actions are handled consistently** — organization
+  skills, agents, and connectors are selectable without duplicate panes,
+  connector cloud slugs survive download and materialize removable local
+  copies, cloud-only connectors stay out of Added after deletion, and lists
+  refresh in place after synchronization (#1050 @homeant).
+- **`valuz-runs-refresh` also refetches the project list** — an agent share
+  landing after boot stayed invisible in the sidebar until an unrelated
+  navigation happened to refetch projects (#1031 @St0neWan9).
+- **The playbook list quiet-degrades when a host refuses it** — a shared-agent
+  or remote project toasted a load failure on `device.offline` /
+  `shared_agent.path_not_allowed`; the list now degrades to empty while
+  user-initiated actions keep their toasts (#1029 @St0neWan9).
+- **Dialogs use the surface background token**, with a design-contract
+  regression test (#1019 @St0neWan9).
+
+### Docs & Chore
+
+- **The attachment custody transfer is pinned by a test** — three regressions
+  came from re-keying the staging set without enumerating its readers; the
+  census is now recorded and the single cross-page handoff has a test
+  (#1025 @Ready22Race).
+
 ## [0.4.4] - 2026-08-22
 
 ### Added

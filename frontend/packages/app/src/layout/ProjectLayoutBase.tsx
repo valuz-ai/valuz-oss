@@ -116,7 +116,6 @@ export interface ProjectLayoutBaseProps {
   topbarActions?: ReactNode;
   projectDialogExtraFields?: ReactNode;
   rightPanel?: ReactNode;
-  mascotSrc?: string | null;
 }
 
 // How many runs each project's own sidebar window asks for. The accordion
@@ -177,7 +176,6 @@ export function ProjectLayoutBase({
   topbarActions,
   projectDialogExtraFields,
   rightPanel: controlledRightPanel,
-  mascotSrc = null,
 }: ProjectLayoutBaseProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -220,6 +218,10 @@ export function ProjectLayoutBase({
   const [headerClassName, setHeaderClassName] = useState<string | undefined>();
   const [hideHeader, setHideHeader] = useState(false);
   const [asideClassName, setAsideClassName] = useState<string | undefined>();
+  const [rightPanelDefaultSize, setRightPanelDefaultSize] = useState<
+    string | undefined
+  >();
+  const [masterDetailLayout, setMasterDetailLayout] = useState(false);
   const [mainClassName, setMainClassName] = useState<string | undefined>();
   const [contentInnerClassName, setContentInnerClassName] = useState<
     string | undefined
@@ -775,6 +777,8 @@ export function ProjectLayoutBase({
     setHeaderClassName,
     setHideHeader,
     setAsideClassName,
+    setRightPanelDefaultSize,
+    setMasterDetailLayout,
     setMainClassName,
     setContentInnerClassName,
   };
@@ -788,10 +792,13 @@ export function ProjectLayoutBase({
       </span>
     ));
   const resolvedRightPanel = controlledRightPanel ?? rightPanel;
-  // Skills / Connectors / Agents use the right-panel slot for a master-detail layout
-  // (list + detail), not a collapsible side panel — so the collapse toggle
-  // is meaningless there and is hidden.
+  // Skills / Connectors / Agents use the right-panel slot for a master-detail
+  // layout (list + detail), not a collapsible side panel — so the collapse
+  // toggle is meaningless there and is hidden. Overlay editions route their
+  // own master-detail pages, which this path list cannot know about; those
+  // declare it through ``setMasterDetailLayout`` instead.
   const suppressRightPanelToggle =
+    masterDetailLayout ||
     location.pathname.startsWith("/skills") ||
     location.pathname.startsWith("/connectors") ||
     location.pathname.startsWith("/agents");
@@ -1031,7 +1038,6 @@ export function ProjectLayoutBase({
             sidebarHeader={sidebarHeader}
             sidebarFooter={sidebarFooter}
             sidebarExtraItems={sidebarExtraItems}
-            mascotSrc={mascotSrc}
             LinkComponent={Link}
             primaryActionHref="/conversation/new"
             onPrimaryAction={refreshConnectorAlert}
@@ -1064,8 +1070,12 @@ export function ProjectLayoutBase({
               if (!trimmed) return;
               projectsApi
                 .rename(projectId, trimmed)
-                .then(() => {
+                .then((updated) => {
                   toast.success(t("sidebar.renamed"));
+                  // Publish the new name before the list refetch lands: any
+                  // open project page reads it from this store, and waiting
+                  // for the round trip left the page showing the old name.
+                  useProjectStore.getState().upsertProject(updated);
                   void fetchProjects();
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
@@ -1094,6 +1104,7 @@ export function ProjectLayoutBase({
         // context panel loads, opens, or closes. The panel node itself is not
         // the capability signal; changing this flag with the node remounts the
         // conversation and repeats its bootstrap requests indefinitely.
+        rightPanelDefaultSize={rightPanelDefaultSize}
         rightPanelResizable={!suppressRightPanelToggle}
         rightPanelMaximized={rightPanelMaximized}
         rightPanelResizeLabel={t("sidebar.resizePanel")}

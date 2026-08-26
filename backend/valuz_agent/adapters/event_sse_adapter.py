@@ -616,6 +616,19 @@ def _translate_kernel_event(
             data,
         )
 
+    if kernel_type == "plan_proposed":
+        # Plan-mode PROPOSAL awaiting product-level approval (codex: the
+        # ``<proposed_plan>`` block re-published as a first-class plan
+        # item). Distinct from ``plan_update`` (TODO-checklist snapshots).
+        # ``plan`` is the proposal markdown; the frontend renders it as a
+        # plan card with the approve-and-run affordance.
+        return "session.plan_proposed", _with_message_id(
+            {
+                "plan": _stringify(data.get("plan") or ""),
+            },
+            data,
+        )
+
     if kernel_type == "workflow_progress":
         # Claude dynamic-workflow (``Workflow`` tool) live progress. The
         # kernel streams a snapshot of the run's phases / per-agent progress /

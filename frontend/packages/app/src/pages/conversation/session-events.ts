@@ -28,6 +28,7 @@ export function sessionDetailToListItem(detail: SessionDetail): SessionListItem 
     runtime_provider: detail.runtime_provider,
     permission_mode: detail.permission_mode,
     effort: detail.effort ?? null,
+    mode: detail.mode ?? "default",
     task_id: detail.task_id ?? null,
     // Carries ``exists`` (liveness) from the detail fetch — the header
     // worktree badge greys out on it.

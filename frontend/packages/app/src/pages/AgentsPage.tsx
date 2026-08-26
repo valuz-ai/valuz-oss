@@ -55,7 +55,6 @@ import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
   agentRowId,
   agentTargetKind,
-  isCloudOnlyAgent,
   compareAgentsWithValurionFirst,
   isRemoteAgentRow,
   runsOnAnotherTarget,
@@ -139,6 +138,7 @@ export const AgentsPage = () => {
     setRightPanel,
     setAsideClassName,
     setMainClassName,
+    setMasterDetailLayout,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
   const navigate = useNavigate();
@@ -276,19 +276,45 @@ export const AgentsPage = () => {
     // contributes its library (same rule as the sidebar rails).
   }, [loadData, targetsRevision]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const resourceType = (event as CustomEvent<{ resourceType?: string }>)
+        .detail?.resourceType;
+      if (resourceType !== "agent") return;
+      if (activeRemote) {
+        setActiveSlug(activeRemote.slug);
+        setActiveRemote(null);
+      }
+      void loadData();
+    };
+    window.addEventListener("valuz:resource-refresh", refresh);
+    return () => window.removeEventListener("valuz:resource-refresh", refresh);
+  }, [activeRemote, loadData]);
+
   /* -- Layout: split panel -- */
 
   useEffect(() => {
+    // List on the left, detail on the right — the detail IS the page. Declared
+    // rather than inferred from the path, so the shell keeps its resizable
+    // split (and its collapse / maximize controls) away from these columns.
+    setMasterDetailLayout(true);
     setHideHeader(true);
     setMainClassName("w-[345px] flex-none");
     setAsideClassName("flex-1 w-auto");
     return () => {
+      setMasterDetailLayout(false);
       setHideHeader(false);
       setHeader(null);
       setMainClassName(undefined);
       setAsideClassName(undefined);
     };
-  }, [setHideHeader, setHeader, setMainClassName, setAsideClassName]);
+  }, [
+    setMasterDetailLayout,
+    setHideHeader,
+    setHeader,
+    setMainClassName,
+    setAsideClassName,
+  ]);
 
   const didInitRightPanel = useRef(false);
   useEffect(() => {
@@ -337,25 +363,27 @@ export const AgentsPage = () => {
       .filter(({ members }) => members.length > 0);
   }, [projectMembers, projects]);
 
-
   const unassignedAgents = useMemo(() => {
     const deployed = new Set(projectMembers.map((member) => member.sourceSlug));
-    return agents
-      .filter((agent) => !deployed.has(agent.slug))
-      // Agents that live on another machine are not part of THIS machine's
-      // project layout at all — they are grouped on the 全部 Agent tab
-      // (buildAgentCategories: 远程 / 开放).
-      .filter((agent) => !runsOnAnotherTarget(agent))
-      .sort(compareAgentsWithValurionFirst);
+    return (
+      agents
+        .filter((agent) => !deployed.has(agent.slug))
+        // Agents that live on another machine are not part of THIS machine's
+        // project layout at all — they are grouped on the 全部 Agent tab
+        // (buildAgentCategories: 远程 / 开放).
+        .filter((agent) => !runsOnAnotherTarget(agent))
+        .sort(compareAgentsWithValurionFirst)
+    );
   }, [agents, projectMembers]);
-
 
   // Keep the detail panel stable across tab switches: honour the explicit
   // selection if it still exists, otherwise fall back to the first agent in
   // the active tab (then any agent at all).
   const currentAgent = activeRemote
     ? activeRemote
-    : (localAgents.find((a) => a.slug === activeSlug) ?? localAgents[0] ?? null);
+    : (localAgents.find((a) => a.slug === activeSlug) ??
+      localAgents[0] ??
+      null);
   const effectiveActiveSlug = currentAgent?.slug ?? null;
   const effectiveProjectMemberKey =
     activeProjectMemberKey ??
@@ -384,21 +412,28 @@ export const AgentsPage = () => {
       return;
     }
     setRightPanel(
-      <div className="h-full overflow-y-auto">
-        {/* key by row: remount on agent change so per-agent dialog/draft
+      <div className="flex h-full min-h-0 flex-col">
+        {/* Detail header — deliberately empty: it exists to match the list
+            column's own header height (``h-15``) so both columns start their
+            content on one line. The agent's name is not repeated here; the
+            identity block right below already carries it. */}
+        <div aria-hidden className="h-15 shrink-0" />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* key by row: remount on agent change so per-agent dialog/draft
             state (delete confirm, edits, deploy) never leaks across agents. */}
-        {runsOnAnotherTarget(currentAgent) ? (
-          <RemoteAgentDetail
-            key={agentRowId(currentAgent)}
-            agent={currentAgent}
-          />
-        ) : (
-          <AgentDetailView
-            key={currentAgent.slug}
-            slug={currentAgent.slug}
-            onChanged={loadData}
-          />
-        )}
+          {isRemoteAgentRow(currentAgent) ? (
+            <RemoteAgentDetail
+              key={agentRowId(currentAgent)}
+              agent={currentAgent}
+            />
+          ) : (
+            <AgentDetailView
+              key={currentAgent.slug}
+              slug={currentAgent.slug}
+              onChanged={loadData}
+            />
+          )}
+        </div>
       </div>,
     );
     return () => setRightPanel(null);
@@ -773,14 +808,13 @@ export const AgentsPage = () => {
                       : null
                 }
                 onSelect={(a: Agent) => {
-                  if (runsOnAnotherTarget(a)) {
+                  if (isRemoteAgentRow(a)) {
                     // Selectable, but read-only: its instructions and
                     // resources live on that machine.
                     setActiveRemote(a);
                     setActiveProjectMemberKey(null);
                     return;
                   }
-                  if (isCloudOnlyAgent(a)) return;
                   if (selecting) {
                     if (!isSystemAgent(a)) toggleChecked(a.slug);
                     return;

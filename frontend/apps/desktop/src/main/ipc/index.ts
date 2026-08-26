@@ -43,9 +43,12 @@ export const registerIpcHandlers = () => {
   });
 
   ipcMain.handle("open_in_finder", async (_event, args: { path: string }) => {
-    if (args?.path) {
-      await shell.openPath(args.path);
-    }
+    // ``shell.openPath`` reports failure by RESOLVING with a message, not by
+    // rejecting — so awaiting and discarding it turns every failure (no app
+    // for the extension, quarantine, a path that no longer exists) into a
+    // click that does nothing at all. Hand it back.
+    if (!args?.path) return "";
+    return await shell.openPath(args.path);
   });
 
   ipcMain.handle(

@@ -20,9 +20,7 @@ export const webCapabilities: PlatformCapabilities = {
     success: false,
     error: "File operations not available in browser",
   }),
-  revealInFinder: async () => {
-    /* no-op */
-  },
+  revealInFinder: async () => "",
   quitApp: async () => {
     /* no-op */
   },

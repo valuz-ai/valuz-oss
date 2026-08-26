@@ -49,6 +49,7 @@ import {
   PageLoader,
   SearchInput,
   cn,
+  type DocumentPreviewSlice,
 } from "@valuz/ui";
 import {
   docsApi,
@@ -325,7 +326,7 @@ export const KnowledgePage = ({
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<DocDetail | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DocumentPreviewSlice | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -347,7 +348,7 @@ export const KnowledgePage = ({
     setHeader,
     setHeaderClassName,
     setContentInnerClassName,
-    setAsideClassName,
+    setRightPanelDefaultSize,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
@@ -483,10 +484,20 @@ export const KnowledgePage = ({
           docsApi.get(docId, activeKb?.id),
           docsApi
             .preview(docId, activeKb?.id)
-            .catch(() => ({ document_id: docId, markdown: "" })),
+            .catch(() => ({
+              document_id: docId,
+              markdown: "",
+              offset: 0,
+              returned_bytes: 0,
+              total_bytes: 0,
+              truncated: false,
+            })),
         ]);
         setSelectedDoc(doc);
-        setPreview(prev.markdown || null);
+        // The whole response, not just the text: ``truncated`` is what lets the
+        // panel say a large document is only partly shown instead of silently
+        // presenting a window as the document.
+        setPreview(prev.markdown ? prev : null);
       } catch {
         toast.error(t("knowledge.cannotLoadDetail" as Parameters<typeof t>[0]));
       }
@@ -499,14 +510,20 @@ export const KnowledgePage = ({
   useEffect(() => {
     if (!selectedDoc) {
       setRightPanel(null);
-      setAsideClassName(undefined);
+      setRightPanelDefaultSize(undefined);
       return;
     }
     // The detail is the thing being read once a document is selected — the
     // parsed markdown, error text — while the list is just where the click
-    // came from. 3:7 in the detail's favor; back to the 345px default the
-    // moment no document is open.
-    setAsideClassName("w-[70%] min-w-[480px]");
+    // came from. 3:7 in the detail's favor; back to the shell default the
+    // moment no document is open, so no other page inherits this width.
+    //
+    // Asked for as a panel size, not a width class. The shell moved to
+    // resizable panels, where the aside is laid out by the panel group and
+    // carries ``w-full`` — a ``w-[70%]`` class still reaches the element and
+    // is still overridden there, so the page silently got the 345px default
+    // while looking like it had asked for 70%.
+    setRightPanelDefaultSize("70%");
     setRightPanel(
       <DocumentDetailPanel
         doc={{
@@ -584,10 +601,10 @@ export const KnowledgePage = ({
     // stayed on screen next to the settings content.
     return () => {
       setRightPanel(null);
-      setAsideClassName(undefined);
+      setRightPanelDefaultSize(undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshTree/openSourceFile change identity per render; the panel only needs the ones current when it was handed over
-  }, [selectedDoc, preview, setRightPanel, setAsideClassName, activeKb]);
+  }, [selectedDoc, preview, setRightPanel, setRightPanelDefaultSize, activeKb]);
 
   // Auto-poll the doc detail while the parse is in flight so the
   // panel reflects live state without a manual refresh. Polls every
@@ -629,7 +646,7 @@ export const KnowledgePage = ({
           try {
             const freshPreview = await docsApi.preview(docId, docKbId);
             if (selectedDocId === docId) {
-              setPreview(freshPreview.markdown || null);
+              setPreview(freshPreview.markdown ? freshPreview : null);
             }
           } catch {
             // Preview re-fetch failed — keep the old content; non-fatal.
@@ -689,8 +706,29 @@ export const KnowledgePage = ({
         const d = await filesApi.resolveOne(`valuz-file://${sourcePath}`, {
           baseRef: activeKb ? { kbId: activeKb.id } : {},
         });
+        // Say which failure it is BEFORE trying to act on the descriptor. A
+        // resolve can succeed as a call and still describe a file that is not
+        // there — ``kind`` and ``absPath`` are filled in either way, so acting
+        // on those alone hands a dead path to the OS and gets back silence.
+        // A knowledge base whose folder was cleaned out (a library under
+        // ``/tmp``, a moved directory) is exactly that shape, and "the button
+        // does nothing" is the worst way to learn it.
+        if (d?.error === "not_found" || d?.exists === false) {
+          toast.error(
+            t("knowledge.statusSourceMissing" as Parameters<typeof t>[0]),
+          );
+          return;
+        }
+        if (d?.error) {
+          toast.error(t("common.failed" as Parameters<typeof t>[0]));
+          return;
+        }
         if (d?.kind === "local" && d.absPath && platform.isElectron) {
-          await platform.revealInFinder(d.absPath);
+          // ``revealInFinder`` hands back whatever the OS complained about —
+          // no association for the extension, quarantine, a path that vanished
+          // between the stat above and this call. Empty means it opened.
+          const failure = await platform.revealInFinder(d.absPath);
+          if (failure) toast.error(failure);
           return;
         }
         if (d?.url) {

@@ -136,15 +136,13 @@ class DeepSeekHarnessRuntime:
         self._interrupt_cancels = 0
         self._turn_anchor: dict[str, Any] | None = None
         self._mapper = DshEventMapper()
-        if toolkit is not None and toolkit.list_tools():
-            # Kernel-registered ToolDefs reach the other runtimes through the
-            # in-process MCP bridge; dsh consumes tools only through its own
-            # composition (session.mcp_servers). Valuz sessions carry harness
-            # tools as MCP rows, so this is expected to be empty here.
-            logger.warning(
-                "deepseek_harness: ignoring %d kernel toolkit tools (composition-only tools)",
-                len(toolkit.list_tools()),
-            )
+        # Kernel-owned ToolDefs (e.g. PTC's execute_code) are served to dsh
+        # through the kernel's ``/mcp/toolkit/{session_id}`` bridge: the
+        # runtime registers its toolkit in ``mcp_bridge`` at spawn and the
+        # composition carries one extra ``dsh-mcp-client`` row (same path
+        # codex takes). See ``_register_kernel_toolkit``.
+        self.toolkit = toolkit or ToolKit()
+        self._registered_session_id: str | None = None
 
     # -- RuntimePort surface --
 
@@ -218,6 +216,11 @@ class DeepSeekHarnessRuntime:
             self._interrupt_cancels += 1
 
     async def close(self) -> None:
+        if self._registered_session_id is not None:
+            from src.core.mcp_bridge import unregister_session_toolkit
+
+            unregister_session_toolkit(self._registered_session_id)
+            self._registered_session_id = None
         client = self._client
         self._client = None
         self._native_session_id = None
@@ -406,6 +409,34 @@ class DeepSeekHarnessRuntime:
                 if received and payload.get("status") == "idle":
                     return outcome
 
+    def _register_kernel_toolkit(self, session: Session) -> bool:
+        """Publish this session's kernel ToolDefs on the mcp_bridge registry.
+
+        Returns True when the composition should carry the kernel-toolkit
+        MCP row — i.e. the toolkit has at least one callable, non-denied
+        tool. The bridge (``kernel/app/mcp_toolkit_router``) resolves the
+        record registered here per request; codex registers the same way.
+        """
+        callable_tools = [
+            t for t in self.toolkit.list_tools() if t.handler is not None and t.permission != "deny"
+        ]
+        if not callable_tools:
+            return False
+        from src.core.mcp_bridge import register_session_toolkit
+        from src.core.tools import ExecContext
+
+        register_session_toolkit(
+            session.id,
+            self.toolkit,
+            ExecContext(
+                workspace=self.workspace_root,
+                session_id=session.id,
+                user_id=getattr(session, "user_id", "") or "",
+            ),
+        )
+        self._registered_session_id = session.id
+        return True
+
     async def _ensure_process(self, session: Session) -> None:
         if self._client is not None and self._client.is_running:
             return
@@ -442,6 +473,7 @@ class DeepSeekHarnessRuntime:
             workspace_root=self.workspace_root,
             skills_root=skills_root,
             model_settings=model_settings,
+            kernel_toolkit=self._register_kernel_toolkit(session),
         )
         self._composition_fingerprint = _composition_fingerprint(session)
 
@@ -640,9 +672,7 @@ def _usage_payload(totals: dict[str, int], model: str) -> dict[str, Any]:
     }
     return {
         **flat,
-        "model_usage": {
-            model: {**flat, "reasoning_tokens": totals.get("reasoning_tokens", 0)}
-        },
+        "model_usage": {model: {**flat, "reasoning_tokens": totals.get("reasoning_tokens", 0)}},
     }
 
 

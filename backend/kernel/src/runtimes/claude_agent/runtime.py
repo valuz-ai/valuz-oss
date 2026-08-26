@@ -18,7 +18,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -306,6 +306,35 @@ PERMISSION_MAP: dict[
     "full_access": "bypassPermissions",
 }
 
+# Appended to the system prompt while ``session.mode == "plan"``
+# (``_build_system_prompt``). The CLI's native plan mode only gates
+# MUTATING tools; read-only research is legitimately allowed, so a pure
+# analysis task never trips the gate and the model produces the final
+# deliverable without ever proposing a plan. The product semantics
+# ("align on the plan before doing the work" — for research and writing
+# tasks as much as code) therefore have to ride the prompt, the same way
+# dsh's plan plugin ships a ``plan:policy`` prompt section.
+PLAN_MODE_DISCIPLINE = """
+
+<plan-mode-discipline>
+This session is in plan mode. The user wants to align on a plan BEFORE
+you produce anything. This applies to EVERY kind of task — research,
+analysis, and writing included, not just code changes:
+
+1. Keep reconnaissance lightweight and read-only: check which data
+   sources / files exist and what shape they have. Do NOT run the full
+   analysis, pull complete datasets, or draft the deliverable yet.
+2. Present a concise execution plan — goal, steps, data sources,
+   deliverable format, and any open choices for the user — by calling
+   the ExitPlanMode tool with the plan as markdown. Then stop and wait
+   for approval.
+3. Execute only after the plan is approved.
+
+Exception: a trivial exchange that plainly needs no plan (a greeting, a
+one-line factual question) may be answered directly.
+</plan-mode-discipline>
+"""
+
 MODEL_MAP: dict[str, str] = {
     "claude-opus-4-6": "opus",
     "claude-sonnet-4-6": "sonnet",
@@ -433,6 +462,7 @@ class ClaudeAgentRuntime:
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
+        self._cur_user_id: str = ""
         self._egress_turn_attempt_id: str | None = None
         self._egress_enabled_for_spawn = False
         self._egress_first_model_event_recorded = False
@@ -542,6 +572,15 @@ class ClaudeAgentRuntime:
         # state at turn start (cross-runtime "PATCH applies on next turn
         # after Send" contract); see docs/design/session-modes.md §Per-runtime.
         self._applied_mode: Literal["default", "plan", "goal"] | None = None
+        # Whether the live client was BUILT with the plan-mode inputs
+        # (discipline prompt section + restricted allowlist). Diverges
+        # from ``_applied_mode`` after a mid-turn ExitPlanMode approve:
+        # the hook flips ``_applied_mode`` to default but cannot rebuild
+        # the client from inside a ``can_use_tool`` callback — the next
+        # turn's reconcile detects the drift and cold-reloads, or the
+        # stale prompt section would keep telling the model it's
+        # planning. Seeded at spawn alongside ``_applied_mode``.
+        self._built_with_plan_prompt: bool = False
         # Current-turn session reference, set at ``run()`` entry and
         # cleared on exit. The SDK ``can_use_tool`` callback runs
         # without session context, so ``_on_exit_plan_mode_approved``
@@ -720,6 +759,8 @@ class ClaudeAgentRuntime:
         self._citation_raw_documents = {}
         self._citation_document_metadata = {}
         self._cur_session_id = session.id
+        # getattr: run() is exercised with synthetic session stubs in tests.
+        self._cur_user_id = getattr(session, "user_id", "") or ""
         self._egress_turn_attempt_id = uuid.uuid4().hex
         self._egress_first_model_event_recorded = False
         self._cancelled = False
@@ -752,6 +793,7 @@ class ClaudeAgentRuntime:
                     session.model_settings.effort if session.model_settings else None
                 )
                 self._applied_mode = session.mode
+                self._built_with_plan_prompt = session.mode == "plan"
                 await self._emit_turn_phase(
                     "runtime_init", duration_ms=int((time.monotonic() - t0) * 1000)
                 )
@@ -1641,13 +1683,11 @@ class ClaudeAgentRuntime:
 
         # Slice 5 — session-mode transition. Run BEFORE the
         # permission_mode arm because ``mode == "plan"`` supersedes
-        # ``session.permission_mode`` on the SDK side: the slash sets
-        # the SDK's permissionMode to ``"plan"`` regardless of the
-        # underlying value, and exiting plan must restore explicitly.
-        # Entering goal is a deliberate no-op here — the orchestrator
-        # wraps the user's NEXT message to ``/goal <text>`` and the
-        # SDK enters goal mode on that turn (the bare ``/goal`` is
-        # status-only on Claude, spike-confirmed).
+        # ``session.permission_mode`` on the SDK side. Entering goal is
+        # a deliberate no-op here — the orchestrator wraps the user's
+        # NEXT message to ``/goal <text>`` and the SDK enters goal mode
+        # on that turn (the bare ``/goal`` is status-only on Claude,
+        # spike-confirmed).
         if new_session_mode != self._applied_mode:
             prior_mode = self._applied_mode
             if prior_mode == "goal" and new_session_mode != "goal":
@@ -1659,49 +1699,39 @@ class ClaudeAgentRuntime:
                     await self._client.query("/goal clear")
                 except Exception:
                     logger.exception("claude_agent: /goal clear failed")
-            if prior_mode == "plan" and new_session_mode != "plan":
-                # Restore SDK permissionMode to the underlying
-                # ``session.permission_mode`` (which may have been
-                # PATCHed silently while we were in plan).  Typed
-                # mutator: deterministic, doesn't depend on the CLI's
-                # current toggle state.
-                sdk_perm = PERMISSION_MAP.get(session.permission_mode, "default")
-                try:
-                    await self._client.set_permission_mode(sdk_perm)
-                except Exception:
-                    logger.exception(
-                        "claude_agent: set_permission_mode(%s) failed on "
-                        "plan exit; falling back to destroy+rebuild",
-                        sdk_perm,
-                    )
-                    await self._destroy_client()
-                    return
-                # SDK is now back in sync with session.permission_mode.
-                self._applied_permission_mode = session.permission_mode
-                self._cached_permission_mode = session.permission_mode
-            # Mode-ENTRY dispatch is wrap-driven for goal (orchestrator
-            # prepends ``/goal <text>`` and Claude's CLI processes the
-            # slash). Plan is the exception: Claude's ``/plan`` slash
-            # is interactive-CLI-only and returns "isn't available in
-            # this environment" through the SDK. The typed mutator IS
-            # exposed, so plan entry goes through there. ``wrap_for_mode``
-            # skips Claude+plan in lockstep — subsequent user messages
-            # flow through unwrapped, Claude's plan permissionMode is
-            # sticky on the client.
-            if new_session_mode == "plan":
-                try:
-                    await self._client.set_permission_mode("plan")
-                except Exception:
-                    logger.exception(
-                        "claude_agent: set_permission_mode('plan') failed; "
-                        "falling back to destroy+rebuild"
-                    )
-                    await self._destroy_client()
-                    return
-                # SDK is now in plan mode; reflect in caches so the perm
-                # arm below sees us as already-in-plan and short-circuits.
-                self._applied_permission_mode = session.permission_mode
+            if new_session_mode == "plan" or prior_mode == "plan":
+                # Plan entry AND exit → cold reload, NOT the live
+                # ``set_permission_mode`` mutator. The plan-mode
+                # discipline section of the system prompt is a
+                # BUILD-TIME input (``_build_system_prompt``), as is the
+                # plan-restricted toolkit allowlist (``_build_options``
+                # drops ``execute_code``): flipping only the SDK's
+                # permissionMode would gate file edits while leaving
+                # the model without the plan-first instructions —
+                # field-verified failure: a research task in plan mode
+                # sailed straight to the full deliverable (read-only
+                # tools are legitimately allowed in plan mode, so a
+                # no-mutation task never hits the gate). Fork the next
+                # spawn: plain ``--resume`` makes the CLI honor the
+                # resumed session's ORIGINAL permissionMode and ignore
+                # the new ``--permission-mode`` arg (same CLI behavior
+                # the bypass arm below documents).
+                self._fork_next_spawn = True
+                await self._destroy_client()
+                return
             self._applied_mode = new_session_mode
+
+        # Plan-prompt drift: the client's build-time inputs (discipline
+        # section, restricted allowlist) must match the CURRENT mode even
+        # when ``_applied_mode`` is already in sync — the ExitPlanMode
+        # approve hook flips the trackers mid-turn but cannot rebuild the
+        # live client from inside a ``can_use_tool`` callback. Without
+        # this, every turn after an approved plan still carries the
+        # "you are in plan mode" prompt section.
+        if (new_session_mode == "plan") != self._built_with_plan_prompt:
+            self._fork_next_spawn = True
+            await self._destroy_client()
+            return
 
         # ``permission_mode`` change → live mutator when possible.
         # Skipped while in plan mode: the SDK's permissionMode is
@@ -1824,7 +1854,12 @@ class ClaudeAgentRuntime:
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()
         if sdk_tools:
-            mcp["harness"] = create_sdk_mcp_server(name="harness", tools=sdk_tools)
+            # ``harness_toolkit`` — the kernel's own ToolDefs (e.g. PTC's
+            # execute_code), matching the codex bridge name. NOT ``harness``:
+            # that name belongs to the host's toolkit MCP server, which
+            # arrives through ``session.mcp_servers`` below and would
+            # otherwise overwrite this entry (shadowing every kernel tool).
+            mcp["harness_toolkit"] = create_sdk_mcp_server(name="harness_toolkit", tools=sdk_tools)
 
         proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
@@ -1839,10 +1874,11 @@ class ClaudeAgentRuntime:
         # without invoking our ``_permission_handler``. We therefore
         # only include:
         #
-        # * ``mcp__harness__<tool>`` — harness-bridged tools the
-        #   operator defined via ``AgentConfig.tools``. These are
-        #   harness infrastructure (we are the authority on them) and
-        #   are not subject to user approval.
+        # * ``mcp__harness_toolkit__<tool>`` — kernel-bridged tools the
+        #   operator defined via ``AgentConfig.tools`` (or the kernel
+        #   exposed, e.g. PTC's execute_code). These are harness
+        #   infrastructure (we are the authority on them) and are not
+        #   subject to user approval.
         # * ``Agent`` — sub-agent dispatch (callable_agents), same
         #   rationale.
         #
@@ -1856,7 +1892,18 @@ class ClaudeAgentRuntime:
         # for every MCP tool on Claude (no ``requires_action`` event
         # was emitted; the SDK auto-approved upstream of our callback).
         allowed: list[str] = [
-            f"mcp__harness__{t.name}" for t in self.toolkit.list_tools() if t.handler
+            f"mcp__harness_toolkit__{t.name}"
+            for t in self.toolkit.list_tools()
+            if t.handler
+            # Plan mode: ``allowed_tools`` entries outrank the CLI's
+            # plan-mode read-only gate, and ``execute_code`` (PTC) runs
+            # arbitrary code — the one toolkit tool that can mutate the
+            # workspace. Field-verified: a plan-mode session ran
+            # execute_code 5× straight through. Keep it off the
+            # allowlist while planning so the SDK's plan gate treats it
+            # like any other mutating tool; the post-approval rebuild
+            # (mode transition → cold reload) restores it.
+            and not (session.mode == "plan" and t.name == "execute_code")
         ]
         if self.config.callable_agents:
             allowed.append("Agent")
@@ -2228,6 +2275,16 @@ class ClaudeAgentRuntime:
         append the per-session instructions, if any. (The agent's
         ``instructions`` is a UI-side default; the session is the runtime's
         source of truth.)
+
+        ``session.mode == "plan"`` additionally appends the plan-mode
+        discipline section (``PLAN_MODE_DISCIPLINE``). The CLI's native
+        plan mode only gates MUTATING tools — a pure research/analysis
+        task never trips the gate and the model sails straight to the
+        final deliverable (field-verified). The product contract is
+        "align on the plan first" for EVERY task type, so the prompt has
+        to carry that. Mode transitions cold-reload the client (see the
+        ``_reconcile_session_levers`` mode arm), which is what keeps
+        this build-time section in sync with the session's mode.
         """
         if is_bare_completion(session):
             # Bare one-shot completion: the claude_code preset (the full
@@ -2235,11 +2292,14 @@ class ClaudeAgentRuntime:
             # session that lives one turn and calls no tools — send ONLY
             # the session's own instructions as a plain string.
             return session.instructions or ""
-        if session.instructions:
+        append = session.instructions or ""
+        if session.mode == "plan":
+            append = f"{append}{PLAN_MODE_DISCIPLINE}" if append else PLAN_MODE_DISCIPLINE
+        if append:
             return SystemPromptPreset(
                 type="preset",
                 preset="claude_code",
-                append=session.instructions,
+                append=append,
             )
         return SystemPromptPreset(type="preset", preset="claude_code")
 
@@ -2282,6 +2342,7 @@ class ClaudeAgentRuntime:
                 ExecContext(
                     workspace=self.workspace_root,
                     session_id=self._cur_session_id,
+                    user_id=self._cur_user_id,
                 ),
             )
             return {
@@ -2394,12 +2455,21 @@ class ClaudeAgentRuntime:
             hooks is not None and hooks._handlers.get("after_tool")
         ):
 
-            def post_tool_output(tool_name: str, value: Any) -> SyncHookJSONOutput:
+            def post_tool_output(
+                tool_name: str,
+                value: Any,
+                *,
+                mcp_response_uses_content_blocks: bool,
+            ) -> SyncHookJSONOutput:
                 if tool_name.startswith("mcp__"):
                     return SyncHookJSONOutput(
                         hookSpecificOutput={
                             "hookEventName": "PostToolUse",
-                            "updatedMCPToolOutput": value,
+                            "updatedMCPToolOutput": (
+                                _normalize_mcp_tool_output(value)
+                                if mcp_response_uses_content_blocks
+                                else value
+                            ),
                         }
                     )
                 return SyncHookJSONOutput(
@@ -2415,6 +2485,9 @@ class ClaudeAgentRuntime:
                 data: dict[str, Any] = dict(input_data)
                 tool_name = str(data.get("tool_name") or "")
                 tool_response = data.get("tool_response", "")
+                mcp_response_uses_content_blocks = tool_name.startswith("mcp__") and isinstance(
+                    tool_response, list
+                )
                 if hooks is not None and hooks._handlers.get("after_tool"):
                     _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
                     await hooks.fire(
@@ -2516,7 +2589,11 @@ class ClaudeAgentRuntime:
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
-                        return post_tool_output(tool_name, visible)
+                        return post_tool_output(
+                            tool_name,
+                            visible,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
                 if not source_metadata_handled:
                     augmented_indexed_content = augment_indexed_document_evidence(
                         effective_tool_response,
@@ -2555,29 +2632,17 @@ class ClaudeAgentRuntime:
                     )
                 if compacted is None:
                     if source_content_transport_handled:
-                        return post_tool_output(tool_name, effective_tool_response)
+                        return post_tool_output(
+                            tool_name,
+                            effective_tool_response,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
                     return SyncHookJSONOutput()
-                visible_output: Any = compacted
-                if source_content_transport_handled and tool_name.startswith("mcp__"):
-                    # Claude's SDK-MCP control bridge gives PostToolUse a list
-                    # of MCP content blocks and requires replacements to keep
-                    # that outer shape.  Source adaptation works on the
-                    # restored structured payload, so serialize its model
-                    # projection back into one ordinary compatibility block.
-                    # Returning the mapping directly makes the CLI call
-                    # ``reduce`` on a non-list and converts a successful tool
-                    # call into a runtime failure.
-                    visible_output = [
-                        {
-                            "type": "text",
-                            "text": json.dumps(
-                                compacted,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        }
-                    ]
-                return post_tool_output(tool_name, visible_output)
+                return post_tool_output(
+                    tool_name,
+                    compacted,
+                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                )
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
@@ -2657,15 +2722,37 @@ class ClaudeAgentRuntime:
             return await self._await_host_decision(tool_name, input_data, context)
 
         simple_name = tool_name
-        if tool_name.startswith("mcp__harness__"):
-            simple_name = tool_name[len("mcp__harness__") :]
+        # Kernel-bridged ToolDefs surface as ``mcp__harness_toolkit__*``;
+        # the legacy ``mcp__harness__`` strip stays for host-toolkit names
+        # (their bare names are not in ``self.toolkit``, so it is inert).
+        for prefix in ("mcp__harness_toolkit__", "mcp__harness__"):
+            if tool_name.startswith(prefix):
+                simple_name = tool_name[len(prefix) :]
+                break
 
         tdef = self.toolkit.get(simple_name)
         if tdef:
-            if tdef.read_only or tdef.permission == "auto":
-                return PermissionResultAllow(updated_input=input_data)
             if tdef.permission == "deny":
                 return PermissionResultDeny(message=f"{tool_name} denied by policy")
+            # Plan mode's read-only guarantee for kernel toolkit tools.
+            # The CLI's plan gate only blocks its own built-in mutating
+            # tools; MCP tools route here, where ``full_access`` /
+            # ``permission == "auto"`` would happily wave through
+            # ``execute_code`` (arbitrary code — field-verified running
+            # mid-plan). Deny every non-read-only toolkit tool while the
+            # client is plan-built; the ExitPlanMode approve hook flips
+            # ``_applied_mode`` to default, so post-approval execution in
+            # the same turn passes normally.
+            if self._applied_mode == "plan" and not tdef.read_only:
+                return PermissionResultDeny(
+                    message=(
+                        f"Plan mode is active — {simple_name} is disabled until "
+                        "the plan is approved. Present your plan via ExitPlanMode "
+                        "first; execution tools unlock after approval."
+                    )
+                )
+            if tdef.read_only or tdef.permission == "auto":
+                return PermissionResultAllow(updated_input=input_data)
 
         if self._cached_permission_mode != "default":
             return PermissionResultAllow(updated_input=input_data)
@@ -2870,6 +2957,24 @@ class ClaudeAgentRuntime:
                 # docs/design/session-modes.md §Per-runtime / Claude.
                 await self._on_exit_plan_mode_approved()
             return PermissionResultAllow(updated_input=input_data)
+        if tool_name == "ExitPlanMode":
+            # The deny message is what the model reads as the tool
+            # result. Passing the user's feedback verbatim is fatally
+            # ambiguous — field case: a bare "write the results to a
+            # file" feedback made the model announce the plan was
+            # approved and start executing. Wrap it in an unambiguous
+            # NOT-approved envelope.
+            feedback = (message or "").strip()
+            detail = f' Their feedback: "{feedback}"' if feedback else ""
+            return PermissionResultDeny(
+                message=(
+                    "The user did NOT approve this plan. Plan mode is still "
+                    "active — do not execute anything and do not claim "
+                    "approval. Revise the plan to address the user's "
+                    "feedback, then present the updated plan via "
+                    f"ExitPlanMode again.{detail}"
+                )
+            )
         return PermissionResultDeny(message=message or "User rejected.")
 
     async def _on_exit_plan_mode_approved(self) -> None:
@@ -3482,6 +3587,46 @@ def _stringify_tool_result_content(content: Any) -> str:
         return json.dumps(content, ensure_ascii=False, default=default)
     except (TypeError, ValueError):
         return str(content)
+
+
+def _is_mcp_content_block(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    block_type = value.get("type")
+    if block_type == "text":
+        return isinstance(value.get("text"), str)
+    if block_type in {"image", "audio"}:
+        return isinstance(value.get("data"), str) and isinstance(value.get("mimeType"), str)
+    if block_type == "resource":
+        resource = value.get("resource")
+        return (
+            isinstance(resource, Mapping)
+            and isinstance(resource.get("uri"), str)
+            and (isinstance(resource.get("text"), str) or isinstance(resource.get("blob"), str))
+        )
+    if block_type == "resource_link":
+        return isinstance(value.get("name"), str) and isinstance(value.get("uri"), str)
+    return False
+
+
+def _is_mcp_content_block_list(value: Any) -> bool:
+    return isinstance(value, list) and all(_is_mcp_content_block(block) for block in value)
+
+
+def _normalize_mcp_tool_output(value: Any) -> list[Any]:
+    """Keep PostToolUse replacements inside Claude's MCP content contract.
+
+    Claude Code accepts strings or content-block lists when it budgets a tool
+    result, but structured projections from hooks are often mappings, scalars,
+    or ordinary JSON lists.  Passing those values through makes the CLI call
+    ``reduce`` on a non-list or silently ignore JSON list items.  Preserve a
+    real MCP content list and serialize every other JSON value into one text
+    block.  An empty list is already a valid empty MCP result.
+    """
+
+    if _is_mcp_content_block_list(value):
+        return cast(list[Any], value)
+    return [{"type": "text", "text": _stringify_tool_result_content(value)}]
 
 
 def _iter_tool_response_mappings(value: Any) -> Iterator[Mapping[str, Any]]:

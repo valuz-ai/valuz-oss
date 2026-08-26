@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { initI18n } from "@valuz/shared/i18n";
-import { docsApi, kbApi } from "@valuz/core";
+import { toast } from "sonner";
+import { docsApi, filesApi, kbApi } from "@valuz/core";
 import { PlatformProvider } from "@valuz/app/platform";
 import { KnowledgePage } from "./KnowledgePage";
 import type { PlatformCapabilities } from "@valuz/core";
@@ -12,7 +13,11 @@ let latestHeader: ReactNode | null = null;
 // no button in this tree to press. Captured instead, and its callbacks are
 // invoked directly — the wiring is what these tests are about.
 let latestRightPanel: ReactNode | null = null;
-let latestAsideClassName: string | undefined;
+let latestPanelSize: string | undefined;
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
+}));
 
 vi.mock("react-router-dom", async () => {
   const actual =
@@ -30,8 +35,9 @@ vi.mock("react-router-dom", async () => {
       },
       setHeaderClassName: vi.fn(),
       setHideHeader: vi.fn(),
-      setAsideClassName: (cls: string | undefined) => {
-        latestAsideClassName = cls;
+      setAsideClassName: vi.fn(),
+      setRightPanelDefaultSize: (size: string | undefined) => {
+        latestPanelSize = size;
       },
       setMainClassName: vi.fn(),
       setContentInnerClassName: vi.fn(),
@@ -53,7 +59,7 @@ const platform: PlatformCapabilities = {
 function renderKnowledgePage(props: Parameters<typeof KnowledgePage>[0] = {}) {
   latestHeader = null;
   latestRightPanel = null;
-  latestAsideClassName = undefined;
+  latestPanelSize = undefined;
   return render(
     <PlatformProvider value={platform}>
       <KnowledgePage {...props} />
@@ -86,7 +92,7 @@ const DOC = {
   kb_folder_id: null,
   relative_path: "a.pdf",
   created_at: 0,
-  source_path: null,
+  source_path: "/tmp/kb-root/a.pdf",
   parser_mode: null,
   docs_runtime_id: null,
   last_error_code: null,
@@ -95,7 +101,8 @@ const DOC = {
 };
 
 /** Open the library and select its one document. */
-async function openDoc() {
+async function openDoc(opts: { platformOverrides?: Partial<PlatformCapabilities> } = {}) {
+  Object.assign(platform, opts.platformOverrides ?? {});
   vi.spyOn(kbApi, "list").mockResolvedValue({ knowledge_bases: [KB] });
   vi.spyOn(kbApi, "get").mockResolvedValue(KB);
   vi.spyOn(kbApi, "tree").mockResolvedValue({
@@ -122,6 +129,10 @@ async function openDoc() {
   vi.spyOn(docsApi, "preview").mockResolvedValue({
     document_id: DOC.id,
     markdown: "",
+    offset: 0,
+    returned_bytes: 0,
+    total_bytes: 0,
+    truncated: false,
   });
 
   const rendered = renderKnowledgePage();
@@ -137,6 +148,9 @@ describe("KnowledgePage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    // ``openDoc`` mutates the shared platform stub in place; put the
+    // browser-shaped defaults back so one test cannot configure another.
+    Object.assign(platform, { isElectron: false, revealInFinder: vi.fn() });
   });
 
   // ── Which backend a per-document call goes to ────────────────────────
@@ -164,13 +178,17 @@ describe("KnowledgePage", () => {
   it("gives the open document's detail the wider side", async () => {
     // The detail is what is being read — parse history, error text, source
     // path — while the list is just where the click came from. The default
-    // 345px aside made the panel the cramped side.
+    // 345px panel made the detail the cramped side.
+    //
+    // Asserted as a panel size rather than a width class. The class was what
+    // this page used to set, and it kept passing after the shell moved to
+    // resizable panels — the class still reached the element, was overridden
+    // there by the panel group's ``w-full``, and the page silently rendered at
+    // the default width while the test agreed it had asked for 70%.
     initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
     await openDoc();
 
-    await waitFor(() =>
-      expect(latestAsideClassName ?? "").toContain("w-[70%]"),
-    );
+    await waitFor(() => expect(latestPanelSize).toBe("70%"));
   });
 
   it("hands the layout back when the document is closed and on unmount", async () => {
@@ -180,12 +198,14 @@ describe("KnowledgePage", () => {
     // content.
     initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
     const { unmount } = await openDoc();
-    await waitFor(() => expect(latestAsideClassName ?? "").toContain("w-[70%]"));
+    await waitFor(() => expect(latestPanelSize).toBe("70%"));
 
     unmount();
 
     expect(latestRightPanel).toBeNull();
-    expect(latestAsideClassName).toBeUndefined();
+    // Cleared, not left behind: the size lives in the shell, so a stale value
+    // would widen whatever page the user navigated to next.
+    expect(latestPanelSize).toBeUndefined();
   });
 
   it("retries a document on its own library's backend", async () => {
@@ -299,4 +319,62 @@ describe("KnowledgePage", () => {
     expect(screen.getAllByText(/managed directory/).length).toBeGreaterThan(0);
     expect(screen.queryByText("Select directory")).toBeNull();
   });
+
+  // ── Opening the ORIGINAL file ────────────────────────────────────────
+  //
+  // ``/v1/files/resolve`` answers for a file that is not there the same way it
+  // answers for one that is: ``kind`` and ``absPath`` are both filled in, with
+  // the bad news in ``error`` / ``exists``. Acting on the first two alone hands
+  // a dead path to the OS, which opens nothing and says nothing — the click
+  // looks broken. A knowledge base whose folder was cleaned out from under it
+  // (a library under ``/tmp``, a moved directory) is exactly that shape.
+
+  it("says the source file is gone instead of opening nothing", async () => {
+    initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
+    const reveal = vi.fn(async () => "");
+    vi.spyOn(filesApi, "resolveOne").mockResolvedValue({
+      ref: "valuz-file:///tmp/kb-root/a.pdf",
+      kind: "local",
+      absPath: "/tmp/kb-root/a.pdf",
+      exists: false,
+      error: "not_found",
+    } as never);
+    await openDoc({ platformOverrides: { isElectron: true, revealInFinder: reveal } });
+
+    await waitFor(() => expect(latestRightPanel).toBeTruthy());
+    const panel = latestRightPanel as ReactElement<{ onViewSource?: () => void }>;
+    panel.props.onViewSource?.();
+
+    // Naming the failure is the whole point: falling through to the generic
+    // "failed" toast is the same dead end the user already had, one word
+    // louder. The message has to say the SOURCE FILE is gone.
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("源文件缺失"),
+    );
+    // And the OS is never handed the dead path.
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it("surfaces what the OS complained about when opening fails", async () => {
+    // ``shell.openPath`` reports failure by RESOLVING with a message. A caller
+    // that ignores the return value turns "no application can open this" into
+    // a click that does nothing.
+    initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
+    const reveal = vi.fn(async () => "no application knows how to open this");
+    vi.spyOn(filesApi, "resolveOne").mockResolvedValue({
+      ref: "valuz-file:///tmp/kb-root/a.pdf",
+      kind: "local",
+      absPath: "/tmp/kb-root/a.pdf",
+      exists: true,
+      error: null,
+    } as never);
+    await openDoc({ platformOverrides: { isElectron: true, revealInFinder: reveal } });
+
+    await waitFor(() => expect(latestRightPanel).toBeTruthy());
+    const panel = latestRightPanel as ReactElement<{ onViewSource?: () => void }>;
+    panel.props.onViewSource?.();
+
+    await waitFor(() => expect(reveal).toHaveBeenCalledWith("/tmp/kb-root/a.pdf"));
+  });
+
 });

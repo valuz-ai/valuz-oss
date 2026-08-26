@@ -19,7 +19,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -509,6 +509,27 @@ def _session_document_scope(session: Session) -> set[str] | None:
     return {str(item) for item in document_ids if str(item)}
 
 
+def _make_mode_persist(
+    store: Any, user_id: str, session_id: str
+) -> Callable[[str], Awaitable[None]]:
+    """Targeted write-through for a runtime-initiated mode transition.
+
+    Loads a FRESH row and writes only ``mode`` — deliberately not the
+    turn's in-memory ``session`` reference, whose other runtime-owned
+    fields (status, todos, stop_reason) must keep their end-of-turn save
+    semantics. The turn's final ``save_session`` persists the same mode
+    again (the reconcile rule keeps the runtime's value when
+    ``runtime_mode_change`` is set), so this write is idempotent."""
+
+    async def _persist(mode: str) -> None:
+        fresh = await store.load_session(user_id, session_id)
+        if fresh is not None and fresh.mode != mode:
+            fresh.mode = mode
+            await store.save_session(fresh)
+
+    return _persist
+
+
 class _MessageObserverSink:
     """Pass Runtime events through first, then attach optional sidecars.
 
@@ -533,6 +554,7 @@ class _MessageObserverSink:
         semantic_verifier: SemanticVerifierPort | None = None,
         claim_normalizer: ClaimNormalizerPort | None = None,
         task_coverage_enabled: bool = False,
+        mode_persist: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._inner = inner
         self._message_id = message_id
@@ -576,6 +598,7 @@ class _MessageObserverSink:
         self.task_coverage: dict[str, Any] | None = None
         self.last_todos: list[dict[str, Any]] | None = None
         self.runtime_mode_change: Literal["default", "plan", "goal"] | None = None
+        self._mode_persist = mode_persist
 
     async def emit(self, event: Event) -> None:
         if event.type == "citation_evidence":
@@ -708,6 +731,25 @@ class _MessageObserverSink:
                 mode = event.data.get("mode")
                 if mode in ("default", "plan", "goal"):
                     self.runtime_mode_change = mode
+                    # Write the transition through to the store NOW, not at
+                    # the end-of-turn save. A runtime-initiated exit
+                    # (approved ExitPlanMode) can happen minutes before the
+                    # turn finishes; until then any client that (re)opens
+                    # the session hydrates ``mode`` from the row and would
+                    # show a stale plan chip — the live ``mode_changed``
+                    # frame only reaches clients attached at that moment,
+                    # and replays are deliberately inert. Best-effort: a
+                    # failed persist must never corrupt the turn (the
+                    # end-of-turn save persists the same value anyway).
+                    if self._mode_persist is not None:
+                        try:
+                            await self._mode_persist(mode)
+                        except Exception:
+                            logger.warning(
+                                "mode_changed write-through failed; the "
+                                "end-of-turn save will persist it",
+                                exc_info=True,
+                            )
 
         await self._inner.emit(event)
 
@@ -1390,7 +1432,8 @@ class SessionOrchestrator:
             runtime_context=runtime_context,
         )
         try:
-            await runtime.prepare(session)
+            with self._lend_runtime_context(session, runtime_context):
+                await runtime.prepare(session)
         except Exception:
             await self._evict_runtime(session_id)
             raise
@@ -1430,11 +1473,12 @@ class SessionOrchestrator:
             runtime_context=runtime_context,
         )
         try:
-            return await runtime.fork_session(
-                session,
-                source_native_session_id=source_native_session_id,
-                anchor=anchor,
-            )
+            with self._lend_runtime_context(session, runtime_context):
+                return await runtime.fork_session(
+                    session,
+                    source_native_session_id=source_native_session_id,
+                    anchor=anchor,
+                )
         except Exception:
             await self._evict_runtime(session.id)
             raise
@@ -1735,6 +1779,7 @@ class SessionOrchestrator:
             semantic_verifier=semantic_verifier,
             claim_normalizer=claim_normalizer,
             task_coverage_enabled=task_coverage_enabled,
+            mode_persist=_make_mode_persist(self._store, user_id, session_id),
         )
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
@@ -1829,7 +1874,8 @@ class SessionOrchestrator:
                     data={"status": "running", "message_id": message.id},
                 )
             )
-            await runtime.run(session, user_message)
+            with self._lend_runtime_context(session, runtime_context):
+                await runtime.run(session, user_message)
             skip_structural_post_run = observer.requested_structural_output()
             if skip_structural_post_run:
                 observer.skip_post_run_verification_for_structural_output()
@@ -1865,13 +1911,16 @@ class SessionOrchestrator:
                     coverage_sink = _TaskCoverageProtocolSink(observer)
                     runtime.update_sink(coverage_sink)
                     try:
-                        await runtime.run_task_coverage(
-                            session,
-                            UserMessage(
-                                text=build_task_coverage_continuation_prompt(task_coverage_policy)
-                            ),
-                            no_op_tool=build_task_coverage_noop_tool(),
-                        )
+                        with self._lend_runtime_context(session, runtime_context):
+                            await runtime.run_task_coverage(
+                                session,
+                                UserMessage(
+                                    text=build_task_coverage_continuation_prompt(
+                                        task_coverage_policy
+                                    )
+                                ),
+                                no_op_tool=build_task_coverage_noop_tool(),
+                            )
                     except asyncio.CancelledError:
                         # The primary answer is already complete; the
                         # continuation is an optional enhancement. A
@@ -2104,6 +2153,48 @@ class SessionOrchestrator:
         # holds no agents table to consult.
         return session, session.agent_config
 
+    @contextmanager
+    def _lend_runtime_context(
+        self,
+        session: Any,
+        runtime_context: dict[str, str] | None,
+    ) -> Any:
+        """Lend *session* its materialized runtime-context values for the
+        duration of one ``RuntimePort`` call, then take them back.
+
+        Materializing for ``create_runtime`` alone is not enough. Every
+        ``RuntimePort`` method — ``run`` / ``prepare`` / ``fork_session`` /
+        ``run_task_coverage`` — takes the session as an ARGUMENT and reads its
+        live fields: Claude assembles ``--mcp-config`` from
+        ``session.mcp_servers`` inside ``run()``, and codex emits its per-turn
+        ``mcp_servers.*`` overrides the same way. Only the provider api_key is
+        read at construction. So a session whose MCP headers hold a marker got
+        its model credential filled and shipped the literal placeholder to
+        every MCP server — 403 at the host gate, the runtime parks those
+        servers, and the model reports its tools missing.
+
+        The values are lent to the SAME object rather than handed over as a
+        copy, so the runtime's lifecycle writes (``status`` / ``stop_reason``
+        / ``runtime_session_id`` / ``todos`` / ``mode``) still land on the
+        object that gets persisted. The restore is what keeps the contract
+        from ``materialize_runtime_context``: a later ``save_session`` writes
+        the marker back, never the credential.
+        """
+        from src.core.runtime_context import materialize_runtime_context
+
+        runtime_session = materialize_runtime_context(session, runtime_context)
+        if runtime_session is session:
+            # No markers — nothing lent, nothing to take back.
+            yield
+            return
+        persisted = (session.mcp_servers, session.model_provider)
+        session.mcp_servers = runtime_session.mcp_servers
+        session.model_provider = runtime_session.model_provider
+        try:
+            yield
+        finally:
+            session.mcp_servers, session.model_provider = persisted
+
     async def _ensure_runtime(
         self,
         session_id: str,
@@ -2131,6 +2222,17 @@ class SessionOrchestrator:
         async with lock:
             cached = self._runtimes.get(session_id)
             if cached is not None:
+                # A cached runtime keeps the credentials it was BUILT with.
+                # Per-turn context is materialized at construction only, so a
+                # reused runtime silently carries the previous turn's values —
+                # worth saying when the caller did supply fresh ones.
+                if runtime_context:
+                    logger.info(
+                        "runtime-context: session %s reusing a cached runtime; "
+                        "this turn's context keys %s are NOT applied",
+                        session_id,
+                        sorted(runtime_context),
+                    )
                 cached.update_sink(sink)
                 self._runtime_last_used[session_id] = time.monotonic()
                 if user_id is not None:

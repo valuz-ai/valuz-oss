@@ -6,6 +6,7 @@ import type {
   SessionDetail,
   SessionEventDTO,
   SessionListItem,
+  SessionMode,
   SessionPermissionMode,
   SessionRulePreview,
   TodoItem,
@@ -22,6 +23,7 @@ export type {
   SessionDetail,
   SessionEventDTO,
   SessionListItem,
+  SessionMode,
   SessionPermissionMode,
   SessionRulePreview,
   TodoItem,
@@ -1005,6 +1007,25 @@ export const sessionsApi = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ effort }),
+      baseUrl: sessionBase(sessionId),
+    });
+  },
+
+  /**
+   * Enter or leave a session working mode (kernel ``Session.mode``,
+   * docs/design/session-modes.md). ``plan`` makes the runtime plan
+   * before touching anything — Claude applies the SDK's typed
+   * ``set_permission_mode("plan")`` mutator immediately and exits via
+   * the ``ExitPlanMode`` approval card; ``default`` exits the current
+   * mode. Same-mode re-set is idempotent. Only ``claude_agent`` /
+   * ``codex`` sessions accept non-default modes — the server 400s
+   * deepagents / deepseek_harness.
+   */
+  updateMode(sessionId: string, mode: SessionMode): Promise<SessionDetail> {
+    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/mode`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
       baseUrl: sessionBase(sessionId),
     });
   },

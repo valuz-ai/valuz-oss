@@ -263,6 +263,9 @@ function ConversationViewPage(props: ConversationViewProps) {
             setDraft={core.setDraft}
             hasPendingProjectSend={hasPendingProjectSend}
             startingRuntime={core.startingRuntime}
+            selectedSessionMode={core.selectedSessionMode}
+            setSelectedSessionMode={core.setSelectedSessionMode}
+            performSend={core.performSend}
             emptyStateOverride={props.emptyState}
             canForkFromTurn={canForkSession(core.selectedSession)}
             forkInFlight={forkInFlight}
@@ -355,6 +358,8 @@ function ConversationViewPage(props: ConversationViewProps) {
               id={core.id}
               selectedEffort={core.selectedEffort}
               setSelectedEffort={core.setSelectedEffort}
+              selectedSessionMode={core.selectedSessionMode}
+              setSelectedSessionMode={core.setSelectedSessionMode}
               selectedAgentSkillItems={core.selectedAgentSkillItems}
               composerMentionSkills={core.composerMentionSkills}
               availableSkills={core.availableSkills}
@@ -433,6 +438,9 @@ function ConversationViewPanel(props: ConversationViewProps) {
         setDraft={core.setDraft}
         hasPendingProjectSend={core.hasPendingProjectSend}
         startingRuntime={core.startingRuntime}
+        selectedSessionMode={core.selectedSessionMode}
+        setSelectedSessionMode={core.setSelectedSessionMode}
+        performSend={core.performSend}
         emptyStateOverride={props.emptyState}
       />
 
@@ -509,6 +517,8 @@ function ConversationViewPanel(props: ConversationViewProps) {
         id={core.id}
         selectedEffort={core.selectedEffort}
         setSelectedEffort={core.setSelectedEffort}
+        selectedSessionMode={core.selectedSessionMode}
+        setSelectedSessionMode={core.setSelectedSessionMode}
         selectedAgentSkillItems={core.selectedAgentSkillItems}
         composerMentionSkills={core.composerMentionSkills}
         availableSkills={core.availableSkills}

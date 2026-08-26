@@ -169,7 +169,23 @@
     "versionReuseHint": "正在回用 v{source}；保存后会生成新的 v{version}，不会覆盖历史版本。",
     "versionSaveHint": "修改执行指令后保存会生成 v{version}；仅修改名称、状态或工作区不会增加版本。",
     "versionColumn": "版本",
-    "actionColumn": "操作"
+    "actionColumn": "操作",
+    "detailTitle": "手册详情",
+    "versionLabel": "v{version}",
+    "run": "运行",
+    "executionHistory": "执行记录",
+    "noExecutions": "还没有执行记录",
+    "content": "手册内容",
+    "notFound": "执行手册不存在或已删除",
+    "runStatus": {
+      "queued": "排队中",
+      "planning": "规划中",
+      "running": "运行中",
+      "waiting_approval": "待确认",
+      "completed": "已完成",
+      "failed": "失败",
+      "stopped": "已停止"
+    }
   },
   "backend": {
     "schedule": {
@@ -302,11 +318,18 @@
     "modelsCount": "{count} 个模型"
   },
   "composer": {
-    "modeChat": "Chat",
-    "modeTask": "Task",
+    "modeChat": "对话",
+    "modeTask": "任务",
+    "modeChatTip": "对话：智能体当场回复，适合提问、追问、边聊边改",
     "sendTask": "发起 Task",
     "taskPlaceholder": "描述任务目标，发送后主 Agent 接管，后台执行",
-    "taskHint": "主 Agent 全程对目标负责：自主拆解、按需派子任务给队友、校验汇总。可随时在任务详情页跟踪 / 介入。"
+    "modeTaskTip": "任务：主智能体全程负责，自主拆解、派活给队友、校验汇总",
+    "planMode": "Plan 模式",
+    "planModeHint": "先规划，批准后再执行",
+    "planModeTurnOff": "关闭 Plan 模式",
+    "planChip": "Plan",
+    "planChipTooltip": "Plan 模式已开启 — 点击关闭",
+    "planPlaceholder": "描述任务，先生成计划…"
   },
   "conversation": {
     "addAttachment": "添加附件",
@@ -532,12 +555,18 @@
     "decisionHandled": "已处理",
     "approvalApprove": "批准",
     "approvalReject": "拒绝",
+    "planApproveAndRun": "批准并开始执行",
+    "planKeepPlanning": "继续规划",
+    "planKeepPlanningPlaceholder": "修改意见（可选，会反馈给智能体）",
+    "planProposalTitle": "执行计划",
+    "planProposalHint": "回复可继续调整计划",
+    "planApprovedRun": "计划已批准，开始执行。",
     "approvalApproveWithChanges": "修改后批准",
     "approvalApproveForSession": "本会话一直放行",
     "approvalApproveForSessionDisabled": "此调用不支持会话级规则",
     "approvalMoreActions": "更多操作",
     "approvalRulePreviewPrefix": "本会话一直放行：",
-    "approvalRejectReasonPlaceholder": "拒绝理由（可选，会回灌给智能体）",
+    "approvalRejectReasonPlaceholder": "拒绝理由（可选，会反馈给智能体）",
     "approvalRejectSubmit": "确认拒绝",
     "approvalRejectCancel": "取消",
     "approvalEditTitle": "修改参数后批准",
@@ -1195,7 +1224,7 @@
     "importFailed": "导入失败——请确认文件是有效的 .valuzpack",
     "importDone": "已导入 · {members} 个成员",
     "nameConflict": "已存在同名项目",
-    "nameConflictHint": "为避免覆盖已有项目，导入将被跳过。如需导入，请先重命名已有项目。",
+    "nameConflictHint": "已有同名项目，改个名字即可导入。",
     "confirm": "确认导入",
     "done": "完成",
     "cancel": "取消",
@@ -1254,7 +1283,8 @@
     "bindChatShort": "关联",
     "deleteChat": "解散群",
     "deleteChatDone": "群已解散",
-    "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。"
+    "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。",
+    "nameSection": "项目名称"
   },
   "schedule": {
     "create": "创建定时任务",
@@ -1393,6 +1423,8 @@
       "verificationDesc": "在每条助手消息发布后核查事实、数字与来源是否一致；可能增加等待时间和模型用量。",
       "taskCoverageLabel": "检查任务完整性",
       "taskCoverageDesc": "主回答正常结束后检查是否完整覆盖请求；发现重要遗漏时最多追加一次补充。",
+      "ptcLabel": "程序化工具调用（PTC）",
+      "ptcDesc": "让 agent 通过编写代码批量调用数据工具（Valuz 数据/搜索），原始数据不进入对话上下文，只返回打印的摘要。",
       "memoryTitle": "记忆",
       "saveFailed": "保存个性化设置失败"
     },
@@ -2957,8 +2989,8 @@
     "badgeVerified": "作者已认证",
     "badgeLocked": "暂不可直接安装",
     "modalTypeSkill": "技能",
-    "modalTypeAgent": "单 Agent",
-    "modalTypeTeam": "Agent 团队",
+    "modalTypeAgent": "智能体",
+    "modalTypeTeam": "团队",
     "modalTypeConnector": "连接器",
     "connectorNoDescription": "暂无介绍",
     "connected": "已添加",
@@ -3233,6 +3265,7 @@
     "apiKeyConfig": "API Key 配置",
     "toolCalls": "工具调用",
     "contextPanel": "上下文面板",
-    "overlays": "浮层预览"
+    "overlays": "浮层预览",
+    "playbookDetail": "手册详情"
   }
 }

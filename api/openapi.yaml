@@ -3244,6 +3244,49 @@ paths:
         "404":
           description: Session not found
 
+  /v1/sessions/{session_id}/mode:
+    patch:
+      summary: Update session working mode
+      description: |
+        Enter or leave a session working mode (kernel ``Session.mode``,
+        docs/design/session-modes.md). ``plan`` makes the runtime plan
+        before touching anything: Claude applies the SDK's typed
+        ``set_permission_mode("plan")`` mutator immediately (its
+        ``/plan`` slash is interactive-CLI-only) and exits through the
+        ``ExitPlanMode`` approval card; Codex enters plan per-turn.
+        ``goal`` arms the goal loop — the next non-slash user message
+        is wrapped ``/goal <text>`` by the kernel. ``default`` exits
+        the current mode (plan restores the session's
+        ``permission_mode``; goal dispatches ``/goal clear``). The
+        runtime can also exit on its own (approved plan, completed
+        goal) — surfaced as ``session.mode_changed{by: "runtime"}``.
+        Only ``claude_agent`` and ``codex`` support non-default modes.
+      operationId: updateSessionMode
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionModeRequest"
+      responses:
+        "200":
+          description: Mode updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "400":
+          description: Mode not supported for this runtime (deepagents / deepseek_harness)
+        "404":
+          description: Session not found
+
   /v1/sessions/{session_id}/effort:
     patch:
       summary: Update session reasoning-effort budget
@@ -5158,6 +5201,7 @@ components:
         - conversation_citations_enabled
         - conversation_verification_enabled
         - conversation_task_coverage_enabled
+        - ptc_enabled
       properties:
         default_timezone: {type: string}
         default_locale: {type: string}
@@ -5176,6 +5220,13 @@ components:
           type: boolean
           default: true
           description: Check explicit task completeness and repair bounded omissions before publishing a reply.
+        ptc_enabled:
+          type: boolean
+          default: false
+          description: >-
+            Programmatic Tool Calling — let agents batch data-tool calls by
+            writing Python via execute_code; only printed summaries enter the
+            model context.
     PreferencesPatch:
       type: object
       properties:
@@ -5186,6 +5237,7 @@ components:
         conversation_citations_enabled: {type: boolean}
         conversation_verification_enabled: {type: boolean}
         conversation_task_coverage_enabled: {type: boolean}
+        ptc_enabled: {type: boolean}
     MemoryView:
       type: object
       required: [enabled, auto_extract, custom_instructions, entries]
@@ -7445,6 +7497,23 @@ components:
             Codex ``max`` clamps to ``xhigh``; DeepAgents openai-
             completion ``max`` → ``xhigh``, anthropic pass-through,
             gemini ``xhigh|max`` → ``high``.
+        mode:
+          type: string
+          enum: [default, plan, goal]
+          default: default
+          description: |
+            Session working mode (kernel ``Session.mode``,
+            docs/design/session-modes.md). ``plan`` = the runtime
+            plans before touching anything (Claude lowers to SDK
+            ``permissionMode="plan"`` + the ``ExitPlanMode`` approval
+            card); ``goal`` = the runtime loops until a goal condition
+            is met (used by task lead/member sessions). Only
+            ``claude_agent`` and ``codex`` sessions support non-default
+            modes — deepagents / deepseek_harness reject with 400.
+            Mutable via ``PATCH /v1/sessions/{id}/mode``. The runtime
+            can also exit a mode on its own (e.g. an approved plan) —
+            surfaced live as a ``session.mode_changed`` SSE frame
+            (``{mode, by: user|runtime}``).
         task_id:
           type: string
           nullable: true
@@ -7973,6 +8042,20 @@ components:
             ``turn_kwargs``; DeepAgents drops its cached graph for a
             cold rebuild. A turn already in flight keeps the mode it
             started with.
+
+    SessionModeRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [default, plan, goal]
+          description: |
+            New working mode for the session. Idempotent on same-mode
+            re-set; direct ``plan ↔ goal`` transitions are allowed (the
+            kernel composes the exit and entry in one reconcile pass).
+            400 when the session's runtime has no native mode support
+            (deepagents / deepseek_harness).
 
     SessionEffortRequest:
       type: object

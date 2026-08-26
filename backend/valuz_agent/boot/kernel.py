@@ -410,13 +410,14 @@ def get_kernel_routers() -> list:
     user-facing agent gallery yet. If/when product introduces agent
     presets, this decision is revisited in a new ADR.
     """
+    from app.ptc_router import router as ptc_router
     from app.routes.events import router as events_router
     from app.routes.messages import router as messages_router
     from app.routes.run import router as run_router
     from app.routes.sessions import router as sessions_router
     from app.routes.usage import router as usage_router
 
-    return [sessions_router, messages_router, run_router, events_router, usage_router]
+    return [sessions_router, messages_router, run_router, events_router, usage_router, ptc_router]
 
 
 def make_data_service_placeholder():

@@ -31,11 +31,10 @@ import {
   DropdownMenuTrigger,
   cn,
 } from "@valuz/ui";
-import { Check, ChevronDown, FolderOpen } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, X } from "lucide-react";
 import { executionTargetIcon } from "./execution-target-icon";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
-
 
 export interface ExecutionLocationBarProject {
   id: string;
@@ -66,8 +65,12 @@ export interface ExecutionLocationBarProps {
   className?: string;
 }
 
+// ``min-w-0`` (not ``shrink-0``): this row sits under a composer that can be
+// as narrow as a resized chat card, and a chip that refuses to shrink pushes
+// the row past the card edge instead of truncating inside it. Both labels
+// stay visible — they just truncate.
 const CHIP_CLASS =
-  "flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-ink-body outline-none";
+  "flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-xs text-ink-body outline-none";
 const CHIP_INTERACTIVE_CLASS =
   "cursor-default transition-colors hover:bg-surface-border data-[state=open]:bg-surface-border";
 
@@ -216,10 +219,41 @@ export function ExecutionLocationBar({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className={cn(CHIP_CLASS, CHIP_INTERACTIVE_CLASS)}
+              className={cn(
+                CHIP_CLASS,
+                CHIP_INTERACTIVE_CLASS,
+                "group/exec-proj",
+              )}
             >
               {projectChipBody}
-              <ChevronDown className="h-3 w-3 shrink-0 text-ink-muted" />
+              {selectedProject ? (
+                <span className="relative flex h-3 w-3 shrink-0 items-center justify-center">
+                  {/* Hover swaps the chevron for a clear (×) affordance —
+                      clicking it drops back to 临时对话 without opening the
+                      menu (pointerdown is what Radix opens on, so both
+                      events stop here); the rest of the chip still opens
+                      the dropdown. */}
+                  <ChevronDown className="h-3 w-3 text-ink-muted group-hover/exec-proj:hidden" />
+                  <span
+                    role="button"
+                    aria-label={t("common.remove" as TK)}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onProjectChange(null);
+                    }}
+                    className="absolute inset-0 hidden items-center justify-center rounded text-ink-muted hover:text-ink-heading group-hover/exec-proj:flex"
+                  >
+                    <X className="h-3 w-3" />
+                  </span>
+                </span>
+              ) : (
+                <ChevronDown className="h-3 w-3 shrink-0 text-ink-muted" />
+              )}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent

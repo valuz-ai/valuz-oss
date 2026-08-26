@@ -19,7 +19,10 @@ from src.core.mcp_source_metadata import (
     wrap_mcp_result_metadata_in_content_for_transport,
 )
 from src.core.types import Session
-from src.runtimes.claude_agent.runtime import ClaudeAgentRuntime
+from src.runtimes.claude_agent.runtime import (
+    ClaudeAgentRuntime,
+    _normalize_mcp_tool_output,
+)
 
 
 class _RecordingSink:
@@ -337,6 +340,131 @@ async def test_post_tool_hook_recovers_source_metadata_from_content_transport() 
     sidecar = json.loads(runtime._citation_tool_result_sidecars["mcp-content-transport"])
     assert sidecar["_valuz_evidence"][0]["source"]["providerId"] == "valuz-data"
     assert runtime._citation_tool_result_model_contents["mcp-content-transport"] == compacted
+
+
+async def test_post_tool_hook_wraps_empty_reportify_objects_as_mcp_content_blocks() -> None:
+    runtime = ClaudeAgentRuntime(AgentConfig(id="a", name="a"), "", _RecordingSink())
+    hook = runtime._map_hooks()["PostToolUse"][0].hooks[0]
+    cases = [
+        (
+            "kb_search",
+            {"query": "Moutai", "num": 20},
+            {"chunks": []},
+            {
+                "resourceId": "kb_search-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "item",
+                    "sourceId": "/doc/doc_id",
+                    "documentId": "/doc/doc_id",
+                    "title": "/doc/title",
+                    "url": "/doc/url",
+                    "publishedAt": "/doc/published_at",
+                    "providerCategory": "/doc/category",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {},
+            },
+        ),
+        (
+            "docs_list",
+            {"symbols": ["US:ZZZZZZZZ"]},
+            {
+                "total_count": 0,
+                "total_page": 0,
+                "page_num": 1,
+                "page_size": 10,
+                "docs": [],
+            },
+            {
+                "resourceId": "docs_list-results",
+                "kind": "document-discovery",
+                "authority": "discovery-only",
+                "rootPointer": "",
+                "itemsPointer": "/docs",
+                "mapping": {
+                    "fetch": {
+                        "toolName": "document_fetch",
+                        "argumentFromItem": {"doc_id": "/doc_id"},
+                    }
+                },
+            },
+        ),
+    ]
+
+    for tool_name, tool_input, payload, resource in cases:
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        descriptor = {
+            "version": 1,
+            "provider": {"id": "reportify", "name": "Reportify"},
+            "operation": {"toolName": tool_name},
+            "result": {
+                "target": "structuredContent",
+                "hash": {"algorithm": "sha256", "value": digest},
+                "capturedAt": "2026-08-25T00:00:00Z",
+            },
+            "resources": [resource],
+        }
+        wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+            CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    )
+                ],
+                structuredContent=payload,
+                _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+            ),
+            server_name="valuz-search",
+        )
+        flattened = [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+
+        output = await hook(
+            {
+                "tool_name": f"mcp__valuz-search__{tool_name}",
+                "tool_input": tool_input,
+                "tool_response": flattened,
+            },
+            f"empty-{tool_name}",
+            None,  # type: ignore[arg-type]
+        )
+
+        updated = output["hookSpecificOutput"]["updatedMCPToolOutput"]
+        assert isinstance(updated, list) and updated[0]["type"] == "text"
+        assert json.loads(updated[0]["text"]) == payload
+
+
+def test_normalize_mcp_tool_output_serializes_non_content_json_values() -> None:
+    for value in (
+        None,
+        True,
+        42,
+        {"chunks": []},
+        [{"document_id": "doc-1"}],
+        [{"type": "resource", "resource": {"id": "business-object"}}],
+    ):
+        normalized = _normalize_mcp_tool_output(value)
+        assert normalized[0]["type"] == "text"
+        assert json.loads(normalized[0]["text"]) == value
+
+
+def test_normalize_mcp_tool_output_preserves_content_block_lists() -> None:
+    content = [
+        {"type": "text", "text": "ok"},
+        {"type": "resource_link", "name": "source", "uri": "https://example.com"},
+        {
+            "type": "resource",
+            "resource": {"uri": "file:///report.txt", "text": "report"},
+        },
+    ]
+
+    assert _normalize_mcp_tool_output(content) is content
+    assert _normalize_mcp_tool_output([]) == []
 
 
 async def test_post_tool_hook_builds_uncovered_provider_summary_evidence() -> None:

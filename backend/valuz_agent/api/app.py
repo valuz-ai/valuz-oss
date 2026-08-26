@@ -223,6 +223,16 @@ def create_app(
         for kernel_router in get_kernel_routers():
             api.include_router(kernel_router)
 
+        # Codex reaches kernel-owned ToolDefs (e.g. PTC's execute_code)
+        # through the kernel's ``/mcp/toolkit/{session_id}`` bridge; the
+        # kernel app serves it standalone, the host must serve it in-process.
+        # Root mount on the OUTER app — codex's ``CODEX_TOOLKIT_BASE_URL``
+        # carries no api prefix. The session manager behind it is started by
+        # ``boot/steps.start_mcp_session_managers``.
+        from app.mcp_toolkit_router import mount_mcp_router
+
+        mount_mcp_router(app)
+
     # Mount the aggregate surface under each configured base path. ``None`` →
     # fall back to settings; an empty result → a single mount at "" (native
     # paths, unchanged). Multiple entries (e.g. ["", "/valuz-backend"]) → the

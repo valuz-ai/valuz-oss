@@ -25,6 +25,11 @@ import type {
 } from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
 import { SkillAddDialog } from "@valuz/app/components";
+import {
+  ResourceActionSlot,
+  ResourceCloudDetailSlot,
+} from "../components/ResourceActionSlot";
+import { isCloudOnlyResource } from "./agent-list-state";
 
 /** Add mode driven from the shared header dropdown (null = closed). */
 export type SkillAddMode = "link" | "upload" | null;
@@ -137,13 +142,15 @@ function badgeForCategory(
       tone: "default",
     };
   }
-  if (categoryId === "agents") {
+  if (skill.source === "codex") {
+    return { label: "Codex", tone: "codex" };
+  }
+  if (skill.source === "valuz") {
     if (skill.creation_origin === "created") {
       return { label: t("skill.originCreated"), tone: "valuz" };
     }
     return undefined;
   }
-  if (categoryId === "codex") return { label: "Codex", tone: "codex" };
   return { label: "Claude", tone: "claude" };
 }
 
@@ -201,6 +208,16 @@ export function SkillsPane({
     void loadSkills();
   }, [loadSkills]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const resourceType = (event as CustomEvent<{ resourceType?: string }>)
+        .detail?.resourceType;
+      if (resourceType === "skill") void loadSkills();
+    };
+    window.addEventListener("valuz:resource-refresh", refresh);
+    return () => window.removeEventListener("valuz:resource-refresh", refresh);
+  }, [loadSkills]);
+
   const skillCreatorDraftUrl = useCallback((context: SkillCreationContext) => {
     const params = new URLSearchParams({ mode: "skill-creator" });
     params.set("skill_kind", context.kind);
@@ -251,20 +268,23 @@ export function SkillsPane({
     const assigned = new Set<string>();
     for (const cat of categories) {
       const matching = filtered
-        .filter((s) => !assigned.has(s.id) && cat.filter(s))
+        .filter(
+          (s) =>
+            !isCloudOnlyResource(s) && !assigned.has(s.id) && cat.filter(s),
+        )
         .sort(cat.sort ?? (() => 0));
       if (matching.length > 0) return matching[0];
       for (const s of filtered) if (cat.filter(s)) assigned.add(s.id);
     }
-    return filtered[0] ?? null;
+    return filtered.find((skill) => !isCloudOnlyResource(skill)) ?? null;
   }, [filtered, categories]);
 
   const currentSkill = useMemo(
     () =>
       skills.find(
         (s) =>
-          s.id === activeSkillId ||
-          (!!activeSkillId && !!s.slug && s.slug === activeSkillId),
+          (s.id === activeSkillId ||
+            (!!activeSkillId && !!s.slug && s.slug === activeSkillId)),
       ) ?? firstVisibleSkill,
     [skills, activeSkillId, firstVisibleSkill],
   );
@@ -274,11 +294,16 @@ export function SkillsPane({
     () => (currentSkill ? toCardSkill(currentSkill) : null),
     [currentSkill],
   );
+  const currentSkillCloudOnly = isCloudOnlyResource(currentSkill);
 
   // Load the file tree for the selected skill (skeleton while loading).
   useEffect(() => {
     const id = currentSkill?.id;
     if (!id) return;
+    if (currentSkillCloudOnly) {
+      setActiveFiles({ skillId: id, files: [] });
+      return;
+    }
     setActiveFiles(undefined);
     let cancelled = false;
     void (async () => {
@@ -294,7 +319,7 @@ export function SkillsPane({
     return () => {
       cancelled = true;
     };
-  }, [currentSkill?.id]);
+  }, [currentSkill?.id, currentSkillCloudOnly]);
 
   const activeFilesForCurrentSkill =
     activeFiles && currentSkill && activeFiles.skillId === currentSkill.id
@@ -368,9 +393,23 @@ export function SkillsPane({
               selectedId={effectiveActiveId}
               getId={(s: SkillView) => s.id}
               onSelect={(s: SkillView) => setActiveSkillId(s.id)}
-              renderItem={(skill: SkillView, isSelected: boolean) => {
-                const cat = categories.find((c) => c.filter(skill));
-                const categoryId = cat?.id ?? "_other";
+              renderItem={(
+                skill: SkillView,
+                isSelected: boolean,
+                category: ResourceCategory<SkillView>,
+              ) => {
+                const cloudOnly = isCloudOnlyResource(skill);
+                const categoryId = category.id;
+                const organizationSync = (
+                  skill as unknown as Record<string, unknown>
+                )._org_sync;
+                const actionResource =
+                  category.groupBy && organizationSync
+                    ? ({
+                        ...(skill as unknown as Record<string, unknown>),
+                        _sync: organizationSync,
+                      } as Record<string, unknown>)
+                    : (skill as unknown as Record<string, unknown>);
                 return (
                   <SkillCard
                     skill={toCardSkill(skill)}
@@ -382,19 +421,25 @@ export function SkillsPane({
                         className="flex items-center gap-2"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <Switch
-                          size="sm"
-                          checked={skill.library_enabled !== false}
-                          onCheckedChange={(v) =>
-                            void handleToggleLibrary(skill, v)
-                          }
-                          aria-label={t(
-                            (skill.library_enabled !== false
-                              ? "skill.libraryEnabledTip"
-                              : "skill.libraryDisabledTip") as Parameters<
-                              typeof t
-                            >[0],
-                          )}
+                        {!cloudOnly ? (
+                          <Switch
+                            size="sm"
+                            checked={skill.library_enabled !== false}
+                            onCheckedChange={(v) =>
+                              void handleToggleLibrary(skill, v)
+                            }
+                            aria-label={t(
+                              (skill.library_enabled !== false
+                                ? "skill.libraryEnabledTip"
+                                : "skill.libraryDisabledTip") as Parameters<
+                                typeof t
+                              >[0],
+                            )}
+                          />
+                        ) : null}
+                        <ResourceActionSlot
+                          resourceType="skill"
+                          resource={actionResource}
                         />
                       </div>
                     }
@@ -423,7 +468,12 @@ export function SkillsPane({
       </div>
 
       <div className="min-w-0 flex-1">
-        {currentSkill && currentCardSkill ? (
+        {currentSkill && currentSkillCloudOnly ? (
+          <ResourceCloudDetailSlot
+            resourceType="skill"
+            resource={currentSkill as unknown as Record<string, unknown>}
+          />
+        ) : currentSkill && currentCardSkill ? (
           <SkillDetailPanel
             key={currentSkill.id}
             skill={currentCardSkill}

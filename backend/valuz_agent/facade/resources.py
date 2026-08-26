@@ -24,9 +24,7 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-ResourceKind = Literal[
-    "agent", "skill", "connector", "kb", "project", "automation", "playbook"
-]
+ResourceKind = Literal["agent", "skill", "connector", "kb", "project", "automation", "playbook"]
 
 
 @dataclass
@@ -155,12 +153,8 @@ class ResourceLibrary:
             from valuz_agent.modules.playbooks.service import PlaybookService
 
             async with async_unit_of_work(commit=False) as db:
-                definitions = await PlaybookService(db, ProjectLibrary()).list_definitions(
-                    user_id
-                )
-            return [
-                ResourceRef(kind="playbook", key=row.id, name=row.name) for row in definitions
-            ]
+                definitions = await PlaybookService(db, ProjectLibrary()).list_definitions(user_id)
+            return [ResourceRef(kind="playbook", key=row.id, name=row.name) for row in definitions]
 
         raise NotImplementedError(f"list({kind}) not implemented")
 
@@ -509,11 +503,16 @@ class ResourceLibrary:
                 if existing is None:
                     view = await conn_svc.create_connector(
                         user_id,
+                        slug=snapshot.key,
                         display_name=data["display_name"],
                         transport=data.get("transport", "http"),
                         description=data.get("description"),
                         url=data.get("url"),
-                        connector_type=data.get("connector_type", "custom"),
+                        # A cloud-library download is a user-owned local copy,
+                        # even when its source was originally system-managed.
+                        # Keeping it custom makes disconnect/delete remove only
+                        # this projection while the cloud source stays intact.
+                        connector_type="custom",
                         command=data.get("command"),
                         args=data.get("args"),
                         working_dir=data.get("working_dir"),

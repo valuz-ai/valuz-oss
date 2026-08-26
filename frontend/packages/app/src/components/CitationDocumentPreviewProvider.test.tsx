@@ -27,7 +27,7 @@ const WEB_PLATFORM: PlatformCapabilities = {
   selectDirectory: async () => null,
   copyFiles: async () => ({ copied: 0, errors: [] }),
   deleteFile: async () => ({ success: false }),
-  revealInFinder: async () => undefined,
+  revealInFinder: async () => "",
   quitApp: async () => undefined,
   openNewWindow: async () => undefined,
   isElectron: false,
