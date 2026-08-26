@@ -434,15 +434,15 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-stale"
-    # Status must be ``running`` for the scan to find it (simulates a
-    # crash mid-turn).
+    # A previous recovery pass may already have reset the session to idle
+    # before this scan runs. The pending still cannot survive that restart.
     await store.save_session(
         Session(
             user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-            status="running",
+            status="idle",
         )
     )
     await store.save_message(
@@ -464,7 +464,6 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
             data={
                 "pending_id": pending_id,
                 "subject": "shell_command",
-                "message_id": mid,
                 "available_decisions": ["approve", "reject"],
                 "payload": {"command": "x"},
             },
@@ -481,6 +480,70 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
     assert len(expired) == 1
     assert expired[0].data["decision"] == "expired"
     assert expired[0].data["resolved_by"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_should_expire_pending_when_runtime_is_no_longer_available(
+    _store_and_orchestrator, tmp_path
+):
+    """A dead runtime closes its durable card instead of leaving a retryable zombie."""
+    from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
+    from src.core.events import Event  # type: ignore[import-not-found]
+    from src.core.orchestrator import PendingActionExpiredError  # type: ignore[import-not-found]
+    from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
+
+    store, orchestrator, _ = _store_and_orchestrator
+    aid, sid, mid = (uuid.uuid4().hex for _ in range(3))
+    pending_id = "pending-after-host-restart"
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+            status="idle",
+        )
+    )
+    await store.save_message(
+        "local-test-owner",
+        Message(
+            id=mid,
+            session_id=sid,
+            user_message=UserMessage(text="hi"),
+            started_at=datetime.now(),
+            status="errored",
+        ),
+    )
+    await store.append_event(
+        "local-test-owner",
+        sid,
+        mid,
+        Event(
+            type="requires_action",
+            data={
+                "pending_id": pending_id,
+                "subject": "clarifying_questions",
+                "available_decisions": ["answer", "reject"],
+                "payload": {"questions": []},
+            },
+        ),
+    )
+
+    with pytest.raises(PendingActionExpiredError):
+        await orchestrator.submit_action(
+            "local-test-owner",
+            sid,
+            pending_id=pending_id,
+            decision="answer",
+            answers={"question": "answer"},
+        )
+
+    _, resolved = await orchestrator._derive_pending(
+        "local-test-owner", sid, pending_id
+    )
+    assert resolved is not None
+    assert resolved.data["decision"] == "expired"
+    assert resolved.data["resolved_by"] == "system"
 
 
 # ---------------------------------------------------------------------------

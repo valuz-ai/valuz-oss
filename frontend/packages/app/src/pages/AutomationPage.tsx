@@ -20,7 +20,6 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
-  ScheduledTaskTable,
 } from "@valuz/ui";
 import {
   agentsApi,
@@ -41,81 +40,13 @@ import {
 } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 import {
+  AutomationDefinitionTable,
   CreateAutomationDialog,
   type AutomationAgentChoice,
 } from "@valuz/app/components";
-import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
-
-// "just now" / "5m ago" / "3h ago" / "2d ago".
-function relativeTime(ms: number | null): string {
-  if (ms == null) return "—";
-  const diff = Date.now() - ms;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-// Trigger column — original ScheduledTaskTable shows the cron expression
-// Trigger column — cron rows show the raw cron expression (locale-neutral
-// standard, reads fine in monospace); interval / manual rows show the
-// backend's localized human-readable cadence (``每 30 分钟`` / ``Every 30
-// minutes`` / ``手动``) rather than a raw ``1800s``.
-function triggerColumn(item: AutomationItem): string {
-  if (item.trigger.kind === "cron") return item.trigger.cron_expr;
-  return item.trigger_human_readable;
-}
-
-// Map AutomationItem → the generic shape `ScheduledTaskTable` expects.
-// Field-by-field equivalence with the legacy `mapTasksForTable`:
-//
-//   name              → name
-//   prompt (subtitle) → trigger_human_readable     (was: cron_human_readable)
-//   trigger (mono)    → cron_expr / "every Ns"     (was: cron_expr)
-//   triggerTimezone   → trigger.timezone (cron only)
-//   last              → relativeTime(last_run_at)  (was: relativeTime)
-//   status            → enabled→on / *→off
-function automationToTableRow(item: AutomationItem) {
-  return {
-    id: item.automation_id,
-    name: item.name,
-    // Subtitle = the bound agent (the schedule now lives in the 触发规则
-    // column, so repeating ``trigger_human_readable`` here would duplicate it).
-    prompt: item.agent_name ?? "",
-    trigger: triggerColumn(item),
-    triggerTimezone:
-      item.trigger.kind === "cron"
-        ? (item.trigger.timezone ?? undefined)
-        : undefined,
-    last: relativeTime(item.last_run_at),
-    status: (item.status === "enabled" ? "on" : "off") as "on" | "off",
-    exec_origin: item.exec_origin,
-  };
-}
-
-// "Last run 5m ago" badge on the right of the group header. Returns
-// undefined when the whole group has never fired, in which case the
-// table omits the badge entirely (same contract as the legacy page).
-// Takes ``t`` so it can localize the ``cron.lastRunColumn`` prefix —
-// the legacy page used that exact key, and reusing it keeps the badge
-// reading identically across the rename.
-function latestGroupRunLabel(
-  items: AutomationItem[],
-  t: ReturnType<typeof useTranslation>["t"],
-): string | undefined {
-  const latest = items
-    .map((item) => item.last_run_at)
-    .filter((value): value is number => value !== null)
-    .sort((a, b) => b - a)[0];
-  if (!latest) return undefined;
-  return `${t("cron.lastRunColumn" as Parameters<typeof t>[0])} ${relativeTime(latest)}`;
-}
 
 export const AutomationPage = () => {
   const { t } = useTranslation();
@@ -465,18 +396,10 @@ export const AutomationPage = () => {
                 .filter((group) => group.automations.length > 0)
                 .map((group) => (
                   <section key={group.project_id}>
-                    <ScheduledTaskTable
-                      // Enabled automations sort ahead of paused ones (stable
-                      // within each group); the row map preserves this order.
-                      tasks={[...group.automations]
-                        .sort(
-                          (a, b) =>
-                            Number(b.status === "enabled") -
-                            Number(a.status === "enabled"),
-                        )
-                        .map(automationToTableRow)}
+                    <AutomationDefinitionTable
+                      automations={group.automations}
                       title={group.project_name}
-                      taskCountLabel={t(
+                      countLabel={t(
                         k(
                           group.automations.length === 1
                             ? "automation.groupCount"
@@ -484,15 +407,13 @@ export const AutomationPage = () => {
                         ),
                         { count: group.automations.length },
                       )}
-                      lastRunLabel={latestGroupRunLabel(group.automations, t)}
                       collapsed={collapsedGroupIds.has(group.project_id)}
                       onToggleCollapse={() =>
                         toggleGroupCollapsed(group.project_id)
                       }
-                      onRowClick={(id) => navigate(`/automations/${id}`)}
+                      onOpen={(id) => navigate(`/automations/${id}`)}
                       onToggle={(id) => toggleAutomation(id)}
                       onRunNow={(id) => runNow(id)}
-                      renderOrigin={(o) => <OriginIcon origin={o} />}
                       onDelete={(id) => {
                         const automation = group.automations.find(
                           (item) => item.automation_id === id,

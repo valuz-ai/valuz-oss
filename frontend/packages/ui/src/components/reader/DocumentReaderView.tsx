@@ -105,7 +105,11 @@ function toArtifact(
         kind: "text",
         encoding: "utf-8",
         content: doc.render.html,
-        truncated: false,
+        // Carried, never assumed. Note the render body intercepts html before
+        // the bridged fallthrough, so this branch is currently unreachable —
+        // it stays honest anyway so a future consumer of the bridge cannot
+        // inherit a hardcoded ``false``.
+        truncated: doc.render.truncated ?? false,
       },
     };
   }
@@ -273,11 +277,24 @@ export function DocumentReaderView({
     }
     if (doc.render.kind === "html") {
       return (
-        <HtmlDocumentRenderer
-          html={doc.render.html}
-          title={doc.title}
-          location={location}
-        />
+        <>
+          {/* Between the header and the document, matching the artifact
+              renderers' treatment. The html body renders regardless — the
+              banner is a disclosure, not a gate — but without it a document
+              cut at the host's 5 MiB cap reads as complete, and a citation
+              can point into the part that is gone with nothing on screen
+              saying so. */}
+          {doc.render.truncated ? (
+            <div className="border-b border-surface-border bg-warning-light px-4 py-2 text-xs text-warning-text">
+              {t("ui.artifact.truncated")}
+            </div>
+          ) : null}
+          <HtmlDocumentRenderer
+            html={doc.render.html}
+            title={doc.title}
+            location={location}
+          />
+        </>
       );
     }
     if (

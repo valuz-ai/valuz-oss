@@ -67,14 +67,13 @@
     "playbookLabel": "执行手册",
     "playbookNone": "不使用执行手册 — 仅执行自动化指令",
     "playbookRetired": "已停用",
-    "proposalCollapse": "收起",
     "proposalCreated": "自动化已创建。",
     "proposalDismissed": "已取消",
-    "proposalExpand": "展开",
     "proposalFailed": "无法生成这条自动化",
     "proposalLead": "Lead",
     "proposalNew": "新自动化",
     "proposalUnnamed": "未命名自动化",
+    "promptLabel": "执行指令",
     "recentExecutions": "最近执行",
     "resumeSuccess": "已恢复「{name}」",
     "runFailed": "立即运行失败：{error}",
@@ -83,6 +82,7 @@
     "targetChat": "快速对话",
     "targetLabelTask": "所属项目",
     "timezoneLabel": "时区",
+    "viewPrompt": "查看完整指令",
     "title": "自动化",
     "toggleFailed": "切换状态失败：{error}",
     "triggerCron": "定时",
@@ -119,14 +119,18 @@
     "operation": {
       "cancelled": "已取消，未修改执行手册。",
       "create": "新建提案",
+      "createAction": "创建执行手册",
       "delete": "删除提案",
+      "deleteAction": "确认删除",
       "deleted": "执行手册已删除",
       "failed": "执行手册操作失败",
       "metadata": "信息修改提案",
       "retire": "停用提案",
+      "retireAction": "确认停用",
       "status": "状态变更提案",
       "succeeded": "操作已完成 · 查看执行手册",
-      "update": "新版本提案"
+      "update": "新版本提案",
+      "updateAction": "保存更新"
     },
     "projectAssociated": "已关联工作区",
     "projectGlobal": "全局（不关联工作区）",
@@ -165,7 +169,23 @@
     "versionReuseHint": "正在回用 v{source}；保存后会生成新的 v{version}，不会覆盖历史版本。",
     "versionSaveHint": "修改执行指令后保存会生成 v{version}；仅修改名称、状态或工作区不会增加版本。",
     "versionColumn": "版本",
-    "actionColumn": "操作"
+    "actionColumn": "操作",
+    "detailTitle": "手册详情",
+    "versionLabel": "v{version}",
+    "run": "运行",
+    "executionHistory": "执行记录",
+    "noExecutions": "还没有执行记录",
+    "content": "手册内容",
+    "notFound": "执行手册不存在或已删除",
+    "runStatus": {
+      "queued": "排队中",
+      "planning": "规划中",
+      "running": "运行中",
+      "waiting_approval": "待确认",
+      "completed": "已完成",
+      "failed": "失败",
+      "stopped": "已停止"
+    }
   },
   "backend": {
     "schedule": {
@@ -298,11 +318,12 @@
     "modelsCount": "{count} 个模型"
   },
   "composer": {
-    "modeChat": "Chat",
-    "modeTask": "Task",
+    "modeChat": "对话",
+    "modeTask": "任务",
+    "modeChatTip": "对话：智能体当场回复，适合提问、追问、边聊边改",
     "sendTask": "发起 Task",
     "taskPlaceholder": "描述任务目标，发送后主 Agent 接管，后台执行",
-    "taskHint": "主 Agent 全程对目标负责：自主拆解、按需派子任务给队友、校验汇总。可随时在任务详情页跟踪 / 介入。",
+    "modeTaskTip": "任务：主智能体全程负责，自主拆解、派活给队友、校验汇总",
     "planMode": "Plan 模式",
     "planModeHint": "先规划，批准后再执行",
     "planModeTurnOff": "关闭 Plan 模式",
@@ -1203,7 +1224,7 @@
     "importFailed": "导入失败——请确认文件是有效的 .valuzpack",
     "importDone": "已导入 · {members} 个成员",
     "nameConflict": "已存在同名项目",
-    "nameConflictHint": "为避免覆盖已有项目，导入将被跳过。如需导入，请先重命名已有项目。",
+    "nameConflictHint": "已有同名项目，改个名字即可导入。",
     "confirm": "确认导入",
     "done": "完成",
     "cancel": "取消",
@@ -1262,7 +1283,8 @@
     "bindChatShort": "关联",
     "deleteChat": "解散群",
     "deleteChatDone": "群已解散",
-    "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。"
+    "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。",
+    "nameSection": "项目名称"
   },
   "schedule": {
     "create": "创建定时任务",
@@ -1933,6 +1955,9 @@
     "deleted": "已删除",
     "desktopOnly": "仅在桌面端支持",
     "expandPanel": "展开右侧面板",
+    "maximizePanel": "最大化右侧面板",
+    "resizePanel": "调整右侧面板宽度",
+    "restorePanel": "还原右侧面板",
     "expandShow": "展开显示 ({count})",
     "help": "帮助",
     "home": "首页",
@@ -3240,6 +3265,7 @@
     "apiKeyConfig": "API Key 配置",
     "toolCalls": "工具调用",
     "contextPanel": "上下文面板",
-    "overlays": "浮层预览"
+    "overlays": "浮层预览",
+    "playbookDetail": "手册详情"
   }
 }

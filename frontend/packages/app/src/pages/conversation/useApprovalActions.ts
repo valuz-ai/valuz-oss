@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
-import { sessionsApi, useTranslation } from "@valuz/core";
+import { ApiError, sessionsApi, useTranslation } from "@valuz/core";
 import type { PendingApprovalEntry } from "./useConversationHistory";
 
 type ApprovalActionsParams = {
@@ -77,6 +77,10 @@ export function useApprovalActions({
         request.modified_input = opts.modifiedInput;
       }
       sessionsApi.submitAction(sessionId, request).catch((err: unknown) => {
+        // A 410 means the backend just sealed a durable card whose parked
+        // runtime no longer exists. Its action_resolved event will remove the
+        // card; do not turn that lifecycle repair into a user-facing error.
+        if (err instanceof ApiError && err.status === 410) return;
         setPendingApprovals((prev) =>
           prev.map((p) =>
             p.pendingId === pendingId ? { ...p, submitting: false } : p,
@@ -124,6 +128,11 @@ export function useApprovalActions({
           // then resumes its turn and emits subsequent tool events.
         })
         .catch((err: unknown) => {
+          // The host may have restarted after rendering the historical
+          // question. The backend closes that stale pending with an expired
+          // action_resolved event; retain the optimistic summary until the
+          // event arrives and avoid presenting a retry that can never resume.
+          if (err instanceof ApiError && err.status === 410) return;
           // Submit failed — drop the optimistic answers so the
           // interactive card returns and the user can retry.
           setAskUserQuestionLocalAnswers((prev) => {

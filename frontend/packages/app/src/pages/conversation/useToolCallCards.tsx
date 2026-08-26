@@ -33,6 +33,7 @@ import {
   automationTriggerSummary,
   hostDocumentFileName,
   isToolNamed,
+  normalizeAutomationTrigger,
   parseAutomationCreateInput,
   renderChatplanStatusPill,
   resolveGenUiHost,
@@ -390,8 +391,9 @@ export function useToolCallCards({
           const cardName = proposal?.name ?? inputSpec?.name ?? "";
           const cardPrompt =
             proposal?.prompt_template ?? inputSpec?.prompt_template;
-          const confirmTrigger =
-            proposal?.trigger ?? inputSpec?.trigger ?? null;
+          const confirmTrigger = normalizeAutomationTrigger(
+            proposal?.trigger ?? inputSpec?.trigger ?? null,
+          );
           const cardTriggerHuman =
             proposal?.trigger_human_readable ??
             automationTriggerSummary(confirmTrigger, t);

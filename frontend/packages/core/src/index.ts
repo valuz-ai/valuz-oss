@@ -46,6 +46,7 @@ export * from "./edition";
 export * from "./ipc/transport";
 export * from "./parser/registry";
 export * from "./parser/types";
+export * from "./resource-refresh";
 export * from "./session";
 export * from "./store";
 export type { PlatformCapabilities } from "./platform/types";
