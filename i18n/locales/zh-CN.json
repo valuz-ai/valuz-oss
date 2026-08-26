@@ -790,7 +790,6 @@
     "parserFallbackOk": "最终由 {engine} 成功完成",
     "parserLastError": "最近错误",
     "preview": "预览",
-    "previewTruncated": "文件较大，下面只显示开头部分。",
     "rebuildIndex": "重建索引",
     "refFromKb": "从知识库引用",
     "referenced": "已引用",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { splitIntoUnits } from "./markdown-units";
+import { countTableRows, splitIntoUnits } from "./markdown-units";
 
 const table = (rows: number) =>
   "| Date | Close |\n|---|---|\n" +
@@ -75,5 +75,34 @@ describe("splitIntoUnits", () => {
 
   it("returns nothing for an empty document", () => {
     expect(splitIntoUnits("")).toEqual([]);
+  });
+});
+
+describe("countTableRows", () => {
+  it("counts the body rows of a table", () => {
+    expect(countTableRows(table(100))).toBe(100);
+  });
+
+  it("does not count the header or the delimiter", () => {
+    expect(countTableRows(table(1))).toBe(1);
+  });
+
+  it("does not count a table drawn inside a code fence", () => {
+    // It is text to display, not a table to render — counting it would send a
+    // perfectly ordinary document down the windowed path and cost it
+    // find-in-page for nothing.
+    expect(countTableRows("```\n" + table(100) + "\n```")).toBe(0);
+  });
+
+  it("does not count prose that happens to start with a pipe", () => {
+    expect(countTableRows("| not a table\nnor is this")).toBe(0);
+  });
+
+  it("adds up across several tables", () => {
+    expect(countTableRows(`${table(10)}\n\nbetween\n\n${table(5)}`)).toBe(15);
+  });
+
+  it("is zero for a document with no table", () => {
+    expect(countTableRows("# Title\n\njust prose")).toBe(0);
   });
 });
