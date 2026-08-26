@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { MarkdownContent } from "./MarkdownContent";
+import { PlanProposalCard } from "./PlanProposalCard";
 import {
   CitationSourceCards,
   citationDisplayOrder,
@@ -436,7 +437,11 @@ type DisplayBlock =
   // Context-compaction divider (``/compact`` or autocompact). Meta, like the
   // diff summary: renders inline at the point compaction occurred, always
   // visible (never folded), and transparent to the fold-boundary walk.
-  | { kind: "compaction" };
+  | { kind: "compaction" }
+  // Plan-mode proposal (``session.plan_proposed``). Pinned like the
+  // overridden proposal cards: renders at its position and never folds
+  // away — the plan IS the turn's deliverable.
+  | { kind: "plan_proposal"; plan: string };
 
 /**
  * Foldable strip showing the segment's tool/thinking trail. The trigger
@@ -684,6 +689,14 @@ const buildDisplayBlocks = (
       continue;
     }
 
+    if (block.kind === "plan_proposal") {
+      // Break the segment so the plan card renders inline at its
+      // position; the next assistant/tool opens a fresh segment.
+      flush();
+      result.push({ kind: "plan_proposal", plan: block.plan });
+      continue;
+    }
+
     if (block.kind === "compaction") {
       // Break the segment so the divider renders inline at the point the
       // context was compacted, then leave ``cur`` empty so the next
@@ -916,6 +929,15 @@ interface TurnRowProps {
     turn: ConversationTurn,
     role: "user" | "assistant",
   ) => ReactNode | null;
+  /**
+   * Host-supplied footer for a ``plan_proposal`` card (the
+   * approve-and-run button). Called only for the LAST plan proposal in
+   * the turn; the host returns ``null`` for historical proposals /
+   * sessions no longer in plan mode. External state it depends on
+   * (session mode) must be folded into ``turnActionsKey`` — same memo
+   * contract as ``renderTurnActions``.
+   */
+  renderPlanActions?: (turn: ConversationTurn) => ReactNode | null;
   /** Predicate marking an overridden tool card as *foldable* — it collapses
    * away with the process trail when the turn ends (visible while running or
    * when the turn is expanded), instead of staying pinned at its position.
@@ -947,6 +969,7 @@ const TurnRow = memo(
     renderToolCall,
     renderTurnActions,
     renderTurnLeading,
+    renderPlanActions,
     isToolCardFoldable,
     onRevealFile,
     isLocalFileHref,
@@ -1237,6 +1260,24 @@ const TurnRow = memo(
 
             {displayBlocks.map((block, blockIndex) => {
               const isLastBlock = blockIndex === displayBlocks.length - 1;
+              if (block.kind === "plan_proposal") {
+                // Pinned like the compaction divider / proposal cards —
+                // the plan is the turn's deliverable and must survive
+                // the process fold. Actions only on the turn's LAST
+                // proposal (a revised plan supersedes earlier ones).
+                const isLastProposal = !displayBlocks
+                  .slice(blockIndex + 1)
+                  .some((b) => b.kind === "plan_proposal");
+                return (
+                  <PlanProposalCard
+                    key={`plan-${turn.id}-${blockIndex}`}
+                    plan={block.plan}
+                    actions={
+                      isLastProposal ? (renderPlanActions?.(turn) ?? null) : null
+                    }
+                  />
+                );
+              }
               if (block.kind === "compaction") {
                 // Meta marker — render the divider before the fold check so
                 // it stays visible even when the process trail is folded.
@@ -1467,6 +1508,8 @@ interface ConversationTurnListProps {
     turn: ConversationTurn,
     role: "user" | "assistant",
   ) => ReactNode | null;
+  /** See ``TurnRowProps.renderPlanActions``. */
+  renderPlanActions?: (turn: ConversationTurn) => ReactNode | null;
   /** See ``TurnRowProps.isToolCardFoldable``. */
   isToolCardFoldable?: (tool: PrototypeToolCall) => boolean;
   /** See ``TurnRowProps.onRevealFile``. */
@@ -1516,6 +1559,7 @@ export function ConversationTurnList({
   renderTurnActions,
   turnActionsKey,
   renderTurnLeading,
+  renderPlanActions,
   isToolCardFoldable,
   onRevealFile,
   isLocalFileHref,
@@ -1686,6 +1730,7 @@ export function ConversationTurnList({
                     renderTurnActions={renderTurnActions}
                     turnActionsKey={turnActionsKey}
                     renderTurnLeading={renderTurnLeading}
+                    renderPlanActions={renderPlanActions}
                     isToolCardFoldable={isToolCardFoldable}
                     onRevealFile={onRevealFile}
                     isLocalFileHref={isLocalFileHref}

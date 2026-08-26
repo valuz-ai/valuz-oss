@@ -263,6 +263,9 @@ function ConversationViewPage(props: ConversationViewProps) {
             setDraft={core.setDraft}
             hasPendingProjectSend={hasPendingProjectSend}
             startingRuntime={core.startingRuntime}
+            selectedSessionMode={core.selectedSessionMode}
+            setSelectedSessionMode={core.setSelectedSessionMode}
+            performSend={core.performSend}
             emptyStateOverride={props.emptyState}
             canForkFromTurn={canForkSession(core.selectedSession)}
             forkInFlight={forkInFlight}
@@ -435,6 +438,9 @@ function ConversationViewPanel(props: ConversationViewProps) {
         setDraft={core.setDraft}
         hasPendingProjectSend={core.hasPendingProjectSend}
         startingRuntime={core.startingRuntime}
+        selectedSessionMode={core.selectedSessionMode}
+        setSelectedSessionMode={core.setSelectedSessionMode}
+        performSend={core.performSend}
         emptyStateOverride={props.emptyState}
       />
 

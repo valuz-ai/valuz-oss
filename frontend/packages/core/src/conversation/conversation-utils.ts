@@ -653,6 +653,8 @@ const createTurnsBuilder = () => {
     if (type === "tool.call.completed")
       return `tc::${p.id || p.tool_use_id || p.call_id || ""}`;
     if (type === "session.compaction") return `cmp::${p.message_id ?? ""}`;
+    if (type === "session.plan_proposed")
+      return `plan::${p.message_id ?? ""}::${p.plan ?? ""}`;
     return null;
   };
 
@@ -788,6 +790,18 @@ const createTurnsBuilder = () => {
         // ``/compact`` the "Compacted." reply is suppressed upstream, so this
         // marker is the only visible artifact of the turn.
         turn.blocks.push({ kind: "compaction", messageId: payload.message_id });
+        continue;
+      }
+
+      if (eventType === "session.plan_proposed") {
+        // Plan-mode proposal (codex's plan item). The plan markdown
+        // renders as a pinned card at this point in the turn; the host
+        // wires the approve-and-run affordance onto the latest one.
+        turn.blocks.push({
+          kind: "plan_proposal",
+          plan: payload.plan ?? "",
+          messageId: payload.message_id,
+        });
         continue;
       }
 

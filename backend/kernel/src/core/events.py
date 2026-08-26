@@ -48,6 +48,17 @@ OutboundEventType = Literal[
     # for its interactive surface; codex plan emits ``plan_update``).
     "mode_changed",
     "plan_update",
+    # ``plan_proposed`` carries a plan-mode PROPOSAL awaiting the user's
+    # product-level approval: codex's ``item/completed`` ``plan`` item
+    # (``{plan: <markdown>}``, the ``<proposed_plan>`` block re-published
+    # as a first-class item). Distinct from ``plan_update`` (the
+    # ``update_plan`` TODO-checklist snapshots, which codex hard-disables
+    # inside plan mode). Claude has no analog event — its proposal rides
+    # ``requires_action(subject="exit_plan_mode")`` because approval is a
+    # blocking SDK round-trip there; codex plan approval is client-driven
+    # (next turn flips ``collaborationMode`` to default), so the proposal
+    # is a plain non-blocking event.
+    "plan_proposed",
     # Dynamic-workflow progress (Claude ``Workflow`` tool). The runtime
     # parses the run's state-file path from the ``Workflow`` tool_result,
     # then streams the run's ``wf_<id>.json`` (phases + per-agent progress +
