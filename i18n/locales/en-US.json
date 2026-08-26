@@ -790,6 +790,7 @@
     "parserFallbackOk": "Eventually succeeded via {engine}",
     "parserLastError": "Last error",
     "preview": "Preview",
+    "previewTruncated": "Large file — only the beginning is shown below.",
     "rebuildIndex": "Rebuild index",
     "refFromKb": "Reference from knowledge base",
     "referenced": "Referenced",
