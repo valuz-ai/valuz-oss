@@ -212,6 +212,7 @@ export async function materializeCitationDocument(
   const { mimeType, address } = source.render;
   if (mimeType === "text/html") {
     let html: string | null = null;
+    let truncated = false;
     if (address.kind === "remote" && address.url) {
       const response = await fetch(buildApiUrl(apiBaseUrl, address.url), {
         signal,
@@ -223,7 +224,11 @@ export async function materializeCitationDocument(
       address.absPath &&
       platform.readFileContent
     ) {
-      html = (await platform.readFileContent(address.absPath)).content;
+      // ``truncated`` is destructured rather than dropped: the reader caps at
+      // 5 MiB, and a document cut there must not be shown as if it were whole.
+      const file = await platform.readFileContent(address.absPath);
+      html = file.content;
+      truncated = file.truncated;
     }
     if (html === null) throw new Error("document_address_unavailable");
     return {
@@ -234,6 +239,7 @@ export async function materializeCitationDocument(
           FORBID_TAGS: ["script", "iframe", "object", "embed"],
           FORBID_ATTR: ["srcdoc"],
         }),
+        truncated,
       },
     };
   }
