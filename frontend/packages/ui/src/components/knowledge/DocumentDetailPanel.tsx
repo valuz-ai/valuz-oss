@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { VirtualizedMarkdown } from "./VirtualizedMarkdown";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -14,8 +13,7 @@ import { cn } from "../../lib/cn";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { useI18n } from "../../hooks/use-i18n";
-import type {
-} from "../artifacts/artifact-viewer.types";
+import { VirtualizedMarkdown } from "./VirtualizedMarkdown";
 
 /** Mirror of the backend ``ParserAttempt`` row (one entry per plugin
  *  run for this doc — succeeded or failed). UI doesn't import the
@@ -91,8 +89,6 @@ function _formatAttemptTime(iso: string): string {
     return iso;
   }
 }
-
-/** The parsed markdown, dressed as an artifact for the shared viewer. */
 
 
 export const DocumentDetailPanel = ({

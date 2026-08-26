@@ -14,10 +14,30 @@ let latestHeader: ReactNode | null = null;
 // invoked directly — the wiring is what these tests are about.
 let latestRightPanel: ReactNode | null = null;
 let latestPanelSize: string | undefined;
+/** Every value the page has asked the shell for, in order. */
+let panelSizeAsks: (string | undefined)[] = [];
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
 }));
+
+const OUTLET_CONTEXT = {
+  setRightPanel: (node: ReactNode | null) => {
+    latestRightPanel = node;
+  },
+  setHeader: (node: ReactNode | null) => {
+    latestHeader = node;
+  },
+  setHeaderClassName: vi.fn(),
+  setHideHeader: vi.fn(),
+  setAsideClassName: vi.fn(),
+  setRightPanelDefaultSize: (size: string | undefined) => {
+    latestPanelSize = size;
+    panelSizeAsks.push(size);
+  },
+  setMainClassName: vi.fn(),
+  setContentInnerClassName: vi.fn(),
+};
 
 vi.mock("react-router-dom", async () => {
   const actual =
@@ -26,22 +46,11 @@ vi.mock("react-router-dom", async () => {
     );
   return {
     ...actual,
-    useOutletContext: () => ({
-      setRightPanel: (node: ReactNode | null) => {
-        latestRightPanel = node;
-      },
-      setHeader: (node: ReactNode | null) => {
-        latestHeader = node;
-      },
-      setHeaderClassName: vi.fn(),
-      setHideHeader: vi.fn(),
-      setAsideClassName: vi.fn(),
-      setRightPanelDefaultSize: (size: string | undefined) => {
-        latestPanelSize = size;
-      },
-      setMainClassName: vi.fn(),
-      setContentInnerClassName: vi.fn(),
-    }),
+    // One object, one identity per function — the real layout hands down
+    // ``useState`` setters, which are stable for the life of the shell. A mock
+    // that rebuilds them every render makes every effect keyed on one look
+    // like it re-runs, which hides exactly the bug these tests are about.
+    useOutletContext: () => OUTLET_CONTEXT,
   };
 });
 
@@ -60,6 +69,7 @@ function renderKnowledgePage(props: Parameters<typeof KnowledgePage>[0] = {}) {
   latestHeader = null;
   latestRightPanel = null;
   latestPanelSize = undefined;
+  panelSizeAsks = [];
   return render(
     <PlatformProvider value={platform}>
       <KnowledgePage {...props} />
@@ -377,4 +387,32 @@ describe("KnowledgePage", () => {
     await waitFor(() => expect(reveal).toHaveBeenCalledWith("/tmp/kb-root/a.pdf"));
   });
 
+
+  // ── The width is declared for the page, not for the selection ─────────
+  //
+  // The shell remounts its panel group when this value changes, and the main
+  // route renders inside that group — so a page that changes the width while
+  // mounted remounts itself, loses ``activeKb``, and drops the user back on
+  // the library list. Clicking a document did exactly that.
+
+  it("asks for the wide panel as soon as the page mounts", async () => {
+    vi.spyOn(kbApi, "list").mockResolvedValue({ knowledge_bases: [KB] });
+    vi.spyOn(docsApi, "health").mockResolvedValue({
+      status: "healthy", total_documents: 0, ready_count: 0,
+      processing_count: 0, failed_count: 0, missing_count: 0,
+    });
+
+    renderKnowledgePage();
+
+    await waitFor(() => expect(latestPanelSize).toBe("70%"));
+  });
+
+  it("does not change the panel width when a document is selected", async () => {
+    await openDoc();
+
+    // Not "ends up at 70%" — that would pass even while flipping through it.
+    // The width must never change once the page is up, because every change
+    // remounts this page.
+    expect(new Set(panelSizeAsks)).toEqual(new Set(["70%"]));
+  });
 });
