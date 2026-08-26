@@ -52,6 +52,7 @@ class ResolvedFileDescriptor(BaseModel):
     name: str
     mime_type: str | None = Field(default=None, serialization_alias="mimeType")
     size: int | None = None
+    revision: str | None = None
     exists: bool
     preview_kind: str = Field(serialization_alias="previewKind")
     capabilities: FileCapabilities
@@ -118,6 +119,7 @@ async def _resolve_one(ref: str, user_id: str, roots: list[Path]) -> ResolvedFil
         name=meta.name,
         mime_type=meta.mime_type,
         size=meta.size,
+        revision=meta.revision,
         exists=meta.exists,
         preview_kind=meta.preview_kind,
         capabilities=FileCapabilities(

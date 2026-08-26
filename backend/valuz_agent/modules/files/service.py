@@ -9,6 +9,7 @@ turns the owned absolute path into an access address. See
 from __future__ import annotations
 
 import mimetypes
+import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ class FileMeta:
     size: int | None
     exists: bool
     preview_kind: str
+    #: Opaque change token — see ``_revision``. ``None`` when the file is gone.
+    revision: str | None = None
 
 
 def _is_within(child: Path, parent: Path) -> bool:
@@ -95,6 +98,24 @@ def assert_owned(abs_path: Path, roots: list[Path]) -> Path:
     raise PermissionError(str(abs_path))
 
 
+def _revision(st: os.stat_result | None) -> str | None:
+    """Opaque token that changes whenever the bytes might have.
+
+    ``mtime_ns`` alone is not enough — a write that lands inside the same
+    filesystem timestamp tick reuses it — so size rides along. Together they
+    miss only a same-length rewrite within one tick, which no editor or agent
+    produces in practice.
+
+    Returned as one opaque string on purpose: an open preview compares it for
+    equality and nothing else. Exposing the two numbers separately would invite
+    a client to treat mtime as an ordering, which it is not across machines
+    (a cloud execution plane stats a different filesystem than the desktop).
+    """
+    if st is None:
+        return None
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
 def stat_meta(abs_path: Path) -> FileMeta:
     """File metadata for the descriptor. Missing files return ``exists=False``
     rather than raising (the click surfaces a toast, rendering isn't blocked)."""
@@ -115,6 +136,7 @@ def stat_meta(abs_path: Path) -> FileMeta:
         size=size,
         exists=exists,
         preview_kind=_preview_kind(name, mime_type),
+        revision=_revision(st) if exists else None,
     )
 
 

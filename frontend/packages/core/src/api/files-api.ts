@@ -50,6 +50,13 @@ export interface ResolvedFileDescriptor {
   name: string;
   mimeType: string | null;
   size: number | null;
+  /**
+   * Opaque change token. Equal means the bytes are unchanged; any difference
+   * means re-read. Cheap enough for an open preview to poll — do not parse it
+   * or read an order into it (a cloud execution plane stats a different
+   * filesystem than the desktop). ``null`` when the file does not exist.
+   */
+  revision: string | null;
   exists: boolean;
   previewKind: string;
   capabilities: FileCapabilities;

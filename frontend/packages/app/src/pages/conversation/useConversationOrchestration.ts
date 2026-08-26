@@ -25,6 +25,10 @@ import {
   resolveApiBase,
 } from "@valuz/core";
 import {
+  fileWritesInTurns,
+  type TurnFileWrite,
+} from "@valuz/shared";
+import {
   type ApprovalCardSubject,
   type ApprovalResolvedDecision,
 } from "@valuz/ui";
@@ -773,6 +777,12 @@ export function useConversationOrchestration({
   // carries busy for the turn itself — including turns started by the queue
   // drain, a schedule, or another client. The stream being open says nothing.
   const isBusy = deriveTurnActive(sending, selectedSession?.status);
+  // Files only really change while the agent is working, so the preview
+  // watcher spends its fast gear there and idles the rest of the time.
+  const setArtifactWatchActive = artifactFile.setWatchActive;
+  useEffect(() => {
+    setArtifactWatchActive(isBusy);
+  }, [isBusy, setArtifactWatchActive]);
 
   // The agent actually bound to this composer: an existing session is frozen to
   // its ``sessionAgentSlug`` (ADR-006), a fresh draft uses the picker's
@@ -798,6 +808,41 @@ export function useConversationOrchestration({
   // reply no longer re-walks the whole event history per token. Replaces the
   // old ``useStableTurns(buildTurns(events))`` O(N²) hot path.
   const turns = useIncrementalTurns(events);
+
+  // ── An open preview follows the agent ────────────────────────────────
+  // A document the user has open is a live view, not a snapshot. When the
+  // agent writes that same file, re-read it there and then instead of
+  // leaving a stale copy on screen until someone notices and hits reload.
+  // Only open tabs are touched, and the refresh is silent — no focus jump,
+  // no blank frame (``refreshOpen``).
+  //
+  // Keyed by tool call rather than by path: editing one file twice in a turn
+  // has to refresh twice. On entering a session its existing writes are
+  // recorded as already-handled, so opening an old conversation never
+  // replays its history of edits.
+  const handledFileWritesRef = useRef<Set<string>>(new Set());
+  const fileWriteWatchSessionRef = useRef<string | null>(null);
+  const refreshOpenArtifacts = artifactFile.refreshOpen;
+  useEffect(() => {
+    const keyOf = (write: TurnFileWrite) =>
+      `${write.toolCallId}:${write.path}`;
+    const writes = fileWritesInTurns(turns);
+    if (fileWriteWatchSessionRef.current !== selectedSessionId) {
+      fileWriteWatchSessionRef.current = selectedSessionId;
+      handledFileWritesRef.current = new Set(writes.map(keyOf));
+      return;
+    }
+    const handled = handledFileWritesRef.current;
+    const fresh: string[] = [];
+    for (const write of writes) {
+      const key = keyOf(write);
+      if (handled.has(key)) continue;
+      handled.add(key);
+      fresh.push(write.path);
+    }
+    if (fresh.length > 0) void refreshOpenArtifacts(fresh);
+  }, [turns, selectedSessionId, refreshOpenArtifacts]);
+
   // Background tasks (run_in_background shell commands) — derived from the
   // same persisted event list, so the "still running" strip is correct on
   // live streams and after re-entering the page mid-run.

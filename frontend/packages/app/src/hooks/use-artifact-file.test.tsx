@@ -3,8 +3,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { resolveOne, resolvedToArtifactFile } = vi.hoisted(() => ({
+const { resolveOne, resolveBatch, resolvedToArtifactFile } = vi.hoisted(() => ({
   resolveOne: vi.fn(),
+  resolveBatch: vi.fn(),
   resolvedToArtifactFile: vi.fn(),
 }));
 
@@ -12,7 +13,7 @@ vi.mock("@valuz/core", async (loadOriginal) => {
   const actual = await loadOriginal<typeof import("@valuz/core")>();
   return {
     ...actual,
-    filesApi: { ...actual.filesApi, resolveOne },
+    filesApi: { ...actual.filesApi, resolveOne, resolve: resolveBatch },
   };
 });
 
@@ -52,6 +53,7 @@ function descriptor(name: string): ResolvedFileDescriptor {
     name,
     mimeType: "text/plain",
     size: 1,
+    revision: "r1",
     exists: true,
     previewKind: "plain",
     capabilities: {
@@ -90,7 +92,11 @@ function response(name: string): ArtifactFileResponse {
   };
 }
 
-const renderArtifactHook = (baseRef?: ApiBaseRef, multiTab = false) =>
+const renderArtifactHook = (
+  baseRef?: ApiBaseRef,
+  multiTab = false,
+  watchIntervalMs = 0,
+) =>
   renderHook(() =>
     useArtifactFile({
       projectId: "p1",
@@ -102,6 +108,8 @@ const renderArtifactHook = (baseRef?: ApiBaseRef, multiTab = false) =>
       missingErrorMessage: "missing",
       baseRef,
       multiTab,
+      // Off unless a test is about the watcher: the rest must not race a timer.
+      watchIntervalMs,
     }),
   );
 
@@ -111,6 +119,8 @@ const tabNames = (tabs: { path: string }[]) => tabs.map((tab) => tab.path);
 
 beforeEach(() => {
   resolveOne.mockReset();
+  resolveBatch.mockReset();
+  resolveBatch.mockResolvedValue({ results: [] });
   resolvedToArtifactFile.mockReset();
   resolvedToArtifactFile.mockImplementation(
     async (item: ResolvedFileDescriptor) => response(item.name),
@@ -295,5 +305,227 @@ describe("useArtifactFile", () => {
     expect(tabNames(result.current.tabs)).toContain("f0.txt");
     expect(tabNames(result.current.tabs)).not.toContain("f1.txt");
     expect(result.current.activePath).toBe("overflow.txt");
+  });
+
+  describe("refreshOpen", () => {
+    it("re-reads an open tab the agent wrote, without moving focus", async () => {
+      resolveOne.mockImplementation(async (ref: string) =>
+        descriptor(ref.split("/").pop() ?? ""),
+      );
+      const { result } = renderTabbedHook();
+
+      await act(async () => {
+        await result.current.open("report.md");
+      });
+      await act(async () => {
+        await result.current.open("notes.md");
+      });
+      await waitFor(() => expect(result.current.tabs).toHaveLength(2));
+      expect(result.current.activePath).toBe("notes.md");
+      const reads = resolvedToArtifactFile.mock.calls.length;
+
+      // The agent wrote the tab that is NOT focused.
+      await act(async () => {
+        await result.current.refreshOpen(["/root/report.md"]);
+      });
+
+      expect(resolvedToArtifactFile.mock.calls.length).toBe(reads + 1);
+      // Focus and tab order are the user's, not the agent's.
+      expect(result.current.activePath).toBe("notes.md");
+      expect(tabNames(result.current.tabs)).toEqual(["report.md", "notes.md"]);
+    });
+
+    it("keeps the current content on screen while re-reading", async () => {
+      resolveOne.mockImplementation(async (ref: string) =>
+        descriptor(ref.split("/").pop() ?? ""),
+      );
+      const { result } = renderTabbedHook();
+      await act(async () => {
+        await result.current.open("report.md");
+      });
+      await waitFor(() => expect(result.current.content).not.toBeNull());
+
+      // A refresh that blanked the tab would flash on every agent edit.
+      const slow = deferred<ResolvedFileDescriptor | null>();
+      resolveOne.mockReturnValueOnce(slow.promise);
+      act(() => {
+        void result.current.refreshOpen(["/root/report.md"]);
+      });
+      expect(result.current.content).not.toBeNull();
+      expect(result.current.tabs[0].loading).toBe(false);
+
+      await act(async () => {
+        slow.resolve(descriptor("report.md"));
+      });
+      await waitFor(() => expect(result.current.tabs[0].loading).toBe(false));
+      expect(result.current.content).not.toBeNull();
+    });
+
+    it("ignores a write to a file nobody has open", async () => {
+      resolveOne.mockImplementation(async (ref: string) =>
+        descriptor(ref.split("/").pop() ?? ""),
+      );
+      const { result } = renderTabbedHook();
+      await act(async () => {
+        await result.current.open("report.md");
+      });
+      const reads = resolvedToArtifactFile.mock.calls.length;
+
+      await act(async () => {
+        await result.current.refreshOpen(["/root/elsewhere.md"]);
+      });
+
+      expect(resolvedToArtifactFile.mock.calls.length).toBe(reads);
+      expect(tabNames(result.current.tabs)).toEqual(["report.md"]);
+    });
+  });
+
+  describe("watching for changes", () => {
+    const renderWatchedHook = () => renderArtifactHook(undefined, true, 1000);
+
+    const resolvedAs = (name: string, revision: string | null) => ({
+      ...descriptor(name),
+      revision,
+    });
+
+    it("does not re-read anything while the token is unchanged", async () => {
+      vi.useFakeTimers();
+      try {
+        resolveOne.mockImplementation(async () => resolvedAs("report.md", "r1"));
+        const { result } = renderWatchedHook();
+        await act(async () => {
+          await result.current.open("report.md");
+        });
+        const reads = resolvedToArtifactFile.mock.calls.length;
+        const content = result.current.content;
+        resolveBatch.mockResolvedValue({
+          results: [resolvedAs("report.md", "r1")],
+        });
+
+        // Several rounds of "nothing changed" must cost nothing on screen —
+        // this is what keeps an open preview from flickering.
+        for (let i = 0; i < 3; i += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(1000);
+          });
+        }
+
+        expect(resolveBatch).toHaveBeenCalled();
+        expect(resolvedToArtifactFile.mock.calls.length).toBe(reads);
+        expect(result.current.content).toBe(content);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-reads once the token moves", async () => {
+      vi.useFakeTimers();
+      try {
+        resolveOne.mockImplementation(async () => resolvedAs("report.md", "r1"));
+        const { result } = renderWatchedHook();
+        await act(async () => {
+          await result.current.open("report.md");
+        });
+        const reads = resolvedToArtifactFile.mock.calls.length;
+
+        resolveOne.mockImplementation(async () => resolvedAs("report.md", "r2"));
+        resolveBatch.mockResolvedValue({
+          results: [resolvedAs("report.md", "r2")],
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+
+        expect(resolvedToArtifactFile.mock.calls.length).toBe(reads + 1);
+        // ...and settles: the tab now holds the new token, so the next tick
+        // finds nothing to do.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+        expect(resolvedToArtifactFile.mock.calls.length).toBe(reads + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves the last content up when the file disappears mid-write", async () => {
+      vi.useFakeTimers();
+      try {
+        resolveOne.mockImplementation(async () => resolvedAs("report.md", "r1"));
+        const { result } = renderWatchedHook();
+        await act(async () => {
+          await result.current.open("report.md");
+        });
+        const content = result.current.content;
+        expect(content).not.toBeNull();
+
+        // An agent rewriting in place can be caught between unlink and create.
+        resolveBatch.mockResolvedValue({
+          results: [{ ...resolvedAs("report.md", null), exists: false }],
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+
+        expect(result.current.content).toBe(content);
+        expect(result.current.error).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("idles slowly, and speeds up only while an agent is working", async () => {
+      vi.useFakeTimers();
+      try {
+        resolveOne.mockImplementation(async () => resolvedAs("report.md", "r1"));
+        // Idle cadence for this test: 10s, so the fast gear (4s) is distinct.
+        const { result } = renderArtifactHook(undefined, true, 10_000);
+        await act(async () => {
+          await result.current.open("report.md");
+        });
+        resolveBatch.mockResolvedValue({
+          results: [resolvedAs("report.md", "r1")],
+        });
+
+        // 5s in: the idle timer has not fired.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+        expect(resolveBatch).not.toHaveBeenCalled();
+
+        // The agent starts working — now it checks on the fast cadence.
+        act(() => {
+          result.current.setWatchActive(true);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4000);
+        });
+        expect(resolveBatch).toHaveBeenCalledTimes(1);
+
+        // Back to idle: no more fast ticks.
+        act(() => {
+          result.current.setWatchActive(false);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+        expect(resolveBatch).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not poll with nothing open", async () => {
+      vi.useFakeTimers();
+      try {
+        renderWatchedHook();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3000);
+        });
+        expect(resolveBatch).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
