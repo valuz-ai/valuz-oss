@@ -327,6 +327,9 @@ class ImportProjectConfirmRequest(BaseModel):
     # Optional user-picked project folder. When omitted, the service creates
     # the project under a managed cwd (``data_dir/projects/{id}/``).
     root_path: str | None = None
+    # Optional rename on the way in — how the importer resolves a clash with
+    # a project they already own. Omitted keeps the name from the pack.
+    name: str | None = None
 
 
 class ConnectorToConfigure(BaseModel):
@@ -436,6 +439,7 @@ async def import_project_confirm(
             model=model,
             effort=effort,
             root_path=body.root_path,
+            name=body.name,
         )
     except (ProjectPackImportFailed, PackImportFailed) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

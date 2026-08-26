@@ -318,12 +318,12 @@
     "modelsCount": "{count} 个模型"
   },
   "composer": {
-    "modeChat": "Chat",
-    "modeTask": "Task",
-    "modeChatTip": "Agent 当场回复：提问、追问、调整",
+    "modeChat": "对话",
+    "modeTask": "任务",
+    "modeChatTip": "对话：智能体当场回复，适合提问、追问、边聊边改",
     "sendTask": "发起 Task",
     "taskPlaceholder": "描述任务目标，发送后主 Agent 接管，后台执行",
-    "taskHintShort": "主 Agent 全程负责：拆解、派活、汇总"
+    "modeTaskTip": "任务：主智能体全程负责，自主拆解、派活给队友、校验汇总"
   },
   "conversation": {
     "addAttachment": "添加附件",
@@ -1212,7 +1212,7 @@
     "importFailed": "导入失败——请确认文件是有效的 .valuzpack",
     "importDone": "已导入 · {members} 个成员",
     "nameConflict": "已存在同名项目",
-    "nameConflictHint": "为避免覆盖已有项目，导入将被跳过。如需导入，请先重命名已有项目。",
+    "nameConflictHint": "已有同名项目，改个名字即可导入。",
     "confirm": "确认导入",
     "done": "完成",
     "cancel": "取消",
@@ -1271,7 +1271,8 @@
     "bindChatShort": "关联",
     "deleteChat": "解散群",
     "deleteChatDone": "群已解散",
-    "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。"
+    "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。",
+    "nameSection": "项目名称"
   },
   "schedule": {
     "create": "创建定时任务",

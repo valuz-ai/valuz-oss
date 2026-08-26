@@ -320,10 +320,10 @@
   "composer": {
     "modeChat": "Chat",
     "modeTask": "Task",
-    "modeChatTip": "The agent answers here: ask, follow up, refine.",
+    "modeChatTip": "Chat — the agent answers here: ask, follow up, refine",
     "sendTask": "Launch task",
     "taskPlaceholder": "Describe the task goal — the lead agent will take over and run it in the background.",
-    "taskHintShort": "The lead agent owns it: plans, dispatches, aggregates."
+    "modeTaskTip": "Task — a lead agent owns the goal: plans, dispatches, aggregates"
   },
   "conversation": {
     "addAttachment": "Add attachment",
@@ -1212,7 +1212,7 @@
     "importFailed": "Import failed — make sure the file is a valid .valuzpack",
     "importDone": "Imported · {members} member(s)",
     "nameConflict": "A project with this name already exists",
-    "nameConflictHint": "Import will be skipped to avoid overwriting the existing project. Rename it first if you want to import this one.",
+    "nameConflictHint": "A project with this name already exists — rename it to import.",
     "confirm": "Confirm import",
     "done": "Done",
     "cancel": "Cancel",
@@ -1271,7 +1271,8 @@
     "bindChatShort": "Link",
     "deleteChat": "Delete group",
     "deleteChatDone": "Group deleted",
-    "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good."
+    "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good.",
+    "nameSection": "Project name"
   },
   "schedule": {
     "create": "Create Schedule",

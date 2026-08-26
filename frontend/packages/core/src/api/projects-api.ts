@@ -514,6 +514,8 @@ export const projectsApi = {
   async importProjectConfirm(
     previewId: string,
     rootPath?: string,
+    /** Rename on the way in; omitted keeps the name carried by the pack. */
+    name?: string,
   ): Promise<ImportProjectConfirmResult> {
     const result = await fetchJson<ImportProjectConfirmResult>(
       "/v1/projects/import/confirm",
@@ -523,6 +525,7 @@ export const projectsApi = {
         body: JSON.stringify({
           preview_id: previewId,
           root_path: rootPath || null,
+          name: name?.trim() || null,
         }),
       },
     );
