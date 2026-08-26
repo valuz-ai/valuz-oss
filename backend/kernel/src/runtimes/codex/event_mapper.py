@@ -18,6 +18,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from openai_codex.generated.v2_all import (
@@ -34,6 +35,8 @@ from openai_codex.generated.v2_all import (
     ItemStartedNotification,
     McpServerStatusUpdatedNotification,
     McpToolCallThreadItem,
+    PlanDeltaNotification,
+    PlanThreadItem,
     ReasoningSummaryPartAddedNotification,
     ReasoningSummaryTextDeltaNotification,
     ReasoningTextDeltaNotification,
@@ -109,6 +112,13 @@ def map_notification(notification: Notification) -> list[Event]:
                 },
             )
         ]
+
+    if isinstance(payload, PlanDeltaNotification):
+        # Plan-mode proposal streaming (``item/plan/delta``, experimental).
+        # Folded in v1: the final ``item/completed`` ``plan`` item is
+        # authoritative (the docs warn the concatenated deltas may not
+        # equal it) and plans are short — snapshot rendering is enough.
+        return []
 
     if isinstance(payload, ItemStartedNotification):
         return _map_item_started(payload.item.root)
@@ -205,9 +215,33 @@ def _map_item_started(item: Any) -> list[Event]:
     return []
 
 
+# Codex plan mode instructs the model to wrap the final plan in a
+# ``<proposed_plan>`` block; the app-server re-publishes the block body as
+# a first-class ``plan`` item BUT still emits the ordinary agentMessage
+# with the block inline — render both and the plan shows twice.
+_PROPOSED_PLAN_RE = re.compile(r"<proposed_plan>.*?</proposed_plan>", re.DOTALL)
+
+
 def _map_item_completed(item: Any) -> list[Event]:
     if isinstance(item, AgentMessageThreadItem):
-        return [Event(type="assistant_message", data={"text": item.text})]
+        text = item.text
+        if "<proposed_plan>" in text:
+            # The plan body arrives separately as the ``plan`` item →
+            # ``plan_proposed`` event; strip the duplicate block here so
+            # the assistant bubble keeps only the surrounding prose. A
+            # message that was ONLY the plan block collapses to nothing —
+            # skip the empty bubble.
+            text = _PROPOSED_PLAN_RE.sub("", text).strip()
+            if not text:
+                return []
+        return [Event(type="assistant_message", data={"text": text})]
+
+    if isinstance(item, PlanThreadItem):
+        # Plan-mode proposal (``item.type == "plan"``): the authoritative
+        # plan markdown, awaiting the user's product-level approval
+        # (approve = PATCH mode→default + an execution turn; there is no
+        # protocol round-trip). See docs/design/session-modes.md §codex.
+        return [Event(type="plan_proposed", data={"plan": item.text})]
 
     if isinstance(item, ReasoningThreadItem):
         text = "\n".join(item.content or []) if item.content else ""

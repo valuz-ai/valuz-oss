@@ -140,38 +140,58 @@ Captured in the agent-harness reference tree
   persistence, model self-report via `update_goal`; vendored-SDK typed
   wrappers absent → raw `request()` with camelCase params.
 
-## 6. Roadmap — codex native plan (slice 2)
+## 6. Codex native plan (slice 2 — implemented)
 
-Probed against codex-cli 0.144.4 (bundled) / `openai-codex` 0.144.4:
+Against codex-cli 0.144.4 (bundled) / `openai-codex` 0.144.4; wire
+shapes verified with `codex app-server generate-json-schema
+--experimental`:
 
-- **Enable**: `turn/start` param `collaborationMode: {mode: "plan",
-  settings: {model, reasoning_effort, developer_instructions}}` —
-  experimental field (`experimentalApi: true` already negotiated), the
-  `collaboration_modes` feature gate has graduated (`removed/true`).
-  MUST be sent as a **raw dict**: the SDK's generated `TurnStartParams`
-  predates the field and pydantic silently drops unknown kwargs. Pin
-  with a serialization test.
-- Caveats: `settings.model` is **required**; `collaborationMode` takes
-  precedence over turn `model`/`effort` and REPLACES thread
-  `developerInstructions` (merge `Session.instructions` in);
-  `settings` keys are snake_case inside a camelCase protocol; plan
-  mode is sticky across turns — exiting requires an explicit
-  `mode: "default"` turn; pair with `sandbox_policy: readOnly` (the
-  no-mutation rule is prompt-level).
-- **Plan output**: the model wraps the plan in `<proposed_plan>`; the
-  server re-publishes it as `item/plan/delta` + `item/completed` with
-  `item.type == "plan"` (`{id, text}`, authoritative). The sibling
-  `agentMessage` still contains the block — strip before rendering.
-  `turn/plan/updated` (TODO checklist) is hard-blocked inside plan mode.
-- **Approval**: no protocol round-trip. "批准并开始执行" is
-  product-level: PATCH mode → default + start an "execute the approved
-  plan" turn.
-- **Hard prerequisite**: plan mode is the only mode enabling the
-  `request_user_input` tool, and the built-in prompt pushes it hard.
-  Our codex approval bridge answers ALL server→client requests with the
-  commandExecution `{"decision"}` shape — `item/tool/requestUserInput`
-  needs the answers envelope (map to subject `clarifying_questions`).
-  Ship this before enabling codex in `PLAN_MODE_RUNTIMES`.
+- **Enable**: while `session.mode == "plan"` every `turn/start` carries
+  `collaborationMode: {mode: "plan", settings: {model,
+  reasoning_effort, developer_instructions: null}}` — sent as a **raw
+  dict** merged after the typed params' `model_dump` (the generated
+  `TurnStartParams` predates the experimental field and pydantic
+  silently drops unknown kwargs; `test_codex_plan_mode` pins both the
+  drop and the merge). `settings` keys are snake_case inside the
+  camelCase protocol. `settings.model` is required — a codex plan turn
+  without a session model fails with an actionable error.
+  `developer_instructions: null` selects codex's built-in Plan Mode
+  prompt (the behavioral contract), which REPLACES the thread's
+  developer instructions — the session's own instructions are
+  suspended during plan turns.
+- **Sticky exit**: `collaborationMode` persists server-side, so the
+  runtime records `metadata["codex_collab_plan_active"]` after a
+  successful plan `turn/start` (metadata, not an instance flag —
+  survives rebuild/restart) and the FIRST non-plan turn sends an
+  explicit `mode: "default"` with `developer_instructions =
+  session.instructions` (restoring the persona), then clears the
+  marker.
+- **Hard read-only**: plan turns force `sandbox_policy: readOnly`
+  (codex's no-mutation rule is prompt-level only).
+- **Plan output**: `item/completed` with `item.type == "plan"`
+  (`{id, text}`, authoritative) → kernel `plan_proposed{plan}` → SSE
+  `session.plan_proposed` → the frontend's `PlanProposalCard`. The
+  duplicate `<proposed_plan>` block is stripped from the sibling
+  `agentMessage` (a message that was only the block emits nothing);
+  `item/plan/delta` is folded (snapshot rendering). `turn/plan/updated`
+  (TODO checklist) is unrelated and hard-blocked inside plan mode.
+- **Approval**: no protocol round-trip exists. "批准并开始执行" is
+  product-level — the card's button PATCHes mode → default and sends an
+  execution turn; "继续规划" is simply typing feedback (the next plan
+  turn revises). The button rides only the NEWEST proposal while the
+  session is still in plan mode.
+- **`request_user_input`**: plan mode is the only mode enabling this
+  tool and the built-in prompt pushes it hard. The codex approval
+  bridge maps `item/tool/requestUserInput` → subject
+  `clarifying_questions` (the same card Claude's `AskUserQuestion`
+  renders), ALWAYS parks (the `full_access` short-circuit must not
+  fabricate a malformed `{"decision"}` reply), and answers return as
+  the `ToolRequestUserInputResponse` envelope
+  `{"answers": {<question id>: {"answers": [...]}}}` — remapped from
+  the card's question-text-keyed answers. Reject/timeout/interrupt
+  reply with the empty envelope.
+- `wrap_for_mode` no longer prefixes `/plan ` for codex (plan lowering
+  is protocol-level on every runtime that has it).
 
 ## 7. Roadmap — dsh plan (slice 3)
 

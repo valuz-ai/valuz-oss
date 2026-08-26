@@ -85,7 +85,13 @@ export type ConversationBlock =
   // runtime. Label-only — the kernel ``compaction`` event's raw data is
   // intentionally not parsed for display; it just marks where the context
   // window was summarized within the turn.
-  | { kind: "compaction"; messageId?: string };
+  | { kind: "compaction"; messageId?: string }
+  // Plan-mode PROPOSAL awaiting the user's product-level approval
+  // (``session.plan_proposed`` — codex's plan thread item). ``plan`` is
+  // the proposal markdown; the approve affordance is host-wired onto the
+  // rendered card (approval is client-driven on codex: PATCH mode →
+  // default + an execution turn, no runtime round-trip).
+  | { kind: "plan_proposal"; plan: string; messageId?: string };
 
 export interface ConversationTurnAttachment {
   name: string;

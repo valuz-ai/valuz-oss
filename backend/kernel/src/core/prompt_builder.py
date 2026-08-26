@@ -87,10 +87,10 @@ def wrap_for_mode(
 ) -> str:
     """Wrap a user message per the session's runtime mode, if needed.
 
-    Three out of four (runtime × mode) cells accept ``/<mode> <text>``
-    via the SDK's user-input channel: Claude ``/goal``, codex ``/plan``,
-    codex ``/goal``. The orchestrator wraps each non-slash user message
-    in those cells so the runtime enters its native mode for that turn.
+    Only the GOAL cells accept ``/<mode> <text>`` via the SDK's
+    user-input channel today: Claude ``/goal`` and codex ``/goal``. The
+    orchestrator wraps each non-slash user message in those cells so the
+    runtime enters its native mode for that turn.
 
     **Skip cases** (returns the input unchanged):
 
@@ -101,14 +101,15 @@ def wrap_for_mode(
     * ``runtime_provider == "deepagents"`` — no native plan/goal
       primitive (the route already 400s on non-default; this branch is
       defensive).
-    * ``runtime_provider == "claude_agent"`` AND ``mode == "plan"`` —
-      Claude's ``/plan`` slash is **interactive-CLI-only**: through
-      the SDK headless path it returns "/plan isn't available in this
-      environment". The harness instead enters Claude plan mode via
-      the typed ``ClaudeSDKClient.set_permission_mode("plan")``
-      mutator (slice-5 reconcile), which IS exposed. Subsequent user
-      messages flow through unwrapped — Claude's plan mode is sticky
-      on the SDK client until exited.
+    * ``mode == "plan"`` — NO runtime enters plan via the message
+      channel. Claude's ``/plan`` slash is interactive-CLI-only ("/plan
+      isn't available in this environment" through the SDK); the
+      harness lowers plan through the typed
+      ``set_permission_mode("plan")`` mutator + plan-built spawn
+      options. Codex's app-server turn input does NOT parse slashes
+      (that's a TUI affordance — a ``/plan `` prefix reaches the model
+      as literal text); the codex runtime lowers plan through the
+      ``turn/start.collaborationMode`` protocol field instead.
 
     Otherwise: ``"/<mode> <text>"``. The persisted
     ``Message.user_message.text`` is the wrapped form — source of truth
@@ -123,6 +124,8 @@ def wrap_for_mode(
         # No native plan/goal primitive on these runtimes (the route already
         # 400s on non-default; this branch is defensive).
         return text
-    if runtime_provider == "claude_agent" and mode == "plan":
+    if mode == "plan":
+        # Plan lowering is protocol-level on both remaining runtimes —
+        # see the docstring skip-case above.
         return text
     return f"/{mode} {text}"
