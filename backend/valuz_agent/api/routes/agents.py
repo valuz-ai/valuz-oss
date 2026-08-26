@@ -32,6 +32,7 @@ from valuz_agent.modules.agents.service import (
     AgentNotFoundError,
     AgentService,
     AgentStillDeployedError,
+    InvalidAgentSlugError,
     MemberAlreadyExistsError,
     MemberNotFoundError,
 )
@@ -362,6 +363,8 @@ async def create_agent(
     """Create a user-defined agent."""
     try:
         row = await svc.create_agent(user_id, payload.model_dump())
+    except InvalidAgentSlugError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MemberAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _localized_agent_response(row, accept_language)
@@ -480,6 +483,8 @@ async def create_blank_agent(
             provider_id=payload.provider_id,
             effort=payload.effort,
         )
+    except InvalidAgentSlugError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MemberAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _member_with_agent(result, accept_language)
@@ -509,6 +514,8 @@ async def deploy_agent(
         raise HTTPException(
             status_code=404, detail=f"Source agent not found: {payload.source_agent_slug}"
         ) from exc
+    except InvalidAgentSlugError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MemberAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _member_with_agent(result, accept_language)
@@ -642,6 +649,8 @@ async def confirm_agent_proposal(
             deployed=False,
             project_id=None,
         )
+    except InvalidAgentSlugError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MemberAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
