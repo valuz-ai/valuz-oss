@@ -11,11 +11,15 @@
     "@deepseek-ai/dsh-fs-observation-policy": "0.1.0-rc.6",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",
     "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-plan-mode": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sdk-jsonrpc-demo": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.6",
     "@deepseek-ai/dsh-subprocess-local": "0.1.0-rc.6",
     "@deepseek-ai/dsh-token-meter": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6",
+    "valuz-dsh-kernel-bridge": "file:valuz-plugins/kernel-bridge"
   }
 }

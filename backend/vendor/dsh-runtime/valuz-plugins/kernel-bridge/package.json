@@ -1,0 +1,8 @@
+{
+  "name": "valuz-dsh-kernel-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "Valuz-owned Cordis plugin bridging the dsh subprocess to the Valuz kernel: converges dsh plan-mode state to the kernel-desired value at spawn, and registers a ctx.userQuestions provider that forwards exit_plan_mode reviews / ask_user_question calls to the kernel's user-questions HTTP endpoint (standard requires_action approval cards). Installed into the deploy-root closure as a file: dependency; .npmrc install-links=true makes npm copy (not symlink) it into node_modules so the staged desktop closure stays self-contained. After editing this package, re-run `bash scripts/vendor-dsh-runtime.sh --update` to refresh the copy."
+}

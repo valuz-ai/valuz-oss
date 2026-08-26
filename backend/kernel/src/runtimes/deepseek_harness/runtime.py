@@ -13,12 +13,25 @@ ships the documented v1 stances:
   transcript sidecar under the state dir and prepends a
   ``<conversation-history>`` block on the first prompt of a fresh process.
   Within one live process, dsh continues the session natively.
-* **No approvals.** Tools composed into the session run unattended;
+* **No tool approvals.** Tools composed into the session run unattended;
   ``permission_mode="auto_review"`` is rejected at session create (route
-  guard), and ``submit_action`` raises.
+  guard). The ONE parked surface is the user-questions bridge below.
 * **No native fork / task coverage.** ``fork_session`` and
   ``run_task_coverage`` raise; ``supports_native_continuation`` is False so
   the orchestrator marks task coverage unavailable instead of calling it.
+* **Plan mode + user questions = in-process plugins + HTTP bridge.** The
+  wire has no plan or user-questions channel either, so the composition
+  (on a plan-capable closure) mounts ``dsh-plan-mode`` /
+  ``dsh-user-questions`` / ``dsh-tool-ask-user`` plus the Valuz
+  ``valuz-dsh-kernel-bridge`` plugin, which converges dsh plan state to
+  ``session.mode`` at spawn and forwards ``ask()`` to the kernel's
+  ``/kernel/v1/dsh/user-questions/{token}`` endpoint. The forward parks as
+  a standard ``requires_action`` (subject ``exit_plan_mode`` for the plan
+  review, ``clarifying_questions`` for ask_user_question batches) and
+  ``submit_action`` resolves it — approval therefore continues the SAME
+  dsh turn natively, like Claude's ExitPlanMode. ``plan/mode`` session
+  events map to ``mode_changed{by: "runtime"}`` so the kernel session row
+  stays authoritative.
 
 Model config is per subprocess: ``initialize(provider, model, maxTokens)``
 locks the model for the process lifetime, which matches the kernel's
@@ -32,6 +45,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import time
 import uuid
 from dataclasses import asdict
@@ -41,7 +55,12 @@ from typing import Any, Literal
 
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import ExactArgsRuleMatcher, RuntimeApprovalRuleMatcher
-from src.core.events import Event, EventSink
+from src.core.events import (
+    AVAILABLE_DECISIONS_CLARIFYING,
+    AVAILABLE_DECISIONS_V1,
+    Event,
+    EventSink,
+)
 from src.core.tools import ToolDef, ToolKit
 from src.core.types import (
     EndTurn,
@@ -52,10 +71,21 @@ from src.core.types import (
     StopReason,
     UserMessage,
 )
+from src.core.user_questions_bridge import (
+    UserQuestionsBridgeRecord,
+    register_user_questions_bridge,
+    unregister_user_questions_bridge,
+)
+from src.runtimes.deepseek_harness.approval_bridge import (
+    build_ask_answer_envelope,
+    build_dsh_pending_payload,
+    classify_dsh_subject,
+)
 from src.runtimes.deepseek_harness.composition import (
     DshLaunchSpec,
     cleanup_composition,
     resolve_launch,
+    user_questions_endpoint,
     write_composition,
 )
 from src.runtimes.deepseek_harness.event_mapper import (
@@ -143,6 +173,26 @@ class DeepSeekHarnessRuntime:
         # codex takes). See ``_register_kernel_toolkit``.
         self.toolkit = toolkit or ToolKit()
         self._registered_session_id: str | None = None
+        # User-questions bridge state (plan review + clarifying parks).
+        # ``_uq_token`` is the per-spawn credential the composition hands
+        # the bridge plugin; ``_uq_asks`` keeps every ask of the current
+        # process (terminal states stay readable for poll idempotency).
+        self._uq_token: str | None = None
+        self._uq_asks: dict[str, _UserQuestionsAsk] = {}
+        self._pending_futures: dict[
+            str,
+            asyncio.Future[
+                tuple[Literal["approve", "reject", "answer"], str | None, dict[str, Any] | None]
+            ],
+        ] = {}
+        self._ask_tasks: set[asyncio.Task[None]] = set()
+        # Whether the spawned closure carries the plan plugin set, and the
+        # dsh-side plan state we believe is in force (spawn-converged, then
+        # tracked from wire ``plan/mode`` events). ``run()`` respawns when
+        # it drifts from ``session.mode`` — e.g. the user toggled the chip
+        # off between turns (there is no wire path to flip it live).
+        self._plan_capable = False
+        self._dsh_plan_active: bool | None = None
 
     # -- RuntimePort surface --
 
@@ -197,13 +247,37 @@ class DeepSeekHarnessRuntime:
         answers: dict[str, str | list[str]] | None = None,
         modified_input: dict[str, Any] | None = None,
     ) -> None:
-        raise NotImplementedError(
-            "deepseek_harness emits no requires_action (the dsh SDK wire has "
-            "no approval flow); there is nothing to decide"
-        )
+        """Resolve a user-questions pending (the only parked surface here).
+
+        ``approve`` / ``reject`` decide the ``exit_plan_mode`` plan review;
+        ``answer`` carries the clarifying-questions selections. The decided
+        future wakes ``_resolve_ask``, which translates the verb into dsh's
+        answers envelope and releases the bridge plugin's long-poll — the
+        dsh turn then continues natively (approve = same-turn execution).
+        ``approve_with_changes`` is never advertised for these subjects;
+        raise defensively, mirroring codex.
+        """
+        if decision == "approve_with_changes":
+            raise NotImplementedError(
+                "deepseek_harness does not advertise 'approve_with_changes'; "
+                "the user-questions bridge has no modified-input analog."
+            )
+        _ = modified_input
+        future = self._pending_futures.get(pending_id)
+        if future is None or future.done():
+            return
+        future.set_result((decision, message, dict(answers) if answers is not None else None))
 
     async def interrupt(self) -> None:
         self._cancelled = True
+        # Seal parked user-questions first (cheap set_result) so nothing
+        # stays blocked if the sink chain hangs — codex ordering rationale.
+        for pending_id, future in list(self._pending_futures.items()):
+            if future.done():
+                continue
+            future.set_result(("reject", "session interrupted", None))
+            await self._emit_synthetic_resolved(pending_id, "interrupted")
+        self._pending_futures.clear()
         client = self._client
         if client is not None:
             # No cancel method on the wire — killing the subprocess is the
@@ -221,6 +295,20 @@ class DeepSeekHarnessRuntime:
 
             unregister_session_toolkit(self._registered_session_id)
             self._registered_session_id = None
+        if self._uq_token is not None:
+            unregister_user_questions_bridge(self._uq_token)
+            self._uq_token = None
+        current = asyncio.current_task()
+        ask_tasks = [t for t in self._ask_tasks if t is not current and not t.done()]
+        for t in ask_tasks:
+            t.cancel()
+        if ask_tasks:
+            await asyncio.gather(*ask_tasks, return_exceptions=True)
+        self._ask_tasks.clear()
+        self._pending_futures.clear()
+        self._uq_asks.clear()
+        self._plan_capable = False
+        self._dsh_plan_active = None
         client = self._client
         self._client = None
         self._native_session_id = None
@@ -258,6 +346,28 @@ class DeepSeekHarnessRuntime:
                     "deepseek_harness: session %s capability state drifted — "
                     "respawning the runtime with a fresh composition",
                     session.id,
+                )
+                await self.close()
+            # Plan-state drift is tracked separately from the fingerprint:
+            # a runtime-initiated exit (approved exit_plan_mode) flips BOTH
+            # sides — dsh's logged state and (via mode_changed write-through)
+            # ``session.mode`` — so no respawn is needed then. Only a
+            # user-side toggle between turns leaves them disagreeing, and
+            # the wire has no live flip, so respawn with a fresh
+            # ``planActive`` and let the bridge plugin re-converge.
+            if (
+                self._client is not None
+                and self._client.is_running
+                and self._plan_capable
+                and self._dsh_plan_active is not None
+                and self._dsh_plan_active != (session.mode == "plan")
+            ):
+                logger.info(
+                    "deepseek_harness: session %s plan state drifted "
+                    "(dsh=%s, kernel mode=%s) — respawning",
+                    session.id,
+                    self._dsh_plan_active,
+                    session.mode,
                 )
                 await self.close()
             cold_start = self._client is None or not self._client.is_running
@@ -394,6 +504,10 @@ class DeepSeekHarnessRuntime:
                 seq = event.get("seq")
                 if isinstance(seq, int):
                     outcome.last_seq = seq
+                if event.get("type") == "plan/mode":
+                    plan_data = event.get("data")
+                    if isinstance(plan_data, dict) and isinstance(plan_data.get("active"), bool):
+                        self._dsh_plan_active = plan_data["active"]
                 for mapped in self._mapper.map_session_event(event):
                     await self.event_sink.emit(mapped)
                 reason = extract_turn_end_reason(event)
@@ -433,9 +547,186 @@ class DeepSeekHarnessRuntime:
                 session_id=session.id,
                 user_id=getattr(session, "user_id", "") or "",
             ),
+            tool_gate=self._plan_toolkit_gate,
         )
         self._registered_session_id = session.id
         return True
+
+    def _plan_toolkit_gate(self, tdef: ToolDef) -> str | None:
+        """Plan mode's read-only guarantee for kernel toolkit tools.
+
+        dsh's plan mode is soft guidance by upstream design (sandbox and
+        approval enforce independently), and the toolkit bridge executes
+        with no permission callback — so without this gate ``execute_code``
+        runs happily mid-plan (field-verified, same failure Claude had).
+        Deny every non-read-only toolkit tool while the dsh-side plan
+        state is active; the deny message steers the model to
+        ``exit_plan_mode``, and an approved exit flips
+        ``_dsh_plan_active`` via the ``plan/mode`` event BEFORE the model's
+        next tool call, so same-turn post-approval execution passes.
+        """
+        if self._plan_capable and self._dsh_plan_active and not tdef.read_only:
+            return (
+                f"Plan mode is active — {tdef.name} is disabled until the plan "
+                "is approved. Present your plan via the exit_plan_mode tool "
+                "first; execution tools unlock after approval."
+            )
+        return None
+
+    # -- user-questions bridge (plan review + clarifying parks) --
+
+    APPROVAL_TIMEOUT_SECONDS: float = 3600.0  # 1 h; class attr for test override
+    # Server-side long-poll ceiling per GET — the plugin re-polls, so no
+    # single HTTP request outlives client-side header timeouts.
+    UQ_WAIT_CEILING_SECONDS: float = 30.0
+
+    async def _start_user_questions_ask(self, questions: list[dict[str, Any]]) -> str:
+        """Register one forwarded ``ask()`` as a parked ``requires_action``.
+
+        Called by the transport layer (``app/dsh_user_questions_router``)
+        on the runtime's own loop. Emits the pending event (plus the
+        ``AskUserQuestion`` tool_use anchor for clarifying batches — the
+        conversation page renders the interactive card by overriding that
+        tool block, codex-established pattern; the mapper suppresses dsh's
+        raw ``ask_user_question`` tool_use so the trace doesn't double-
+        render), then spawns ``_resolve_ask`` to await the decision.
+        """
+        if not questions:
+            raise ValueError("user-questions ask carried no questions")
+        pending_id = str(uuid.uuid4())
+        subject = classify_dsh_subject(questions)
+        payload = build_dsh_pending_payload(subject, questions)
+
+        if subject == "clarifying_questions":
+            await self.event_sink.emit(
+                Event(
+                    type="tool_use",
+                    data={
+                        "id": pending_id,
+                        "name": "AskUserQuestion",
+                        "input": {"questions": payload.get("questions", [])},
+                    },
+                )
+            )
+            available = list(AVAILABLE_DECISIONS_CLARIFYING)
+        else:
+            # exit_plan_mode uses the V1 verb set — same rationale as the
+            # Claude bridge: the model owns plan authorship, and "always
+            # approve plans" has no useful semantic.
+            available = list(AVAILABLE_DECISIONS_V1)
+
+        await self.event_sink.emit(
+            Event(
+                type="requires_action",
+                data={
+                    "pending_id": pending_id,
+                    "subject": subject,
+                    "runtime_provider": "deepseek_harness",
+                    "available_decisions": available,
+                    "payload": payload,
+                },
+            )
+        )
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[
+            tuple[Literal["approve", "reject", "answer"], str | None, dict[str, Any] | None]
+        ] = loop.create_future()
+        self._pending_futures[pending_id] = future
+        ask = _UserQuestionsAsk(
+            pending_id=pending_id,
+            subject=subject,
+            questions=[dict(q) for q in questions if isinstance(q, dict)],
+            decision=future,
+            result=loop.create_future(),
+        )
+        self._uq_asks[pending_id] = ask
+        task = asyncio.create_task(self._resolve_ask(ask))
+        self._ask_tasks.add(task)
+        task.add_done_callback(self._ask_tasks.discard)
+        return pending_id
+
+    async def _wait_user_questions_answer(
+        self, ask_id: str, wait_seconds: float
+    ) -> dict[str, Any] | None:
+        """Long-poll one ask's terminal state; ``None`` while pending.
+
+        Raises ``KeyError`` for an unknown ask (the router turns that into
+        404 — e.g. the kernel respawned and the token/ask are gone).
+        Terminal states stay stored so a retried poll is idempotent.
+        """
+        ask = self._uq_asks[ask_id]
+        wait = max(0.0, min(wait_seconds, self.UQ_WAIT_CEILING_SECONDS))
+        try:
+            await asyncio.wait_for(asyncio.shield(ask.result), timeout=wait)
+        except TimeoutError:
+            return None
+        return ask.result.result()
+
+    async def _resolve_ask(self, ask: _UserQuestionsAsk) -> None:
+        """Await the host decision and release the bridge plugin's poll."""
+        try:
+            decision, message, answers = await asyncio.wait_for(
+                ask.decision, timeout=self.APPROVAL_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            await self._emit_synthetic_resolved(ask.pending_id, "expired")
+            if not ask.result.done():
+                ask.result.set_result(
+                    {
+                        "status": "error",
+                        "message": (
+                            "the user did not respond to this request in time; "
+                            "stop here and wait for their next message"
+                        ),
+                    }
+                )
+            return
+        finally:
+            self._pending_futures.pop(ask.pending_id, None)
+
+        if ask.subject == "clarifying_questions":
+            # Close the anchor pair so the card folds once answered
+            # (mirrors the codex clarifying flow).
+            content = (
+                json.dumps(answers or {}, ensure_ascii=False)
+                if decision == "answer"
+                else (message or "declined")
+            )
+            await self.event_sink.emit(
+                Event(
+                    type="tool_result",
+                    data={
+                        "id": ask.pending_id,
+                        "content": content,
+                        "is_error": decision != "answer",
+                    },
+                )
+            )
+
+        envelope = build_ask_answer_envelope(ask.subject, ask.questions, decision, message, answers)
+        if not ask.result.done():
+            ask.result.set_result({"status": "answered", "answer": envelope})
+
+    async def _emit_synthetic_resolved(self, pending_id: str, decision: str) -> None:
+        """Runtime-side seal (timeout / interrupt) — same shape as codex."""
+        try:
+            await self.event_sink.emit(
+                Event(
+                    type="action_resolved",
+                    data={
+                        "pending_id": pending_id,
+                        "decision": decision,
+                        "message": None,
+                        "resolved_by": "system",
+                    },
+                )
+            )
+        except Exception:
+            logger.exception(
+                "deepseek_harness: failed to emit synthetic action_resolved for %s",
+                pending_id,
+            )
 
     async def _ensure_process(self, session: Session) -> None:
         if self._client is not None and self._client.is_running:
@@ -450,6 +741,12 @@ class DeepSeekHarnessRuntime:
                 logger.debug("stale dsh client close failed", exc_info=True)
         cleanup_composition(self._config_path)
         self._config_path = None
+        if self._uq_token is not None:
+            # A failed spawn skips ``close()`` — drop the previous spawn's
+            # bridge token here so the registry never accumulates dead
+            # credentials across respawn attempts.
+            unregister_user_questions_bridge(self._uq_token)
+            self._uq_token = None
 
         launch = self._launch_spec or resolve_launch()
         if launch is None:
@@ -461,6 +758,25 @@ class DeepSeekHarnessRuntime:
         skills_root: str | None = None
         if session.skills:
             skills_root = prepare_codex_skills(self.workspace_root, session.skills)
+
+        self._plan_capable = launch.plan_capable
+        user_questions_url: str | None = None
+        if launch.plan_capable:
+            # Fresh credential per spawn — the token IS the auth for the
+            # user-questions endpoint (PTC's model); revoked at close.
+            self._uq_token = secrets.token_hex(16)
+            register_user_questions_bridge(
+                self._uq_token,
+                UserQuestionsBridgeRecord(
+                    start_ask=self._start_user_questions_ask,
+                    wait_answer=self._wait_user_questions_answer,
+                ),
+            )
+            user_questions_url = user_questions_endpoint(self._uq_token)
+            # The bridge plugin converges dsh-side plan state to the baked
+            # ``planActive`` on the first pre-step; treat it as in force
+            # from spawn (wire ``plan/mode`` events keep it honest after).
+            self._dsh_plan_active = session.mode == "plan"
 
         # The session's model_settings is the live value (PATCH /effort
         # mutates it between turns — codex reads it per turn the same way);
@@ -474,6 +790,8 @@ class DeepSeekHarnessRuntime:
             skills_root=skills_root,
             model_settings=model_settings,
             kernel_toolkit=self._register_kernel_toolkit(session),
+            plan_capable=launch.plan_capable,
+            user_questions_url=user_questions_url,
         )
         self._composition_fingerprint = _composition_fingerprint(session)
 
@@ -579,6 +897,27 @@ class DeepSeekHarnessRuntime:
             f"{body}\n"
             "</conversation-history>"
         )
+
+
+class _UserQuestionsAsk:
+    """One forwarded ``ask()``: its park, decision, and terminal state."""
+
+    def __init__(
+        self,
+        *,
+        pending_id: str,
+        subject: str,
+        questions: list[dict[str, Any]],
+        decision: asyncio.Future[
+            tuple[Literal["approve", "reject", "answer"], str | None, dict[str, Any] | None]
+        ],
+        result: asyncio.Future[dict[str, Any]],
+    ) -> None:
+        self.pending_id = pending_id
+        self.subject = subject
+        self.questions = questions
+        self.decision = decision
+        self.result = result
 
 
 class _TurnOutcome:

@@ -290,5 +290,10 @@ async def test_unimplemented_port_surface(tmp_path: Path) -> None:
     assert runtime.supports_native_continuation is False
     with pytest.raises(NotImplementedError):
         await runtime.fork_session(_session(), source_native_session_id="x")
+    # ``submit_action`` is implemented since the user-questions bridge
+    # (plan mode slice 3): an unknown/settled pending returns silently —
+    # the orchestrator owns the conflict check — and only the never-
+    # advertised ``approve_with_changes`` verb raises.
+    await runtime.submit_action("p1", "approve")
     with pytest.raises(NotImplementedError):
-        await runtime.submit_action("p1", "approve")
+        await runtime.submit_action("p1", "approve_with_changes")
