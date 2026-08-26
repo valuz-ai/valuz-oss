@@ -259,6 +259,19 @@ export const ApprovalCard = memo(function ApprovalCard({
   const meta = _SUBJECT_META[subject] ?? _SUBJECT_META.tool_input;
   const Icon = meta.icon;
 
+  // Plan review reads better with plan-specific verbs (product decision:
+  // one "approve & start executing" button across runtimes; "reject"
+  // becomes "keep planning" — the feedback text goes back to the model,
+  // which refines inside plan mode).
+  const approveLabelKey =
+    subject === "exit_plan_mode"
+      ? "conversation.planApproveAndRun"
+      : "conversation.approvalApprove";
+  const rejectLabelKey =
+    subject === "exit_plan_mode"
+      ? "conversation.planKeepPlanning"
+      : "conversation.approvalReject";
+
   const canEdit =
     availableDecisions.includes("approve_with_changes") &&
     originalInput !== null;
@@ -333,7 +346,7 @@ export const ApprovalCard = memo(function ApprovalCard({
                 className="border-rose-200 text-rose-700 hover:bg-rose-50"
               >
                 <XCircle className="mr-1.5 h-3 w-3" />
-                {t("conversation.approvalReject")}
+                {t(rejectLabelKey as Parameters<typeof t>[0])}
               </Button>
               <Button
                 size="sm"
@@ -346,7 +359,7 @@ export const ApprovalCard = memo(function ApprovalCard({
                 ) : (
                   <CheckCircle2 className="mr-1.5 h-3 w-3" />
                 )}
-                {t("conversation.approvalApprove")}
+                {t(approveLabelKey as Parameters<typeof t>[0])}
               </Button>
               {(canEdit || canApproveForSession) && (
                 <DropdownMenu>

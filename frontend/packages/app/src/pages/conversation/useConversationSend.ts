@@ -23,7 +23,7 @@ import {
   type UseStagedAttachmentsResult,
   type SessionAttachmentItem,
 } from "@valuz/core";
-import type { ConversationTurn } from "@valuz/shared";
+import { supportsPlanMode, type ConversationTurn } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import type { I18nKey } from "@valuz/shared";
 import { resolveBrainOverride } from "../conversation-brain-override";
@@ -53,6 +53,7 @@ type ConversationSendParams = {
   selectedRuntimeId: RuntimeId | null;
   selectedEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   selectedPermissionMode: "default" | "auto_review" | "full_access";
+  selectedSessionMode: "default" | "plan" | "goal";
   selectedMcpSlugs: string[];
   selectedComposerSkill: SkillView | null;
   /** ADR — client-declared host location of this conversation panel (e.g.
@@ -163,6 +164,7 @@ export function useConversationSend({
   selectedRuntimeId,
   selectedEffort,
   selectedPermissionMode,
+  selectedSessionMode,
   selectedMcpSlugs,
   selectedComposerSkill,
   hostRef,
@@ -323,6 +325,22 @@ export function useConversationSend({
           }
         }
       }
+      // Session working mode: the composer's plan toggle is staged
+      // locally while no session exists (create carries no ``mode``
+      // field by design — one kernel-validated write path). Apply it
+      // BEFORE the first message goes out so the first turn's runtime
+      // reconcile already enters plan mode. Await matters: a fire-and-
+      // forget PATCH could lose the race against sendMessage.
+      if (
+        selectedSessionMode === "plan" &&
+        supportsPlanMode(created.runtime_provider)
+      ) {
+        try {
+          created = await sessionsApi.updateMode(created.id, "plan");
+        } catch {
+          /* non-fatal — the session simply stays in default mode */
+        }
+      }
       // 10-new-conversation-guidance slice 3: remember which agent this 临时对话
       // used so the next new conversation pre-selects it.
       if (isChat && selectedAgentSlug) setLastTempAgent(selectedAgentSlug);
@@ -422,6 +440,9 @@ export function useConversationSend({
       // Project-detail flow has no equivalent bug because its
       // ``handleSend`` is a plain function (no closure cache).
       selectedPermissionMode,
+      // Same closure-staleness trap as permission mode: the plan toggle
+      // is read at creation time to PATCH the fresh session.
+      selectedSessionMode,
       selectedEffort,
       selectedAgentSlug,
       // Gates ``brainOverride``: a bound agent owns the brain until the user

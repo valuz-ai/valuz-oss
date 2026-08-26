@@ -12,7 +12,7 @@ import {
   type SkillView,
 } from "@valuz/core";
 import { cn, Composer, type ComposerConnector } from "@valuz/ui";
-import type { I18nKey } from "@valuz/shared";
+import { supportsPlanMode, type I18nKey } from "@valuz/shared";
 import { QueuedInputsBar } from "../../components/QueuedInputsBar";
 import { CreateAgentDialog } from "../../components/CreateAgentDialog";
 import { ExecutionLocationBar } from "../../components/ExecutionLocationBar";
@@ -94,6 +94,10 @@ type ComposerPaneProps = {
   selectedEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   setSelectedEffort: Dispatch<
     SetStateAction<"low" | "medium" | "high" | "xhigh" | "max" | null>
+  >;
+  selectedSessionMode: "default" | "plan" | "goal";
+  setSelectedSessionMode: Dispatch<
+    SetStateAction<"default" | "plan" | "goal">
   >;
   selectedAgentSkillItems: ComposerConfig["selectedAgentSkillItems"];
   composerMentionSkills: ComposerConfig["composerMentionSkills"];
@@ -187,6 +191,8 @@ export function ComposerPane({
   id,
   selectedEffort,
   setSelectedEffort,
+  selectedSessionMode,
+  setSelectedSessionMode,
   selectedAgentSkillItems,
   composerMentionSkills,
   availableSkills,
@@ -484,6 +490,24 @@ export function ComposerPane({
             // ``handleSend`` instead.
             if (!isNewSession && id) {
               void sessionsApi.updatePermissionMode(id, mode).catch(() => {
+                /* non-fatal — surfaced by error toast pipeline */
+              });
+            }
+          }}
+          // Session working mode (docs/design/session-modes.md). Live
+          // sessions PATCH ``/mode`` directly (the kernel applies plan on
+          // the next reconcile and emits ``mode_changed``); a new-session
+          // toggle stages the value here and the send path PATCHes it onto
+          // the freshly created session before the first message. Gated on
+          // the effective runtime — deepagents/dsh never see the toggle.
+          sessionMode={selectedSessionMode}
+          planModeAvailable={supportsPlanMode(
+            selectedSession?.runtime_provider ?? selectedRuntimeId,
+          )}
+          onSessionModeChange={(nextMode) => {
+            setSelectedSessionMode(nextMode);
+            if (!isNewSession && id) {
+              void sessionsApi.updateMode(id, nextMode).catch(() => {
                 /* non-fatal — surfaced by error toast pipeline */
               });
             }

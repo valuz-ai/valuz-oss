@@ -355,6 +355,8 @@ function ConversationViewPage(props: ConversationViewProps) {
               id={core.id}
               selectedEffort={core.selectedEffort}
               setSelectedEffort={core.setSelectedEffort}
+              selectedSessionMode={core.selectedSessionMode}
+              setSelectedSessionMode={core.setSelectedSessionMode}
               selectedAgentSkillItems={core.selectedAgentSkillItems}
               composerMentionSkills={core.composerMentionSkills}
               availableSkills={core.availableSkills}
@@ -509,6 +511,8 @@ function ConversationViewPanel(props: ConversationViewProps) {
         id={core.id}
         selectedEffort={core.selectedEffort}
         setSelectedEffort={core.setSelectedEffort}
+        selectedSessionMode={core.selectedSessionMode}
+        setSelectedSessionMode={core.setSelectedSessionMode}
         selectedAgentSkillItems={core.selectedAgentSkillItems}
         composerMentionSkills={core.composerMentionSkills}
         availableSkills={core.availableSkills}

@@ -2257,6 +2257,34 @@ class SessionService:
         )
         return _session_to_detail(updated)
 
+    async def set_session_mode(
+        self, session_id: str, mode: str, user_id: str | None = None
+    ) -> SessionDetail:
+        """Enter or leave a session working mode (``default``/``plan``/``goal``).
+
+        Thin façade over the kernel's ``POST /sessions/{id}/mode`` — the
+        kernel owns the validation (400 for deepagents / deepseek_harness:
+        no native plan/goal primitive), the write, and the
+        ``mode_changed{by:"user"}`` event. Each runtime lowers the mode
+        natively on its next reconcile (docs/design/session-modes.md):
+        Claude plan applies the typed ``set_permission_mode("plan")``
+        mutator (its ``/plan`` slash is interactive-CLI-only); goal wraps
+        the next non-slash user message as ``/goal <text>``; exit restores
+        the session's ``permission_mode`` / dispatches ``/goal clear``.
+
+        Kernel-shaped errors (``KernelBadRequestError`` for unsupported
+        runtimes) propagate to the route layer, which re-surfaces them
+        verbatim as HTTP errors.
+        """
+        # ``user_id: str | None`` matches every sibling lever in this file;
+        # the reader/client protocols are annotated stricter than their
+        # owner-scoping runtime behavior — same shape as the sibling calls.
+        session = await data_reader().get_session(user_id, session_id)  # type: ignore[arg-type]
+        if session is None:
+            raise _kernel_session_not_found(session_id)
+        updated = await kernel_client.set_mode(user_id, session_id, mode)  # type: ignore[arg-type]
+        return _session_to_detail(updated)
+
     async def set_session_effort(
         self, session_id: str, effort: str | None, user_id: str | None = None
     ) -> SessionDetail:

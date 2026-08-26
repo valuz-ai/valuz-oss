@@ -35,7 +35,7 @@ import {
 } from "@valuz/core";
 import { homeSuggestions } from "@valuz/app/lib/prototype-data";
 import { useTranslation } from "@valuz/core";
-import { assetUrl } from "@valuz/shared";
+import { assetUrl, supportsPlanMode } from "@valuz/shared";
 import { OriginBadge } from "../components/ExecutionLocationPicker";
 import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
 
@@ -73,6 +73,13 @@ export const ConversationsHomePage = () => {
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<
     "default" | "auto_review" | "full_access"
   >("full_access");
+  // Session working mode (docs/design/session-modes.md). Staged locally
+  // until the session is minted, then applied via PATCH ``/mode`` right
+  // after create — create carries no ``mode`` field by design (one
+  // kernel-validated write path).
+  const [selectedSessionMode, setSelectedSessionMode] = useState<
+    "default" | "plan" | "goal"
+  >("default");
   // Multi-target editions: where the quick chat runs. ``null`` follows the
   // registered default; single-target builds have no targets and the picker
   // renders nothing. Locked once the session is minted (same lifecycle as
@@ -289,10 +296,22 @@ export const ConversationsHomePage = () => {
         mcp_provider_slugs: undefined,
       };
     }
-    const session = await sessionsApi.create(
+    let session = await sessionsApi.create(
       payload,
       target ? { baseUrl: target.baseUrl } : undefined,
     );
+    // Apply the staged plan toggle before any message goes out so the
+    // first turn's runtime reconcile already enters plan mode.
+    if (
+      selectedSessionMode === "plan" &&
+      supportsPlanMode(session.runtime_provider)
+    ) {
+      try {
+        session = await sessionsApi.updateMode(session.id, "plan");
+      } catch {
+        /* non-fatal — the session simply stays in default mode */
+      }
+    }
     if (target) {
       recordEntityOrigin(session.id, target.id);
       // Remote quick-chats mint a managed project that no list ever surfaces
@@ -553,6 +572,18 @@ export const ConversationsHomePage = () => {
               onPermissionModeChange={(mode) => {
                 setSelectedPermissionMode(mode);
                 setComposerTouched(true);
+              }}
+              sessionMode={selectedSessionMode}
+              planModeAvailable={supportsPlanMode(selectedRuntimeId)}
+              onSessionModeChange={(nextMode) => {
+                setSelectedSessionMode(nextMode);
+                // A session may already exist (attach-on-upload mints it
+                // before the first send) — reconcile it immediately.
+                if (sessionId) {
+                  void sessionsApi.updateMode(sessionId, nextMode).catch(() => {
+                    /* non-fatal */
+                  });
+                }
               }}
               // ADR-006: the first attach mints the session, freezing
               // model/runtime — lock the pickers once that happens.

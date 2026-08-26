@@ -302,7 +302,13 @@
     "modeTask": "Task",
     "sendTask": "Launch task",
     "taskPlaceholder": "Describe the task goal — the lead agent will take over and run it in the background.",
-    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page."
+    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page.",
+    "planMode": "Plan mode",
+    "planModeHint": "Plan first — execute after approval",
+    "planModeTurnOff": "Turn plan mode off",
+    "planChip": "Plan",
+    "planChipTooltip": "Plan mode on — click to turn off",
+    "planPlaceholder": "Describe your task to generate a plan first..."
   },
   "conversation": {
     "addAttachment": "Add attachment",
@@ -528,6 +534,8 @@
     "decisionHandled": "Handled",
     "approvalApprove": "Approve",
     "approvalReject": "Reject",
+    "planApproveAndRun": "Approve & start executing",
+    "planKeepPlanning": "Keep planning",
     "approvalApproveWithChanges": "Edit & Approve",
     "approvalApproveForSession": "Always for this session",
     "approvalApproveForSessionDisabled": "Session-scoped rule not supported here",

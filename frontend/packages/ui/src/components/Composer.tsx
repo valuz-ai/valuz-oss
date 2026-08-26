@@ -13,6 +13,7 @@ import {
   FolderClosed,
   Gauge,
   Hand,
+  Lightbulb,
   Link2,
   Loader2,
   Lock,
@@ -410,6 +411,25 @@ export interface ComposerProps {
    */
   permissionModeLocked?: boolean;
   /**
+   * Session working mode (kernel ``Session.mode``,
+   * docs/design/session-modes.md). When set together with
+   * ``onSessionModeChange`` and ``planModeAvailable``, the "+" menu
+   * grows a "Plan mode" toggle entry and — while ``plan`` is active —
+   * an orange chip renders next to the approval-mode picker (click to
+   * turn off, mirroring the codex/dsh composers). ``undefined`` hides
+   * the affordance entirely (back-compat).
+   */
+  sessionMode?: "default" | "plan" | "goal" | null;
+  /** Called when the user toggles plan mode from the composer. */
+  onSessionModeChange?: (mode: "default" | "plan") => void;
+  /**
+   * Whether the session's runtime supports plan mode. Only
+   * ``claude_agent`` lowers plan natively today (codex follows with
+   * its ``collaborationMode`` wiring); deepagents / deepseek_harness
+   * have no native primitive and the server 400s them.
+   */
+  planModeAvailable?: boolean;
+  /**
    * Worktree isolation toggle for the NEW conversation this composer will
    * create. Hidden when undefined (back-compat) or `available: false`
    * (project isn't a git repo / git missing). The choice is frozen at
@@ -586,6 +606,9 @@ export const Composer = ({
   permissionMode,
   onPermissionModeChange,
   permissionModeLocked = false,
+  sessionMode,
+  onSessionModeChange,
+  planModeAvailable = false,
   worktree,
   onWorktreeToggle,
   effort,
@@ -1379,6 +1402,13 @@ export const Composer = ({
   const runtimeLacksAutoReview =
     selectedRuntimeId === "deepagents" || selectedRuntimeId === "deepseek_harness";
 
+  // Session working mode (docs/design/session-modes.md). The composer
+  // only *toggles* plan; goal is entered elsewhere (task path). The "+"
+  // menu entry and the active chip both need the handler AND runtime
+  // support — a session on deepagents/dsh gets neither affordance.
+  const planActive = sessionMode === "plan";
+  const planToggleVisible = planModeAvailable && onSessionModeChange !== undefined;
+
   // EFFORT_LABELS — visible labels for the reasoning-budget selector
   // (kernel V5+bba3014 ``ModelSettings.effort``). No "Default" slot:
   // a ``null`` prop (legacy session row) coerces to ``EFFORT_FALLBACK``
@@ -1626,7 +1656,9 @@ export const Composer = ({
               data-placeholder={t(
                 (mode === "task"
                   ? "composer.taskPlaceholder"
-                  : "conversation.inputPlaceholder") as Parameters<typeof t>[0],
+                  : planActive
+                    ? "composer.planPlaceholder"
+                    : "conversation.inputPlaceholder") as Parameters<typeof t>[0],
               )}
               data-empty={currentValue ? undefined : ""}
               className={cn(
@@ -1746,6 +1778,46 @@ export const Composer = ({
                       max: String(MAX_SESSION_ATTACHMENTS),
                     })}
                   </p>
+                )}
+                {/* Plan-mode toggle (docs/design/session-modes.md) —
+                    mirrors the codex composer's Add-menu entry. While
+                    active, the orange chip next to the approval picker
+                    is the turn-off affordance; this entry flips both
+                    ways for discoverability. */}
+                {planToggleVisible && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        onSessionModeChange?.(planActive ? "default" : "plan")
+                      }
+                    >
+                      <Lightbulb
+                        className={cn(
+                          "h-4 w-4",
+                          planActive ? "text-warning-text" : "text-ink-meta",
+                        )}
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-ink-heading">
+                          {t("composer.planMode" as Parameters<typeof t>[0])}
+                        </div>
+                        <div className="truncate text-2xs text-ink-meta">
+                          {planActive
+                            ? t(
+                                "composer.planModeTurnOff" as Parameters<
+                                  typeof t
+                                >[0],
+                              )
+                            : t(
+                                "composer.planModeHint" as Parameters<
+                                  typeof t
+                                >[0],
+                              )}
+                        </div>
+                      </div>
+                    </DropdownMenuItem>
+                  </>
                 )}
                 {(showSkillButton || connectors.length > 0) && (
                   <DropdownMenuSeparator />
@@ -2054,6 +2126,33 @@ export const Composer = ({
                   </div>
                 )}
               </div>
+            )}
+            {/* Plan-mode active chip — renders right after the approval
+                picker (mirrors the codex/dsh composer bars). Click = turn
+                off. Entry point lives in the "+" menu; this chip is the
+                always-visible state + exit affordance while active. */}
+            {planToggleVisible && planActive && (
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-pressed
+                      className="inline-flex h-7 items-center gap-1 rounded-lg bg-warning-light px-2 text-xs leading-none text-warning-text transition-colors duration-[120ms] hover:opacity-80"
+                      onClick={() => onSessionModeChange?.("default")}
+                    >
+                      <Lightbulb className="block h-3 w-3 shrink-0" />
+                      <span className="max-w-[100px] truncate leading-none">
+                        {t("composer.planChip" as Parameters<typeof t>[0])}
+                      </span>
+                      <X className="block h-3 w-3 shrink-0" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {t("composer.planChipTooltip" as Parameters<typeof t>[0])}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {/* Worktree isolation toggle — only for projects that are git
                 repos (``worktree.available``). A simple on/off chip, not a

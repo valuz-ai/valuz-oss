@@ -302,7 +302,13 @@
     "modeTask": "Task",
     "sendTask": "发起 Task",
     "taskPlaceholder": "描述任务目标，发送后主 Agent 接管，后台执行",
-    "taskHint": "主 Agent 全程对目标负责：自主拆解、按需派子任务给队友、校验汇总。可随时在任务详情页跟踪 / 介入。"
+    "taskHint": "主 Agent 全程对目标负责：自主拆解、按需派子任务给队友、校验汇总。可随时在任务详情页跟踪 / 介入。",
+    "planMode": "Plan 模式",
+    "planModeHint": "先规划，批准后再执行",
+    "planModeTurnOff": "关闭 Plan 模式",
+    "planChip": "Plan",
+    "planChipTooltip": "Plan 模式已开启 — 点击关闭",
+    "planPlaceholder": "描述任务，先生成计划…"
   },
   "conversation": {
     "addAttachment": "添加附件",
@@ -528,6 +534,8 @@
     "decisionHandled": "已处理",
     "approvalApprove": "批准",
     "approvalReject": "拒绝",
+    "planApproveAndRun": "批准并开始执行",
+    "planKeepPlanning": "继续规划",
     "approvalApproveWithChanges": "修改后批准",
     "approvalApproveForSession": "本会话一直放行",
     "approvalApproveForSessionDisabled": "此调用不支持会话级规则",
