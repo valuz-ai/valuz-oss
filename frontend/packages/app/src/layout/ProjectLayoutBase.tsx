@@ -94,6 +94,7 @@ import {
 import { OriginIcon } from "../components/ExecutionLocationPicker";
 import { useForkSession } from "../hooks/use-fork-session";
 import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
+import { projectsWithEndedRuns } from "./project-runs-refresh";
 import { PreservedRouteOutlet } from "./PreservedRouteOutlet";
 import { RightPanelControls } from "./RightPanelControls";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
@@ -122,6 +123,10 @@ export interface ProjectLayoutBaseProps {
 // shows 5 before "show more", and every row costs one kernel enrichment read
 // server-side — a small window keeps N projects × one request cheap.
 const PROJECT_RUNS_LIMIT = 20;
+// How long to wait after a run leaves the running pool before re-reading its
+// project's window: long enough for the row's status to have flipped in the DB,
+// and it collapses a turn's burst of transitions into one fetch.
+const PROJECT_RUNS_SETTLE_MS = 1500;
 
 const NAV_ICON_MAP: Record<string, DesktopSidebarBottomItem["icon"]> = {
   assistant: "assistant",
@@ -537,31 +542,93 @@ export function ProjectLayoutBase({
     () => [...projectIdSet].sort().join(","),
     [projectIdSet],
   );
+
+  // One request per project, so this fans out — keep it keyed to what actually
+  // invalidates a project's window.
+  const fetchProjectRuns = useCallback(
+    async (ids: readonly string[], replace: boolean) => {
+      if (ids.length === 0) return;
+      const entries = await Promise.all(
+        ids.map((id) =>
+          runsApi
+            .list({
+              status: "finished",
+              projectId: id,
+              limit: PROJECT_RUNS_LIMIT,
+            })
+            .then((res) => [id, res.runs] as const)
+            .catch(() => [id, [] as RunSummary[]] as const),
+        ),
+      );
+      setProjectRuns((prev) => {
+        // A refreshed subset merges; a changed project set replaces, so a
+        // project that went away does not keep its rows.
+        const next = replace ? new Map<string, RunSummary[]>() : new Map(prev);
+        for (const [id, runs] of entries) next.set(id, runs);
+        return next;
+      });
+    },
+    [],
+  );
+
+  // The project set changed (added / removed / signed in): every project needs
+  // its first window.
   useEffect(() => {
     const ids = projectIdsKey ? projectIdsKey.split(",") : [];
     if (ids.length === 0) {
       setProjectRuns((prev) => (prev.size === 0 ? prev : new Map()));
       return;
     }
-    let cancelled = false;
-    void Promise.all(
-      ids.map((id) =>
-        runsApi
-          .list({
-            status: "finished",
-            projectId: id,
-            limit: PROJECT_RUNS_LIMIT,
-          })
-          .then((res) => [id, res.runs] as const)
-          .catch(() => [id, [] as RunSummary[]] as const),
-      ),
-    ).then((entries) => {
-      if (!cancelled) setProjectRuns(new Map(entries));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectIdsKey, liveRunIds]);
+    void fetchProjectRuns(ids, true);
+  }, [projectIdsKey, fetchProjectRuns]);
+
+  // A run ended: ONLY the project that owned it has a stale window.
+  //
+  // This used to key on ``liveRunIds`` and re-fetch every project, which meant
+  // one agent starting or finishing anything fanned out N requests (times the
+  // number of execution targets). With a handful of projects open that was a
+  // dozen calls in the same tick, several times a turn, to answer a question
+  // about one of them.
+  //
+  // The wait is the same 1.5s the global refresh retries on: the row's status
+  // may not have flipped in the DB by the time it leaves the running pool. It
+  // doubles as the debounce that collapses a turn's burst of transitions.
+  const liveRunProjectsRef = useRef<Map<string, string>>(new Map());
+  const pendingProjectRefreshRef = useRef<Set<string>>(new Set());
+  const projectRefreshTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    const current = new Map<string, string>();
+    for (const run of liveRuns) {
+      if (run.project_id) current.set(run.session_id, run.project_id);
+    }
+    const previous = liveRunProjectsRef.current;
+    liveRunProjectsRef.current = current;
+
+    for (const projectId of projectsWithEndedRuns(
+      previous,
+      current,
+      projectIdSet,
+    )) {
+      pendingProjectRefreshRef.current.add(projectId);
+    }
+    if (pendingProjectRefreshRef.current.size === 0) return;
+    if (projectRefreshTimerRef.current !== null) return;
+    projectRefreshTimerRef.current = window.setTimeout(() => {
+      projectRefreshTimerRef.current = null;
+      const ids = [...pendingProjectRefreshRef.current];
+      pendingProjectRefreshRef.current.clear();
+      void fetchProjectRuns(ids, false);
+    }, PROJECT_RUNS_SETTLE_MS);
+  }, [liveRunIds, liveRuns, projectIdSet, fetchProjectRuns]);
+
+  useEffect(
+    () => () => {
+      if (projectRefreshTimerRef.current !== null) {
+        window.clearTimeout(projectRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   // Merge live + finished runs (dedupe by session), newest first, then split
   // into per-project buckets and a loose "Chats" list. Each project's chats +
