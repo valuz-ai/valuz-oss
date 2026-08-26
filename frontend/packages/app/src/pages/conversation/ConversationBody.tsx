@@ -1,7 +1,7 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, Settings } from "lucide-react";
-import { useTranslation } from "@valuz/core";
+import { CheckCircle2, Loader2, Settings } from "lucide-react";
+import { sessionsApi, useTranslation } from "@valuz/core";
 import type { ConversationTurn } from "@valuz/shared";
 import {
   Button,
@@ -85,6 +85,13 @@ type ConversationBodyProps = {
    *  the embedded ``variant="panel"`` conversation omits it (a 345px
    *  workbench panel has no gutter to put a rail in). */
   activeTurnIndex?: number;
+  /** Session working mode — gates the plan-proposal approve button
+   *  (rendered only while the session is still in plan mode). */
+  selectedSessionMode?: "default" | "plan" | "goal";
+  /** Optimistic mode update after the approve PATCH lands. */
+  setSelectedSessionMode?: Dispatch<SetStateAction<"default" | "plan" | "goal">>;
+  /** Send path for the auto "start executing" turn after plan approval. */
+  performSend?: (overrideText?: string) => Promise<void>;
 };
 
 /**
@@ -133,9 +140,48 @@ export function ConversationBody({
   forkingMessageId,
   onForkFromTurn,
   activeTurnIndex,
+  selectedSessionMode,
+  setSelectedSessionMode,
+  performSend,
 }: ConversationBodyProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+
+  // Plan-proposal approval (codex plan mode — docs/design/session-modes.md
+  // §codex). Approval is CLIENT-driven: no runtime round-trip exists, so
+  // "批准并开始执行" = PATCH the session mode back to default, then start
+  // an execution turn. The button renders only on the newest proposal
+  // while the session is still in plan mode; older proposals (and every
+  // proposal after approval) are plain records.
+  const [planApproving, setPlanApproving] = useState(false);
+  const lastPlanTurnId = useMemo(() => {
+    for (let i = effectiveTurns.length - 1; i >= 0; i -= 1) {
+      const turn = effectiveTurns[i]!;
+      if (turn.blocks.some((b) => b.kind === "plan_proposal")) return turn.id;
+    }
+    return null;
+  }, [effectiveTurns]);
+  const planActionable =
+    lastPlanTurnId !== null &&
+    selectedSessionMode === "plan" &&
+    !displayBusy &&
+    selectedSessionId !== null &&
+    performSend !== undefined;
+  const handleApprovePlan = async () => {
+    if (!planActionable || !selectedSessionId || planApproving) return;
+    setPlanApproving(true);
+    try {
+      await sessionsApi.updateMode(selectedSessionId, "default");
+      setSelectedSessionMode?.("default");
+      await performSend?.(
+        t("conversation.planApprovedRun" as Parameters<typeof t>[0]),
+      );
+    } catch {
+      /* non-fatal — surfaced by the error toast pipeline */
+    } finally {
+      setPlanApproving(false);
+    }
+  };
 
   return (
     <>
@@ -235,7 +281,16 @@ export function ConversationBody({
                 // action row re-renders (spinner/disabled) while a fork runs
                 // (#879). "session" covers a whole-session (header) fork.
                 turnActionsKey={
-                  forkInFlight ? (forkingMessageId ?? "session") : null
+                  [
+                    forkInFlight ? (forkingMessageId ?? "session") : "",
+                    // Plan-approval state lives outside the turn object —
+                    // fold it in so memoized rows re-render when the
+                    // button appears/disables (same contract as the fork
+                    // spinner above).
+                    planActionable ? `plan:${lastPlanTurnId}:${planApproving}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join("|") || null
                 }
                 // Completes the slot added in #744: the prop existed but nothing
                 // passed it, so the slot was unreachable. Overlays register
@@ -293,6 +348,23 @@ export function ConversationBody({
                     context={{ turn, role }}
                   />
                 )}
+                renderPlanActions={(turn) =>
+                  planActionable && turn.id === lastPlanTurnId ? (
+                    <Button
+                      size="sm"
+                      onClick={() => void handleApprovePlan()}
+                      disabled={planApproving}
+                      className="bg-brand text-white hover:bg-brand-hover"
+                    >
+                      {planApproving ? (
+                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="mr-1.5 h-3 w-3" />
+                      )}
+                      {t("conversation.planApproveAndRun" as Parameters<typeof t>[0])}
+                    </Button>
+                  ) : null
+                }
                 // Remount on true session switches so the virtualizer's
                 // internal state starts fresh. The /conversation/new → real-id
                 // promotion keeps this key stable so the first sent turn

@@ -52,6 +52,7 @@ export * from "./components/conversation/AskUserQuestionCard";
 export * from "./components/conversation/RequiresActionCard";
 export * from "./components/conversation/ApprovalCard";
 export * from "./components/conversation/ApprovalRejectInline";
+export * from "./components/conversation/PlanProposalCard";
 export * from "./components/conversation/ApprovalEditModal";
 export * from "./components/conversation/ApprovalResolvedStrip";
 export * from "./components/conversation/AutoApprovedStrip";

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -67,7 +68,12 @@ from openai_codex.generated.v2_all import (
 from pydantic import RootModel
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import ExactArgsRuleMatcher, RuntimeApprovalRuleMatcher
-from src.core.events import AVAILABLE_DECISIONS_V1_WITH_SESSION, Event, EventSink
+from src.core.events import (
+    AVAILABLE_DECISIONS_CLARIFYING,
+    AVAILABLE_DECISIONS_V1_WITH_SESSION,
+    Event,
+    EventSink,
+)
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
@@ -87,8 +93,10 @@ from src.core.types import (
 # re-export them here so existing call sites importing from
 # ``runtime.py`` (e.g. tests written before the split) keep working.
 from src.runtimes.codex.approval_bridge import (
+    _REQUEST_USER_INPUT_METHOD,
     _build_approval_response,
     _build_codex_pending_payload,
+    _build_request_user_input_response,
     _classify_codex_subject,
     _extract_matcher_inputs,
 )
@@ -204,13 +212,22 @@ class CodexRuntime:
         # Approval bridge (Phase 2).
         # ``_pending_futures`` maps pending_id -> asyncio.Future that
         # ``_approval_handler`` is parked on via cross-thread Future.
-        # ``submit_action`` resolves the future to (decision, message).
+        # ``submit_action`` resolves the future to (decision, message,
+        # answers) — ``answers`` is non-None only for the plan-mode
+        # ``clarifying_questions`` subject (``item/tool/requestUserInput``).
         # ``_cached_permission_mode`` is captured at ``_build_thread_kwargs``
         # time so the sync handler (which doesn't receive session) knows
         # whether to park or auto-accept. PATCHing session.permission_mode
         # mid-turn has no effect until the next turn (cold-reload semantics).
         self._pending_futures: dict[
-            str, asyncio.Future[tuple[Literal["approve", "reject"], str | None]]
+            str,
+            asyncio.Future[
+                tuple[
+                    Literal["approve", "reject", "answer"],
+                    str | None,
+                    dict[str, Any] | None,
+                ]
+            ],
         ] = {}
         self._cached_permission_mode: Literal["default", "auto_review", "full_access"] = (
             "full_access"
@@ -474,13 +491,28 @@ class CodexRuntime:
             # which overrides ``params.input``; the typed ``input`` here
             # just satisfies ``TurnStartParams``' required field.
             turn_input = UserInput(root=TextUserInput(type="text", text=prompt))
+            turn_params: Any = TurnStartParams(
+                thread_id=self._thread.id, input=[turn_input], **turn_kwargs
+            )
+            # Plan-mode lowering (docs/design/session-modes.md §codex):
+            # ``collaborationMode`` is an experimental field the generated
+            # ``TurnStartParams`` doesn't know — pydantic would silently
+            # drop it as a kwarg. Serialize the typed params exactly the
+            # way the SDK does (``_params_dict``) and merge the raw key;
+            # the SDK passes dicts through untouched.
+            collab = self._build_collaboration_mode(session)
+            if collab is not None:
+                dumped = turn_params.model_dump(by_alias=True, exclude_none=True, mode="json")
+                dumped["collaborationMode"] = collab
+                turn_params = dumped
             t_dispatch = time.monotonic()
             await self._emit_turn_phase("dispatch_started")
             turn_resp = await self._codex._client.turn_start(
                 self._thread.id,
                 prompt,
-                TurnStartParams(thread_id=self._thread.id, input=[turn_input], **turn_kwargs),
+                turn_params,
             )
+            self._record_collaboration_mode_sent(session, collab)
             self._active_turn = AsyncTurnHandle(self._codex, self._thread.id, turn_resp.turn.id)
             # Overwrite (never reset at run() entry): if a later turn fails
             # before ``turn/start`` the previous consume already cleared the
@@ -788,42 +820,34 @@ class CodexRuntime:
         then user clicked); we return silently — the orchestrator owns the
         idempotency / conflict check on its side.
 
-        ``decision="answer"`` is reserved for ``clarifying_questions``
-        pendings (Claude SDK ``AskUserQuestion``). Codex doesn't emit
-        that subject — the orchestrator's subject↔decision invariant
-        rejects mismatches at 400 before reaching us — so receiving it
-        here means a contract violation upstream. Raise
-        ``NotImplementedError`` defensively; the orchestrator translates
-        it to a 501 ``ApprovalNotImplementedError``.
+        ``decision="answer"`` resolves a plan-mode
+        ``clarifying_questions`` pending (``item/tool/requestUserInput``)
+        — ``answers`` carries the user's selections and the handler maps
+        them into codex's ``ToolRequestUserInputResponse`` envelope. The
+        orchestrator's subject↔decision invariant guarantees the verb
+        only arrives for that subject.
 
-        ``decision="approve_with_changes"`` is similarly out-of-band for
-        codex: codex's approval-response wire shapes
-        (``{"decision": "accept"}`` / ``{"action": "accept"}``) carry no
-        ``updated_input`` analog, so codex sessions never advertise the
-        verb in ``available_decisions`` and the orchestrator 400s
-        before we get here. Raise defensively for the same reason.
+        ``decision="approve_with_changes"`` is out-of-band for codex:
+        codex's approval-response wire shapes (``{"decision": "accept"}``
+        / ``{"action": "accept"}``) carry no ``updated_input`` analog, so
+        codex sessions never advertise the verb in
+        ``available_decisions`` and the orchestrator 400s before we get
+        here. Raise defensively.
         """
-        if decision == "answer":
-            raise NotImplementedError(
-                "CodexRuntime does not emit 'clarifying_questions' subjects; "
-                "decision='answer' is claude_agent-only in v1."
-            )
         if decision == "approve_with_changes":
             raise NotImplementedError(
                 "CodexRuntime does not advertise 'approve_with_changes'; "
                 "codex's approval-response wire shape has no updated_input field."
             )
-        # ``answers`` / ``modified_input`` are forbidden by the
-        # SubmitActionRequest validator for the verbs codex does handle
-        # (approve / reject); reaching here with either set means the
-        # validator was bypassed. Ignore (don't raise) for forward
-        # compat — silent drop is safer than crashing the runtime.
-        _ = answers
+        # ``modified_input`` is forbidden by the SubmitActionRequest
+        # validator for the verbs codex handles; reaching here with it
+        # set means the validator was bypassed. Ignore (don't raise) for
+        # forward compat — silent drop is safer than crashing the runtime.
         _ = modified_input
         future = self._pending_futures.get(pending_id)
         if future is None or future.done():
             return
-        future.set_result((decision, message))
+        future.set_result((decision, message, dict(answers) if answers is not None else None))
 
     async def interrupt(self) -> None:
         self._cancelled = True
@@ -836,7 +860,7 @@ class CodexRuntime:
         for pending_id, future in list(self._pending_futures.items()):
             if future.done():
                 continue
-            future.set_result(("reject", "session interrupted"))
+            future.set_result(("reject", "session interrupted", None))
             await self._emit_synthetic_resolved(pending_id, "interrupted")
         self._pending_futures.clear()
         turn = self._active_turn
@@ -1182,12 +1206,17 @@ class CodexRuntime:
             and the model sees "user rejected MCP tool call".
         """
         params = params or {}
+        # ``item/tool/requestUserInput`` (plan mode's clarifying
+        # questions) ALWAYS parks — the host cannot fabricate answers, so
+        # the ``full_access`` short-circuit below must not swallow it
+        # (mirrors Claude's ``AskUserQuestion`` always-park rule).
+        is_user_input = method == _REQUEST_USER_INPUT_METHOD
         # ``full_access`` never gets here (approval_policy=never).
         # ``auto_review`` is host-bypassed by ApprovalsReviewer.auto_review
         # (codex decides internally via guardian notifications). For both,
         # auto-accept matches the policy contract — codex would have
         # already accepted internally; we just shouldn't fight it.
-        if self._cached_permission_mode != "default":
+        if not is_user_input and self._cached_permission_mode != "default":
             return _build_approval_response(method, "approve", params)
         if self._loop is None or self._loop.is_closed():
             # Either ``run()`` hasn't captured the loop yet (race on a
@@ -1218,12 +1247,19 @@ class CodexRuntime:
             # small buffer above the asyncio timeout so the inner path
             # always wins (synthetic action_resolved emitted there).
             cf = asyncio.run_coroutine_threadsafe(coro, self._loop)
-            decision, message = cf.result(timeout=self.APPROVAL_TIMEOUT_SECONDS + 30.0)
+            decision, message, answers = cf.result(timeout=self.APPROVAL_TIMEOUT_SECONDS + 30.0)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:
             logger.exception("codex approval handler crashed; auto-rejecting")
             return _build_approval_response(method, "reject", params)
+        if is_user_input:
+            # ``answer`` carries the envelope; reject / timeout /
+            # interrupt map to the empty envelope (the only valid
+            # non-answer reply for this method).
+            return _build_request_user_input_response(
+                params, answers if decision == "answer" else None
+            )
         # Codex's approval-response wire shapes ({"decision": "deny"}
         # / {"action": "decline"}) carry no ``reason`` field, so a user-supplied
         # reject ``message`` cannot reach the model — Claude SDK + DeepAgents
@@ -1247,7 +1283,7 @@ class CodexRuntime:
         self,
         method: str,
         params: dict[str, Any],
-    ) -> tuple[Literal["approve", "reject"], str | None]:
+    ) -> tuple[Literal["approve", "reject", "answer"], str | None, dict[str, Any] | None]:
         """Async counterpart to the sync handler — runs on the runtime loop.
 
         Builds the pending payload + ``session_rule_preview`` from the
@@ -1267,6 +1303,65 @@ class CodexRuntime:
         pending_id = str(uuid.uuid4())
         subject = _classify_codex_subject(method)
         payload = _build_codex_pending_payload(subject, method, params, self.workspace_root)
+
+        if subject == "clarifying_questions":
+            # Plan-mode ``request_user_input``: no rule matcher (there is
+            # no "always answer the same question" semantic — mirrors
+            # Claude's AskUserQuestion), verb set is answer/reject.
+            #
+            # Emit an ``AskUserQuestion`` tool_use ANCHOR first: the
+            # conversation page renders the interactive clarifying card
+            # by overriding the tool block named ``AskUserQuestion``
+            # (Claude's SDK emits one natively; codex's
+            # ``request_user_input`` is a bare server→client request
+            # with no thread item in our stream — without the anchor the
+            # transcript parks on a spinner and the notification tray is
+            # the only answerable surface; field-verified). The pairing
+            # walk maps the most recent AskUserQuestion tool block to
+            # the following ``clarifying_questions`` requires_action,
+            # so ORDER MATTERS: tool_use, then requires_action.
+            item_id = str(params.get("itemId") or pending_id)
+            await self.event_sink.emit(
+                Event(
+                    type="tool_use",
+                    data={
+                        "id": item_id,
+                        "name": "AskUserQuestion",
+                        "input": {"questions": payload.get("questions", [])},
+                    },
+                )
+            )
+            await self.event_sink.emit(
+                Event(
+                    type="requires_action",
+                    data={
+                        "pending_id": pending_id,
+                        "subject": subject,
+                        "runtime_provider": "codex",
+                        "available_decisions": list(AVAILABLE_DECISIONS_CLARIFYING),
+                        "payload": payload,
+                    },
+                )
+            )
+            decision, message, answers = await self._park_on_future(pending_id)
+            # Close the anchor pair so the card folds like Claude's once
+            # answered (and doesn't dangle as a forever-running tool on
+            # reject / timeout / interrupt).
+            if decision == "answer":
+                content = json.dumps(answers or {}, ensure_ascii=False)
+            else:
+                content = message or "declined"
+            await self.event_sink.emit(
+                Event(
+                    type="tool_result",
+                    data={
+                        "id": item_id,
+                        "content": content,
+                        "is_error": decision != "answer",
+                    },
+                )
+            )
+            return (decision, message, answers)
 
         # Derive the rule preview the user would commit if they pick
         # ``approve_for_session``. ``_extract_matcher_inputs`` reduces
@@ -1326,25 +1421,35 @@ class CodexRuntime:
                     },
                 )
             )
-            return ("approve", None)
+            return ("approve", None, None)
 
+        return await self._park_on_future(pending_id)
+
+    async def _park_on_future(
+        self, pending_id: str
+    ) -> tuple[Literal["approve", "reject", "answer"], str | None, dict[str, Any] | None]:
+        """Park on the pending future until ``submit_action`` (or timeout)."""
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[tuple[Literal["approve", "reject"], str | None]] = (
-            loop.create_future()
-        )
+        future: asyncio.Future[
+            tuple[
+                Literal["approve", "reject", "answer"],
+                str | None,
+                dict[str, Any] | None,
+            ]
+        ] = loop.create_future()
         self._pending_futures[pending_id] = future
 
         try:
-            decision, message = await asyncio.wait_for(
+            decision, message, answers = await asyncio.wait_for(
                 future, timeout=self.APPROVAL_TIMEOUT_SECONDS
             )
         except TimeoutError:
             await self._emit_synthetic_resolved(pending_id, "expired")
-            return ("reject", "approval timed out")
+            return ("reject", "approval timed out", None)
         finally:
             self._pending_futures.pop(pending_id, None)
 
-        return (decision, message)
+        return (decision, message, answers)
 
     def _check_session_rule(
         self,
@@ -1444,7 +1549,101 @@ class CodexRuntime:
         # output to the matching policy variant.
         kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(mapped["sandbox"])
 
+        # -- plan mode: hard read-only guarantee --
+        # Codex's plan no-mutation rule is prompt-level only (the
+        # collaborationMode developer message); pair every plan turn with
+        # a readOnly sandbox so a prompt slip can't mutate the workspace.
+        # The approval triplet above stays as the permission mode mapped
+        # it — approvals still govern what DOES run.
+        if session.mode == "plan":
+            kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
+
         return kwargs
+
+    # Session-metadata marker: the thread has been switched into codex's
+    # sticky collaborationMode plan and the FIRST non-plan turn must send
+    # an explicit ``mode: "default"`` to flip it back (omitting the field
+    # does NOT exit plan — "turn/start.collaborationMode ... and
+    # subsequent turns"). Persisted in metadata (not an instance flag) so
+    # a runtime rebuild / process restart between the plan turn and the
+    # exit turn cannot strand the thread in plan mode.
+    _COLLAB_PLAN_MARKER = "codex_collab_plan_active"
+
+    def _build_collaboration_mode(self, session: Session) -> dict[str, Any] | None:
+        """Raw ``collaborationMode`` object for this turn, or ``None``.
+
+        MUST be sent as a raw dict merged into the turn params: the
+        generated ``TurnStartParams`` predates the experimental field and
+        pydantic silently drops unknown kwargs (``test_codex_plan_mode``
+        pins the serialized payload). Top-level protocol keys are
+        camelCase but the ``settings`` keys are snake_case — that's the
+        wire schema, not a typo (verified against the bundled binary's
+        ``generate-json-schema --experimental`` dump).
+
+        Pure — the caller records the marker via
+        ``_record_collaboration_mode_sent`` only after ``turn/start``
+        succeeds, so a failed dispatch retries with identical intent.
+        """
+        in_plan = session.mode == "plan"
+        marker = bool((session.metadata or {}).get(self._COLLAB_PLAN_MARKER))
+        if not in_plan and not marker:
+            return None
+        if not (self.model or "").strip():
+            if in_plan:
+                # ``settings.model`` is a REQUIRED protocol field with no
+                # safe fallback. Fail the turn with an actionable message
+                # instead of silently running without plan mode (the
+                # exact failure shape slice 1 shipped to kill).
+                raise ValueError(
+                    "Plan mode on codex requires an explicit session model "
+                    "(`collaborationMode.settings.model` is required); "
+                    "recreate the session with a model or leave plan mode."
+                )
+            logger.warning(
+                "codex: cannot send collaborationMode 'default' without a "
+                "model; thread may keep codex's sticky plan state"
+            )
+            return None
+        effort = session.model_settings.effort if session.model_settings is not None else None
+        settings: dict[str, Any] = {
+            "model": self.model,
+            # Explicit null is valid ("unset") — the raw dict bypasses the
+            # SDK's exclude_none dump, and the schema marks both nullable.
+            "reasoning_effort": _map_effort_for_codex(effort) if effort is not None else None,
+        }
+        if in_plan:
+            # null → codex's built-in Plan Mode developer instructions,
+            # the behavioral contract that makes plan mode plan (present
+            # a <proposed_plan>, no mutations, request_user_input for
+            # clarifying). collaborationMode REPLACES the thread's
+            # developerInstructions, so the session's own instructions
+            # are suspended during plan turns; the exit turn below
+            # restores them.
+            settings["developer_instructions"] = None
+            return {"mode": "plan", "settings": settings}
+        # First non-plan turn after plan: flip the sticky server state
+        # back and restore the session's developer instructions.
+        settings["developer_instructions"] = session.instructions or None
+        return {"mode": "default", "settings": settings}
+
+    def _record_collaboration_mode_sent(
+        self, session: Session, collab: dict[str, Any] | None
+    ) -> None:
+        """Update the sticky-plan marker after a successful ``turn/start``.
+
+        Metadata mutations persist at the orchestrator's end-of-turn
+        ``save_session`` (the mid-turn mode reconcile guards only
+        ``session.mode``)."""
+        if collab is None:
+            return
+        meta = dict(session.metadata or {})
+        if collab.get("mode") == "plan":
+            if not meta.get(self._COLLAB_PLAN_MARKER):
+                meta[self._COLLAB_PLAN_MARKER] = True
+                session.metadata = meta
+        elif self._COLLAB_PLAN_MARKER in meta:
+            meta.pop(self._COLLAB_PLAN_MARKER, None)
+            session.metadata = meta
 
     def _materialize_skills(self, session: Session) -> None:
         if not self.workspace_root or not session.skills:

@@ -40,6 +40,18 @@ logger = logging.getLogger(__name__)
 # ``commandExecution`` / ``fileChange`` (which use ``{"decision": ...}``).
 _ELICITATION_METHODS: frozenset[str] = frozenset({"mcpServer/elicitation/request"})
 
+# EXPERIMENTAL server request codex sends when the model calls the
+# ``request_user_input`` tool — the only tool enabled exclusively in plan
+# mode (``ModeKind::allows_request_user_input``), and the built-in plan
+# prompt pushes it hard. Params: ``ToolRequestUserInputParams``
+# ``{itemId, threadId, turnId, questions: [{id, header, question,
+# isOther?, isSecret?, options?: [{label, description}]}]}``. Response:
+# ``ToolRequestUserInputResponse`` ``{"answers": {<question id>:
+# {"answers": [<string>, ...]}}}`` — an ANSWERS envelope, never the
+# ``{"decision"}`` / ``{"action"}`` approval shapes. (Shapes verified
+# against the bundled binary's ``generate-json-schema --experimental``.)
+_REQUEST_USER_INPUT_METHOD = "item/tool/requestUserInput"
+
 
 def _is_elicitation_method(method: str) -> bool:
     return method in _ELICITATION_METHODS
@@ -47,14 +59,18 @@ def _is_elicitation_method(method: str) -> bool:
 
 def _classify_codex_subject(
     method: str,
-) -> Literal["shell_command", "file_change", "mcp_tool_call", "tool_input"]:
+) -> Literal[
+    "shell_command", "file_change", "mcp_tool_call", "clarifying_questions", "tool_input"
+]:
     """Map a codex server-request method to the approval-card subject.
 
-    Recognises the documented ``requestApproval`` methods plus
+    Recognises the documented ``requestApproval`` methods,
     ``mcpServer/elicitation/request`` (codex relays MCP elicitations
-    through this generic dispatcher path). Anything else falls back to
-    the generic ``tool_input`` subject so the front-end's card still
-    renders raw method + params JSON.
+    through this generic dispatcher path) and the plan-mode
+    ``item/tool/requestUserInput`` (surfaced as ``clarifying_questions``
+    — same card Claude's ``AskUserQuestion`` renders). Anything else
+    falls back to the generic ``tool_input`` subject so the front-end's
+    card still renders raw method + params JSON.
     """
     if method == "item/commandExecution/requestApproval":
         return "shell_command"
@@ -62,6 +78,8 @@ def _classify_codex_subject(
         return "file_change"
     if method == "mcpServer/elicitation/request":
         return "mcp_tool_call"
+    if method == _REQUEST_USER_INPUT_METHOD:
+        return "clarifying_questions"
     return "tool_input"
 
 
@@ -78,6 +96,39 @@ def _build_codex_pending_payload(
     All accesses use ``.get()`` with safe defaults so this never raises
     on the stdio reader thread.
     """
+    if subject == "clarifying_questions":
+        # Frontend renders the same card as Claude's ``AskUserQuestion``:
+        # ``{"questions": [{question, header, options: [{label,
+        # description}], multiSelect}]}``. Codex's per-question ``id`` is
+        # carried through (the answers envelope is keyed by it — see
+        # ``_build_request_user_input_response``); ``isSecret``/``isOther``
+        # ride along for future card affordances.
+        raw_questions = params.get("questions")
+        questions: list[dict[str, Any]] = []
+        for q in raw_questions if isinstance(raw_questions, list) else []:
+            if not isinstance(q, dict):
+                continue
+            raw_options = q.get("options")
+            options = [
+                {
+                    "label": str(o.get("label") or ""),
+                    "description": str(o.get("description") or ""),
+                }
+                for o in (raw_options if isinstance(raw_options, list) else [])
+                if isinstance(o, dict)
+            ]
+            questions.append(
+                {
+                    "id": str(q.get("id") or ""),
+                    "question": str(q.get("question") or ""),
+                    "header": str(q.get("header") or ""),
+                    "options": options,
+                    "multiSelect": False,
+                    "isOther": bool(q.get("isOther") or False),
+                    "isSecret": bool(q.get("isSecret") or False),
+                }
+            )
+        return {"questions": questions}
     if subject == "shell_command":
         command = params.get("command")
         if isinstance(command, list):
@@ -230,6 +281,46 @@ def _extract_matcher_inputs(
     return (method, dict(params))
 
 
+def _build_request_user_input_response(
+    params: dict[str, Any],
+    answers: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the ``ToolRequestUserInputResponse`` answers envelope.
+
+    The host's ``answer`` decision arrives keyed the way the frontend's
+    clarifying-questions card sends it — by question TEXT (the Claude
+    ``AskUserQuestion`` contract the card was built for) — with values
+    ``str | list[str]``. Codex wants ``{"answers": {<question id>:
+    {"answers": [<string>, ...]}}}``, so remap through the original
+    ``params.questions`` (id lookups also accepted, defensively). Every
+    question gets an entry — an unanswered one maps to an empty list,
+    which reads as "declined to answer" model-side. A rejected /
+    timed-out / interrupted pending returns the bare empty envelope.
+    """
+    raw_questions = params.get("questions")
+    questions = raw_questions if isinstance(raw_questions, list) else []
+    if answers is None:
+        return {"answers": {}}
+    envelope: dict[str, Any] = {}
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        qid = str(q.get("id") or "")
+        if not qid:
+            continue
+        value = answers.get(str(q.get("question") or ""))
+        if value is None:
+            value = answers.get(qid)
+        if value is None:
+            selected: list[str] = []
+        elif isinstance(value, list):
+            selected = [str(v) for v in value]
+        else:
+            selected = [str(value)]
+        envelope[qid] = {"answers": selected}
+    return {"answers": envelope}
+
+
 def _build_approval_response(
     method: str,
     decision: Literal["approve", "reject"],
@@ -244,6 +335,13 @@ def _build_approval_response(
     send ``{}`` as a v1 best-effort — the user clicked "approve"
     without filling in anything), while URL mode omits ``content``.
     """
+    if method == _REQUEST_USER_INPUT_METHOD:
+        # Answered pendings are built by the runtime via
+        # ``_build_request_user_input_response`` directly (it carries the
+        # answers); this branch covers reject / timeout / interrupt —
+        # the empty envelope is the only valid non-answer reply (the
+        # ``{"decision"}`` shape reads as malformed to codex).
+        return _build_request_user_input_response(params, None)
     if _is_elicitation_method(method):
         if decision == "approve":
             mode = params.get("mode")

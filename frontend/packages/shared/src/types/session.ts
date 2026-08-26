@@ -46,12 +46,13 @@ export type SessionMode = "default" | "plan" | "goal";
  * Runtimes whose plan-mode lowering is wired end-to-end today.
  * ``claude_agent`` lowers natively (typed SDK
  * ``set_permission_mode("plan")`` + the ``ExitPlanMode`` approval
- * card). ``codex`` joins once its native ``collaborationMode`` wiring
- * lands; deepagents / deepseek_harness have no native primitive and
- * the server 400s them. UI affordances gate on this list so users
- * never see a toggle the backend would reject.
+ * card); ``codex`` via ``turn/start.collaborationMode`` (plan proposal
+ * arrives as ``session.plan_proposed`` and approval is client-driven).
+ * deepagents / deepseek_harness have no native primitive and the
+ * server 400s them. UI affordances gate on this list so users never
+ * see a toggle the backend would reject.
  */
-export const PLAN_MODE_RUNTIMES: readonly string[] = ["claude_agent"];
+export const PLAN_MODE_RUNTIMES: readonly string[] = ["claude_agent", "codex"];
 
 /** Whether the composer should offer the plan-mode toggle for a runtime. */
 export function supportsPlanMode(
