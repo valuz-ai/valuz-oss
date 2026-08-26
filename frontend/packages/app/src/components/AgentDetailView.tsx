@@ -62,6 +62,7 @@ import { modelLabel } from "@valuz/shared";
 import { AgentModelPicker, type AgentModelSelection } from "./AgentModelPicker";
 import { reconcileDraft, sameBrain } from "./agent-draft-sync";
 import { AgentDetailCopyActions } from "./AgentDetailCopyActions";
+import { CreateAgentDialog } from "./CreateAgentDialog";
 import { CatalogPickerDialog } from "./CatalogPickerDialog";
 import { ExportPackDialog } from "./ExportPackDialog";
 import { ResourceDetailActionSlot } from "./ResourceActionSlot";
@@ -186,7 +187,6 @@ export const AgentDetailView = ({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [copyConfirmOpen, setCopyConfirmOpen] = useState(false);
-  const [copyBusy, setCopyBusy] = useState(false);
   // Deferred save awaiting multi-project confirmation (see saveFields).
   const [pendingSave, setPendingSave] = useState<{
     tab: string;
@@ -517,25 +517,6 @@ export const AgentDetailView = ({
       toast.error(t("agent.instantiateFailed"));
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const doCopyAgent = async () => {
-    if (!agent) return;
-    setCopyBusy(true);
-    try {
-      const copy = await agentsApi.copyAgent(agent.slug);
-      setCopyConfirmOpen(false);
-      toast.success(t("agent.agentCreated" as Parameters<typeof t>[0]));
-      await onChanged?.();
-      navigate(`/agents/${encodeURIComponent(copy.slug)}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(
-        `${t("agent.saveFailed" as Parameters<typeof t>[0])}: ${msg}`,
-      );
-    } finally {
-      setCopyBusy(false);
     }
   };
 
@@ -1853,32 +1834,18 @@ export const AgentDetailView = ({
 
       {/* Copy agent confirmation — non-destructive, so don't reuse the red
           DeleteConfirmDialog. Just a plain Dialog with two buttons. */}
-      <Dialog open={copyConfirmOpen} onOpenChange={setCopyConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {t("agent.copyAgent" as Parameters<typeof t>[0])}
-            </DialogTitle>
-            <DialogDescription>
-              {t("agent.copyConfirmDesc" as Parameters<typeof t>[0], {
-                name: agent.name,
-              })}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setCopyConfirmOpen(false)}
-              disabled={copyBusy}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button onClick={() => void doCopyAgent()} disabled={copyBusy}>
-              {t("common.confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Copying from the detail header opens the same form the library list
+          opens, seeded from this agent — a copy is a new agent worth naming
+          and adjusting before it exists, not a yes/no. */}
+      <CreateAgentDialog
+        open={copyConfirmOpen}
+        onOpenChange={setCopyConfirmOpen}
+        seed={agent}
+        onCreated={async (createdSlug) => {
+          await onChanged?.();
+          navigate(`/agents/${encodeURIComponent(createdSlug)}`);
+        }}
+      />
 
       {/* Skill catalog picker — shared multi-select with search. */}
       <CatalogPickerDialog
