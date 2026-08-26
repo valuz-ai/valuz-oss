@@ -40,6 +40,21 @@ interface AskUserQuestionCardProps {
   answered?: boolean;
 }
 
+/**
+ * The short category label the model attaches to a question (``header``).
+ *
+ * Model-authored free text, so it is pinned to one line: left to wrap, a
+ * six-character CJK label collapses into a column of single glyphs the
+ * moment the card gets narrow (the notification inbox is ~470px wide).
+ */
+function HeaderPill({ label }: { label: string }) {
+  return (
+    <span className="inline-block min-w-0 truncate rounded-md bg-brand/10 px-1.5 py-0.5 text-2xs font-medium text-brand">
+      {label}
+    </span>
+  );
+}
+
 function QuestionBlock({
   question,
   header,
@@ -68,14 +83,18 @@ function QuestionBlock({
   const { t } = useI18n();
   return (
     <fieldset disabled={answered} className="space-y-1.5">
-      <div className="flex items-center gap-2">
-        {header ? (
-          <span className="inline-flex rounded-md bg-brand/10 px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-brand">
-            {header}
-          </span>
-        ) : null}
-        <span className="text-sm font-medium text-ink-heading">{question}</span>
-      </div>
+      {header ? (
+        // Only reached on multi-question cards — a lone header is hoisted
+        // into the card title instead. Stacked, never side by side: sharing
+        // a row makes the pill and the question fight for the card's width
+        // and both wrap mid-word.
+        <div className="space-y-1">
+          <HeaderPill label={header} />
+          <p className="text-sm font-medium text-ink-heading">{question}</p>
+        </div>
+      ) : (
+        <p className="text-sm font-medium text-ink-heading">{question}</p>
+      )}
       <div className="space-y-1">
         {options.map((opt) => {
           const isSelected = selected.has(opt.label);
@@ -266,6 +285,13 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
     }
   };
 
+  // A single question's header labels the whole card, and the title row is
+  // otherwise empty — hoist it there so the question keeps the full width.
+  // With 2+ questions there is no one header to hoist, so each block renders
+  // its own above its question instead.
+  const hoistedHeader =
+    questions.length === 1 ? (questions[0]?.header ?? null) : null;
+
   const canSubmit = questions.every((_q, idx) => {
     const hasSelection = (selections[idx]?.size ?? 0) > 0;
     const hasOther = otherSelected[idx];
@@ -293,11 +319,12 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
         <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand">
           <CircleHelp className="h-3.5 w-3.5" />
         </div>
-        <span className="text-sm font-medium text-ink-heading">
+        <span className="shrink-0 text-sm font-medium text-ink-heading">
           {answered
             ? t("conversation.answered")
             : t("conversation.pleaseSelect")}
         </span>
+        {hoistedHeader ? <HeaderPill label={hoistedHeader} /> : null}
       </div>
 
       <div className="space-y-4 px-4 pb-3">
@@ -305,7 +332,7 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
           <QuestionBlock
             key={idx}
             question={q.question}
-            header={q.header}
+            header={hoistedHeader ? undefined : q.header}
             options={q.options}
             multiSelect={q.multiSelect}
             answered={!!answered}

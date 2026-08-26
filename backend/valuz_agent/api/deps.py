@@ -196,8 +196,17 @@ async def build_parser_router(db: AsyncSession, user_id: str) -> ParserRouter:
     closed by the time it runs.
     """
     from valuz_agent.modules.settings.parser_routing import load_routing_config
+    from valuz_agent.ports.extensions import ext
 
-    routing_config = await load_routing_config(db, user_id=user_id)
+    # The deployment gets the last word. OSS's policy returns the snapshot
+    # unchanged, so this is a no-op here; a managed deployment where parsing is
+    # an operator-provided capability rather than an account preference binds
+    # one that fixes the engine. It reads the loaded snapshot rather than
+    # replacing this load, because ``plugin_configs`` (secret refs, options) is
+    # still settings' to supply.
+    routing_config = ext.parser_routing_policy.decide(
+        await load_routing_config(db, user_id=user_id), user_id=user_id
+    )
     return ParserRouter(
         registry=_parser_registry(),
         secret_resolver=_SecretResolver(user_id),
@@ -326,9 +335,7 @@ async def get_channel_ingress_service() -> AsyncGenerator[ChannelIngressService,
             ),
             bindings=ChannelThreadBindingDatastore(db),
             chat_bindings=ChannelChatBindingDatastore(db),
-            project_members=DatastoreProjectMemberReader(
-                members=ProjectMemberDatastore(db)
-            ),
+            project_members=DatastoreProjectMemberReader(members=ProjectMemberDatastore(db)),
             sessions=SessionServiceChannelRunner(session_service),
         )
 

@@ -128,9 +128,13 @@ class _Sessions:
         user_id: str,
         citation_enabled_override: bool | None = None,
         citation_verification_enabled_override: bool | None = None,
+        task_coverage_enabled_override: bool | None = None,
     ) -> object:
         assert citation_enabled_override is True
         assert citation_verification_enabled_override is False
+        # Shared situational rule: internal summary runs disable BOTH
+        # post-run features, not just claim verification.
+        assert task_coverage_enabled_override is False
         self.sent.append((session_id, content, user_id))
         return SimpleNamespace()
 
@@ -261,7 +265,7 @@ async def test_connector_document_uses_provider_summary_and_locks_qa_to_connecto
             transport="http",
         ),
         McpHttpServerConfigSchema(
-            name="valuz-stock",
+            name="valuz-data",
             url="http://localhost/stock",
             transport="http",
         ),

@@ -51,6 +51,7 @@ KEY_CONVERSATION_VERIFICATION_ENABLED = "conversation.verification_enabled"
 # rendering/verification. It can add one bounded same-runtime continuation,
 # so users retain a separate control.
 KEY_CONVERSATION_TASK_COVERAGE_ENABLED = "conversation.task_coverage_enabled"
+KEY_PTC_ENABLED = "conversation.ptc_enabled"
 # Memory system toggles (memory-system-design §11). ``memory.enabled`` is the
 # product master switch (gates injection, the foreground tool, and the
 # background extractor); ``memory.auto_extract`` gates ONLY the background
@@ -429,6 +430,16 @@ async def set_conversation_verification_enabled(
         "true" if value else "false",
         user_id=user_id,
     )
+
+
+async def get_ptc_enabled(db: AsyncSession, user_id: str | None = None) -> bool:
+    """Whether Programmatic Tool Calling (the execute_code code face over
+    data connectors) is enabled for this user's sessions."""
+    return await _read_bool(db, KEY_PTC_ENABLED, False, user_id=user_id)
+
+
+async def set_ptc_enabled(db: AsyncSession, value: bool, user_id: str | None = None) -> None:
+    await _write(db, KEY_PTC_ENABLED, "true" if value else "false", user_id=user_id)
 
 
 async def get_conversation_task_coverage_enabled(

@@ -448,6 +448,27 @@ export function useSessionSubscription({
             ),
           );
         }
+        // Session working-mode transitions (docs/design/session-modes.md).
+        // ``by: "runtime"`` frames — e.g. Claude's approved ExitPlanMode
+        // lifting plan mode — are the only way the UI learns the runtime
+        // exited a mode on its own; patch the session row so the composer's
+        // plan chip reconciles live. Replays stay inert (a backfilled old
+        // transition must not regress the current row, which the detail
+        // fetch already hydrated).
+        if (evType === "session.mode_changed" && !isReplayOfSeen) {
+          const nextMode = event.event.payload.mode;
+          if (
+            nextMode === "default" ||
+            nextMode === "plan" ||
+            nextMode === "goal"
+          ) {
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.id === sessionId ? { ...s, mode: nextMode } : s,
+              ),
+            );
+          }
+        }
         // ``!isReplayOfSeen``: a redelivered terminal frame must not re-run
         // turn-end handling for a turn that is long over.
         const terminal =

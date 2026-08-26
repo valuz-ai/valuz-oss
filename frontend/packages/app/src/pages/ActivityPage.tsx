@@ -480,6 +480,13 @@ export const ActivityPage = () => {
           showProjectName
           onOpenSession={openSession}
           onOpenTask={openTask}
+          onOpenPlaybookRun={(runId, sessionId) =>
+            navigate(
+              sessionId
+                ? `/conversation/${sessionId}`
+                : `/playbooks?run=${encodeURIComponent(runId)}`,
+            )
+          }
           onRenameConfirm={handleRenameConfirm}
           onDeleteSession={(id, title) => setDeletingChat({ id, title })}
           onForkSession={handleForkSession}

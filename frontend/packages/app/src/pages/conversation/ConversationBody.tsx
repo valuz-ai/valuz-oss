@@ -13,6 +13,7 @@ import {
 import type { usePlatform } from "@valuz/app/platform";
 import type { useCitationDocumentPreview } from "../../components/CitationDocumentPreviewProvider";
 import { shouldShowNoModelEmptyState } from "../conversation-loading";
+import { SelectionActionsOverlay } from "./SelectionActionsOverlay";
 import { NEW_SESSION_ID } from "./session-events";
 import type { useArtifactPane } from "./useArtifactPane";
 import type { useComposerConfig } from "./useComposerConfig";
@@ -177,6 +178,19 @@ export function ConversationBody({
                 onSelect={scrollToTurnIndex}
               />
             ) : null}
+            {/* Floating actions for assistant-text selections — renders only
+                when an overlay registered ``conversation.selection-actions``. */}
+            <SelectionActionsOverlay
+              sessionId={selectedSessionId}
+              containerRef={scrollContainerRef}
+              // Appends below any text already staged, so acting on a
+              // selection never clobbers a draft in progress.
+              insertDraft={(text) =>
+                setDraft((previous) =>
+                  previous.trim() ? `${previous.trimEnd()}\n\n${text}` : text,
+                )
+              }
+            />
             <div
               ref={scrollContainerRef}
               className="min-h-0 flex-1 overflow-y-auto bg-surface pt-0 pb-7"

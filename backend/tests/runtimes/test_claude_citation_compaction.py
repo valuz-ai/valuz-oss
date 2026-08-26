@@ -9,11 +9,20 @@ import json
 import valuz_agent.boot.kernel  # noqa: F401
 from claude_agent_sdk import ToolResultBlock
 from claude_agent_sdk import UserMessage as SdkUserMessage
+from mcp.types import CallToolResult, TextContent
 
 from src.core.agent_config import AgentConfig
 from src.core.citation import EvidenceRegistry
+from src.core.mcp_source_metadata import (
+    MCP_SOURCE_CONTENT_TRANSPORT_PREFIX,
+    MCP_SOURCE_METADATA_KEY,
+    wrap_mcp_result_metadata_in_content_for_transport,
+)
 from src.core.types import Session
-from src.runtimes.claude_agent.runtime import ClaudeAgentRuntime
+from src.runtimes.claude_agent.runtime import (
+    ClaudeAgentRuntime,
+    _normalize_mcp_tool_output,
+)
 
 
 class _RecordingSink:
@@ -249,6 +258,213 @@ async def test_post_tool_hook_builds_document_evidence_from_mcp_result_meta() ->
     sidecar = json.loads(runtime._citation_tool_result_sidecars["mcp-meta-document"])
     assert sidecar["_valuz_evidence"][0]["source"]["providerId"] == "reportify"
     assert sidecar["_valuz_evidence"][0]["locator"]["page"] == 9
+
+
+async def test_post_tool_hook_recovers_source_metadata_from_content_transport() -> None:
+    runtime = ClaudeAgentRuntime(AgentConfig(id="a", name="a"), "", _RecordingSink())
+    hook = runtime._map_hooks()["PostToolUse"][0].hooks[0]
+    payload = {
+        "doc_id": "msft-q1",
+        "title": "Microsoft FY2026 Q1 transcript",
+        "url": "https://reportify.cn/transcripts/msft-q1",
+        "document_version": "v1",
+        "chunks": [
+            {
+                "id": "chunk-1",
+                "content": "Demand continues to exceed available supply.",
+                "metadata": {"document_page": 9},
+            }
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    descriptor = {
+        "version": 1,
+        "provider": {"id": "valuz-data", "name": "Valuz Data"},
+        "operation": {"toolName": "get_document_chunks"},
+        "result": {
+            "target": "structuredContent",
+            "hash": {"algorithm": "sha256", "value": digest},
+            "capturedAt": "2026-08-21T00:00:00Z",
+        },
+        "resources": [
+            {
+                "resourceId": "document-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "documentVersion": "/document_version",
+                    "title": "/title",
+                    "url": "/url",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {
+                    "chunkId": "/id",
+                    "text": "/content",
+                    "page": "/metadata/document_page",
+                },
+            }
+        ],
+    }
+    wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+        CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structuredContent=payload,
+            _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+        ),
+        server_name="valuz-data",
+    )
+    flattened = [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+
+    output = await hook(
+        {
+            "tool_name": "mcp__valuz-data__get_document_chunks",
+            "tool_input": {"document_id": "msft-q1"},
+            "tool_response": flattened,
+        },
+        "mcp-content-transport",
+        None,  # type: ignore[arg-type]
+    )
+
+    updated = output["hookSpecificOutput"]["updatedMCPToolOutput"]
+    assert isinstance(updated, list) and updated[0]["type"] == "text"
+    compacted = json.loads(updated[0]["text"])
+    assert compacted["chunks"][0]["content"] == payload["chunks"][0]["content"]
+    assert compacted["chunks"][0]["evidenceHandle"].startswith("ev_mcp_")
+    assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(compacted)
+    sidecar = json.loads(runtime._citation_tool_result_sidecars["mcp-content-transport"])
+    assert sidecar["_valuz_evidence"][0]["source"]["providerId"] == "valuz-data"
+    assert runtime._citation_tool_result_model_contents["mcp-content-transport"] == compacted
+
+
+async def test_post_tool_hook_wraps_empty_reportify_objects_as_mcp_content_blocks() -> None:
+    runtime = ClaudeAgentRuntime(AgentConfig(id="a", name="a"), "", _RecordingSink())
+    hook = runtime._map_hooks()["PostToolUse"][0].hooks[0]
+    cases = [
+        (
+            "kb_search",
+            {"query": "Moutai", "num": 20},
+            {"chunks": []},
+            {
+                "resourceId": "kb_search-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "item",
+                    "sourceId": "/doc/doc_id",
+                    "documentId": "/doc/doc_id",
+                    "title": "/doc/title",
+                    "url": "/doc/url",
+                    "publishedAt": "/doc/published_at",
+                    "providerCategory": "/doc/category",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {},
+            },
+        ),
+        (
+            "docs_list",
+            {"symbols": ["US:ZZZZZZZZ"]},
+            {
+                "total_count": 0,
+                "total_page": 0,
+                "page_num": 1,
+                "page_size": 10,
+                "docs": [],
+            },
+            {
+                "resourceId": "docs_list-results",
+                "kind": "document-discovery",
+                "authority": "discovery-only",
+                "rootPointer": "",
+                "itemsPointer": "/docs",
+                "mapping": {
+                    "fetch": {
+                        "toolName": "document_fetch",
+                        "argumentFromItem": {"doc_id": "/doc_id"},
+                    }
+                },
+            },
+        ),
+    ]
+
+    for tool_name, tool_input, payload, resource in cases:
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        descriptor = {
+            "version": 1,
+            "provider": {"id": "reportify", "name": "Reportify"},
+            "operation": {"toolName": tool_name},
+            "result": {
+                "target": "structuredContent",
+                "hash": {"algorithm": "sha256", "value": digest},
+                "capturedAt": "2026-08-25T00:00:00Z",
+            },
+            "resources": [resource],
+        }
+        wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+            CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    )
+                ],
+                structuredContent=payload,
+                _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+            ),
+            server_name="valuz-search",
+        )
+        flattened = [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+
+        output = await hook(
+            {
+                "tool_name": f"mcp__valuz-search__{tool_name}",
+                "tool_input": tool_input,
+                "tool_response": flattened,
+            },
+            f"empty-{tool_name}",
+            None,  # type: ignore[arg-type]
+        )
+
+        updated = output["hookSpecificOutput"]["updatedMCPToolOutput"]
+        assert isinstance(updated, list) and updated[0]["type"] == "text"
+        assert json.loads(updated[0]["text"]) == payload
+
+
+def test_normalize_mcp_tool_output_serializes_non_content_json_values() -> None:
+    for value in (
+        None,
+        True,
+        42,
+        {"chunks": []},
+        [{"document_id": "doc-1"}],
+        [{"type": "resource", "resource": {"id": "business-object"}}],
+    ):
+        normalized = _normalize_mcp_tool_output(value)
+        assert normalized[0]["type"] == "text"
+        assert json.loads(normalized[0]["text"]) == value
+
+
+def test_normalize_mcp_tool_output_preserves_content_block_lists() -> None:
+    content = [
+        {"type": "text", "text": "ok"},
+        {"type": "resource_link", "name": "source", "uri": "https://example.com"},
+        {
+            "type": "resource",
+            "resource": {"uri": "file:///report.txt", "text": "report"},
+        },
+    ]
+
+    assert _normalize_mcp_tool_output(content) is content
+    assert _normalize_mcp_tool_output([]) == []
 
 
 async def test_post_tool_hook_builds_uncovered_provider_summary_evidence() -> None:
@@ -1004,6 +1220,7 @@ async def test_tool_result_event_replays_private_sidecar_for_registry() -> None:
             }
         ]
     }
+    runtime._citation_tool_result_model_contents["tool-1"] = compacted
 
     await runtime._handle_message(
         Session(id="s", agent_config=agent, cwd="/tmp"),
@@ -1021,7 +1238,9 @@ async def test_tool_result_event_replays_private_sidecar_for_registry() -> None:
     assert event.type == "tool_result"
     assert "bulk transcript" not in event.data["content"]
     assert "bulk transcript" in event.data["_citation_content"]
+    assert event.data["_citation_model_content"] == compacted
     assert "tool-1" not in runtime._citation_tool_result_sidecars
+    assert "tool-1" not in runtime._citation_tool_result_model_contents
 
 
 def test_disabled_citation_mode_does_not_install_internal_hook() -> None:

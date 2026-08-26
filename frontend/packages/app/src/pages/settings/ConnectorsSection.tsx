@@ -1032,6 +1032,15 @@ export const ConnectorsSection = () => {
                                 )}
                               </Badge>
                             )}
+                            {connector.connector_type === "builtin" && (
+                              <Badge variant="outline" className="text-[10px]">
+                                {t(
+                                  "settings.connectors.builtIn" as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}
+                              </Badge>
+                            )}
                           </div>
                           <div className="mt-0.5 flex items-center gap-2 text-2xs text-ink-meta">
                             {connector.url && (
@@ -1106,16 +1115,18 @@ export const ConnectorsSection = () => {
                             <FilePenLine className="h-3 w-3" />
                           </Button>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 p-0 text-error-text hover:bg-error-light hover:text-error-text"
-                          onClick={() =>
-                            void handleDeleteConnector(connector.id)
-                          }
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                        {connector.connector_type !== "builtin" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-error-text hover:bg-error-light hover:text-error-text"
+                            onClick={() =>
+                              void handleDeleteConnector(connector.id)
+                            }
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   );

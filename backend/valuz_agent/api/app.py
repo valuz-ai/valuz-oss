@@ -34,14 +34,17 @@ from valuz_agent.api.routes.marketplace import router as marketplace_router
 from valuz_agent.api.routes.memory import router as memory_router
 from valuz_agent.api.routes.notifications import router as notifications_router
 from valuz_agent.api.routes.onboarding import router as onboarding_router
+from valuz_agent.api.routes.operations import router as operations_router
 from valuz_agent.api.routes.parser import settings_router as parser_settings_router
 from valuz_agent.api.routes.parser import system_router as parser_system_router
+from valuz_agent.api.routes.playbooks import router as playbooks_router
 from valuz_agent.api.routes.plugins import router as plugins_router
 from valuz_agent.api.routes.projects import router as projects_router
 from valuz_agent.api.routes.providers import router as providers_router
 from valuz_agent.api.routes.resources import router as resources_router
 from valuz_agent.api.routes.runs import router as runs_router
 from valuz_agent.api.routes.runtimes import router as runtimes_router
+from valuz_agent.api.routes.sessions import attachments_router
 from valuz_agent.api.routes.sessions import router as sessions_router
 from valuz_agent.api.routes.settings import router as settings_router
 from valuz_agent.api.routes.skills import router as skills_router
@@ -170,10 +173,15 @@ def create_app(
     api.include_router(artifacts_router)
     api.include_router(worktrees_router)
     api.include_router(sessions_router)
+    # Attachments live outside ``/v1/sessions``: a file uploads before any
+    # session exists and is bound by the turn that ships it.
+    api.include_router(attachments_router)
     api.include_router(stream_router)
     api.include_router(skills_router)
     api.include_router(docs_router)
     api.include_router(automations_router)
+    api.include_router(playbooks_router)
+    api.include_router(operations_router)
     api.include_router(backup_router)
     api.include_router(notifications_router)
     api.include_router(agents_router)
@@ -214,6 +222,16 @@ def create_app(
 
         for kernel_router in get_kernel_routers():
             api.include_router(kernel_router)
+
+        # Codex reaches kernel-owned ToolDefs (e.g. PTC's execute_code)
+        # through the kernel's ``/mcp/toolkit/{session_id}`` bridge; the
+        # kernel app serves it standalone, the host must serve it in-process.
+        # Root mount on the OUTER app — codex's ``CODEX_TOOLKIT_BASE_URL``
+        # carries no api prefix. The session manager behind it is started by
+        # ``boot/steps.start_mcp_session_managers``.
+        from app.mcp_toolkit_router import mount_mcp_router
+
+        mount_mcp_router(app)
 
     # Mount the aggregate surface under each configured base path. ``None`` →
     # fall back to settings; an empty result → a single mount at "" (native
@@ -269,6 +287,11 @@ def create_app(
     )
 
     _mount_internal("/_internal/mcp/automations", build_automations_mcp_asgi())
+
+    # Owner-scoped Playbook library + in-session invocation tool.
+    from valuz_agent.integrations.playbooks_mcp_server import build_playbooks_mcp_asgi
+
+    _mount_internal("/_internal/mcp/playbooks", build_playbooks_mcp_asgi())
 
     # In-process connectors MCP server — exposes the ``create_mcp`` tool to
     # every session so the agent can create connectors on behalf of the user.

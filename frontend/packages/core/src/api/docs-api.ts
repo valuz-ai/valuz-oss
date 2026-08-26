@@ -99,6 +99,13 @@ export interface DocDetail extends DocListItem {
 export interface DocPreview {
   document_id: string;
   markdown: string;
+  /** Byte offset of this window within the parsed text. */
+  offset: number;
+  returned_bytes: number;
+  /** The whole document, so a caller can tell a window from the lot. */
+  total_bytes: number;
+  /** Derived by the server: there is more past this window. */
+  truncated: boolean;
 }
 
 export interface ImportTask {
@@ -277,8 +284,13 @@ export const docsApi = {
     });
   },
 
-  preview(id: string, kbId?: string): Promise<DocPreview> {
-    return fetchJson(`/v1/docs/${id}/preview`, {
+  /**
+   * One window of a document's parsed text. The server bounds it by default —
+   * a caller that wants more pages with ``offset``.
+   */
+  preview(id: string, kbId?: string, offset?: number): Promise<DocPreview> {
+    const query = offset ? `?offset=${offset}` : "";
+    return fetchJson(`/v1/docs/${id}/preview${query}`, {
       baseUrl: kbId ? kbBase(kbId) : undefined,
     });
   },
@@ -309,11 +321,20 @@ export const docsApi = {
     );
   },
 
-  reindex(documentIds: string[]): Promise<ImportTask> {
-    return fetchJson(
-      "/v1/docs/reindex",
-      jsonPost({ document_ids: documentIds }),
-    );
+  /**
+   * Re-parse and re-index documents.
+   *
+   * ``kbId`` routes the call the same way every other per-document call is
+   * routed. Without it this always went to the module default, so retrying a
+   * failed document in a CLOUD library posted to the local backend, which has
+   * never heard of it — the button reported failure every single time, which
+   * reads as "this document cannot be retried".
+   */
+  reindex(documentIds: string[], kbId?: string): Promise<ImportTask> {
+    return fetchJson("/v1/docs/reindex", {
+      ...jsonPost({ document_ids: documentIds }),
+      baseUrl: kbId ? kbBase(kbId) : undefined,
+    });
   },
 
   async health(): Promise<DocsHealth> {

@@ -71,20 +71,20 @@ async def test_propagated_credentials_survive_a_reload(sessionmaker_) -> None:
     async with sessionmaker_() as db:
         await ConnectorDatastore(db).create(_USER, _row("valuz-search", authorized=True))
     async with sessionmaker_() as db:
-        await ConnectorDatastore(db).create(_USER, _row("valuz-stock", authorized=False))
+        await ConnectorDatastore(db).create(_USER, _row("valuz-data", authorized=False))
 
     async with sessionmaker_() as db:
         ds = ConnectorDatastore(db)
         source = await ds.get_by_slug(_USER, "valuz-search")
         assert source is not None
         assert await propagate_oauth_credentials(_USER, source, ds, install_missing=True) == [
-            "valuz-stock"
+            "valuz-data"
         ]
 
     # Fresh session → the holder is re-hydrated from the side table, proving the
     # write landed rather than only mutating the in-memory proxy.
     async with sessionmaker_() as db:
-        target = await ConnectorDatastore(db).get_by_slug(_USER, "valuz-stock")
+        target = await ConnectorDatastore(db).get_by_slug(_USER, "valuz-data")
         assert target is not None
         assert target.oauth_token_json == _TOKEN
         assert target.oauth_client_info_json == _CLIENT  # refresh needs the client
@@ -94,7 +94,7 @@ async def test_propagated_credentials_survive_a_reload(sessionmaker_) -> None:
 
 
 async def test_authorizing_one_member_installs_the_other(sessionmaker_) -> None:
-    """The headline path: connect Valuz search, quotes shows up installed + connected.
+    """The headline path: connect Valuz search, full data shows up installed + connected.
 
     Only the authorized member exists to begin with — the sibling has no row at
     all, which is exactly the state a user is in when they connect one from the
@@ -108,19 +108,19 @@ async def test_authorizing_one_member_installs_the_other(sessionmaker_) -> None:
         source = await ds.get_by_slug(_USER, "valuz-search")
         assert source is not None
         assert await propagate_oauth_credentials(_USER, source, ds, install_missing=True) == [
-            "valuz-stock"
+            "valuz-data"
         ]
 
     async with sessionmaker_() as db:
-        installed = await ConnectorDatastore(db).get_by_slug(_USER, "valuz-stock")
+        installed = await ConnectorDatastore(db).get_by_slug(_USER, "valuz-data")
         assert installed is not None
         assert (installed.status, installed.enabled) == ("connected", True)
         assert installed.oauth_token_json == _TOKEN
         assert installed.oauth_client_info_json == _CLIENT
         # Definition comes from the catalog — the user never filled in a form.
-        assert installed.url == "https://mcp.reportify.cn/stock/mcp"
+        assert installed.url == "https://data.valuz.cn/mcp"
         assert installed.auth_type == "oauth"
-        assert installed.connector_type == "recommended"
+        assert installed.connector_type == "builtin"
 
 
 async def test_inherited_credentials_survive_a_reload(sessionmaker_) -> None:
@@ -130,12 +130,12 @@ async def test_inherited_credentials_survive_a_reload(sessionmaker_) -> None:
     # Install the second member after the group was already authorized.
     async with sessionmaker_() as db:
         ds = ConnectorDatastore(db)
-        fresh = _row("valuz-stock", authorized=False)
+        fresh = _row("valuz-data", authorized=False)
         assert await inherit_oauth_credentials(_USER, fresh, ds) == "valuz-search"
         await ds.create(_USER, fresh)
 
     async with sessionmaker_() as db:
-        target = await ConnectorDatastore(db).get_by_slug(_USER, "valuz-stock")
+        target = await ConnectorDatastore(db).get_by_slug(_USER, "valuz-data")
         assert target is not None
         assert target.oauth_token_json == _TOKEN
         assert target.oauth_client_info_json == _CLIENT
@@ -147,26 +147,26 @@ async def test_sharing_never_crosses_owners(sessionmaker_) -> None:
     async with sessionmaker_() as db:
         await ConnectorDatastore(db).create("owner-a", _row("valuz-search", authorized=True))
     async with sessionmaker_() as db:
-        await ConnectorDatastore(db).create("owner-b", _row("valuz-stock", authorized=False))
+        await ConnectorDatastore(db).create("owner-b", _row("valuz-data", authorized=False))
 
     async with sessionmaker_() as db:
         ds = ConnectorDatastore(db)
         source = await ds.get_by_slug("owner-a", "valuz-search")
         assert source is not None
         assert await propagate_oauth_credentials("owner-a", source, ds, install_missing=True) == [
-            "valuz-stock"
+            "valuz-data"
         ]
 
     async with sessionmaker_() as db:
         ds = ConnectorDatastore(db)
         # owner-b's row is untouched — a different row entirely, still unauthorized.
-        theirs = await ds.get_by_slug("owner-b", "valuz-stock")
+        theirs = await ds.get_by_slug("owner-b", "valuz-data")
         assert theirs is not None
         assert theirs.oauth_token_json is None
         assert theirs.status == "pending_auth"
 
         # owner-a got their own, authorized row under the same slug.
-        mine = await ds.get_by_slug("owner-a", "valuz-stock")
+        mine = await ds.get_by_slug("owner-a", "valuz-data")
         assert mine is not None
         assert mine.id != theirs.id
         assert mine.oauth_token_json == _TOKEN

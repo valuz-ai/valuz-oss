@@ -197,6 +197,20 @@ async def _enforce_budget(session: object, user_id: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+
+def mint_session_id() -> str:
+    """The id a new session gets, and the only place that decides its shape.
+
+    Two spellings of a UUID are already live in the sessions table — this one
+    (``uuid4().hex``, 32 chars) and the kernel's ``str(uuid4())`` (36, dashed)
+    that fork and the kernel's own mint produce. That split is not worth
+    migrating, but it is worth not widening: every host-side caller that needs
+    an id ahead of the create (the attachment reservation) comes through here
+    rather than writing ``uuid4()`` again with whichever spelling it happened
+    to pick.
+    """
+    return uuid4().hex
+
 class SessionService:
     """Business façade over the V5 kernel session machinery.
 
@@ -896,7 +910,7 @@ class SessionService:
             ),
         )
 
-        session_id = uuid4().hex
+        session_id = mint_session_id()
 
         # Guarantee the always-on baseline AT SESSION-CREATE (not "whatever the
         # agent happens to carry") — symmetric with the task path
@@ -1207,7 +1221,7 @@ class SessionService:
         # it into the in-process docs MCP URL (the URL embeds the session
         # id so the host can scope each request to a project). The id
         # then flows into the kernel session row unchanged below.
-        session_id = uuid4().hex
+        session_id = mint_session_id()
 
         # Resolve skills / mcp_servers.
         try:
@@ -1603,6 +1617,7 @@ class SessionService:
         *,
         citation_enabled_override: bool | None = None,
         citation_verification_enabled_override: bool | None = None,
+        task_coverage_enabled_override: bool | None = None,
         host_ref: HostRef | None = None,
     ) -> SessionRunResponse:
         """Block until the agent turn completes.  Used by the schedule runner."""
@@ -1614,6 +1629,7 @@ class SessionService:
             user_id,
             citation_enabled_override=citation_enabled_override,
             verification_enabled_override=citation_verification_enabled_override,
+            task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
         )
 
@@ -2239,6 +2255,34 @@ class SessionService:
         updated = await kernel_client.update_session(
             user_id, session_id, UpdateSessionRequest(permission_mode=target)
         )
+        return _session_to_detail(updated)
+
+    async def set_session_mode(
+        self, session_id: str, mode: str, user_id: str | None = None
+    ) -> SessionDetail:
+        """Enter or leave a session working mode (``default``/``plan``/``goal``).
+
+        Thin façade over the kernel's ``POST /sessions/{id}/mode`` — the
+        kernel owns the validation (400 for deepagents / deepseek_harness:
+        no native plan/goal primitive), the write, and the
+        ``mode_changed{by:"user"}`` event. Each runtime lowers the mode
+        natively on its next reconcile (docs/design/session-modes.md):
+        Claude plan applies the typed ``set_permission_mode("plan")``
+        mutator (its ``/plan`` slash is interactive-CLI-only); goal wraps
+        the next non-slash user message as ``/goal <text>``; exit restores
+        the session's ``permission_mode`` / dispatches ``/goal clear``.
+
+        Kernel-shaped errors (``KernelBadRequestError`` for unsupported
+        runtimes) propagate to the route layer, which re-surfaces them
+        verbatim as HTTP errors.
+        """
+        # ``user_id: str | None`` matches every sibling lever in this file;
+        # the reader/client protocols are annotated stricter than their
+        # owner-scoping runtime behavior — same shape as the sibling calls.
+        session = await data_reader().get_session(user_id, session_id)  # type: ignore[arg-type]
+        if session is None:
+            raise _kernel_session_not_found(session_id)
+        updated = await kernel_client.set_mode(user_id, session_id, mode)  # type: ignore[arg-type]
         return _session_to_detail(updated)
 
     async def set_session_effort(

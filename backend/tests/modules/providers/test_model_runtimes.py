@@ -100,7 +100,7 @@ def test_stamp_contributed_fills_none_runtimes() -> None:
         [LLMModel(id="glm", label=None, selection_hint="1.5×")],
     )
     out = _stamp_contributed_runtimes(ch)
-    assert tuple(out.models[0].runtimes or ()) == ("deepagents",)
+    assert tuple(out.models[0].runtimes or ()) == ("deepagents", "deepseek_harness")
     assert out.models[0].selection_hint == "1.5×"
 
 
@@ -182,6 +182,22 @@ def test_codex_capability_is_kind_scoped() -> None:
     # endpoint, not the model name.
     row = _row(provider_kind="compatible", model_ids='["deepseek-v4-flash"]')
     assert "codex" not in (_row_to_list_item(row).models[0].runtimes or ())
+
+
+def test_compatible_completion_channel_derives_harness_for_every_model() -> None:
+    # deepseek_harness is protocol-scoped (like codex on the Responses wire):
+    # every model of a chat-completions-speaking channel derives it, DeepSeek
+    # branding or not — the dsh adapter posts plain chat-completions to the
+    # channel's own endpoint.
+    row = _row(
+        provider_kind="compatible",
+        model_ids='["deepseek-ai/DeepSeek-V3.1", "glm-4-plus"]',
+    )
+    for m in _row_to_list_item(row).models:
+        rts = tuple(m.runtimes or ())
+        assert "deepseek_harness" in rts
+        # Never the one-click default — priority keeps deepagents first.
+        assert rts[0] != "deepseek_harness"
 
 
 def test_other_dual_protocol_kinds_do_not_derive_codex() -> None:

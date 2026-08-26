@@ -17,10 +17,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Maximize2 } from "lucide-react";
-import type { ActionKind, AutomationProjectTarget, Trigger } from "@valuz/core";
+import type {
+  ActionKind,
+  AutomationPlaybookChoice,
+  AutomationProjectTarget,
+  Trigger,
+} from "@valuz/core";
 import {
   automationsApi,
   getDefaultExecutionTarget,
+  getExecutionTargets,
+  resolveApiBase,
   useExecutionTargets,
 } from "@valuz/core";
 import { browserTimezone, timezoneLabel, timezoneOptions } from "@valuz/shared";
@@ -94,6 +101,8 @@ export interface AutomationEditInitial {
   trigger: Trigger;
   action_kind: ActionKind;
   worktree?: boolean;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
 }
 
 export interface CreateAutomationDialogProps {
@@ -113,6 +122,8 @@ export interface CreateAutomationDialogProps {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
     /** Execution-location target id (``"local"``/``"cloud"``) for a
      * Chat-standalone automation on multi-target editions; ``undefined`` for
      * project-bound targets (they inherit the project's origin), in edit
@@ -169,6 +180,10 @@ export interface CreateAutomationDialogProps {
    * already shows the choice).
    */
   fixedTargetName?: string;
+  /** Project identity used only to route the Playbook picker when the target
+   * is locked (project page / detail edit). UI copy remains "工作区" in the
+   * Finance edition; the persisted identity is still project_id. */
+  fixedProjectId?: string;
   /**
    * Pre-fill values for edit mode. When provided, the dialog opens with
    * these values populated and the title defaults to "Edit ...". Omit
@@ -195,6 +210,7 @@ export const CreateAutomationDialog = ({
   selectedExecLocation,
   onSelectExecLocation,
   fixedTargetName,
+  fixedProjectId,
   initial,
   title: titleProp,
   description: descriptionProp,
@@ -296,6 +312,11 @@ export const CreateAutomationDialog = ({
   // false (chat projects) the Task radio is disabled and we coerce
   // ``task`` back to ``chat`` at submit time as a defence-in-depth.
   const [actionKind, setActionKind] = useState<ActionKind>("chat");
+  // Optional process contract. Automation remains useful as a lightweight
+  // Trigger × Agent instruction; selecting a Playbook upgrades each fire into
+  // a persisted PlaybookRun pinned to one immutable Definition version.
+  const [playbooks, setPlaybooks] = useState<AutomationPlaybookChoice[]>([]);
+  const [playbookDefinitionId, setPlaybookDefinitionId] = useState("");
   // Worktree isolation (design §5) — valid for BOTH action kinds, shown
   // whenever a real (git-repo) project is bound. ``chat`` runs each fire in its
   // own worktree; ``task`` runs lead + every member in one worktree.
@@ -315,6 +336,10 @@ export const CreateAutomationDialog = ({
   // project — Task can't run without one, and this saves a second click.
   const handlePickMode = (value: ActionKind) => {
     setActionKind(value);
+    // Task kickoff is fire-and-forget today, so its terminal lifecycle cannot
+    // yet close a PlaybookRun truthfully. Keep the UI aligned with the backend
+    // fail-closed rule by clearing the pin when Task is selected.
+    if (value === "task") setPlaybookDefinitionId("");
     if (
       value === "task" &&
       !isEdit &&
@@ -358,6 +383,7 @@ export const CreateAutomationDialog = ({
           ? "chat"
           : initial.action_kind,
       );
+      setPlaybookDefinitionId(initial.playbook_definition_id ?? "");
       setWorktree(Boolean(initial.worktree));
       if (initial.trigger.kind === "cron") {
         setTriggerKind("cron");
@@ -408,8 +434,43 @@ export const CreateAutomationDialog = ({
     setIntervalUnit("minutes");
     setAgentSlug(defaultAgentSlug ?? agents[0]?.slug ?? "");
     setActionKind("chat");
+    setPlaybookDefinitionId("");
     setWorktree(false);
   }, [open, initial, defaultAgentSlug, agents, allowTaskMode]);
+
+  // Definitions are listed from the same backend that will own the
+  // Automation. Their owner Project does not constrain where they execute:
+  // Definition Project and PlaybookRun Project are intentionally independent.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const routedProjectId = selectedTarget?.project_id ?? fixedProjectId;
+    let baseUrl = routedProjectId
+      ? resolveApiBase({ projectId: routedProjectId }, "") || undefined
+      : undefined;
+    if (isChatStandaloneTarget && selectedExecLocation) {
+      baseUrl = getExecutionTargets().find(
+        (target) => target.id === selectedExecLocation,
+      )?.baseUrl;
+    }
+    automationsApi
+      .listPlaybooks(baseUrl ? { baseUrl } : undefined)
+      .then((items) => {
+        if (!cancelled) setPlaybooks(items);
+      })
+      .catch(() => {
+        if (!cancelled) setPlaybooks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    open,
+    selectedTarget?.project_id,
+    fixedProjectId,
+    isChatStandaloneTarget,
+    selectedExecLocation,
+  ]);
 
   // Debounced next-run preview: re-validate the cron in the selected tz and
   // surface the next fire instant. Only for cron triggers; interval/manual
@@ -481,12 +542,20 @@ export const CreateAutomationDialog = ({
 
   const submitDisabled =
     !effectiveAgentSlug ||
-    !prompt.trim() ||
+    (!prompt.trim() && !playbookDefinitionId) ||
     taskNeedsProject ||
     (triggerKind === "interval" && intervalSeconds < MIN_INTERVAL_SECONDS);
 
   const handleSubmit = async () => {
     if (submitDisabled) return;
+    const selectedPlaybook = playbooks.find(
+      (playbook) => playbook.id === playbookDefinitionId,
+    );
+    const pinnedVersion =
+      playbookDefinitionId === initial?.playbook_definition_id &&
+      initial?.playbook_version
+        ? initial.playbook_version
+        : (selectedPlaybook?.current_version ?? null);
     await onSubmit({
       name: name.trim() || t("cron.untitled" as Parameters<typeof t>[0]),
       prompt_template: prompt.trim(),
@@ -498,6 +567,8 @@ export const CreateAutomationDialog = ({
       // Worktree applies to both chat and task, gated on a real (git-repo)
       // project being bound — the same condition as ``taskModeAllowed``.
       worktree: taskModeAllowed ? worktree : false,
+      playbook_definition_id: playbookDefinitionId || null,
+      playbook_version: playbookDefinitionId ? pinnedVersion : null,
       // Only a Chat-standalone target carries a location choice; project-bound
       // targets inherit the project's origin and the parent routes via the
       // project id.
@@ -650,6 +721,58 @@ export const CreateAutomationDialog = ({
                   })}
                 </div>
               </FormField>
+
+              {actionKind === "chat" ? (
+                <FormField
+                  label={t(
+                    "automation.playbookLabel" as Parameters<typeof t>[0],
+                  )}
+                >
+                  <Select
+                    value={playbookDefinitionId || "__none__"}
+                    onValueChange={(value) =>
+                      setPlaybookDefinitionId(
+                        value === "__none__" ? "" : value,
+                      )
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">
+                        {t(
+                          "automation.playbookNone" as Parameters<typeof t>[0],
+                        )}
+                      </SelectItem>
+                      {playbooks.map((playbook) => {
+                        const version =
+                          playbook.id === initial?.playbook_definition_id
+                            ? (initial.playbook_version ??
+                              playbook.current_version)
+                            : playbook.current_version;
+                        return (
+                          <SelectItem key={playbook.id} value={playbook.id}>
+                            {playbook.name} · v{version}
+                            {playbook.status === "retired"
+                              ? ` · ${t(
+                                  "automation.playbookRetired" as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}`
+                              : ""}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-2xs leading-4 text-ink-meta">
+                    {t(
+                      "automation.playbookHint" as Parameters<typeof t>[0],
+                    )}
+                  </p>
+                </FormField>
+              ) : null}
 
               {/* Worktree toggle — shown whenever a real (git-repo) project is
               bound, for BOTH chat and task actions. Off = the fire works in the

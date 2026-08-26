@@ -9,6 +9,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from valuz_agent.facade.evidence import (
+    MessageEvidenceLibrary,
+    MessageEvidenceRef,
+    SealedMessageEvidence,
+    canonical_citation_hash,
+)
+from valuz_agent.facade.playbooks import (
+    PlaybookDefinitionRef,
+    PlaybookLibrary,
+    PlaybookRunRef,
+    PlaybookVersionRef,
+)
+from valuz_agent.facade.projects import ProjectLibrary, ProjectRef, get_project_library
 from valuz_agent.facade.resources import (
     ResourceKind,
     ResourceLibrary,
@@ -38,12 +51,24 @@ def __getattr__(name: str) -> Any:
 
     return getattr(automations, name)
 
+
 __all__ = [
     "ResourceKind",
     "ResourceLibrary",
     "ResourceRef",
     "ResourceSnapshot",
     "get_resource_library",
+    "ProjectLibrary",
+    "ProjectRef",
+    "get_project_library",
+    "PlaybookDefinitionRef",
+    "PlaybookLibrary",
+    "PlaybookRunRef",
+    "PlaybookVersionRef",
+    "MessageEvidenceLibrary",
+    "MessageEvidenceRef",
+    "SealedMessageEvidence",
+    "canonical_citation_hash",
     "RunClaimResult",
     "claim_due_runs",
     "execute_claimed_run",

@@ -21,7 +21,11 @@ def _session(**overrides) -> Session:
         cwd="/tmp/ws",
         runtime_provider="deepseek_harness",
         model="deepseek-v4-flash",
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(
+            api_key="k",
+            base_url="https://api.deepseek.com",
+            api_protocol="openai_completion",
+        ),
     )
     defaults.update(overrides)
     return Session(**defaults)
@@ -42,6 +46,16 @@ def test_requires_model_and_provider() -> None:
         )
     with pytest.raises(ValueError):
         create_runtime(_session().agent_config, _session(model=""), _NullSink())
+
+
+def test_requires_explicit_base_url() -> None:
+    # dsh's empty-endpoint fallback is DeepSeek's public API — wrong for any
+    # other channel's key, so the factory demands an explicit endpoint.
+    provider = ModelProvider(api_key="k", api_protocol="openai_completion")
+    with pytest.raises(ValueError, match="base_url"):
+        create_runtime(
+            _session().agent_config, _session(model_provider=provider), _NullSink()
+        )
 
 
 def test_protocol_allowlist() -> None:

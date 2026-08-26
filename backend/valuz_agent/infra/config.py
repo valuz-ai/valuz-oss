@@ -259,7 +259,7 @@ class Settings(BaseSettings):
         survives process restarts. Sessions bake this token into their stored
         ``mcp_servers`` headers, and the recovery/resume path replays those
         stored sessions — a per-boot random token would 403 every pre-restart
-        session's internal-MCP calls (harness / docs / automations /
+        session's internal-MCP calls (harness / docs / automations / playbooks /
         connectors), breaking task recovery. ``internal_mcp_token_override``
         (env ``VALUZ_INTERNAL_MCP_TOKEN_OVERRIDE``) still takes precedence for
         tests and explicit configuration.

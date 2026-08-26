@@ -9,7 +9,13 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@valuz/core";
 import type { ActivityFeed, ActivityItem } from "@valuz/core";
 import { Badge, cn } from "@valuz/ui";
-import { Clock3, ListChecks, Loader2, MessageSquare } from "lucide-react";
+import {
+  BookOpenText,
+  Clock3,
+  ListChecks,
+  Loader2,
+  MessageSquare,
+} from "lucide-react";
 
 import { BUCKET_KEY, groupByTimeBucket } from "../lib/time-buckets";
 import { RenameInput } from "./RenameInput";
@@ -46,6 +52,16 @@ const TASK_STATUS_KEY: Record<string, string> = {
   blocked: "task.statusBlocked",
 };
 
+const PLAYBOOK_STATUS_KEY: Record<string, string> = {
+  queued: "activity.statusIdle",
+  planning: "activity.statusRunning",
+  running: "activity.statusRunning",
+  waiting_approval: "task.statusBlocked",
+  completed: "task.statusCompleted",
+  failed: "task.statusFailed",
+  stopped: "task.statusStopped",
+};
+
 const activityStatusVariant = (
   status: string,
 ): "brand" | "success" | "warning" | "error" | "outline" => {
@@ -61,6 +77,7 @@ export interface ActivityFeedListProps {
   feed: ActivityFeed;
   onOpenSession: (id: string) => void;
   onOpenTask: (id: string) => void;
+  onOpenPlaybookRun?: (id: string, linkedSessionId: string | null) => void;
   onRenameConfirm: (id: string, value: string) => void;
   onDeleteSession: (id: string, title: string) => void;
   /** Whole-session fork (docs/design/session-fork.md). Rendered on chat
@@ -81,6 +98,7 @@ export const ActivityFeedList = ({
   feed,
   onOpenSession,
   onOpenTask,
+  onOpenPlaybookRun,
   onRenameConfirm,
   onDeleteSession,
   onForkSession,
@@ -130,16 +148,23 @@ export const ActivityFeedList = ({
   const grouped = groupByTimeBucket(items, (item) => item.sort_at);
 
   const renderItem = (item: ActivityItem) => {
-    const Icon = item.is_automation
-      ? Clock3
-      : item.kind === "task"
+    const Icon =
+      item.kind === "playbook"
+        ? BookOpenText
+        : item.is_automation
+          ? Clock3
+          : item.kind === "task"
         ? ListChecks
         : MessageSquare;
     const statusKey =
-      item.kind === "task"
+      item.kind === "playbook"
+        ? PLAYBOOK_STATUS_KEY[item.status]
+        : item.kind === "task"
         ? TASK_STATUS_KEY[item.status]
         : SESSION_STATUS_KEY[item.status];
-    const kindLabel = item.is_automation
+    const kindLabel = item.kind === "playbook"
+      ? t("playbook.title" as Parameters<typeof t>[0])
+      : item.is_automation
       ? t("activity.automationTag" as Parameters<typeof t>[0])
       : item.kind === "task"
         ? t("project.tasksColumn" as Parameters<typeof t>[0])
@@ -172,13 +197,18 @@ export const ActivityFeedList = ({
         <div
           role="button"
           tabIndex={0}
-          onClick={() =>
-            item.kind === "task" ? onOpenTask(item.id) : onOpenSession(item.id)
-          }
+          onClick={() => {
+            if (item.kind === "task") onOpenTask(item.id);
+            else if (item.kind === "playbook")
+              onOpenPlaybookRun?.(item.id, item.linked_session_id);
+            else onOpenSession(item.id);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               if (item.kind === "task") onOpenTask(item.id);
+              else if (item.kind === "playbook")
+                onOpenPlaybookRun?.(item.id, item.linked_session_id);
               else onOpenSession(item.id);
             }
           }}

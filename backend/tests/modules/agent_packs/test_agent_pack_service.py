@@ -165,7 +165,7 @@ async def test_import_pack_creates_agents(svc: AgentPackService) -> None:
         "comps",
         "idea-generation",
     ]
-    assert analyst.connector_types == ["valuz-search", "valuz-stock"]
+    assert analyst.connector_types == ["valuz-search", "valuz-data"]
 
 
 async def test_import_supply_chain_tracking_pack(svc: AgentPackService) -> None:
@@ -180,7 +180,7 @@ async def test_import_supply_chain_tracking_pack(svc: AgentPackService) -> None:
     lead = next(r for r in res["roles"] if r.slug == "sct-theme-lead")
     assert lead.name == "Theme Lead"
     assert lead.skills == ["serenity-unified-skill", "serenity-bottleneck-hunter"]
-    assert lead.connector_types == ["valuz-search", "valuz-stock"]
+    assert lead.connector_types == ["valuz-search", "valuz-data"]
     assert "Supply Chain Tracking team" in lead.instructions
     assert "not investment advice" in lead.instructions
 

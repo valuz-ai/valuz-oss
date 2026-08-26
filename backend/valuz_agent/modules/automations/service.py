@@ -46,6 +46,9 @@ from valuz_agent.modules.automations.errors import (
     AutomationNameEmpty,
     AutomationNotFound,
     AutomationPaused,
+    AutomationPlaybookNotFound,
+    AutomationPlaybookTaskUnsupported,
+    AutomationPlaybookVersionNotFound,
     AutomationProjectNotFound,
     AutomationPromptEmpty,
     AutomationTaskOnlyOnProject,
@@ -77,6 +80,7 @@ from valuz_agent.modules.automations.triggers import (
     MIN_INTERVAL_SECONDS,
     TriggerEvaluator,
 )
+from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
 from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
 from valuz_agent.ports.extensions import ext
@@ -132,6 +136,7 @@ class AutomationService:
         self._ds = AutomationDatastore(db)
         self._members = ProjectMemberDatastore(db)
         self._agents = AgentDatastore(db)
+        self._playbooks = PlaybookDatastore(db)
         self._bus = event_bus
         self._ws = project_service
         self._agent_svc = agent_service
@@ -238,6 +243,34 @@ class AutomationService:
             if trigger.seconds < MIN_INTERVAL_SECONDS:
                 raise IntervalTooShort()
 
+    async def _resolve_playbook_pin(
+        self,
+        user_id: str,
+        *,
+        definition_id: str | None,
+        version: int | None,
+        action_kind: str,
+    ) -> tuple[str | None, int | None]:
+        """Validate an owner-scoped Playbook and return an exact version pin.
+
+        Automation never stores a floating "current" reference: omitting the
+        version resolves the Definition's current version now and persists it.
+        """
+
+        if definition_id is None:
+            if version is not None:
+                raise AutomationPlaybookNotFound()
+            return None, None
+        if action_kind != "chat":
+            raise AutomationPlaybookTaskUnsupported()
+        definition = await self._playbooks.get_definition(user_id, definition_id)
+        if definition is None:
+            raise AutomationPlaybookNotFound()
+        resolved_version = version or definition.current_version
+        if await self._playbooks.get_version(user_id, definition.id, resolved_version) is None:
+            raise AutomationPlaybookVersionNotFound()
+        return definition.id, resolved_version
+
     # ── Row → DTO ─────────────────────────────────────────────────────
 
     async def _resolve_agent_name(
@@ -279,6 +312,8 @@ class AutomationService:
             agent_name=await self._resolve_agent_name(row, user_id),
             action_kind=row.action_kind,
             worktree=bool(getattr(row, "worktree", False)),
+            playbook_definition_id=getattr(row, "playbook_definition_id", None),
+            playbook_version=getattr(row, "playbook_version", None),
             trigger=self._row_to_trigger(row),
             trigger_human_readable=self._trigger_human(row),
             status=row.status,
@@ -328,6 +363,7 @@ class AutomationService:
             error_message_key=row.error_message_key,
             session_id=row.session_id,
             created_files=created_files,
+            playbook_run_id=getattr(row, "playbook_run_id", None),
             # The spawned task (task-action automations): id + title deep-link to
             # it; status is its *live* outcome (the run row froze to success at
             # kickoff, but the lead may run for hours after).
@@ -396,7 +432,8 @@ class AutomationService:
         ]
 
     async def list_automation_groups(
-        self, project_id: str | None = None,
+        self,
+        project_id: str | None = None,
         user_id: str | None = None,
     ) -> list[AutomationGroupResponse]:
         """Group automations for the automation page / per-project panel.
@@ -545,9 +582,7 @@ class AutomationService:
 
             # 2. Resolve the agent for that project
             if payload.agent_kind == "project_member":
-                member = await self._members.get(
-                    user_id, project_id, payload.agent_slug
-                )
+                member = await self._members.get(user_id, project_id, payload.agent_slug)
                 if member is None:
                     raise AgentNotInProject()
                 return project_id, payload.agent_slug
@@ -611,6 +646,8 @@ class AutomationService:
         project_id: str | None,
         session_agent_slug: str | None,
         worktree: bool = False,
+        playbook_definition_id: str | None = None,
+        playbook_version: int | None = None,
     ) -> AutomationCreatePayload:
         """Assemble an :class:`AutomationCreatePayload` from raw create inputs.
 
@@ -631,7 +668,7 @@ class AutomationService:
         name = (name or "").strip()
         if not name:
             raise AutomationNameEmpty()
-        if not (prompt_template or "").strip():
+        if not (prompt_template or "").strip() and not playbook_definition_id:
             raise AutomationPromptEmpty()
         effective_agent_slug = agent_slug
         if not effective_agent_slug and project_kind == "chat":
@@ -656,10 +693,14 @@ class AutomationService:
             # silently drop the flag for chat-kind targets rather than persisting
             # a meaningless value. Valid for BOTH chat and task actions.
             worktree=bool(worktree) and project_kind == "project",
+            playbook_definition_id=playbook_definition_id,
+            playbook_version=playbook_version,
         )
 
     async def _preview_agent_name(
-        self, payload: AutomationCreatePayload, calling_session_project_id: str | None,
+        self,
+        payload: AutomationCreatePayload,
+        calling_session_project_id: str | None,
         user_id: str | None = None,
     ) -> str | None:
         """Resolve the bound agent's display name WITHOUT side effects.
@@ -711,7 +752,7 @@ class AutomationService:
         name = payload.name.strip()
         if not name:
             raise AutomationNameEmpty()
-        if not payload.prompt_template.strip():
+        if not payload.prompt_template.strip() and not payload.playbook_definition_id:
             raise AutomationPromptEmpty()
         if not payload.agent_slug:
             raise AutomationAgentRequired()
@@ -720,6 +761,14 @@ class AutomationService:
 
         self._validate_trigger(payload.trigger)
         user_id = self._require_user_id(user_id)
+        playbook_definition_id, playbook_version = await self._resolve_playbook_pin(
+            user_id,
+            definition_id=payload.playbook_definition_id,
+            version=payload.playbook_version,
+            action_kind=payload.action_kind,
+        )
+        if not payload.prompt_template.strip() and not playbook_definition_id:
+            raise AutomationPromptEmpty()
         agent_name = await self._preview_agent_name(payload, calling_session_project_id, user_id)
 
         now = now_ms()
@@ -732,6 +781,8 @@ class AutomationService:
             prompt_template=payload.prompt_template.strip(),
             action_kind=payload.action_kind,
             worktree=bool(payload.worktree),
+            playbook_definition_id=playbook_definition_id,
+            playbook_version=playbook_version,
             trigger_kind="cron",  # overwritten by _apply_trigger
             status="enabled",
             next_run_at=None,
@@ -750,6 +801,8 @@ class AutomationService:
             agent_name=agent_name,
             action_kind=payload.action_kind,
             worktree=bool(payload.worktree),
+            playbook_definition_id=playbook_definition_id,
+            playbook_version=playbook_version,
             trigger_human_readable=self._trigger_human(row),
             next_run_at=next_run,
         )
@@ -786,7 +839,7 @@ class AutomationService:
         name = payload.name.strip()
         if not name:
             raise AutomationNameEmpty()
-        if not payload.prompt_template.strip():
+        if not payload.prompt_template.strip() and not payload.playbook_definition_id:
             raise AutomationPromptEmpty()
         if not payload.agent_slug:
             raise AutomationAgentRequired()
@@ -798,6 +851,15 @@ class AutomationService:
             raise AutomationTaskOnlyOnProject()
 
         self._validate_trigger(payload.trigger)
+
+        playbook_definition_id, playbook_version = await self._resolve_playbook_pin(
+            user_id,
+            definition_id=payload.playbook_definition_id,
+            version=payload.playbook_version,
+            action_kind=payload.action_kind,
+        )
+        if not payload.prompt_template.strip() and not playbook_definition_id:
+            raise AutomationPromptEmpty()
 
         project_id, agent_slug = await self._resolve_project_and_agent(
             payload,
@@ -815,6 +877,8 @@ class AutomationService:
             prompt_template=payload.prompt_template.strip(),
             action_kind=payload.action_kind,
             worktree=bool(payload.worktree),
+            playbook_definition_id=playbook_definition_id,
+            playbook_version=playbook_version,
             trigger_kind="cron",  # overwritten by _apply_trigger
             status="enabled",
             next_run_at=None,
@@ -874,7 +938,7 @@ class AutomationService:
                 raise InvalidCronExpression(err_msg)
         if not row.name.strip():
             raise AutomationNameEmpty()
-        if not row.prompt_template.strip():
+        if not row.prompt_template.strip() and not row.playbook_definition_id:
             raise AutomationPromptEmpty()
         if not row.agent_slug:
             raise AutomationAgentRequired()
@@ -950,7 +1014,9 @@ class AutomationService:
             raise AutomationProjectNotFound() from exc
 
     async def update(
-        self, automation_id: str, payload: AutomationUpdatePayload,
+        self,
+        automation_id: str,
+        payload: AutomationUpdatePayload,
         user_id: str | None = None,
     ) -> AutomationDetailResponse:
         user_id = self._require_user_id(user_id)
@@ -965,8 +1031,6 @@ class AutomationService:
 
         if payload.prompt_template is not None:
             prompt = payload.prompt_template.strip()
-            if not prompt:
-                raise AutomationPromptEmpty()
             row.prompt_template = prompt
 
         if payload.agent_slug is not None:
@@ -991,6 +1055,36 @@ class AutomationService:
                 if ws_kind != "project":
                     raise AutomationTaskOnlyOnProject()
             row.action_kind = payload.action_kind
+
+        playbook_fields = payload.model_fields_set & {
+            "playbook_definition_id",
+            "playbook_version",
+        }
+        if playbook_fields or payload.action_kind is not None:
+            definition_changed = "playbook_definition_id" in playbook_fields
+            definition_id = (
+                payload.playbook_definition_id if definition_changed else row.playbook_definition_id
+            )
+            if "playbook_version" in playbook_fields:
+                requested_version = payload.playbook_version
+            elif definition_changed:
+                # A different Definition without an explicit version pins that
+                # Definition's current immutable version now.
+                requested_version = None
+            else:
+                requested_version = row.playbook_version
+            (
+                row.playbook_definition_id,
+                row.playbook_version,
+            ) = await self._resolve_playbook_pin(
+                user_id,
+                definition_id=definition_id,
+                version=requested_version,
+                action_kind=row.action_kind,
+            )
+
+        if not row.prompt_template.strip() and not row.playbook_definition_id:
+            raise AutomationPromptEmpty()
 
         if payload.worktree is not None:
             row.worktree = bool(payload.worktree)
@@ -1133,16 +1227,17 @@ class AutomationService:
         )
 
     async def list_runs(
-        self, automation_id: str, limit: int = 20, cursor: str | None = None,
+        self,
+        automation_id: str,
+        limit: int = 20,
+        cursor: str | None = None,
         user_id: str | None = None,
     ) -> list[AutomationRunItemResponse]:
         user_id = self._require_user_id(user_id)
         row = await self._ds.get_automation(user_id, automation_id)
         if row is None:
             raise AutomationNotFound()
-        runs = await self._ds.list_runs(
-            user_id, automation_id, limit=limit, cursor=cursor
-        )
+        runs = await self._ds.list_runs(user_id, automation_id, limit=limit, cursor=cursor)
         # Task automations: the run row freezes to ``success`` at kickoff, so
         # resolve each lead session's spawned task (id + title + live status) and
         # let the client deep-link to it. Batched to avoid an N+1 over the page.
@@ -1153,7 +1248,8 @@ class AutomationService:
         ]
 
     async def _resolve_task_links(
-        self, runs: list[AutomationRunRow],
+        self,
+        runs: list[AutomationRunRow],
         user_id: str | None = None,
     ) -> dict[str, tuple[str, str, str]]:
         """Map each run's lead ``session_id`` → ``(task_id, title, status)`` of

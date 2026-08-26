@@ -17,7 +17,12 @@
 import { useSyncExternalStore } from "react";
 
 export type EntityOriginKind =
-  "session" | "project" | "task" | "automation" | "kb";
+  | "session"
+  | "project"
+  | "task"
+  | "automation"
+  | "playbook"
+  | "kb";
 
 export interface EntityOriginAdapter {
   /** Synchronous lookup. May trigger an async fill on miss (then notify). */

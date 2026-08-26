@@ -1,6 +1,6 @@
 ---
 name: earnings-preview
-description: Pre-earnings analysis for global equities (focus US / HK / A-shares, also other markets). Builds scenario frameworks (actual vs consensus, beat/miss cases), identifies key metrics to watch, and prepares positioning notes before companies report quarterly results. Uses valuz-stock (earnings_calendar, income_statement, revenue_breakdown, company_overview, stock_quote) and valuz-search (reports_search 一致预期/前瞻, conferences_search guidance, earnings_search, filings_search, news_search). Triggers on "财报前瞻", "季报前瞻", "业绩前瞻", "earnings preview", "what to watch for [company] earnings", or "pre-earnings setup".
+description: Pre-earnings analysis for global equities (focus US / HK / A-shares, also other markets). Builds scenario frameworks (actual vs consensus, beat/miss cases), identifies key metrics to watch, and prepares positioning notes before companies report quarterly results. Uses valuz-data (get_calendar, get_financial_statements, get_financial_statements, get_company, get_snapshots) and valuz-search (search_documents 一致预期/前瞻, search_documents guidance, search_documents, search_documents, search_documents). Triggers on "财报前瞻", "季报前瞻", "业绩前瞻", "earnings preview", "what to watch for [company] earnings", or "pre-earnings setup".
 ---
 
 # earnings-preview
@@ -11,48 +11,49 @@ Build **全球上市公司（美股/港股/A 股为主，兼顾其他市场）�
 
 ## Data Sources
 
-用 `valuz-stock` 定档期 + 取历史财务基线，用 `valuz-search` 取一致预期/指引/电话会/公告。
+用 `valuz-data` 定档期 + 取历史财务基线，用 `valuz-search` 取一致预期/指引/电话会/公告。
 
-> **Symbol format**: `valuz-stock` 用裸代码（`AAPL` / `00700` / `600519`）；`valuz-search` 用 `market:ticker`（`US:AAPL` / `HK:00700` / `SH:600519`）。
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 
-- **`valuz-stock`** — 财报日程、历史财务、指标数值数据。
+- **`valuz-data`** — 财报日程、历史财务、指标数值数据。
 - **`valuz-search`** — 一致预期/前瞻、指引、电话会、公告、纪要检索。
 
 ```python
-# valuz-stock — 裸代码 (AAPL / 00700 / 600519)
-earnings_calendar(symbol="AAPL")                      → 下次财报档期、报告期
-income_statement(symbol="AAPL", period="quarterly", limit=8)  → 历史营收/利润/EPS 趋势
-revenue_breakdown(symbol="AAPL", period="quarterly")  → 分部/分产品收入结构
-company_overview(symbol="AAPL")                       → 估值、PE/PB、市值
-stock_quote(symbol="AAPL")                            → 当前价、交易区间
+# valuz-data — MARKET:LOCAL 规范代码 (US:AAPL / HK:00700 / SH:600519)
+get_calendar(symbol="US:AAPL")                      → 下次财报档期、报告期
+get_financial_statements(statement_type="income", symbol="US:AAPL", period="quarterly", limit=8) → 历史营收/利润/EPS 趋势
+get_financial_statements(statement_type="revenue_breakdown", symbol="US:AAPL", period="quarterly") → 分部/分产品收入结构
+get_company(kind="profile", symbol="US:AAPL")      → 公司画像
+get_valuations(kind="latest", symbol="US:AAPL")   → 估值、PE/PB、市值
+get_snapshots(symbol="US:AAPL")                            → 当前价、交易区间
 # valuz-search — market:ticker (US:AAPL / HK:00700 / SH:600519)
-reports_search(query="一致预期 前瞻", symbols=["US:AAPL"])  → 卖方一致预期、前瞻研报
-conferences_search(symbols=["US:AAPL"])               → 上次电话会指引
-news_search(query="业绩预告 指引", symbols=["US:AAPL"]) → 近期催化、指引新闻
-filings_search(symbols=["US:AAPL"])                   → 业绩预告、公告
-earnings_search(symbols=["US:AAPL"])                  → 历史财报披露文档
+search_documents(category="all", query="一致预期 前瞻", symbols=["US:AAPL"])  → 卖方一致预期、前瞻研报
+search_documents(category="all", symbols=["US:AAPL"])               → 上次电话会指引
+search_documents(category="all", query="业绩预告 指引", symbols=["US:AAPL"]) → 近期催化、指引新闻
+search_documents(category="all", symbols=["US:AAPL"])                   → 业绩预告、公告
+search_documents(category="all", symbols=["US:AAPL"])                  → 历史财报披露文档
 ```
 
 ### Consensus Estimates
 
-- 一致预期/前瞻用 `reports_search`(valuz-search，`query="一致预期"` 或 `"前瞻"`)。
+- 一致预期/前瞻用 `search_documents`(valuz-search，`query="一致预期"` 或 `"前瞻"`)。
 - **If consensus unavailable**, derive from:
-  - 历史增速基线：`income_statement`(valuz-stock)
-  - 上次指引：`conferences_search`(valuz-search) 取电话会指引
+  - 历史增速基线：`get_financial_statements`(valuz-data)
+  - 上次指引：`search_documents`(valuz-search) 取电话会指引
   - Industry benchmarks
 
 ### Secondary Sources (via `valuz-search`)
-- 公司公告/业绩预告 (earnings preview notices) — `filings_search`
-- 历史财报披露文档 — `earnings_search`
-- 卖方研报/前瞻 (broker research) — `reports_search`
-- 电话会指引/纪要 (earnings call) — `conferences_search`、`minutes_search`
-- 近期催化/指引新闻 — `news_search`
+- 公司公告/业绩预告 (earnings preview notices) — `search_documents`
+- 历史财报披露文档 — `search_documents`
+- 卖方研报/前瞻 (broker research) — `search_documents`
+- 电话会指引/纪要 (earnings call) — `search_documents`
+- 近期催化/指引新闻 — `search_documents`
 
 ## Workflow
 
 ### Step 1: Establish Baseline
 
-先用 `earnings_calendar`(valuz-stock，裸代码) 确认下次财报档期与报告期；历史基线用 `income_statement`(valuz-stock，`period="quarterly"`, `limit=8`)，收入结构用 `revenue_breakdown`(valuz-stock)。
+先用 `get_calendar`(valuz-data，MARKET:LOCAL 规范代码) 确认下次财报档期与报告期；历史基线用 `get_financial_statements`(valuz-data，`period="quarterly"`, `limit=8`)，收入结构用 `get_financial_statements`(valuz-data)。
 
 **Historical performance (last 4-8 quarters):**
 
@@ -71,7 +72,7 @@ earnings_search(symbols=["US:AAPL"])                  → 历史财报披露文�
 
 ### Step 2: Gather Consensus Estimates
 
-一致预期与前瞻用 `reports_search`(valuz-search，`query="一致预期"`/`"前瞻"`, `symbols=["US:AAPL"]`)；上次管理层指引用 `conferences_search`(valuz-search)；近期指引/预告新闻用 `news_search`(valuz-search)。
+一致预期与前瞻用 `search_documents`(valuz-search，`query="一致预期"`/`"前瞻"`, `symbols=["US:AAPL"]`)；上次管理层指引用 `search_documents`(valuz-search)；近期指引/预告新闻用 `search_documents`(valuz-search)。
 
 **Consensus table:**
 
@@ -124,7 +125,7 @@ BEAR CASE (超预期悲观)
   Revenue: -X% vs consensus
   Net Income: -Y% vs consensus
   Key factor: [specific risk]
-  Likely catalysts: 业绩预告大幅下调, 行业负面政策 (核对 `filings_search` / `news_search`)
+  Likely catalysts: 业绩预告大幅下调, 行业负面政策 (核对 `search_documents`)
 
 BASE CASE (符合预期)
   Revenue: ±Z% vs consensus
@@ -143,7 +144,7 @@ BULL CASE (超预期乐观)
 
 **What does the market expect?**
 
-当前估值/股价用 `company_overview` 与 `stock_quote`(valuz-stock，裸代码)；卖方评级分布用 `reports_search`(valuz-search)。
+当前估值/股价用 `get_company` 与 `get_snapshots`(valuz-data，MARKET:LOCAL 规范代码)；卖方评级分布用 `search_documents`(valuz-search)。
 
 - Recent stock price performance into earnings
 - Implied move from options (if listed options available)
@@ -200,7 +201,7 @@ After actual results are released:
 
 Earnings-season conventions vary by market — confirm each company's reporting
 calendar and deadlines for its listing venue rather than assuming a single
-schedule. 用 `earnings_calendar`(valuz-stock，裸代码) 取该公司下次披露日期与报告期。
+schedule. 用 `get_calendar`(valuz-data，MARKET:LOCAL 规范代码) 取该公司下次披露日期与报告期。
 
 | Report Type | Typical Cadence | Typical Release Time |
 |-------------|-----------------|----------------------|
@@ -221,7 +222,7 @@ schedule. 用 `earnings_calendar`(valuz-stock，裸代码) 取该公司下次披
 - Published typically weeks before the formal report
 - A-share format examples: 预增 (increase), 预减 (decrease), 扭亏 (turn to profit), 首亏 (first loss), 续亏 (continued loss)
 - Provides directional guidance before formal report
-- 检索：`filings_search`(valuz-search，`symbols=["SH:600519"]`) 或 `news_search`(valuz-search，`query="业绩预告"`)
+- 检索：`search_documents`(valuz-search，`symbols=["SH:600519"]`) 或 `search_documents`(valuz-search，`query="业绩预告"`)
 
 ### Consensus Reliability
 
@@ -247,8 +248,8 @@ schedule. 用 `earnings_calendar`(valuz-stock，裸代码) 取该公司下次披
 
 Before delivering preview:
 
-- [ ] Historical data complete and accurate (verified via `income_statement` / `revenue_breakdown`, valuz-stock)
-- [ ] Consensus estimates sourced via `reports_search` / `conferences_search` (valuz-search) — or clearly noted as unavailable
+- [ ] Historical data complete and accurate (verified via `get_financial_statements`, valuz-data)
+- [ ] Consensus estimates sourced via `search_documents` (valuz-search) — or clearly noted as unavailable
 - [ ] Scenario framework covers bull/base/bear
 - [ ] Key watch items identified with rationale
 - [ ] Market-specific risks flagged (政策, 集采, regulatory, etc.)

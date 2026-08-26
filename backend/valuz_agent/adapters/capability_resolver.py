@@ -482,6 +482,7 @@ async def always_on_http_mcp_servers(
     from valuz_agent.integrations.automations_mcp_server import automations_mcp_url
     from valuz_agent.integrations.connectors_mcp_server import connectors_mcp_url
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_url
+    from valuz_agent.integrations.playbooks_mcp_server import playbooks_mcp_url
     from valuz_agent.integrations.toolkit_mcp_server import toolkit_mcp_url
     from valuz_agent.ports.sandbox_credential import get_sandbox_credential_verifier
 
@@ -502,6 +503,13 @@ async def always_on_http_mcp_servers(
         McpHttpServerConfig(
             name="valuz_automations",
             url=automations_mcp_url(base_url=base),
+            transport="http",
+            headers=dict(headers),
+            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+        ),
+        McpHttpServerConfig(
+            name="valuz_playbooks",
+            url=playbooks_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
             tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,

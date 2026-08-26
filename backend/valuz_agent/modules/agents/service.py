@@ -122,6 +122,22 @@ class AgentManagedFieldError(Exception):
         super().__init__(f"agent '{slug}' has system-managed field(s): {', '.join(self.fields)}")
 
 
+class InvalidAgentSlugError(Exception):
+    """Raised when a caller supplies a slug that is not a valid ASCII handle.
+
+    Derived slugs are valid by construction; this only ever fires on a slug the
+    caller typed. See ``modules/agents/slug.py`` for why the handle is ASCII —
+    a non-ASCII one cannot be sent as an HTTP header value at all.
+    """
+
+    def __init__(self, slug: str) -> None:
+        self.slug = slug
+        super().__init__(
+            f"agent slug '{slug}' is invalid: use ASCII letters, digits and single "
+            "dashes (no leading/trailing dash)"
+        )
+
+
 async def _after_agent_saved_hook(
     db: AsyncSession, user_id: str, row: AgentRow, origin: str
 ) -> None:
@@ -355,12 +371,18 @@ class AgentService:
         spaces→``-``, case kept. A caller-supplied slug is honored as-is.
         Either way it's made globally unique by suffixing on collision.
         """
-        from valuz_agent.modules.agents.slug import derive_slug, ensure_unique_slug
+        from valuz_agent.modules.agents.slug import (
+            derive_slug,
+            ensure_unique_slug,
+            is_valid_slug,
+        )
 
         slug = (payload.get("slug") or "").strip()
         if not slug:
             existing = {a.slug for a in await self._agents.list_agents(user_id)}
             slug = ensure_unique_slug(derive_slug(payload["name"]), existing)
+        elif not is_valid_slug(slug):
+            raise InvalidAgentSlugError(slug)
         if slug == VALURION_SLUG:
             raise MemberAlreadyExistsError(f"agent slug '{slug}' is reserved")
         if await self._agents.get_agent(user_id, slug) is not None:
@@ -673,7 +695,11 @@ class AgentService:
         it intentionally creates a distinct member handle per automation that may
         reference the same source agent in the same project.
         """
-        from valuz_agent.modules.agents.slug import derive_slug, ensure_unique_slug
+        from valuz_agent.modules.agents.slug import (
+            derive_slug,
+            ensure_unique_slug,
+            is_valid_slug,
+        )
 
         source_agent = await self.get_agent(user_id, source_agent_slug)
 
@@ -684,6 +710,8 @@ class AgentService:
         if not agent_slug:
             taken = {m.agent_slug for m in await self._members.list_by_project(user_id, project_id)}
             agent_slug = ensure_unique_slug(derive_slug(source_agent.name), taken)
+        elif not is_valid_slug(agent_slug):
+            raise InvalidAgentSlugError(agent_slug)
 
         if await self._members.get(user_id, project_id, agent_slug) is not None:
             raise MemberAlreadyExistsError(

@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowDown } from "lucide-react";
 import {
@@ -12,9 +12,8 @@ import {
   type SkillView,
 } from "@valuz/core";
 import { cn, Composer, type ComposerConnector } from "@valuz/ui";
-import type { I18nKey } from "@valuz/shared";
+import { supportsPlanMode, type I18nKey } from "@valuz/shared";
 import { QueuedInputsBar } from "../../components/QueuedInputsBar";
-import { AttachmentParsingDialog } from "../../components/AttachmentParsingDialog";
 import { CreateAgentDialog } from "../../components/CreateAgentDialog";
 import { ExecutionLocationBar } from "../../components/ExecutionLocationBar";
 import type { useComposerConfig } from "./useComposerConfig";
@@ -96,6 +95,10 @@ type ComposerPaneProps = {
   setSelectedEffort: Dispatch<
     SetStateAction<"low" | "medium" | "high" | "xhigh" | "max" | null>
   >;
+  selectedSessionMode: "default" | "plan" | "goal";
+  setSelectedSessionMode: Dispatch<
+    SetStateAction<"default" | "plan" | "goal">
+  >;
   selectedAgentSkillItems: ComposerConfig["selectedAgentSkillItems"];
   composerMentionSkills: ComposerConfig["composerMentionSkills"];
   availableSkills: SkillView[];
@@ -104,9 +107,13 @@ type ComposerPaneProps = {
   connectorOptions: ComposerConnector[];
   selectedMcpSlugs: string[];
   toggleConnector: (slug: string, enabled: boolean) => void;
-  parsingConfirmOpen: boolean;
-  setParsingConfirmOpen: Dispatch<SetStateAction<boolean>>;
   performSend: ConversationSend["performSend"];
+  /** Enables the composer's chat/task mode toggle (the same one the project
+   * home composer carries). In task mode Send hands the draft to this
+   * callback — typically a ``tasksApi.kickoff`` — instead of the
+   * conversation send; return ``true`` to clear the draft. Absent → no
+   * toggle, chat-only behavior unchanged. */
+  onSendTask?: (goal: string) => Promise<boolean> | boolean;
 };
 
 /**
@@ -184,6 +191,8 @@ export function ComposerPane({
   id,
   selectedEffort,
   setSelectedEffort,
+  selectedSessionMode,
+  setSelectedSessionMode,
   selectedAgentSkillItems,
   composerMentionSkills,
   availableSkills,
@@ -192,12 +201,12 @@ export function ComposerPane({
   connectorOptions,
   selectedMcpSlugs,
   toggleConnector,
-  parsingConfirmOpen,
-  setParsingConfirmOpen,
-  performSend,
+  onSendTask,
 }: ComposerPaneProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // Chat/task mode only exists when the host provides a task kickoff.
+  const [composerMode, setComposerMode] = useState<"chat" | "task">("chat");
 
   return (
     <>
@@ -305,7 +314,17 @@ export function ComposerPane({
             isProjectProject ? effectiveAgentSlug != null : undefined
           }
           autoFocus
+          mode={onSendTask ? composerMode : undefined}
+          onModeChange={onSendTask ? setComposerMode : undefined}
           onSend={() => {
+            if (onSendTask && composerMode === "task") {
+              const goal = draft.trim();
+              if (!goal) return;
+              void (async () => {
+                if (await onSendTask(goal)) setDraft("");
+              })();
+              return;
+            }
             void handleSend();
           }}
           sending={displayBusy}
@@ -475,6 +494,24 @@ export function ComposerPane({
               });
             }
           }}
+          // Session working mode (docs/design/session-modes.md). Live
+          // sessions PATCH ``/mode`` directly (the kernel applies plan on
+          // the next reconcile and emits ``mode_changed``); a new-session
+          // toggle stages the value here and the send path PATCHes it onto
+          // the freshly created session before the first message. Gated on
+          // the effective runtime — deepagents/dsh never see the toggle.
+          sessionMode={selectedSessionMode}
+          planModeAvailable={supportsPlanMode(
+            selectedSession?.runtime_provider ?? selectedRuntimeId,
+          )}
+          onSessionModeChange={(nextMode) => {
+            setSelectedSessionMode(nextMode);
+            if (!isNewSession && id) {
+              void sessionsApi.updateMode(id, nextMode).catch(() => {
+                /* non-fatal — surfaced by error toast pipeline */
+              });
+            }
+          }}
           // Effort budget: seeded from the bound agent's brain for a new
           // agent conversation (overridable here — see
           // ``allowAgentBrainOverride`` below), or from Settings for quick
@@ -521,14 +558,6 @@ export function ComposerPane({
           connectorsReadOnly={!isNewSession}
           onManageSkills={() => navigate("/skills")}
           onManageConnectors={() => navigate("/connectors")}
-        />
-        <AttachmentParsingDialog
-          open={parsingConfirmOpen}
-          onConfirm={() => {
-            setParsingConfirmOpen(false);
-            void performSend();
-          }}
-          onCancel={() => setParsingConfirmOpen(false)}
         />
       </div>
     </>

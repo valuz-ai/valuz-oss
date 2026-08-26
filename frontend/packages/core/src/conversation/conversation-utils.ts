@@ -61,7 +61,10 @@ const parseCitationBundle = (
       const record = citation as Record<string, unknown>;
       const id = record.citationId;
       if (typeof id !== "string" || !id || ids.has(id)) return undefined;
-      if (!isCitationSource(record.source) || !isCitationEvidence(record.evidence)) {
+      if (
+        !isCitationSource(record.source) ||
+        !isCitationEvidence(record.evidence)
+      ) {
         return undefined;
       }
       ids.add(id);
@@ -205,6 +208,45 @@ const interruptKind = (value: unknown): "user" | "runtime" | null => {
       }
     }
     return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Classify a ``stop_reason`` as the runtime hitting one of its per-run budgets.
+ *
+ * The kernel serializes ``BudgetExhausted`` as ``{type: "budget_exhausted",
+ * reason: "max_cost" | "max_turns"}`` and the turn is recorded as a normal
+ * COMPLETED turn — no ``run.failed``, no ``error``. So without this branch a
+ * budget stop renders as literally nothing: the user's message sits there with
+ * an empty assistant area and no explanation (the CLI rejects the query before
+ * any model call, so there are no blocks either). Surface it.
+ *
+ * An unrecognized (or absent) ``reason`` still returns ``"unknown"`` rather
+ * than ``null``. Falling back to ``null`` would put the turn straight back
+ * into the silent-blank-reply bug this function exists to fix, and guessing a
+ * specific reason would state a cause we don't have — so the caller gets a
+ * cause-free marker and the UI says only what is known.
+ *
+ * Accepts the bare string or a serialized ``{type}`` object, same as
+ * ``interruptKind``.
+ */
+const budgetHaltKind = (
+  value: unknown,
+): "max_cost" | "max_turns" | "unknown" | null => {
+  if (typeof value !== "string") return null;
+  const bare = value.trim().toLowerCase();
+  if (bare === "max_cost" || bare === "max_turns") return bare;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const obj = parsed as Record<string, unknown>;
+    if (String(obj.type ?? "").toLowerCase() !== "budget_exhausted")
+      return null;
+    const reason = String(obj.reason ?? "").toLowerCase();
+    if (reason === "max_cost" || reason === "max_turns") return reason;
+    return "unknown";
   } catch {
     return null;
   }
@@ -692,6 +734,10 @@ const createTurnsBuilder = () => {
           const kind = interruptKind(payload.stop_reason);
           if (kind === "user") currentTurn.cancelled = true;
           else if (kind === "runtime") currentTurn.interrupted = true;
+          else {
+            const budget = budgetHaltKind(payload.stop_reason);
+            if (budget) currentTurn.budgetHalt = budget;
+          }
         }
         continue;
       }

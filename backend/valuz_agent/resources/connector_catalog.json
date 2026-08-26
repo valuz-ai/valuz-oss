@@ -3,8 +3,8 @@
     "slug": "valuz",
     "display_name": "Valuz",
     "description": {
-      "zh-CN": "搜索和行情数据",
-      "en-US": "Search and market data"
+      "zh-CN": "Valuz Data 搜索和金融数据",
+      "en-US": "Valuz Data search and financial data"
     },
     "connectors": [
       {
@@ -17,23 +17,25 @@
           "zh-CN": "全市场财报、电话会、研报、纪要、公告搜索",
           "en-US": "Search across earnings reports, conference calls, research, minutes & filings"
         },
-        "url": "https://mcp.reportify.cn/search/mcp",
+        "url": "https://data.valuz.cn/mcp/search",
         "auth_type": "oauth",
-        "transport": "http"
+        "transport": "http",
+        "builtin": true
       },
       {
-        "slug": "valuz-stock",
+        "slug": "valuz-data",
         "display_name": {
-          "zh-CN": "Valuz · 行情",
-          "en-US": "Valuz · Quotes"
+          "zh-CN": "Valuz · 数据",
+          "en-US": "Valuz · Data"
         },
         "description": {
-          "zh-CN": "全市场实时与历史行情、财务、指标数据",
-          "en-US": "Real-time and historical quotes, financials, and indicators across all markets"
+          "zh-CN": "完整的 Valuz Data 金融数据与文档工具集",
+          "en-US": "The complete Valuz Data financial and document toolset"
         },
-        "url": "https://mcp.reportify.cn/stock/mcp",
+        "url": "https://data.valuz.cn/mcp",
         "auth_type": "oauth",
-        "transport": "http"
+        "transport": "http",
+        "builtin": true
       }
     ]
   },

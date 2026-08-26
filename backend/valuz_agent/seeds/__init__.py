@@ -22,6 +22,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.modules.agents.seed import seed_official_agents
+from valuz_agent.seeds.connectors import seed_builtin_connectors
 from valuz_agent.seeds.providers import seed_builtin_providers
 
 
@@ -45,6 +46,12 @@ async def seed_all(db: AsyncSession, *, user_id: str) -> None:
     (``reset_providers`` / the ``reset-providers`` CLI).
     """
     await seed_official_agents(db, user_id)
+    await seed_builtin_connectors(db, user_id=user_id)
 
 
-__all__ = ["seed_all", "seed_builtin_providers", "seed_official_agents"]
+__all__ = [
+    "seed_all",
+    "seed_builtin_connectors",
+    "seed_builtin_providers",
+    "seed_official_agents",
+]

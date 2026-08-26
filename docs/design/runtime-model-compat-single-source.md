@@ -68,7 +68,12 @@ launches runtimes — through the seam that is already local/remote-aware (§3.3
 ## 2. Current state (authority map)
 
 - **Authoritative — model→runtime derivation:** `runtimes_for(protocols, provider_kind)`
-  and `build_model_options` (`modules/settings/model_options.py`).
+  and `build_model_options` (`modules/settings/model_options.py`). Every
+  derivation is protocol-scoped: codex for any non-subscription channel on
+  the Responses wire, deepseek_harness for any non-subscription channel on
+  the chat-completions wire (the dsh adapter posts plain
+  `${base_url}/chat/completions` and follows the channel endpoint via
+  `DEEPSEEK_BASE_URL`).
 - **Authoritative — runtime↔protocol capability:** `RUNTIME_REGISTRY`
   (`adapters/runtime_registry.py`), mirroring kernel
   `src/runtimes/factory.py:ALLOWED_PROTOCOLS_BY_RUNTIME`.

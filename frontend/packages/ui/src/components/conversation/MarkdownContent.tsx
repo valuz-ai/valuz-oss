@@ -1902,6 +1902,20 @@ export const MarkdownContent = memo(function MarkdownContent({
           // unbreakable runs — API-error JSON blobs, URLs, hashes in plain
           // paragraphs — so they wrap instead of pushing past the message
           // column's right edge. Inline ``<code>`` keeps its own ``break-all``.
+          //
+          // ``relative`` is load-bearing, not decoration. Rendered markdown
+          // contains absolutely-positioned descendants — the ``sr-only``
+          // heading the footnotes section emits is one — and without a
+          // positioned ancestor their containing block is the INITIAL one, so
+          // they resolve against the document instead of this box. They then
+          // escape every ``overflow`` clip between here and the viewport and
+          // push ``document.documentElement.scrollHeight`` out to wherever
+          // they happen to land: a 1px screen-reader label 1000px down made
+          // the whole app shell scrollable. Measured — a footnoted document in
+          // the knowledge-base panel took the document from 720 to 1784, and
+          // the symptom was the page sliding under the cursor whenever the
+          // wheel went over a list that had nothing of its own to scroll.
+          "relative",
           "text-base leading-[1.7] text-ink-heading break-words",
           ...RICH_TEXT_OVERRIDES,
           className,

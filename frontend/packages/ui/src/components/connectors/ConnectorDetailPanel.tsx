@@ -2,6 +2,7 @@ import { Loader2, Plug, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ToolInfo } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ConnectorIcon } from "./ConnectorIcon";
 
@@ -22,6 +23,12 @@ export interface ConnectorDetailPanelProps {
   toolsError?: string | null;
   /** A connect/disconnect request is in flight — disables the buttons. */
   busy?: boolean;
+  /** Built-in connector: labelled as such, and it cannot be removed. It can
+   *  still be disconnected — the caller decides what that means (disabling a
+   *  built-in, deleting anything else), so this no longer disables the button.
+   *  Disabling it stranded owners whose credential had expired: a built-in
+   *  showing "connected" offers no Connect button and had no way out. */
+  systemManaged?: boolean;
   onConnect?: () => void;
   onDisconnect?: () => void;
   /** Edition/overlay-provided actions rendered in the detail header. */
@@ -37,6 +44,7 @@ export const ConnectorDetailPanel = ({
   tools,
   toolsError,
   busy,
+  systemManaged,
   onConnect,
   onDisconnect,
   headerActions,
@@ -64,14 +72,21 @@ export const ConnectorDetailPanel = ({
               {errorMessage}
             </p>
           ) : null}
-          <Button className="mt-3" size="sm" disabled={busy} onClick={onConnect}>
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plug className="h-3.5 w-3.5" />
-            )}
-            {t("connector.connect")}
-          </Button>
+          {onConnect ? (
+            <Button
+              className="mt-3"
+              size="sm"
+              disabled={busy}
+              onClick={onConnect}
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plug className="h-3.5 w-3.5" />
+              )}
+              {t("connector.connect")}
+            </Button>
+          ) : null}
         </div>
       </aside>
     );
@@ -84,8 +99,19 @@ export const ConnectorDetailPanel = ({
         <div className="flex items-center gap-3">
           <ConnectorIcon name={name} iconUrl={iconUrl} />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-base font-medium text-ink-heading">
-              {name}
+            <div className="flex items-center gap-2">
+              <span className="truncate text-base font-medium text-ink-heading">
+                {name}
+              </span>
+              {systemManaged ? (
+                <Badge
+                  variant="brand"
+                  className="shrink-0"
+                  title={t("connector.systemManaged")}
+                >
+                  {t("connector.systemManagedBadge")}
+                </Badge>
+              ) : null}
             </div>
           </div>
           {headerActions}
@@ -93,7 +119,10 @@ export const ConnectorDetailPanel = ({
             variant="outline"
             size="sm"
             className="shrink-0"
-            disabled={busy}
+            disabled={busy || !onDisconnect}
+            title={
+              systemManaged ? t("connector.systemManaged") : undefined
+            }
             onClick={onDisconnect}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}

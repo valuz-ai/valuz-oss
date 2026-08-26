@@ -35,6 +35,7 @@ async def test_edition_server_rides_every_session(restore_specs: None) -> None:
     assert set(by_name) >= {
         "valuz_docs",
         "valuz_automations",
+        "valuz_playbooks",
         "valuz_connectors",
         "harness",
         "valuz_finance",

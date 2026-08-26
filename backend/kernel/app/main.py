@@ -11,6 +11,7 @@ from app import config_gate
 from app.config import AppConfig
 from app.dependencies import init_dependencies, shutdown_dependencies
 from app.mcp_toolkit_router import mcp_router_lifespan, mount_mcp_router
+from app.ptc_router import router as ptc_router
 from app.routes.events import router as events_router
 from app.routes.messages import router as messages_router
 from app.routes.run import router as run_router
@@ -102,6 +103,11 @@ async def _require_bearer_token(request: Request, call_next: Any) -> Any:
     explicit loopback opt-in before serving anything).
     """
     token = config.auth_token
+    # The PTC forwarding endpoint authenticates by one-shot execution token
+    # (path segment) — the calling subprocess deliberately holds no kernel
+    # bearer. See app/ptc_router.py.
+    if token and "/v1/ptc/exec/" in request.url.path:
+        return await call_next(request)
     if token and request.url.path != "/health":
         supplied = request.headers.get("authorization", "")
         if supplied != f"Bearer {token}":
@@ -118,6 +124,7 @@ app.include_router(sessions_router)
 app.include_router(messages_router)
 app.include_router(run_router)
 app.include_router(events_router)
+app.include_router(ptc_router)
 app.include_router(usage_router)
 app.include_router(runtimes_router)
 mount_mcp_router(app)

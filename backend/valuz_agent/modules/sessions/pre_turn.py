@@ -42,7 +42,7 @@ async def restamp_always_on_mcp(session_id: str, user_id: str | None) -> None:
 
     Two distinct staleness sources converge here:
 
-    - **The always-on trio** (docs / automations / connectors). Their headers
+    - **The always-on tools** (docs / automations / playbooks / connectors). Their headers
       carry ``X-Valuz-Internal`` plus ``backend_base_url`` and the session id,
       baked at create time. A session re-driven after a backend restart — task
       resume / recovery, the persistent actor loop, a sync kickoff — can carry
@@ -125,6 +125,7 @@ async def _refresh_citation_policy(
     *,
     citation_enabled_override: bool | None,
     verification_enabled_override: bool | None,
+    task_coverage_enabled_override: bool | None = None,
     host_ref: HostRef | None = None,
 ) -> None:
     """Converge the citation / verification / task-coverage policy on the
@@ -145,6 +146,7 @@ async def _refresh_citation_policy(
             user_id,
             citation_enabled_override=citation_enabled_override,
             verification_enabled_override=verification_enabled_override,
+            task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
         )
     except Exception:  # noqa: BLE001 — the kernel guard still fails closed
@@ -171,6 +173,7 @@ def chat_capability_hook(
     *,
     citation_enabled_override: bool | None = None,
     verification_enabled_override: bool | None = None,
+    task_coverage_enabled_override: bool | None = None,
     host_ref: HostRef | None = None,
 ) -> PreTurnHook:
     """Full convergence — the chat turn path (send, queue drain, sync send).
@@ -191,10 +194,28 @@ def chat_capability_hook(
             user_id,
             citation_enabled_override=citation_enabled_override,
             verification_enabled_override=verification_enabled_override,
+            task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
         )
         await _refresh_bundled_skills(session_id, user_id)
         await _refresh_docs_capabilities(session_id, user_id)
         await restamp_always_on_mcp(session_id, user_id)
+        # Last: PTC reads the post-restamp MCP set (final server names) to
+        # decide the code face for this turn.
+        await _refresh_ptc(session_id, user_id)
 
     return _hook
+
+
+async def _refresh_ptc(session_id: str, user_id: str | None) -> None:
+    """Converge the PTC code face (generated skill + opt-in metadata +
+    prompt policy block) with the user's preference and the session's
+    data connectors. Additive/reversible; a no-op keeps rows unchanged."""
+    if user_id is None:
+        return
+    try:
+        from valuz_agent.modules.ptc.session_refresh import refresh_ptc_for_session
+
+        await refresh_ptc_for_session(session_id, user_id)
+    except Exception:  # noqa: BLE001 — never block a turn on a refresh failure
+        logger.warning("ptc refresh failed for session %s", session_id, exc_info=True)

@@ -20,8 +20,9 @@ import {
   type ActivityTab,
 } from "../api/activity-api";
 import { resolveApiBase } from "../api/base-resolver";
-import { recordEntityOrigins } from "../edition/entity-origin";
+import { getEntityOrigin, recordEntityOrigins } from "../edition/entity-origin";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
+import { resolveProjectActivity } from "../edition/project-activity";
 
 export interface ActivityFeed {
   items: ActivityItem[];
@@ -79,6 +80,23 @@ export function useActivityFeed(opts: {
     cursor: CursorState;
   }> => {
     const params = { projectId, tab, limit: pageSize };
+    // An edition-provided source may own this project's feed entirely (its
+    // backend cannot answer /v1/activity — see edition/project-activity).
+    const override = projectId
+      ? resolveProjectActivity({
+          projectId,
+          tab,
+          limit: pageSize,
+          cursor: null,
+        })
+      : null;
+    if (override) {
+      const page = await override;
+      return {
+        items: page.items,
+        cursor: { kind: "single", cursor: page.next_cursor },
+      };
+    }
     // A project feed lives on the project's backend (single source).
     const fanTargets = projectId ? [] : getListFanOutTargets();
     if (fanTargets.length === 0) {
@@ -88,8 +106,16 @@ export function useActivityFeed(opts: {
           ? { baseUrl: resolveApiBase({ projectId }, "") || undefined }
           : undefined,
       );
+      const projectOrigin = projectId
+        ? getEntityOrigin(projectId, "project")
+        : undefined;
       return {
-        items: page.items,
+        // A project-scoped feed routes to one backend instead of fanning out,
+        // but its PlaybookRun rows still need an origin before a click leaves
+        // the project page for the global Run detail route.
+        items: projectOrigin
+          ? tagAndRecord(page.items, projectOrigin)
+          : page.items,
         cursor: { kind: "single", cursor: page.next_cursor },
       };
     }
@@ -147,14 +173,34 @@ export function useActivityFeed(opts: {
     }> => {
       if (!state) throw new Error("unreachable");
       if (state.kind === "single") {
+        const override = projectId
+          ? resolveProjectActivity({
+              projectId,
+              tab,
+              limit: pageSize,
+              cursor: state.cursor,
+            })
+          : null;
+        if (override) {
+          const page = await override;
+          return {
+            older: page.items,
+            next: { kind: "single", cursor: page.next_cursor },
+          };
+        }
         const page = await activityApi.list(
           { projectId, tab, limit: pageSize, cursor: state.cursor },
           projectId
             ? { baseUrl: resolveApiBase({ projectId }, "") || undefined }
             : undefined,
         );
+        const projectOrigin = projectId
+          ? getEntityOrigin(projectId, "project")
+          : undefined;
         return {
-          older: page.items,
+          older: projectOrigin
+            ? tagAndRecord(page.items, projectOrigin)
+            : page.items,
           next: { kind: "single", cursor: page.next_cursor },
         };
       }

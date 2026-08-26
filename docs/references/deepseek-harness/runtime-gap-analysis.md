@@ -203,10 +203,21 @@ closed on the public mirror). Filed for each wire/closure gap:
    event mapper + composition generator + RuntimePort impl), factory /
    availability / fork-map / route-guard wiring, kernel migration `0004`
    (CHECK constraint), host registry/resolver/model-options plumbing
-   (`deepseek_harness` derives only for the `deepseek` provider kind),
+   (`deepseek_harness` initially derived only for the `deepseek` provider
+   kind; a follow-up widened it to protocol-scoped — any non-subscription
+   channel speaking chat-completions, mirroring how codex derives on the
+   Responses wire. The dsh adapter posts plain
+   `${base_url}/chat/completions` and honors the channel's endpoint via
+   `DEEPSEEK_BASE_URL`; the host materializes each kind's default endpoint
+   for dsh sessions and the kernel factory rejects an empty `base_url`,
+   because dsh's own empty-endpoint fallback is DeepSeek's public API),
    frontend enum/label/auto-review-gate updates, and a fake-server test
    suite (`backend/tests/runtimes/test_dsh_*`). Dev availability:
-   `VALUZ_DSH_ROOT=<checkout>` (source mode) or `VALUZ_DSH_RUNTIME_BIN=<exe>`.
+   `scripts/dev.sh` auto-vendors the closure on backend install (idempotent
+   `npm ci`, refreshed when the committed lockfile outdates npm's install
+   stamp; fail-open when npm is missing/offline) — overridable with
+   `VALUZ_DSH_ROOT=<checkout>` (source mode) or `VALUZ_DSH_RUNTIME_BIN=<exe>`,
+   or run `scripts/vendor-dsh-runtime.sh` by hand.
 2. **Server plugin work** (upstream PRs or a small carried bundle):
    `session/cancel`, persisted-log resume on first prompt, then approvals over
    server→client requests. Each one deletes a workaround from step 1.

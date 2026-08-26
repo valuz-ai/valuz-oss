@@ -123,6 +123,18 @@ export function useComposerSelection({
     "low" | "medium" | "high" | "xhigh" | "max" | null
   >(null);
 
+  // Session working mode (kernel ``Session.mode``,
+  // docs/design/session-modes.md). For a new session the composer's
+  // plan toggle stages the value here and the send path PATCHes it onto
+  // the freshly created session before the first message; for a live
+  // session toggles PATCH ``/v1/sessions/{id}/mode`` directly. The
+  // effect below reconciles from the session row, which the SSE
+  // ``session.mode_changed`` handler keeps live — so a runtime-driven
+  // exit (approved plan) flips the chip off without a refetch.
+  const [selectedSessionMode, setSelectedSessionMode] = useState<
+    "default" | "plan" | "goal"
+  >("default");
+
   // Connector selection — only meaningful for new sessions (locked at creation
   // per ADR-006). The picker UI was removed from the composer; we still
   // pre-select every connected connector at session-creation time so the
@@ -210,6 +222,13 @@ export function useComposerSelection({
       (selectedSession.effort as
         "low" | "medium" | "high" | "xhigh" | "max" | null | undefined) ?? null,
     );
+    // Session working mode: reconcile the plan chip to the session row.
+    // ``session.mode_changed`` SSE frames patch the row live, so a
+    // runtime-driven exit (approved plan) lands here too.
+    setSelectedSessionMode(
+      (selectedSession.mode as "default" | "plan" | "goal" | undefined) ??
+        "default",
+    );
   }, [
     selectedSession?.id,
     selectedSession?.locked_model_id,
@@ -217,6 +236,7 @@ export function useComposerSelection({
     selectedSession?.runtime_provider,
     selectedSession?.permission_mode,
     selectedSession?.effort,
+    selectedSession?.mode,
   ]);
 
   return {
@@ -236,6 +256,8 @@ export function useComposerSelection({
     setSelectedPermissionMode,
     selectedEffort,
     setSelectedEffort,
+    selectedSessionMode,
+    setSelectedSessionMode,
     selectedMcpSlugs,
     connectorOptions,
     toggleConnector,

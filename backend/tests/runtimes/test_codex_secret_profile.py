@@ -155,3 +155,101 @@ def test_custom_provider_secrets_disable_login_shell(base_url: str | None) -> No
         else codex_runtime._CODEX_OPENAI_API_KEY
     )
     assert f'shell_environment_policy.filters.{expected_env_key}="exclude"' in overrides
+
+
+# ── residue guard: diagnosability + value-part scoping (issue #987) ──────────
+
+
+def _externalize(mcp_servers: tuple[Any, ...]) -> None:
+    session = Session(
+        id="residue",
+        agent_config=AgentConfig(id="a", name="a"),
+        cwd="/tmp",
+        runtime_provider="codex",
+        mcp_servers=mcp_servers,
+    )
+    overrides = codex_runtime._build_config_overrides(session, None, "gpt-5.5")
+    codex_runtime._externalize_mcp_secrets(session, overrides)
+
+
+def test_url_residue_fires_with_redacted_diagnostics() -> None:
+    # The issue-#987 shape: one connector's header credential also rides
+    # another connector's URL query string. The guard must fire AND name the
+    # origin (server/header/env), the matched override key, and a hash prefix
+    # — never the value.
+    secret = "tok-abcdef123456"
+    with pytest.raises(RuntimeError) as exc:
+        _externalize(
+            (
+                McpHttpServerConfig(
+                    name="alpha",
+                    url="https://mcp.alpha.example/mcp",
+                    headers={"X-Api-Key": secret},
+                ),
+                McpHttpServerConfig(
+                    name="beta",
+                    url=f"https://mcp.beta.example/mcp?apikey={secret}",
+                ),
+            )
+        )
+    message = str(exc.value)
+    assert secret not in message
+    assert "http server 'alpha' header 'X-Api-Key'" in message
+    assert "mcp_servers.beta.url" in message
+    assert "sha256=" in message
+    assert f"len={len(secret)}" in message
+
+
+def test_urlencoded_url_residue_detected() -> None:
+    # merge_params_into_url urlencodes query values, so the URL copy of a
+    # secret with reserved characters differs byte-wise from the raw value.
+    # The urlencoded probe still catches it.
+    secret = "tok+abc/def=="
+    encoded = "tok%2Babc%2Fdef%3D%3D"
+    with pytest.raises(RuntimeError, match="mcp_servers.beta.url"):
+        _externalize(
+            (
+                McpHttpServerConfig(
+                    name="alpha",
+                    url="https://mcp.alpha.example/mcp",
+                    headers={"X-Api-Key": secret},
+                ),
+                McpHttpServerConfig(
+                    name="beta",
+                    url=f"https://mcp.beta.example/mcp?apikey={encoded}",
+                ),
+            )
+        )
+
+
+def test_toml_escaped_residue_in_stdio_args_detected() -> None:
+    # A secret containing a quote is TOML-escaped inside args arrays; the raw
+    # substring check missed it (false negative). The escaped probe catches it.
+    secret = 'ab"cd'
+    with pytest.raises(RuntimeError, match="mcp_servers.local.args"):
+        _externalize(
+            (
+                McpStdioServerConfig(
+                    name="local",
+                    command="local-mcp",
+                    args=("--token", secret),
+                    env={"LOCAL_TOKEN": secret},
+                ),
+            )
+        )
+
+
+def test_key_path_collision_no_longer_false_positives() -> None:
+    # Every header value (secret or not) is externalized. A benign value that
+    # happens to be a substring of a dotted KEY path used to trip the blind
+    # full-text check — undebuggable in production. Value-part scoping fixes it.
+    for benign in ("http_headers", "mcp_servers", "env_vars"):
+        _externalize(
+            (
+                McpHttpServerConfig(
+                    name="alpha",
+                    url="https://mcp.alpha.example/mcp",
+                    headers={"X-Note": benign},
+                ),
+            )
+        )

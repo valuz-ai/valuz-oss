@@ -54,6 +54,30 @@ async def owner_allowed_roots(user_id: str) -> list[Path]:
                 roots.append(_root_path(user_id, root_path).resolve())
             except Exception:  # noqa: BLE001
                 continue
+
+    # The owner's knowledge-base tree. KB files are the owner's own uploads,
+    # but they live under ``<data_dir>/kb`` — outside the project root — so
+    # resolving one for "view the original file" answered ``forbidden`` for a
+    # document the caller had just uploaded themselves.
+    try:
+        roots.append(fs_registry.kb_root(user_id).resolve())
+    except Exception:  # noqa: BLE001 — same posture as the managed root above
+        pass
+
+    # Plus each knowledge base's OWN root. The line above covers the managed
+    # tree; on the desktop a knowledge base can point at any folder the user
+    # picked, exactly like a ``project``-kind project — and for those every
+    # document sits outside all of the prefixes collected so far. "Open the
+    # original file" then answered ``forbidden`` for a library the user had
+    # just built, which reads as the button being broken rather than as a
+    # boundary doing its job.
+    from valuz_agent.modules.docs.service import owner_kb_root_paths
+
+    for kb_root_path in await owner_kb_root_paths(user_id):
+        try:
+            roots.append(_root_path(user_id, kb_root_path).resolve())
+        except Exception:  # noqa: BLE001 — one unreadable library must not sink the batch
+            continue
     return roots
 
 

@@ -18,6 +18,7 @@ import {
 import {
   BindChatDialog,
   CreateAutomationDialog,
+  CreatePlaybookDialog,
   DeployAgentsDialog,
   ActivityFeedList,
   type ActivityFeedListProps,
@@ -41,7 +42,8 @@ import {
   usePanelStore,
   useProjectLastUsed,
   useRuntimes,
-  useSessionAttachments,
+  useStagedAttachments,
+  type SessionAttachmentItem,
   useSessionStore,
   useActivityFeed,
   type ActivityTab,
@@ -68,10 +70,10 @@ import {
   type AgentSkillItem,
 } from "../lib/agent-skill-items";
 import { toFileTree } from "../lib/file-tree";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
 import { useForkSession } from "../hooks/use-fork-session";
+import { useProjectPlaybooks } from "../hooks/use-project-playbooks";
 import { toAbsoluteProjectPath } from "../lib/project-paths";
 
 /** Bytes as the rail shows them. Local because the two other copies of this in
@@ -95,6 +97,7 @@ const ActivityTabPanel = ({
   tab,
   onOpenSession,
   onOpenTask,
+  onOpenPlaybookRun,
   onRenameConfirm,
   onDeleteSession,
   onForkSession,
@@ -111,6 +114,7 @@ const ActivityTabPanel = ({
       feed={feed}
       onOpenSession={onOpenSession}
       onOpenTask={onOpenTask}
+      onOpenPlaybookRun={onOpenPlaybookRun}
       onRenameConfirm={onRenameConfirm}
       onDeleteSession={onDeleteSession}
       onForkSession={onForkSession}
@@ -386,8 +390,15 @@ export const ProjectDetailPage = () => {
   // view, as opposed to the per-session list a conversation shows. Reloaded
   // when the project changes; a delivery lands during a conversation, not here.
   const [projectArtifacts, setProjectArtifacts] = useState<
-    { id: string; name: string; size: string; path: string; versionNo: number;
-      isCurrent: boolean; artifactId: string }[]
+    {
+      id: string;
+      name: string;
+      size: string;
+      path: string;
+      versionNo: number;
+      isCurrent: boolean;
+      artifactId: string;
+    }[]
   >([]);
 
   useEffect(() => {
@@ -487,12 +498,17 @@ export const ProjectDetailPage = () => {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
-    markPendingConsumed,
-  } = useSessionAttachments(chatSessionId);
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // No session to route on — the composer names the backend its turn will
+    // run on. Omitting it sent cloud-project uploads to the local default,
+    // where the turn could never find them.
+    resolveApiBase({ projectId: id }, "") || undefined,
+  );
+
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
   // and routes to the task detail page.
@@ -649,6 +665,18 @@ export const ProjectDetailPage = () => {
     expandFolder: pickerExpandFolder,
   } = useKbDocTree(kbPickerOpen);
   const [scheduledTasks, setScheduledTasks] = useState<AutomationItem[]>([]);
+  const {
+    definitions: projectPlaybookDefinitions,
+    editing: editingPlaybook,
+    dialogOpen: playbookDialogOpen,
+    runningId: runningPlaybookId,
+    openCreate: openCreatePlaybook,
+    openEdit: openEditPlaybook,
+    setOpen: setPlaybookDialogOpen,
+    submit: submitPlaybook,
+    remove: removePlaybook,
+    run: runPlaybook,
+  } = useProjectPlaybooks(id);
   const selectedFileParam = searchParams.get("file");
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // When set, the automation dialog opens in edit mode (PATCH the row) instead
@@ -805,7 +833,8 @@ export const ProjectDetailPage = () => {
         );
         const projectOrigin = id ? getEntityOrigin(id, "project") : undefined;
         if (projectOrigin) recordEntityOrigin(session.id, projectOrigin);
-        await sessionsApi.addKbAttachments(session.id, ids);
+        // Staged, not bound: the conversation page's first send claims them.
+        await sessionsApi.addKbAttachments(ids);
         navigate(`/conversation/${session.id}`);
       } catch {
         toast.error(t("common.failed" as Parameters<typeof t>[0]));
@@ -829,6 +858,8 @@ export const ProjectDetailPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
   }) => {
     // Edit mode: PATCH the existing row. The dialog is stateless and calls the
     // same submit handler for create + edit; ``editTask`` decides which.
@@ -840,6 +871,8 @@ export const ProjectDetailPage = () => {
         trigger: data.trigger,
         action_kind: data.action_kind,
         worktree: data.worktree,
+        playbook_definition_id: data.playbook_definition_id,
+        playbook_version: data.playbook_version,
       });
       toast.success(t("common.saved" as Parameters<typeof t>[0]));
       await reloadScheduledTasks();
@@ -859,6 +892,8 @@ export const ProjectDetailPage = () => {
       trigger: data.trigger,
       action_kind: data.action_kind,
       worktree: data.worktree,
+      playbook_definition_id: data.playbook_definition_id,
+      playbook_version: data.playbook_version,
     });
     toast.success(t("project.taskCreated" as Parameters<typeof t>[0]));
     const schedRes = await automationsApi.listGroups(id);
@@ -1041,7 +1076,12 @@ export const ProjectDetailPage = () => {
       void openArtifactFile(selectedFileParam, { syncUrl: false });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [project?.root_path, activeArtifactPath, openArtifactFile, selectedFileParam]);
+  }, [
+    project?.root_path,
+    activeArtifactPath,
+    openArtifactFile,
+    selectedFileParam,
+  ]);
 
   const handleArtifactReload = useCallback(() => {
     void reloadArtifact();
@@ -1168,10 +1208,11 @@ export const ProjectDetailPage = () => {
     }
   };
 
-  // Mint (once) the project chat session attachments upload into and the send
-  // reuses. Project sessions bind to an agent, so one must be picked first
-  // (ADR-006: the agent is frozen at creation — the composer locks it once
-  // ``chatSessionId`` is set).
+  // Create the session, at Send. Attachments no longer need one to exist, so
+  // this is also where ADR-006 freezes agent / model / runtime — later than
+  // before and more truthfully: whatever is selected when the turn goes out is
+  // what the session gets, instead of whatever happened to be selected when a
+  // file was dropped on the composer.
   const ensureChatSession = async (): Promise<{ id: string }> => {
     if (chatSessionId) return { id: chatSessionId };
     if (!selectedAgentSlug) throw new Error("no-agent-selected");
@@ -1207,7 +1248,7 @@ export const ProjectDetailPage = () => {
       );
       return;
     }
-    void attachLocalFiles(files, ensureChatSession);
+    void attachLocalFiles(files);
   };
 
   // The actual chat send. Attachments are already uploaded (on attach), so
@@ -1226,7 +1267,11 @@ export const ProjectDetailPage = () => {
     // shape /conversation/new already accepts.
     if (!chatSessionId) {
       setComposerValue("");
-      markPendingConsumed();
+      // Hand the files over explicitly. A composer holds what IT attached, so
+      // the page this navigates to cannot see these by looking — and must not
+      // be able to, or every composer would see every other one's. Claiming
+      // here and restaging there is the transfer said out loud.
+      const handedOver = claimStagedAttachments();
       const params = new URLSearchParams({ project: id });
       if (selectedAgentSlug) params.set("agent", selectedAgentSlug);
       navigate(`/conversation/new?${params.toString()}`, {
@@ -1234,6 +1279,7 @@ export const ProjectDetailPage = () => {
           projectSend: {
             text,
             sentAt: Date.now(),
+            attachments: handedOver,
             // Every choice this composer holds. The conversation page has its
             // own state under most of these names, so anything omitted here is
             // not an error — it silently mints the session with that page's
@@ -1264,9 +1310,14 @@ export const ProjectDetailPage = () => {
     // early. Send into it from here and hand the conversation page only the
     // optimistic turn.
     setSending(true);
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureChatSession();
-      markPendingConsumed();
+      // Take the staged files out and carry them to the turn. The conversation
+      // page cannot work this set out for itself — it is gone from staging the
+      // moment this claim returns — so the handoff carries the names too.
+      claimed = claimStagedAttachments();
       setComposerValue("");
       // Navigate the MOMENT there is an id to navigate to — before the send
       // round-trip, not after it.
@@ -1284,14 +1335,40 @@ export const ProjectDetailPage = () => {
       // its ``ensureSession``, which mints a SECOND session whenever the
       // freshly-navigated page has not fetched this one yet.
       navigate(`/conversation/${session.id}`, {
-        state: { handoff: { text, sentAt: Date.now() } },
+        state: {
+          handoff: {
+            text,
+            sentAt: Date.now(),
+            attachments: claimed.map((a) => ({
+              name: a.filename,
+              size: a.size_bytes,
+            })),
+            // The rows themselves, for the arriving page's file panel. It
+            // cannot read them back: the POST below is still in flight when
+            // that page does its one attachment read, and nothing re-reads
+            // afterwards — so without these the file was missing from the
+            // panel until the person switched away and back.
+            attachmentRows: claimed,
+          },
+        },
       });
       // ``text`` already contains any ``/slug`` tokens because Composer
       // serializes inline skill chips into its controlled value. This page is
       // unmounting behind the navigation; the failure toast below is global,
       // and the conversation page simply never gets its turn.
-      await sessionsApi.sendMessage(session.id, text);
+      // Bind the staged files to this turn — this is where a file stops
+      // being a draft and becomes part of the conversation.
+      await sessionsApi.sendMessage(
+        session.id,
+        text,
+        null,
+        null,
+        null,
+        claimed.map((a) => a.id),
+      );
     } catch (cause) {
+      // The turn did not go out, so the files are still the composer's.
+      restageAttachments(claimed);
       // A billing rejection (402) carries an i18n key the client renders;
       // otherwise fall back to the generic save-failed copy.
       toast.error(
@@ -1354,11 +1431,19 @@ export const ProjectDetailPage = () => {
       return;
     }
 
-    // Chat mode — block on unfinished parsing, then send.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // Chat mode. An unfinished parse no longer stops the person.
+    //
+    // The confirm this replaces bought one thing: the agent seeing the markdown
+    // extract rather than the raw file. It does not buy it any more — the turn
+    // binds the attachment either way, and a turn that goes out mid-parse
+    // ships ``source_path``, which the runtime can read. What the dialog
+    // reliably did was stop someone in front of a composer where nothing was
+    // happening, to ask a question whose only answer is "yes".
+    //
+    // The remaining cost is real and accepted: a scanned PDF sent within the
+    // parse window reaches the agent as a PDF instead of text. If that needs
+    // protecting, it belongs on the server — holding a turn there costs no
+    // rendering — not in front of the person.
     void performChatSend();
   };
 
@@ -1405,6 +1490,16 @@ export const ProjectDetailPage = () => {
         initialOpenSection={null}
         instructions={instructions}
         onInstructionsChange={handleInstructionsChange}
+        playbooks={projectPlaybookDefinitions.map((definition) => ({
+          id: definition.id,
+          name: definition.name,
+          version: definition.current_version,
+          status: definition.status,
+          running: runningPlaybookId === definition.id,
+        }))}
+        onAddPlaybook={openCreatePlaybook}
+        onOpenPlaybook={(definitionId) => void openEditPlaybook(definitionId)}
+        onRunPlaybook={(definitionId) => void runPlaybook(definitionId)}
         members={members}
         defaultLeadSlug={project?.default_lead_agent_slug ?? null}
         projectArtifacts={projectArtifacts}
@@ -1539,6 +1634,11 @@ export const ProjectDetailPage = () => {
     panelCollapsed,
     panelSetCollapsed,
     instructions,
+    projectPlaybookDefinitions,
+    runningPlaybookId,
+    openCreatePlaybook,
+    openEditPlaybook,
+    runPlaybook,
     members,
     chatBindings,
     addedKbTree,
@@ -1649,18 +1749,14 @@ export const ProjectDetailPage = () => {
                   showSkillSlash={selectedAgentSlug != null}
                   skills={selectedAgentSkillItems}
                   uploadOnAttach
-                  existingAttachmentCount={
-                    stagedAttachments.filter((a) => !a.consumed_at).length
-                  }
-                  pinnedAttachments={stagedAttachments
-                    .filter((a) => !a.consumed_at)
-                    .map((a) => ({
-                      id: a.id,
-                      name: a.filename,
-                      parseStatus: a.parse_status as
-                        "parsing" | "ready" | "failed" | "native" | undefined,
-                      sourceKind: a.source_kind,
-                    }))}
+                  existingAttachmentCount={stagedAttachments.length}
+                  pinnedAttachments={stagedAttachments.map((a) => ({
+                    id: a.id,
+                    name: a.filename,
+                    parseStatus: a.parse_status as
+                      "parsing" | "ready" | "failed" | "native" | undefined,
+                    sourceKind: a.source_kind,
+                  }))}
                   onRemovePinnedAttachment={(attId) =>
                     void removeAttachment(attId)
                   }
@@ -1701,14 +1797,6 @@ export const ProjectDetailPage = () => {
                   }
                   onWorktreeToggle={setWorktreeEnabled}
                 />
-                <AttachmentParsingDialog
-                  open={parsingConfirmOpen}
-                  onConfirm={() => {
-                    setParsingConfirmOpen(false);
-                    void performChatSend();
-                  }}
-                  onCancel={() => setParsingConfirmOpen(false)}
-                />
               </div>
 
               {/* Centre history area (PRD-NEXT §3.4): Chat (sessions) and Task
@@ -1735,6 +1823,9 @@ export const ProjectDetailPage = () => {
                       <TabsTrigger value="automation">
                         {t("activity.automationTag" as Parameters<typeof t>[0])}
                       </TabsTrigger>
+                      <TabsTrigger value="playbook">
+                        {t("playbook.title" as Parameters<typeof t>[0])}
+                      </TabsTrigger>
                     </TabsList>
                   </div>
                   <TabsContent value="all" className="mt-5">
@@ -1743,6 +1834,13 @@ export const ProjectDetailPage = () => {
                       tab="all"
                       onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
@@ -1798,191 +1896,236 @@ export const ProjectDetailPage = () => {
                       )}
                     />
                   </TabsContent>
+                  <TabsContent value="playbook" className="mt-5">
+                    <ActivityTabPanel
+                      projectId={id}
+                      tab="playbook"
+                      onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
+                      onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
+                      onRenameConfirm={handleRenameConfirm}
+                      onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
+                      hideScopeTag
+                      emptyLabel={t(
+                        "playbook.emptyTitle" as Parameters<typeof t>[0],
+                      )}
+                    />
+                  </TabsContent>
                 </Tabs>
               </div>
             </div>
           </div>
         </>
 
-      {/* Project automation create — uses the same agent-driven dialog
+        {/* Project automation create — uses the same agent-driven dialog
           as the global Automation page, with task mode enabled (this is
           a project project) and candidates resolved from the project's
           members. ``description`` keeps the existing project-specific
           hint copy ("Tasks created here are linked to this project"). */}
-      <CreateAutomationDialog
-        open={newTaskOpen}
-        onOpenChange={(open) => {
-          // Reset edit context on close so the next "+ New" starts fresh in
-          // create mode.
-          if (!open) setEditTask(null);
-          setNewTaskOpen(open);
-        }}
-        description={t("project.instruction" as Parameters<typeof t>[0])}
-        onSubmit={handleSubmitTask}
-        agents={rawMembers.map((entry) => ({
-          slug: entry.member.agent_slug,
-          name: entry.agent?.name ?? entry.member.agent_slug,
-        }))}
-        allowTaskMode
-        fixedTargetName={displayName}
-        initial={
-          editTask
-            ? {
-                name: editTask.name,
-                prompt_template: editTask.prompt_template,
-                agent_slug: editTask.agent_slug,
-                trigger: editTask.trigger,
-                action_kind: (editTask.action_kind as ActionKind) ?? "chat",
-                worktree: editTask.worktree ?? false,
-              }
-            : undefined
-        }
-      />
+        <CreateAutomationDialog
+          open={newTaskOpen}
+          onOpenChange={(open) => {
+            // Reset edit context on close so the next "+ New" starts fresh in
+            // create mode.
+            if (!open) setEditTask(null);
+            setNewTaskOpen(open);
+          }}
+          description={t("project.instruction" as Parameters<typeof t>[0])}
+          onSubmit={handleSubmitTask}
+          agents={rawMembers.map((entry) => ({
+            slug: entry.member.agent_slug,
+            name: entry.agent?.name ?? entry.member.agent_slug,
+          }))}
+          allowTaskMode
+          fixedTargetName={displayName}
+          fixedProjectId={id}
+          initial={
+            editTask
+              ? {
+                  name: editTask.name,
+                  prompt_template: editTask.prompt_template,
+                  agent_slug: editTask.agent_slug,
+                  trigger: editTask.trigger,
+                  action_kind: (editTask.action_kind as ActionKind) ?? "chat",
+                  worktree: editTask.worktree ?? false,
+                  playbook_definition_id: editTask.playbook_definition_id,
+                  playbook_version: editTask.playbook_version,
+                }
+              : undefined
+          }
+        />
 
-      <DeleteConfirmDialog
-        open={chatDeleteTarget !== null}
-        onOpenChange={(next) => {
-          if (!next) setChatDeleteTarget(null);
-        }}
-        itemName={
-          chatBindings.find((c) => c.id === chatDeleteTarget)?.name ?? undefined
-        }
-        description={t("project.deleteChatDesc" as Parameters<typeof t>[0])}
-        onConfirm={() => {
-          const target = chatDeleteTarget;
-          setChatDeleteTarget(null);
-          if (target) void handleDeleteChat(target);
-        }}
-      />
+        {/* The project rail is a scoped projection of the same Playbook
+          library. Creation/editing stays on the shared dialog and persists
+          ``project_id=id``; no project-only Playbook model is introduced. */}
+        <CreatePlaybookDialog
+          open={playbookDialogOpen}
+          onOpenChange={setPlaybookDialogOpen}
+          onSubmit={submitPlaybook}
+          onDelete={removePlaybook}
+          initial={editingPlaybook}
+          targets={[]}
+          agents={rawMembers.map((entry) => ({
+            slug: entry.member.agent_slug,
+            name: entry.agent?.name ?? entry.member.agent_slug,
+          }))}
+          fixedProjectId={id}
+          fixedProjectName={displayName}
+        />
 
-      <BindChatDialog
-        open={bindChatOpen}
-        onOpenChange={setBindChatOpen}
-        projectId={id}
-        onBound={loadChatBindings}
-      />
+        <DeleteConfirmDialog
+          open={chatDeleteTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) setChatDeleteTarget(null);
+          }}
+          itemName={
+            chatBindings.find((c) => c.id === chatDeleteTarget)?.name ??
+            undefined
+          }
+          description={t("project.deleteChatDesc" as Parameters<typeof t>[0])}
+          onConfirm={() => {
+            const target = chatDeleteTarget;
+            setChatDeleteTarget(null);
+            if (target) void handleDeleteChat(target);
+          }}
+        />
 
-      <DeployAgentsDialog
-        open={addAgentOpen}
-        onOpenChange={setAddAgentOpen}
-        projectId={id}
-        agents={libraryAgents}
-        members={rawMembers}
-        onChanged={loadMembers}
-        onCreateNew={() => navigate("/agents")}
-      />
+        <BindChatDialog
+          open={bindChatOpen}
+          onOpenChange={setBindChatOpen}
+          projectId={id}
+          onBound={loadChatBindings}
+        />
 
-      {/* Knowledge Base file picker overlay — tree view: documents
+        <DeployAgentsDialog
+          open={addAgentOpen}
+          onOpenChange={setAddAgentOpen}
+          projectId={id}
+          agents={libraryAgents}
+          members={rawMembers}
+          onChanged={loadMembers}
+          onCreateNew={() => navigate("/agents")}
+        />
+
+        {/* Knowledge Base file picker overlay — tree view: documents
           organised under their KB and folders; folders expandable for
           navigation, only files selectable. */}
-      {kbPickerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="flex h-[600px] max-h-[85vh] w-[720px] max-w-[92vw] flex-col rounded-xl border border-surface-border bg-card p-4 shadow-xl">
-            <KnowledgeFileTreePicker
-              kbTree={pickerKbTree}
-              loading={pickerKbLoading}
-              onExpandFolder={pickerExpandFolder}
-              selected={[]}
-              onCancel={() => setKbPickerOpen(false)}
-              onConfirm={(ids) => {
-                void handleKbPickerConfirm(ids);
-              }}
-            />
+        {kbPickerOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="flex h-[600px] max-h-[85vh] w-[720px] max-w-[92vw] flex-col rounded-xl border border-surface-border bg-card p-4 shadow-xl">
+              <KnowledgeFileTreePicker
+                kbTree={pickerKbTree}
+                loading={pickerKbLoading}
+                onExpandFolder={pickerExpandFolder}
+                selected={[]}
+                onCancel={() => setKbPickerOpen(false)}
+                onConfirm={(ids) => {
+                  void handleKbPickerConfirm(ids);
+                }}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* KB add/remove dialog — lists all KBs with checkboxes; added KBs
+        {/* KB add/remove dialog — lists all KBs with checkboxes; added KBs
           pre-checked. Confirm atomically updates project bindings. */}
-      <KnowledgeBaseAddDialog
-        open={kbAddDialogOpen}
-        onOpenChange={setKbAddDialogOpen}
-        kbs={kbTree.map((kb) => ({
-          id: kb.id,
-          name: kb.name,
-          documentCount: kb.documentCount,
-        }))}
-        selectedIds={addedKbIds}
-        onConfirm={(ids) => {
-          void handleSetAddedKbs(ids);
-        }}
-      />
+        <KnowledgeBaseAddDialog
+          open={kbAddDialogOpen}
+          onOpenChange={setKbAddDialogOpen}
+          kbs={kbTree.map((kb) => ({
+            id: kb.id,
+            name: kb.name,
+            documentCount: kb.documentCount,
+          }))}
+          selectedIds={addedKbIds}
+          onConfirm={(ids) => {
+            void handleSetAddedKbs(ids);
+          }}
+        />
 
-      <DeleteConfirmDialog
-        open={worktreeDiscardTarget !== null}
-        onOpenChange={(v) => !v && setWorktreeDiscardTarget(null)}
-        itemName={worktreeDiscardTarget?.name}
-        title={t("project.worktreeDiscardTitle" as Parameters<typeof t>[0])}
-        description={
-          worktreeDiscardTarget
-            ? worktreeDiscardTarget.dirtyFiles !== null &&
-              worktreeDiscardTarget.aheadCommits !== null
-              ? t("project.worktreeDiscardDesc" as Parameters<typeof t>[0], {
-                  dirty: worktreeDiscardTarget.dirtyFiles,
-                  ahead: worktreeDiscardTarget.aheadCommits,
-                })
-              : t(
-                  "project.worktreeDiscardUnknownDesc" as Parameters<
-                    typeof t
-                  >[0],
-                )
-            : undefined
-        }
-        loading={worktreeDiscarding}
-        onConfirm={() => void handleDiscardWorktree()}
-      />
-      <DeleteConfirmDialog
-        open={memberDeleteTarget !== null}
-        onOpenChange={(v) => !v && setMemberDeleteTarget(null)}
-        title={t("agent.confirmDeleteMember")}
-        description={
-          memberDeleteTarget
-            ? t("agent.confirmDeleteMemberDesc", { slug: memberDeleteTarget })
-            : undefined
-        }
-        confirmLabel={t("common.remove")}
-        loading={memberDeleteBusy}
-        onConfirm={confirmMemberDelete}
-      />
-      <DeleteConfirmDialog
-        open={pendingDelete !== null}
-        onOpenChange={(v) => !v && setPendingDelete(null)}
-        itemName={pendingDelete?.name || undefined}
-        description={
-          pendingDelete?.kind === "task"
-            ? t("cron.confirmDeleteTaskDesc" as Parameters<typeof t>[0], {
-                name: pendingDelete.name,
-              })
-            : undefined
-        }
-        loading={pendingDeleteBusy}
-        onConfirm={async () => {
-          if (!pendingDelete) return;
-          const pd = pendingDelete;
-          setPendingDeleteBusy(true);
-          try {
-            if (pd.kind === "task") {
-              await automationsApi.delete(pd.id);
-              toast.success(t("common.deleted" as Parameters<typeof t>[0]));
-              await reloadScheduledTasks();
-            } else {
-              await deleteSession(pd.id);
-              toast.success(t("sidebar.deleted" as Parameters<typeof t>[0]));
-            }
-            setPendingDelete(null);
-          } catch {
-            toast.error(
-              t(
-                (pd.kind === "task"
-                  ? "common.deleteFailed"
-                  : "sidebar.deleteFailed") as Parameters<typeof t>[0],
-              ),
-            );
-          } finally {
-            setPendingDeleteBusy(false);
+        <DeleteConfirmDialog
+          open={worktreeDiscardTarget !== null}
+          onOpenChange={(v) => !v && setWorktreeDiscardTarget(null)}
+          itemName={worktreeDiscardTarget?.name}
+          title={t("project.worktreeDiscardTitle" as Parameters<typeof t>[0])}
+          description={
+            worktreeDiscardTarget
+              ? worktreeDiscardTarget.dirtyFiles !== null &&
+                worktreeDiscardTarget.aheadCommits !== null
+                ? t("project.worktreeDiscardDesc" as Parameters<typeof t>[0], {
+                    dirty: worktreeDiscardTarget.dirtyFiles,
+                    ahead: worktreeDiscardTarget.aheadCommits,
+                  })
+                : t(
+                    "project.worktreeDiscardUnknownDesc" as Parameters<
+                      typeof t
+                    >[0],
+                  )
+              : undefined
           }
-        }}
-      />
+          loading={worktreeDiscarding}
+          onConfirm={() => void handleDiscardWorktree()}
+        />
+        <DeleteConfirmDialog
+          open={memberDeleteTarget !== null}
+          onOpenChange={(v) => !v && setMemberDeleteTarget(null)}
+          title={t("agent.confirmDeleteMember")}
+          description={
+            memberDeleteTarget
+              ? t("agent.confirmDeleteMemberDesc", { slug: memberDeleteTarget })
+              : undefined
+          }
+          confirmLabel={t("common.remove")}
+          loading={memberDeleteBusy}
+          onConfirm={confirmMemberDelete}
+        />
+        <DeleteConfirmDialog
+          open={pendingDelete !== null}
+          onOpenChange={(v) => !v && setPendingDelete(null)}
+          itemName={pendingDelete?.name || undefined}
+          description={
+            pendingDelete?.kind === "task"
+              ? t("cron.confirmDeleteTaskDesc" as Parameters<typeof t>[0], {
+                  name: pendingDelete.name,
+                })
+              : undefined
+          }
+          loading={pendingDeleteBusy}
+          onConfirm={async () => {
+            if (!pendingDelete) return;
+            const pd = pendingDelete;
+            setPendingDeleteBusy(true);
+            try {
+              if (pd.kind === "task") {
+                await automationsApi.delete(pd.id);
+                toast.success(t("common.deleted" as Parameters<typeof t>[0]));
+                await reloadScheduledTasks();
+              } else {
+                await deleteSession(pd.id);
+                toast.success(t("sidebar.deleted" as Parameters<typeof t>[0]));
+              }
+              setPendingDelete(null);
+            } catch {
+              toast.error(
+                t(
+                  (pd.kind === "task"
+                    ? "common.deleteFailed"
+                    : "sidebar.deleteFailed") as Parameters<typeof t>[0],
+                ),
+              );
+            } finally {
+              setPendingDeleteBusy(false);
+            }
+          }}
+        />
       </div>
     </ArtifactSplitPane>
   );

@@ -13,6 +13,14 @@ installed via the ``valuz.parser_plugins`` entry-point group (Phase 2 —
 separate pypi packages). Built-in ids win on collision; conflicting
 third-party plugins are skipped with a warning.
 
+Finally it layers in anything handed over through :func:`register`. That door
+exists because entry points only see *installed distributions*: an overlay
+shipped as source on ``PYTHONPATH`` is invisible to them while importing
+perfectly, which produces no error and no log line. Composition-time
+registrations therefore win outright — including over a built-in, since
+they are a deliberate act by whoever assembles the app rather than a
+discovery of whatever happens to be installed.
+
 Import-order note: the cloud plugins need ``modules.parser.polling`` at
 import time; ``modules.parser.__init__`` in turn imports this registry.
 To break the cycle, plugin sub-packages are imported lazily inside
@@ -82,6 +90,42 @@ class ParserPluginRegistry:
 
     def __len__(self) -> int:
         return len(self._plugins)
+
+
+# Overlay plugins handed over at composition time, by id.
+#
+# The entry-point pass below only sees **installed distributions**. An overlay
+# that ships as source on ``PYTHONPATH`` has no metadata for
+# ``importlib.metadata`` to find, so discovery returns nothing while every
+# import in that package works perfectly — a failure mode with no error and no
+# log line, which is the worst kind. That shape is not hypothetical: a
+# downstream edition deploys exactly that way, installing its whole dependency
+# graph but deliberately not the package itself.
+#
+# So this is the second door, and it mirrors
+# ``integrations.sandbox_registry.register`` — whose docstring already offers
+# "declares a ``valuz.sandbox_drivers`` entry point (or calls ``register`` at
+# composition)" as the two ways an overlay plugs in. The parser registry only
+# ever had the first.
+_registered: dict[str, ParserPlugin] = {}
+
+
+def register(plugin: ParserPlugin) -> None:
+    """Contribute a parser plugin from the composition root.
+
+    **Call before the registry is first built.** ``api.deps._parser_registry``
+    caches it for the process, so a registration that arrives afterwards is
+    silently ignored — register while assembling the app (alongside the other
+    port bindings), not lazily from a request path.
+
+    Last registration for an id wins, matching ``sandbox_registry.register``.
+    """
+    _registered[plugin.descriptor.id] = plugin
+
+
+def registered_plugin_ids() -> list[str]:
+    """Ids contributed through :func:`register`. Diagnostics only."""
+    return sorted(_registered)
 
 
 def build_default_registry(
@@ -157,6 +201,23 @@ def build_default_registry(
             continue
         plugins[pid] = plugin
 
+    # Composition-time registrations win, including over a built-in.
+    #
+    # Unlike the two passes above — which *discover* whatever happens to be
+    # installed — this one is a deliberate act by whoever assembles the app, so
+    # deferring to a built-in would make it impossible to do the one thing it
+    # exists for. ``valuz_ocr`` is the case in point: it ships as a
+    # descriptor-only placeholder whose own docstring offers "a clean drop-in
+    # point to swap in their concrete backend", and until now nothing could
+    # drop into it (a same-id entry point loses to the built-in, silently).
+    for pid, plugin in _registered.items():
+        if pid in plugins:
+            logger.info(
+                "parser plugin %r replaced by a composition-time registration",
+                pid,
+            )
+        plugins[pid] = plugin
+
     # ``light_local`` is the universal fallback every routing decision lands on
     # (``ParserRouter._resolve_plugin`` → ``registry.get(LIGHT_LOCAL_PLUGIN_ID)``).
     # If it's absent the registry is fundamentally broken: every parse AND every
@@ -199,11 +260,7 @@ def _discover_builtin_subpackages() -> list[str]:
     paths = getattr(pkg, "__path__", None)
     if paths is None:
         return []
-    return [
-        info.name
-        for info in pkgutil.iter_modules(paths)
-        if info.ispkg
-    ]
+    return [info.name for info in pkgutil.iter_modules(paths) if info.ispkg]
 
 
 def _load_builtin(
@@ -217,9 +274,7 @@ def _load_builtin(
     try:
         module = importlib.import_module(mod_name)
     except Exception:
-        logger.warning(
-            "parser plugin %r failed to import — skipping", mod_name, exc_info=True
-        )
+        logger.warning("parser plugin %r failed to import — skipping", mod_name, exc_info=True)
         return None
     factory = getattr(module, "make_plugin", None)
     if not callable(factory):
@@ -292,4 +347,6 @@ __all__ = [
     "ParserPluginRegistry",
     "UnknownPluginError",
     "build_default_registry",
+    "register",
+    "registered_plugin_ids",
 ]

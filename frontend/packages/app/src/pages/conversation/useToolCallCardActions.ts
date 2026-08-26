@@ -3,9 +3,13 @@ import { toast } from "sonner";
 import {
   agentsApi,
   automationsApi,
+  operationsApi,
+  notifyResourceRefresh,
+  parseOperationToolOutput,
   skillsApi,
   useTranslation,
   type Trigger,
+  type OperationView,
   type useIncrementalTurns,
 } from "@valuz/core";
 import { type SkillSubmissionState } from "@valuz/ui";
@@ -20,6 +24,66 @@ type ToolCallCardActionsParams = {
    *  confirmed submission/proposal cards. */
   selectedSessionName: string | null;
 };
+
+type AutomationConfirmSpec = {
+  name: string;
+  prompt_template: string;
+  trigger: Trigger;
+  agent_slug?: string | null;
+  action_kind?: "chat" | "task";
+  worktree?: boolean;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
+};
+
+export async function confirmAutomationProposalAndNotify(
+  sessionId: string,
+  toolId: string,
+  spec: AutomationConfirmSpec,
+) {
+  const result = await automationsApi.confirmProposal(sessionId, {
+    tool_call_id: toolId,
+    name: spec.name,
+    prompt_template: spec.prompt_template,
+    trigger: spec.trigger,
+    agent_slug: spec.agent_slug ?? null,
+    action_kind: spec.action_kind,
+    worktree: spec.worktree ?? false,
+    playbook_definition_id: spec.playbook_definition_id ?? null,
+    playbook_version: spec.playbook_version ?? null,
+  });
+  notifyResourceRefresh({
+    resourceType: "automation",
+    projectId: result.project_id,
+    resourceId: result.automation_id,
+  });
+  return result;
+}
+
+export async function confirmOperationAndNotify(
+  sessionId: string,
+  operation: OperationView,
+): Promise<OperationView> {
+  const result = await operationsApi.confirm(
+    operation.id,
+    operation.proposal_hash,
+    sessionId,
+  );
+  if (result.state !== "succeeded") return result;
+
+  const canonicalResourceId = result.canonical_result_refs.find(
+    (ref) => typeof ref.id === "string",
+  )?.id;
+  notifyResourceRefresh({
+    resourceType: result.operation_type.split(".", 1)[0] || "operation",
+    projectId: result.project_id,
+    resourceId:
+      typeof canonicalResourceId === "string"
+        ? canonicalResourceId
+        : result.id,
+  });
+  return result;
+}
 
 /**
  * Confirm/dismiss state machines behind the special-cased tool-call cards:
@@ -93,6 +157,12 @@ export function useToolCallCardActions({
   };
   const [automationProposalStates, setAutomationProposalStates] = useState<
     Record<string, AutomationProposalEntry>
+  >({});
+  const [operationStates, setOperationStates] = useState<
+    Record<string, OperationView>
+  >({});
+  const [operationBusy, setOperationBusy] = useState<
+    Record<string, "confirm" | "cancel" | undefined>
   >({});
 
   const submissionProjectLabel = useMemo(() => {
@@ -252,14 +322,7 @@ export function useToolCallCardActions({
   const handleConfirmAutomation = useCallback(
     async (
       toolId: string,
-      spec: {
-        name: string;
-        prompt_template: string;
-        trigger: Trigger;
-        agent_slug?: string | null;
-        action_kind?: "chat" | "task";
-        worktree?: boolean;
-      },
+      spec: AutomationConfirmSpec,
     ) => {
       const sid = selectedSessionIdRef.current;
       if (!sid) return;
@@ -271,15 +334,11 @@ export function useToolCallCardActions({
         },
       }));
       try {
-        const res = await automationsApi.confirmProposal(sid, {
-          tool_call_id: toolId,
-          name: spec.name,
-          prompt_template: spec.prompt_template,
-          trigger: spec.trigger,
-          agent_slug: spec.agent_slug ?? null,
-          action_kind: spec.action_kind,
-          worktree: spec.worktree ?? false,
-        });
+        const res = await confirmAutomationProposalAndNotify(
+          sid,
+          toolId,
+          spec,
+        );
         setAutomationProposalStates((prev) => ({
           ...prev,
           [toolId]: { state: "confirmed", automationId: res.automation_id },
@@ -310,6 +369,81 @@ export function useToolCallCardActions({
       [toolId]: { state: "dismissed" },
     }));
   }, []);
+
+  const handleConfirmOperation = useCallback(
+    async (operation: OperationView) => {
+      const sid = selectedSessionIdRef.current;
+      if (!sid) return;
+      setOperationBusy((current) => ({
+        ...current,
+        [operation.id]: "confirm",
+      }));
+      try {
+        const next = await confirmOperationAndNotify(sid, operation);
+        setOperationStates((current) => ({
+          ...current,
+          [operation.id]: next,
+        }));
+        if (next.state === "succeeded") {
+          toast.success(
+            t(
+              next.preview.change === "delete"
+                ? "playbook.operation.deleted"
+                : "playbook.operation.succeeded",
+            ),
+          );
+        } else if (next.error_message) {
+          toast.error(next.error_message);
+        }
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : t("playbook.operation.failed"),
+        );
+      } finally {
+        setOperationBusy((current) => ({
+          ...current,
+          [operation.id]: undefined,
+        }));
+      }
+    },
+    [selectedSessionIdRef, t],
+  );
+
+  const handleCancelOperation = useCallback(
+    async (operation: OperationView) => {
+      const sid = selectedSessionIdRef.current;
+      if (!sid) return;
+      setOperationBusy((current) => ({
+        ...current,
+        [operation.id]: "cancel",
+      }));
+      try {
+        const next = await operationsApi.cancel(
+          operation.id,
+          operation.proposal_hash,
+          sid,
+        );
+        setOperationStates((current) => ({
+          ...current,
+          [operation.id]: next,
+        }));
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : t("conversation.cancelFailed"),
+        );
+      } finally {
+        setOperationBusy((current) => ({
+          ...current,
+          [operation.id]: undefined,
+        }));
+      }
+    },
+    [selectedSessionIdRef, t],
+  );
 
   // Stable signature of the propose_agent tool_use ids in this session, so the
   // re-entry detection below fetches only when the set of proposal cards
@@ -450,6 +584,41 @@ export function useToolCallCardActions({
     };
   }, [selectedSessionId, automationCreateToolSig]);
 
+  const operationSig = useMemo(() => {
+    const ids: string[] = [];
+    for (const turn of turns) {
+      for (const block of turn.blocks) {
+        if (block.kind !== "tool") continue;
+        if (!isToolNamed(block.tool.title || "", "playbook")) continue;
+        const result = parseOperationToolOutput(block.tool.output);
+        if (result?.operation?.id) ids.push(result.operation.id);
+      }
+    }
+    return [...new Set(ids)].join(",");
+  }, [turns]);
+
+  useEffect(() => {
+    if (!selectedSessionId || !operationSig) return;
+    const ids = operationSig.split(",").filter(Boolean);
+    let cancelled = false;
+    void operationsApi
+      .status(ids, selectedSessionId)
+      .then((result) => {
+        if (!cancelled) {
+          setOperationStates((current) => ({
+            ...current,
+            ...result.operations,
+          }));
+        }
+      })
+      .catch(() => {
+        // Non-fatal: the tool result still renders its persisted snapshot.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [operationSig, selectedSessionId]);
+
   // Scan staging for every ``submit_skill`` tool_use we've seen, so the
   // card renders the actual file tree (not just the agent's
   // ``files_touched`` claim) and gates its save button on real file
@@ -566,11 +735,15 @@ export function useToolCallCardActions({
     submissionStates,
     proposalStates,
     automationProposalStates,
+    operationStates,
+    operationBusy,
     handleConfirmSubmission,
     handleDismissSubmission,
     handleConfirmProposal,
     handleDismissProposal,
     handleConfirmAutomation,
     handleDismissAutomation,
+    handleConfirmOperation,
+    handleCancelOperation,
   };
 }

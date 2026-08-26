@@ -4,6 +4,7 @@ import { Sparkles } from "lucide-react";
 import {
   SESSION_ACTION_RESOLVED_EVENT,
   SlotRenderer,
+  parseOperationToolOutput,
   parseActionResolved,
   useTranslation,
   type SessionEventDTO,
@@ -16,6 +17,7 @@ import {
   AskUserQuestionCard,
   AutomationProposalCard,
   AutomationToolCard,
+  PlaybookOperationCard,
   GenerativeUICard,
   SkillSubmissionCard,
   UserAnswerSummaryCard,
@@ -31,6 +33,7 @@ import {
   automationTriggerSummary,
   hostDocumentFileName,
   isToolNamed,
+  normalizeAutomationTrigger,
   parseAutomationCreateInput,
   renderChatplanStatusPill,
   resolveGenUiHost,
@@ -93,12 +96,16 @@ export function useToolCallCards({
     submissionStates,
     proposalStates,
     automationProposalStates,
+    operationStates,
+    operationBusy,
     handleConfirmSubmission,
     handleDismissSubmission,
     handleConfirmProposal,
     handleDismissProposal,
     handleConfirmAutomation,
     handleDismissAutomation,
+    handleConfirmOperation,
+    handleCancelOperation,
   } = useToolCallCardActions({
     turns,
     isBusy,
@@ -309,6 +316,44 @@ export function useToolCallCards({
         }
       }
 
+      // Generic edition-domain mutation seam. Industry editions expose an
+      // always-on MCP tool named ``domain_operation`` and register the actual
+      // persisted proposal card in this slot. The host owns only placement;
+      // it neither knows Finance entities nor duplicates their confirm API.
+      if (isToolNamed(name, "domain_operation")) {
+        return (
+          <SlotRenderer
+            name="domain.operation-card"
+            context={{ tool }}
+          />
+        );
+      }
+
+      const isPlaybook = isToolNamed(name, "playbook");
+      if (isPlaybook) {
+        const result = parseOperationToolOutput(tool.output);
+        const snapshot = result?.operation;
+        if (snapshot) {
+          const operation = operationStates[snapshot.id] ?? snapshot;
+          return (
+            <PlaybookOperationCard
+              operation={operation}
+              busy={operationBusy[operation.id] ?? null}
+              onConfirm={() => void handleConfirmOperation(operation)}
+              onCancel={() => void handleCancelOperation(operation)}
+              onOpenPlaybook={(definitionId) =>
+                navigate(
+                  `/playbooks?definition=${encodeURIComponent(definitionId)}`,
+                )
+              }
+            />
+          );
+        }
+        // Read-only queries and run lifecycle actions do not create an
+        // OperationRecord. Let them reach the generic tool renderer so the
+        // user can still inspect the Agent's Playbook call and result.
+      }
+
       // ADR-021: automation tool result → AutomationToolCard. The MCP
       // server returns a structured JSON blob as ``tool.output``; we
       // parse it and hand off to the card. If the output is missing
@@ -346,8 +391,9 @@ export function useToolCallCards({
           const cardName = proposal?.name ?? inputSpec?.name ?? "";
           const cardPrompt =
             proposal?.prompt_template ?? inputSpec?.prompt_template;
-          const confirmTrigger =
-            proposal?.trigger ?? inputSpec?.trigger ?? null;
+          const confirmTrigger = normalizeAutomationTrigger(
+            proposal?.trigger ?? inputSpec?.trigger ?? null,
+          );
           const cardTriggerHuman =
             proposal?.trigger_human_readable ??
             automationTriggerSummary(confirmTrigger, t);
@@ -357,6 +403,12 @@ export function useToolCallCards({
             proposal?.worktree ?? inputSpec?.worktree ?? false;
           const cardAgentName =
             proposal?.agent_name ?? inputSpec?.agent_slug ?? null;
+          const cardPlaybookDefinitionId =
+            proposal?.playbook_definition_id ??
+            inputSpec?.playbook_definition_id ??
+            null;
+          const cardPlaybookVersion =
+            proposal?.playbook_version ?? inputSpec?.playbook_version ?? null;
           const entry = automationProposalStates[tool.id] || {
             state: "pending" as const,
           };
@@ -368,6 +420,7 @@ export function useToolCallCards({
               agentName={cardAgentName}
               actionKind={cardActionKind}
               worktree={cardWorktree}
+              playbookVersion={cardPlaybookVersion}
               state={entry.state}
               errorMessage={entry.errorMessage}
               validationError={validationError}
@@ -380,6 +433,8 @@ export function useToolCallCards({
                   agent_slug: proposal?.agent_slug ?? inputSpec?.agent_slug,
                   action_kind: cardActionKind,
                   worktree: cardWorktree,
+                  playbook_definition_id: cardPlaybookDefinitionId,
+                  playbook_version: cardPlaybookVersion,
                 });
               }}
               onDismiss={() => handleDismissAutomation(tool.id)}
@@ -627,6 +682,10 @@ export function useToolCallCards({
       automationProposalStates,
       handleConfirmAutomation,
       handleDismissAutomation,
+      operationStates,
+      operationBusy,
+      handleConfirmOperation,
+      handleCancelOperation,
       askUserQuestionAnswersByToolId,
       askUserQuestionLocalAnswers,
       askUserQuestionSubmitRef,
@@ -634,6 +693,7 @@ export function useToolCallCards({
       workflowStates,
       revealInFinder,
       selectedSessionId,
+      hostRef,
       navigate,
       t,
     ],

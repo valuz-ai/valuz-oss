@@ -6,6 +6,7 @@ import type {
   SessionDetail,
   SessionEventDTO,
   SessionListItem,
+  SessionMode,
   SessionPermissionMode,
   SessionRulePreview,
   TodoItem,
@@ -22,6 +23,7 @@ export type {
   SessionDetail,
   SessionEventDTO,
   SessionListItem,
+  SessionMode,
   SessionPermissionMode,
   SessionRulePreview,
   TodoItem,
@@ -355,6 +357,8 @@ export interface SessionMessageHostRef {
 
 export interface SessionMessageRequest {
   prompt: string;
+  /** Staged attachments this turn claims. See ``sendMessage``. */
+  attachment_ids?: string[];
   provider_id?: string | null;
   model_id?: string | null;
   host_ref?: SessionMessageHostRef | null;
@@ -410,7 +414,8 @@ export interface SessionActionResponse {
 
 export interface SessionAttachmentItem {
   id: string;
-  session_id: string;
+  /** ``null`` while staged — bound by the turn that ships it. */
+  session_id: string | null;
   filename: string;
   stored_path: string;
   parsed_path?: string | null;
@@ -650,11 +655,16 @@ export const sessionsApi = {
     providerId?: string | null,
     modelId?: string | null,
     hostRef?: SessionMessageHostRef | null,
+    attachmentIds?: string[] | null,
   ): Promise<SessionDetail> {
     const body: SessionMessageRequest = { prompt };
     if (providerId) body.provider_id = providerId;
     if (modelId) body.model_id = modelId;
     if (hostRef) body.host_ref = hostRef;
+    // The staged files this turn claims. Server-minted ids handed back, not
+    // an identifier the client invented — and named explicitly so sending in
+    // one composer cannot swallow another's staged files.
+    if (attachmentIds?.length) body.attachment_ids = attachmentIds;
     return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -864,22 +874,39 @@ export const sessionsApi = {
     });
   },
 
+  /**
+   * Upload a file with no session attached to it.
+   *
+   * Uploading needed nothing from a session — the bytes land in the owner's
+   * store and the parse is a server-side job — but requiring one meant
+   * attaching a file had to CREATE one, and in cloud mode creating a session
+   * provisions a sandbox: about three and a half seconds of nothing happening.
+   * The turn that ships the file binds it (``sendMessage({attachmentIds})``).
+   *
+   * ``baseUrl`` is explicit because there is no session to route on; pass the
+   * project's / target's base, the same one the eventual create will use.
+   */
   uploadAttachment(
-    sessionId: string,
     file: File,
+    opts?: { baseUrl?: string },
   ): Promise<SessionAttachmentItem> {
     const form = new FormData();
     form.append("file", file);
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments`,
-      {
-        method: "POST",
-        body: form,
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson("/v1/attachments", {
+      method: "POST",
+      body: form,
+      baseUrl: opts?.baseUrl,
+    });
   },
 
+  /** This owner's staged (not yet sent) attachments. */
+  listStagedAttachments(opts?: {
+    baseUrl?: string;
+  }): Promise<{ items: SessionAttachmentItem[] }> {
+    return fetchJson("/v1/attachments", { baseUrl: opts?.baseUrl });
+  },
+
+  /** Everything ever attached to ``sessionId`` — the conversation's history. */
   listAttachments(
     sessionId: string,
   ): Promise<{ items: SessionAttachmentItem[] }> {
@@ -911,18 +938,15 @@ export const sessionsApi = {
    * silently dropped server-side; missing doc ids return 400.
    */
   addKbAttachments(
-    sessionId: string,
     docIds: string[],
+    opts?: { baseUrl?: string },
   ): Promise<{ items: SessionAttachmentItem[] }> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/kb`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc_ids: docIds }),
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson("/v1/attachments/kb", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_ids: docIds }),
+      baseUrl: opts?.baseUrl,
+    });
   },
 
   /**
@@ -931,11 +955,14 @@ export const sessionsApi = {
    * ``source_kind="kb_doc"`` only the row is deleted (the KB
    * document survives for other sessions).
    */
-  deleteAttachment(sessionId: string, attachmentId: string): Promise<void> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: "DELETE", baseUrl: sessionBase(sessionId) },
-    );
+  deleteAttachment(
+    attachmentId: string,
+    opts?: { baseUrl?: string },
+  ): Promise<void> {
+    return fetchJson(`/v1/attachments/${encodeURIComponent(attachmentId)}`, {
+      method: "DELETE",
+      baseUrl: opts?.baseUrl,
+    });
   },
 
   /**
@@ -980,6 +1007,25 @@ export const sessionsApi = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ effort }),
+      baseUrl: sessionBase(sessionId),
+    });
+  },
+
+  /**
+   * Enter or leave a session working mode (kernel ``Session.mode``,
+   * docs/design/session-modes.md). ``plan`` makes the runtime plan
+   * before touching anything — Claude applies the SDK's typed
+   * ``set_permission_mode("plan")`` mutator immediately and exits via
+   * the ``ExitPlanMode`` approval card; ``default`` exits the current
+   * mode. Same-mode re-set is idempotent. Only ``claude_agent`` /
+   * ``codex`` sessions accept non-default modes — the server 400s
+   * deepagents / deepseek_harness.
+   */
+  updateMode(sessionId: string, mode: SessionMode): Promise<SessionDetail> {
+    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/mode`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
       baseUrl: sessionBase(sessionId),
     });
   },

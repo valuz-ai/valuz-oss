@@ -56,10 +56,6 @@ import {
   ErrorBoundary,
   Input,
   OfflineBanner,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
   TopBar,
   WindowControls,
   type DesktopSidebarBottomItem,
@@ -99,6 +95,7 @@ import { OriginIcon } from "../components/ExecutionLocationPicker";
 import { useForkSession } from "../hooks/use-fork-session";
 import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
 import { PreservedRouteOutlet } from "./PreservedRouteOutlet";
+import { RightPanelControls } from "./RightPanelControls";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
 import type { ProjectOutletContext } from "./types";
 
@@ -119,7 +116,6 @@ export interface ProjectLayoutBaseProps {
   topbarActions?: ReactNode;
   projectDialogExtraFields?: ReactNode;
   rightPanel?: ReactNode;
-  mascotSrc?: string | null;
 }
 
 // How many runs each project's own sidebar window asks for. The accordion
@@ -131,6 +127,7 @@ const NAV_ICON_MAP: Record<string, DesktopSidebarBottomItem["icon"]> = {
   assistant: "assistant",
   skills: "skills",
   scheduled: "scheduled",
+  playbooks: "playbooks",
   activity: "activity",
   knowledge: "knowledge",
   settings: "settings",
@@ -179,7 +176,6 @@ export function ProjectLayoutBase({
   topbarActions,
   projectDialogExtraFields,
   rightPanel: controlledRightPanel,
-  mascotSrc = null,
 }: ProjectLayoutBaseProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -217,10 +213,15 @@ export function ProjectLayoutBase({
   const togglePanel = usePanelStore((state) => state.toggle);
 
   const [rightPanel, setRightPanel] = useState<ReactNode | null>(null);
+  const [rightPanelMaximized, setRightPanelMaximized] = useState(false);
   const [pageHeader, setPageHeader] = useState<ReactNode | null>(null);
   const [headerClassName, setHeaderClassName] = useState<string | undefined>();
   const [hideHeader, setHideHeader] = useState(false);
   const [asideClassName, setAsideClassName] = useState<string | undefined>();
+  const [rightPanelDefaultSize, setRightPanelDefaultSize] = useState<
+    string | undefined
+  >();
+  const [masterDetailLayout, setMasterDetailLayout] = useState(false);
   const [mainClassName, setMainClassName] = useState<string | undefined>();
   const [contentInnerClassName, setContentInnerClassName] = useState<
     string | undefined
@@ -366,6 +367,13 @@ export function ProjectLayoutBase({
     [],
   );
 
+  // A collapsed panel always reopens at the last manually resized normal
+  // width. Keeping a hidden panel in the maximized state would make the
+  // expand affordance unexpectedly reopen at half-window size.
+  useEffect(() => {
+    if (rightPanelCollapsed) setRightPanelMaximized(false);
+  }, [rightPanelCollapsed]);
+
   useEffect(() => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
     void Promise.resolve().then(() => {
@@ -503,10 +511,17 @@ export function ProjectLayoutBase({
   // the finished-runs window explicitly; without this the forked chat
   // waits for the next unrelated turn to appear in the sidebar.
   useEffect(() => {
-    const onRefresh = () => refreshFinishedRuns();
+    const onRefresh = () => {
+      refreshFinishedRuns();
+      // The same nudge also covers "the set of projects a fan-out can see
+      // changed" (an agent share landing after boot): the endpoints catalog
+      // fires this event, and the extra-projects provider only reaches the
+      // sidebar through a fresh fetch.
+      void fetchProjects();
+    };
     window.addEventListener("valuz-runs-refresh", onRefresh);
     return () => window.removeEventListener("valuz-runs-refresh", onRefresh);
-  }, [refreshFinishedRuns]);
+  }, [refreshFinishedRuns, fetchProjects]);
 
   // Per-project runs for the sidebar accordion. The global finished-runs
   // window above is ONE recency list shared with quick chats, so an install
@@ -762,6 +777,8 @@ export function ProjectLayoutBase({
     setHeaderClassName,
     setHideHeader,
     setAsideClassName,
+    setRightPanelDefaultSize,
+    setMasterDetailLayout,
     setMainClassName,
     setContentInnerClassName,
   };
@@ -775,66 +792,42 @@ export function ProjectLayoutBase({
       </span>
     ));
   const resolvedRightPanel = controlledRightPanel ?? rightPanel;
-  // Skills / Connectors / Agents use the right-panel slot for a master-detail layout
-  // (list + detail), not a collapsible side panel — so the collapse toggle
-  // is meaningless there and is hidden.
+  // Skills / Connectors / Agents use the right-panel slot for a master-detail
+  // layout (list + detail), not a collapsible side panel — so the collapse
+  // toggle is meaningless there and is hidden. Overlay editions route their
+  // own master-detail pages, which this path list cannot know about; those
+  // declare it through ``setMasterDetailLayout`` instead.
   const suppressRightPanelToggle =
+    masterDetailLayout ||
     location.pathname.startsWith("/skills") ||
     location.pathname.startsWith("/connectors") ||
     location.pathname.startsWith("/agents");
-  const rightPanelToggle =
+  const rightPanelControls =
     resolvedRightPanel && !suppressRightPanelToggle ? (
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={
-                rightPanelCollapsed
-                  ? t("sidebar.expandPanel")
-                  : t("sidebar.collapsePanel")
-              }
-              onClick={() => togglePanel()}
-              className="flex h-[22px] w-[22px] items-center justify-center rounded-[5px] text-ink-body transition-colors hover:bg-surface-muted"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <line
-                  x1={rightPanelCollapsed ? 17 : 15}
-                  y1={rightPanelCollapsed ? 7 : 3}
-                  x2={rightPanelCollapsed ? 17 : 15}
-                  y2={rightPanelCollapsed ? 17 : 21}
-                />
-              </svg>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {rightPanelCollapsed
-              ? t("sidebar.expandPanel")
-              : t("sidebar.collapsePanel")}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <RightPanelControls
+        collapsed={rightPanelCollapsed}
+        maximized={rightPanelMaximized}
+        labels={{
+          collapse: t("sidebar.collapsePanel"),
+          expand: t("sidebar.expandPanel"),
+          maximize: t("sidebar.maximizePanel"),
+          restore: t("sidebar.restorePanel"),
+        }}
+        onToggleCollapsed={() => togglePanel()}
+        onToggleMaximized={() =>
+          setRightPanelMaximized((maximized) => !maximized)
+        }
+      />
     ) : null;
   // ADR-022: the decision-inbox badge always sits in the topbar control
   // group (it self-hides when there are no pendings), so the control is
   // present whenever the badge has something to show even if the page
-  // contributes no topbarActions / rightPanelToggle.
+  // contributes no topbarActions / rightPanelControls.
   const topbarRightControl = (
     <div className="flex items-center gap-1">
       <NotificationBadge />
       {topbarActions}
-      {rightPanelToggle}
+      {rightPanelControls}
     </div>
   );
 
@@ -1045,7 +1038,6 @@ export function ProjectLayoutBase({
             sidebarHeader={sidebarHeader}
             sidebarFooter={sidebarFooter}
             sidebarExtraItems={sidebarExtraItems}
-            mascotSrc={mascotSrc}
             LinkComponent={Link}
             primaryActionHref="/conversation/new"
             onPrimaryAction={refreshConnectorAlert}
@@ -1078,8 +1070,12 @@ export function ProjectLayoutBase({
               if (!trimmed) return;
               projectsApi
                 .rename(projectId, trimmed)
-                .then(() => {
+                .then((updated) => {
                   toast.success(t("sidebar.renamed"));
+                  // Publish the new name before the list refetch lands: any
+                  // open project page reads it from this store, and waiting
+                  // for the round trip left the page showing the old name.
+                  useProjectStore.getState().upsertProject(updated);
                   void fetchProjects();
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
@@ -1104,6 +1100,14 @@ export function ProjectLayoutBase({
         asideClassName={
           resolvedRightPanel ? (asideClassName ?? "w-[345px]") : undefined
         }
+        // Keep the main route under one stable panel owner while an async
+        // context panel loads, opens, or closes. The panel node itself is not
+        // the capability signal; changing this flag with the node remounts the
+        // conversation and repeats its bootstrap requests indefinitely.
+        rightPanelDefaultSize={rightPanelDefaultSize}
+        rightPanelResizable={!suppressRightPanelToggle}
+        rightPanelMaximized={rightPanelMaximized}
+        rightPanelResizeLabel={t("sidebar.resizePanel")}
         mainClassName={mainClassName}
         contentInnerClassName={contentInnerClassName}
         // Degraded multi-target hint rides the shell's notice slot — pinned

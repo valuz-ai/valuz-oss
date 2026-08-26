@@ -15,6 +15,8 @@ import {
   mcpProvidersApi,
   recordEntityOrigin,
   sessionsApi,
+  type SessionAttachmentItem,
+  type SessionCreateRequest,
   useEntityOrigin,
   skillsApi,
   useComposerProviderChannels,
@@ -24,7 +26,7 @@ import {
   useModelDefaults,
   useRuntimes,
   usePanelStore,
-  useSessionAttachments,
+  useStagedAttachments,
   projectsApi,
   type ProjectListItem,
   type RuntimeId,
@@ -33,8 +35,7 @@ import {
 } from "@valuz/core";
 import { homeSuggestions } from "@valuz/app/lib/prototype-data";
 import { useTranslation } from "@valuz/core";
-import { assetUrl } from "@valuz/shared";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
+import { assetUrl, supportsPlanMode } from "@valuz/shared";
 import { OriginBadge } from "../components/ExecutionLocationPicker";
 import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
 
@@ -72,6 +73,13 @@ export const ConversationsHomePage = () => {
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<
     "default" | "auto_review" | "full_access"
   >("full_access");
+  // Session working mode (docs/design/session-modes.md). Staged locally
+  // until the session is minted, then applied via PATCH ``/mode`` right
+  // after create — create carries no ``mode`` field by design (one
+  // kernel-validated write path).
+  const [selectedSessionMode, setSelectedSessionMode] = useState<
+    "default" | "plan" | "goal"
+  >("default");
   // Multi-target editions: where the quick chat runs. ``null`` follows the
   // registered default; single-target builds have no targets and the picker
   // renders nothing. Locked once the session is minted (same lifecycle as
@@ -117,12 +125,15 @@ export const ConversationsHomePage = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
-    markPendingConsumed,
-  } = useSessionAttachments(sessionId);
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // The backend this chat will run on — see ProjectDetailPage.
+    resolveExecTarget()?.baseUrl,
+  );
+
   // Observed origin of the minted quick-chat session — drives the locked
   // bar's location chip (multi-target editions).
   const mintedSessionOrigin = useEntityOrigin(sessionId, "session");
@@ -258,7 +269,7 @@ export const ConversationsHomePage = () => {
   // directories with one another. ADR-006: model_provider is locked at
   // session creation, so the composer's pick rides on the create call —
   // sendMessage ignores it.
-  const sessionPayload = () => ({
+  const sessionPayload = (): SessionCreateRequest => ({
     project_id: "chat-default",
     mcp_provider_slugs: enabledSlugs.length > 0 ? enabledSlugs : undefined,
     provider_id: selectedProviderId ?? undefined,
@@ -285,10 +296,22 @@ export const ConversationsHomePage = () => {
         mcp_provider_slugs: undefined,
       };
     }
-    const session = await sessionsApi.create(
+    let session = await sessionsApi.create(
       payload,
       target ? { baseUrl: target.baseUrl } : undefined,
     );
+    // Apply the staged plan toggle before any message goes out so the
+    // first turn's runtime reconcile already enters plan mode.
+    if (
+      selectedSessionMode === "plan" &&
+      supportsPlanMode(session.runtime_provider)
+    ) {
+      try {
+        session = await sessionsApi.updateMode(session.id, "plan");
+      } catch {
+        /* non-fatal — the session simply stays in default mode */
+      }
+    }
     if (target) {
       recordEntityOrigin(session.id, target.id);
       // Remote quick-chats mint a managed project that no list ever surfaces
@@ -310,8 +333,6 @@ export const ConversationsHomePage = () => {
     }
   };
 
-  // Mint (once) the quick-chat session attachments upload into. Cached in
-  // ``sessionId`` so subsequent attaches + the send reuse the same session.
   const ensureSession = async (): Promise<{ id: string }> => {
     if (sessionId) return { id: sessionId };
     const session = await createSession();
@@ -325,16 +346,29 @@ export const ConversationsHomePage = () => {
     const text = input.trim();
     if (!text || sending) return;
     setSending(true);
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureSession();
-      markPendingConsumed();
-      await sessionsApi.sendMessage(session.id, text);
+      claimed = claimStagedAttachments();
+      // Bind the staged files to this turn — this is where a file stops
+      // being a draft and becomes part of the conversation.
+      await sessionsApi.sendMessage(
+        session.id,
+        text,
+        null,
+        null,
+        null,
+        claimed.map((a) => a.id),
+      );
       setInput("");
       panelSetCollapsed(false);
       navigate(`/conversation/${session.id}`, {
         state: { revealSessionContext: true },
       });
     } catch {
+      // The turn did not go out; the files are still this composer's.
+      restageAttachments(claimed);
       navigate("/conversation/new");
     } finally {
       setSending(false);
@@ -344,11 +378,9 @@ export const ConversationsHomePage = () => {
   const handleSend = () => {
     const text = input.trim();
     if (!text || sending) return;
-    // Block on unfinished parsing — let the user wait or submit raw.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // An unfinished parse no longer stops the person: the turn binds the
+    // attachment either way and ships ``source_path`` if the extract is not
+    // ready. See ProjectDetailPage for the full rationale.
     void performSend();
   };
 
@@ -541,15 +573,26 @@ export const ConversationsHomePage = () => {
                 setSelectedPermissionMode(mode);
                 setComposerTouched(true);
               }}
+              sessionMode={selectedSessionMode}
+              planModeAvailable={supportsPlanMode(selectedRuntimeId)}
+              onSessionModeChange={(nextMode) => {
+                setSelectedSessionMode(nextMode);
+                // A session may already exist (attach-on-upload mints it
+                // before the first send) — reconcile it immediately.
+                if (sessionId) {
+                  void sessionsApi.updateMode(sessionId, nextMode).catch(() => {
+                    /* non-fatal */
+                  });
+                }
+              }}
               // ADR-006: the first attach mints the session, freezing
               // model/runtime — lock the pickers once that happens.
               modelLocked={sessionId != null}
               uploadOnAttach
               existingAttachmentCount={
-                stagedAttachments.filter((a) => !a.consumed_at).length
+                stagedAttachments.length
               }
               pinnedAttachments={stagedAttachments
-                .filter((a) => !a.consumed_at)
                 .map((a) => ({
                   id: a.id,
                   name: a.filename,
@@ -559,10 +602,10 @@ export const ConversationsHomePage = () => {
                 }))}
               onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
               onLocalUpload={(files) =>
-                void attachLocalFiles(files, ensureSession)
+                void attachLocalFiles(files)
               }
               onFileDrop={(files) =>
-                void attachLocalFiles(files, ensureSession)
+                void attachLocalFiles(files)
               }
               sending={sending}
               autoFocus
@@ -600,14 +643,7 @@ export const ConversationsHomePage = () => {
                 />
               }
             />
-            <AttachmentParsingDialog
-              open={parsingConfirmOpen}
-              onConfirm={() => {
-                setParsingConfirmOpen(false);
-                void performSend();
-              }}
-              onCancel={() => setParsingConfirmOpen(false)}
-            />
+
           </div>
         </div>
       </div>

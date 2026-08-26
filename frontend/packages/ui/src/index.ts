@@ -116,6 +116,7 @@ export * from "./components/skill/SkillSubmissionCard";
 export * from "./components/agent/AgentProposalCard";
 export * from "./components/automation/AutomationToolCard";
 export * from "./components/automation/AutomationProposalCard";
+export * from "./components/playbooks/PlaybookOperationCard";
 export * from "./components/system/SystemLogList";
 export * from "./components/system/SystemLogToolbar";
 export * from "./components/system/SystemStatusCard";

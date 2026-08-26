@@ -8,6 +8,8 @@ and neither seam may weaken an authorization the service already makes.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -97,16 +99,18 @@ def _svc(db, runtime):
 # ── dispatch ─────────────────────────────────────────────────────────────
 
 
-def test_default_dispatcher_declines():
+@pytest.mark.asyncio
+async def test_default_dispatcher_declines():
     """Declining is what keeps the in-process thread the OSS behavior."""
-    assert NoopReindexDispatcher().dispatch("u1", ["d1"], "t1") is False
+    assert await NoopReindexDispatcher().dispatch("u1", ["d1"], "t1") is False
 
 
-def test_a_bound_dispatcher_takes_the_documents(monkeypatch):
+@pytest.mark.asyncio
+async def test_a_bound_dispatcher_takes_the_documents(monkeypatch):
     taken: list[tuple[str, list[str], str]] = []
 
     class _Dispatcher:
-        def dispatch(self, user_id, doc_ids, task_id):  # type: ignore[no-untyped-def]
+        async def dispatch(self, user_id, doc_ids, task_id):  # type: ignore[no-untyped-def]
             taken.append((user_id, list(doc_ids), task_id))
             return True
 
@@ -114,7 +118,7 @@ def test_a_bound_dispatcher_takes_the_documents(monkeypatch):
     spawned: list[int] = []
     monkeypatch.setattr("threading.Thread", lambda *a, **k: spawned.append(1) or _NeverStart())
 
-    DocumentLibraryService._schedule_background_reindex(
+    await DocumentLibraryService._schedule_background_reindex(
         _svc(None, _Runtime()), ["d1", "d2"], "task-1", "owner-9"
     )
 
@@ -122,16 +126,46 @@ def test_a_bound_dispatcher_takes_the_documents(monkeypatch):
     assert spawned == [], "a handled dispatch must not also spawn the thread"
 
 
+@pytest.mark.asyncio
+async def test_a_dispatcher_is_awaited_before_it_is_believed(monkeypatch):
+    """The publish must have HAPPENED before the caller stands down.
+
+    A dispatcher that only scheduled its send and answered optimistically was
+    believed, and the ``return`` that follows is not revocable — so when the
+    send was later cancelled with the loop carrying it, the documents sat
+    queued with nobody coming. This pins the ordering that makes the answer
+    worth anything: whatever the dispatcher does, it is complete by the time
+    ``True`` reaches the caller.
+    """
+    published: list[str] = []
+
+    class _SlowButHonest:
+        async def dispatch(self, user_id, doc_ids, task_id):  # type: ignore[no-untyped-def]
+            await asyncio.sleep(0)  # a real one is a round trip
+            published.extend(doc_ids)
+            return True
+
+    ext.docs_reindex_dispatcher = _SlowButHonest()
+    monkeypatch.setattr("threading.Thread", lambda *a, **k: _NeverStart())
+
+    await DocumentLibraryService._schedule_background_reindex(
+        _svc(None, _Runtime()), ["d1", "d2"], "task-1", "owner-9"
+    )
+
+    assert published == ["d1", "d2"], "the caller stood down before the publish landed"
+
+
 class _NeverStart:
     def start(self) -> None:  # pragma: no cover - guard, must not run
         raise AssertionError("thread started despite a handled dispatch")
 
 
-def test_a_failing_dispatcher_falls_back_instead_of_stranding(monkeypatch):
+@pytest.mark.asyncio
+async def test_a_failing_dispatcher_falls_back_instead_of_stranding(monkeypatch):
     """Documents left neither dispatched nor parsed would sit queued forever."""
 
     class _Broken:
-        def dispatch(self, user_id, doc_ids, task_id):  # type: ignore[no-untyped-def]
+        async def dispatch(self, user_id, doc_ids, task_id):  # type: ignore[no-untyped-def]
             raise RuntimeError("queue unreachable")
 
     ext.docs_reindex_dispatcher = _Broken()
@@ -146,7 +180,7 @@ def test_a_failing_dispatcher_falls_back_instead_of_stranding(monkeypatch):
 
     monkeypatch.setattr("threading.Thread", _Thread)
 
-    DocumentLibraryService._schedule_background_reindex(
+    await DocumentLibraryService._schedule_background_reindex(
         _svc(None, _Runtime()), ["d1"], "task-1", "owner-9"
     )
 

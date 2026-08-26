@@ -8,13 +8,18 @@ from src.core.citation import (
     EvidenceRegistry,
     compact_citation_tool_content,
     private_citation_tool_content,
+    rebase_collection_projections,
 )
 from src.core.mcp_source_metadata import (
+    MCP_LEGACY_SOURCE_METADATA_KEY,
+    MCP_SOURCE_CONTENT_TRANSPORT_PREFIX,
     MCP_SOURCE_METADATA_KEY,
     MCP_SOURCE_TRANSPORT_KEY,
     adapt_mcp_source_result,
+    unwrap_mcp_source_content_transport,
     unwrap_mcp_source_transport,
     wrap_mcp_result_metadata_for_transport,
+    wrap_mcp_result_metadata_in_content_for_transport,
 )
 
 
@@ -74,6 +79,163 @@ def test_transport_preserves_meta_and_restores_original_structured_content() -> 
     assert actual_descriptor == descriptor
     assert actual_structured == structured
     assert restored == {"structured_content": structured, "existing": True}
+
+
+def test_transport_accepts_legacy_source_metadata_key() -> None:
+    structured = {"data": [{"ticker": "600519", "revenue": 1}]}
+    descriptor = _descriptor(structured, tool_name="income_statement", resources=[])
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={MCP_LEGACY_SOURCE_METADATA_KEY: descriptor},
+    )
+
+    wrapped = wrap_mcp_result_metadata_for_transport(result, server_name="reportify")
+
+    assert wrapped.structuredContent is not None
+    artifact = {"structured_content": wrapped.structuredContent}
+    actual_descriptor, actual_structured, _ = unwrap_mcp_source_transport(artifact)
+    assert actual_descriptor == descriptor
+    assert actual_structured == structured
+
+
+def test_content_transport_survives_claude_sdk_result_flattening() -> None:
+    structured = {"data": [{"ticker": "600519", "revenue": 1}]}
+    descriptor = _descriptor(structured, tool_name="income_statement", resources=[])
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+    )
+
+    wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+        result,
+        server_name="reportify",
+    )
+    flattened = [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+
+    actual_descriptor, actual_structured, restored = unwrap_mcp_source_content_transport(flattened)
+    assert actual_descriptor == descriptor
+    assert actual_structured == structured
+    assert restored == [{"type": "text", "text": json.dumps(structured)}]
+    assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(restored)
+
+
+def test_content_transport_does_not_mark_failed_mcp_result() -> None:
+    structured = {"error": {"code": "invalid_argument"}}
+    descriptor = _descriptor(structured, tool_name="arbitrary_tool", resources=[])
+    result = CallToolResult(
+        isError=True,
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+    )
+
+    wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+        result,
+        server_name="arbitrary-server",
+    )
+
+    assert wrapped is result
+    assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(
+        [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+    )
+
+
+def test_hash_accepts_semantically_identical_json_compatibility_text() -> None:
+    # Some cross-language JSON encoders preserve a decimal scale in the MCP
+    # compatibility text even though structuredContent has already been
+    # decoded into ordinary runtime numbers.  Bind the hash to that text only
+    # after proving that both carriers represent the same JSON value.
+    structured = {"data": {"items": [{"value": 1.0}]}}
+    compatibility_text = '{"data":{"items":[{"value":1.0000}]}}'
+    digest = hashlib.sha256(compatibility_text.encode()).hexdigest()
+    descriptor = _descriptor(
+        structured,
+        tool_name="arbitrary_tool",
+        resources=[
+            {
+                "resourceId": "arbitrary-data",
+                "kind": "structured-collection",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "itemsPointer": "/data/items",
+                "dataset": {"id": "arbitrary.dataset", "revision": "v1"},
+                "identity": {"fields": ["/value"]},
+                "addressing": {
+                    "mode": "json-pointer",
+                    "allowedPathRoots": ["/data/items"],
+                },
+            }
+        ],
+    )
+    descriptor["result"]["hash"]["value"] = digest
+
+    adapted = adapt_mcp_source_result(
+        [{"type": "text", "text": compatibility_text}],
+        tool_name="mcp__any-server__arbitrary_tool",
+        descriptor=descriptor,
+        structured_content=structured,
+    )
+
+    assert adapted is not None
+    assert adapted.evidence_count == 1
+
+
+def test_hash_rejects_compatibility_text_that_differs_from_structured_content() -> None:
+    structured = {"data": {"items": [{"value": 2.0}]}}
+    compatibility_text = '{"data":{"items":[{"value":1.0000}]}}'
+    descriptor = _descriptor(
+        structured,
+        tool_name="arbitrary_tool",
+        resources=[
+            {
+                "resourceId": "arbitrary-data",
+                "kind": "operational",
+                "authority": "non-citable",
+                "rootPointer": "",
+            }
+        ],
+    )
+    descriptor["result"]["hash"]["value"] = hashlib.sha256(compatibility_text.encode()).hexdigest()
+
+    assert (
+        adapt_mcp_source_result(
+            [{"type": "text", "text": compatibility_text}],
+            tool_name="mcp__any-server__arbitrary_tool",
+            descriptor=descriptor,
+            structured_content=structured,
+        )
+        is None
+    )
+
+
+def test_conflicting_current_and_legacy_descriptors_fail_closed() -> None:
+    structured = {"data": [{"ticker": "600519", "revenue": 1}]}
+    current = _descriptor(structured, tool_name="income_statement", resources=[])
+    legacy = json.loads(json.dumps(current))
+    legacy["provider"]["id"] = "different"
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={
+            MCP_SOURCE_METADATA_KEY: current,
+            MCP_LEGACY_SOURCE_METADATA_KEY: legacy,
+        },
+    )
+
+    wrapped = wrap_mcp_result_metadata_for_transport(result, server_name="reportify")
+
+    assert wrapped is result
+    wire = {
+        "content": [{"type": "text", "text": json.dumps(structured)}],
+        "structuredContent": structured,
+        "_meta": {
+            MCP_SOURCE_METADATA_KEY: current,
+            MCP_LEGACY_SOURCE_METADATA_KEY: legacy,
+        },
+    }
+    assert adapt_mcp_source_result(wire, tool_name="income_statement") is None
 
 
 def test_discovery_metadata_stays_non_citable_retrieval_input() -> None:
@@ -766,10 +928,14 @@ def test_large_structured_result_registers_one_collection_and_materializes_one_a
     assert collection["kind"] == "structured-evidence-collection"
     assert "T0999" not in json.dumps(collection, ensure_ascii=False)
 
-    compacted = compact_citation_tool_content(adapted.model_content)
-    legacy_private = private_citation_tool_content(adapted.model_content)
+    rebased = rebase_collection_projections(adapted.model_content)
+    assert rebased["_valuz_evidence"][0]["collectionHandle"] == collection["collectionHandle"]
+    assert rebased["_valuz_evidence"][0]["contentHash"] == collection["contentHash"]
+
+    compacted = compact_citation_tool_content(rebased)
+    legacy_private = private_citation_tool_content(rebased)
     private = private_citation_tool_content(
-        adapted.model_content,
+        rebased,
         model_content=compacted,
     )
     assert compacted is not None and private is not None
@@ -804,6 +970,93 @@ def test_large_structured_result_registers_one_collection_and_materializes_one_a
         == 0
     )
     assert rejected.rejected_count == 1
+
+
+def test_structured_provenance_maps_original_source_without_replacing_delivery_provider() -> None:
+    payload = {
+        "data": {
+            "items": [
+                {
+                    "symbol": "US:AAPL",
+                    "metric": "revenue",
+                    "value": 100,
+                    "source_original": "SEC EDGAR",
+                    "source_url": "https://www.sec.gov/Archives/example.htm",
+                    "accession_number": "0000320193-25-000079",
+                }
+            ]
+        },
+        "meta": {"provenance": {"data_as_of": "2025-09-27"}},
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="get_company_kpis",
+        resources=[
+            {
+                "resourceId": "company-kpis",
+                "kind": "structured-collection",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "itemsPointer": "/data/items",
+                "dataset": {"id": "valuz-data.company-kpis", "revision": "v1"},
+                "identity": {"fields": ["/symbol", "/metric"]},
+                "semantics": {
+                    "entity": {"symbol": "/symbol"},
+                    "metric": {"name": "/metric"},
+                },
+                "addressing": {
+                    "mode": "json-pointer",
+                    "allowedPathRoots": ["/data/items"],
+                },
+                "provenance": {
+                    "origin": {
+                        "status": "available",
+                        "scope": "item",
+                        "mapping": {
+                            "sourceName": "/source_original",
+                            "sourceUrl": "/source_url",
+                            "documentId": "/accession_number",
+                        },
+                    },
+                    "temporal": {"dataAsOf": "/meta/provenance/data_as_of"},
+                    "derivation": {
+                        "class": "extracted",
+                        "methodRef": {
+                            "id": "valuz.company-kpi-normalization",
+                            "revision": "v1",
+                        },
+                    },
+                },
+            }
+        ],
+    )
+    descriptor["provider"] = {
+        "id": "valuz-data",
+        "name": "Valuz Data",
+        "adapterRevision": "valuz-data-source-v1",
+    }
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="get_company_kpis",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None and adapted.citable
+    compacted = compact_citation_tool_content(adapted.model_content)
+    private = private_citation_tool_content(adapted.model_content, model_content=compacted)
+    assert compacted is not None and private is not None
+    registry = EvidenceRegistry()
+    assert registry.register_tool_projection(compacted, private, trusted_private=True) == 1
+    handle = compacted["_valuz_evidence_hint"]["collectionHandle"]
+    record = registry.materialize_reference(handle, "#/data/items/0/value")
+    assert record is not None
+    assert record.source["providerId"] == "valuz-data"
+    assert record.source["organization"] == "SEC EDGAR"
+    assert record.source["canonicalUrl"] == "https://www.sec.gov/Archives/example.htm"
+    assert record.source["documentId"] == "0000320193-25-000079"
+    assert record.evidence["asOf"] == "2025-09-27"
 
 
 def test_tampered_business_result_rejects_metadata() -> None:

@@ -32,13 +32,31 @@ from typing import Protocol
 class DocsReindexDispatcher(Protocol):
     """Hands queued documents to whatever parses them."""
 
-    def dispatch(self, user_id: str, doc_ids: list[str], task_id: str) -> bool:
+    async def dispatch(self, user_id: str, doc_ids: list[str], task_id: str) -> bool:
         """Take ownership of parsing ``doc_ids``.
 
         Returns whether this dispatcher handled them. ``False`` leaves the
         caller to fall back to the in-process default, so a dispatcher that
         cannot reach its queue degrades to working-but-local rather than
         dropping the documents on the floor.
+
+        **Awaitable because handing work to a queue is a round trip, and the
+        answer is only worth anything after it.** This used to be synchronous,
+        which meant a dispatcher publishing to a broker had to say "mine"
+        before it knew, and the caller's ``return`` on that answer is not
+        revocable. One did exactly that — it scheduled the publish on whatever
+        loop was running and answered optimistically. The loop it got was the
+        throwaway one ``asyncio.run`` opens for the rescan thread, which
+        cancels what is still pending and closes the moment the rescan returns,
+        so the publish never completed. Measured on a real library: four
+        documents, four dispatches claimed, zero messages sent, and every one
+        of them parsed six to nine minutes later by the recovery sweep that
+        exists for lost messages. The recovery path was carrying all of the
+        traffic and nothing said so.
+
+        So: do the work, then answer. An implementation that cannot reach its
+        queue must return ``False`` — that is what makes the fallback below it
+        mean anything.
         """
         ...
 
@@ -46,7 +64,7 @@ class DocsReindexDispatcher(Protocol):
 class NoopReindexDispatcher:
     """OSS default: decline, leaving the in-process thread to do the work."""
 
-    def dispatch(self, user_id: str, doc_ids: list[str], task_id: str) -> bool:
+    async def dispatch(self, user_id: str, doc_ids: list[str], task_id: str) -> bool:
         return False
 
 

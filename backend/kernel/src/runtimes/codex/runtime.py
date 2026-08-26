@@ -33,6 +33,7 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -41,6 +42,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
 from typing import Any, Literal, cast
+from urllib.parse import quote_plus
 
 from openai_codex import (
     AsyncCodex,
@@ -70,7 +72,6 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
 from src.core.types import (
-    BudgetExhausted,
     EndTurn,
     Error,
     McpStdioServerConfig,
@@ -1014,6 +1015,7 @@ class CodexRuntime:
             ExecContext(
                 workspace=self.workspace_root,
                 session_id=session.id,
+                user_id=getattr(session, "user_id", "") or "",
             ),
         )
         self._registered_session_id = session.id
@@ -1522,6 +1524,14 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
 _CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
+
+# Header names (lowercase) whose values are identifiers, not credentials.
+# They stay on the plain ``http_headers`` override: the session id
+# legitimately recurs elsewhere in the overrides (the kernel toolkit URL
+# embeds it), so externalizing it as a secret makes the residue guard
+# refuse to launch on that legal recurrence (field bug: PTC exposing
+# ``harness_toolkit`` made the kernel toolkit URL appear for the first time).
+_CODEX_NON_SECRET_HTTP_HEADERS = frozenset({"x-valuz-session-id"})
 _CODEX_OPENAI_API_KEY = "OPENAI_API_KEY"
 _CODEX_SHELL_APPLY_SECRET_FILTERS = "shell_environment_policy.ignore_default_excludes=false"
 _CODEX_SHELL_CORE_INHERIT = 'shell_environment_policy.inherit="core"'
@@ -1572,6 +1582,9 @@ def _externalize_mcp_secrets(
     remove: set[str] = set()
     add: list[str] = []
     secret_env: dict[str, str] = {}
+    # secret_env key -> redacted human origin ("http server 'x' header 'y'"),
+    # for the residue diagnostics below. Never carries values.
+    origin: dict[str, str] = {}
     stdio_secret_values: dict[str, tuple[str, str]] = {}
     nonce = uuid.uuid4().hex
     inherited_stdio_names = {
@@ -1606,6 +1619,7 @@ def _externalize_mcp_secrets(
                     )
                 stdio_secret_values[upper_key] = (key, value)
                 secret_env[key] = value
+                origin[key] = f"stdio server {cfg.name!r} env {key!r}"
                 if key not in env_vars:
                     env_vars.append(key)
             if env_vars:
@@ -1613,9 +1627,12 @@ def _externalize_mcp_secrets(
             continue
 
         for header_index, (key, value) in enumerate(cfg.headers.items()):
+            if key.lower() in _CODEX_NON_SECRET_HTTP_HEADERS:
+                continue  # identifier header — keep the plain http_headers line
             remove.add(f"mcp_servers.{cfg.name}.http_headers.{_toml_key(key)}={_toml_quote(value)}")
             env_name = f"{_CODEX_MCP_SECRET_ENV_PREFIX}{nonce}_{server_index}_{header_index}"
             secret_env[env_name] = value
+            origin[env_name] = f"http server {cfg.name!r} header {key!r}"
             add.append(
                 f"mcp_servers.{cfg.name}.env_http_headers.{_toml_key(key)}={_toml_quote(env_name)}"
             )
@@ -1644,17 +1661,57 @@ def _externalize_mcp_secrets(
         # Exact filters plus disabled login-shell startup close both paths.
         for env_name in secret_env:
             policy = (
-                f"shell_environment_policy.filters.{_toml_key(env_name)}="
-                f"{_toml_quote('exclude')}"
+                f"shell_environment_policy.filters.{_toml_key(env_name)}={_toml_quote('exclude')}"
             )
             if policy not in overrides:
                 add.append(policy)
     safe_overrides = tuple(value for value in overrides if value not in remove) + tuple(add)
-    serialized = "\n".join(safe_overrides)
-    leaked = [value for value in secret_env.values() if value and value in serialized]
-    if leaked:
-        raise RuntimeError("Refusing to launch Codex because an MCP secret remained in argv")
+    residues = _find_secret_residues(safe_overrides, secret_env, origin)
+    if residues:
+        detail = "; ".join(residues)
+        logger.error("codex MCP secret residue in argv overrides: %s", detail)
+        raise RuntimeError(
+            f"Refusing to launch Codex because an MCP secret remained in argv — {detail}"
+        )
     return safe_overrides, secret_env
+
+
+def _find_secret_residues(
+    safe_overrides: tuple[str, ...],
+    secret_env: dict[str, str],
+    origin: dict[str, str],
+) -> list[str]:
+    """Diagnose externalized values that still appear in the override text.
+
+    Matches VALUE PARTS only (the text after each line's first ``=``): a value
+    that merely collides with a dotted key path — a server name,
+    ``http_headers.``, a policy key — no longer trips the guard. The previous
+    blind full-text substring check produced exactly that class of
+    undebuggable false positive, because every header value (secret or not)
+    is externalized. Each value is probed in the three shapes it could
+    survive in: raw (a removal miss), TOML-escaped (as ``_toml_quote`` writes
+    it into strings and arrays), and urlencoded (as ``merge_params_into_url``
+    embeds query params into ``url``).
+
+    Returns one redacted description per residue — origin, env name, length,
+    and a SHA-256 prefix for cross-checking against stored credentials; never
+    the value itself.
+    """
+    residues: list[str] = []
+    value_parts = [(line.partition("=")[0], line.partition("=")[2]) for line in safe_overrides]
+    for env_name, value in secret_env.items():
+        if not value:
+            continue
+        probes = {value, _toml_quote(value)[1:-1], quote_plus(value)}
+        matched = sorted(key for key, part in value_parts if any(p in part for p in probes))
+        if matched:
+            digest = hashlib.sha256(value.encode()).hexdigest()[:8]
+            residues.append(
+                f"{origin.get(env_name, 'unknown origin')} (env {env_name}, "
+                f"len={len(value)}, sha256={digest}) matched override value(s): "
+                + ", ".join(matched)
+            )
+    return residues
 
 
 def _build_config_overrides(
@@ -1899,9 +1956,7 @@ def _build_config_overrides(
         if _CODEX_DISABLE_LOGIN_SHELL not in overrides:
             overrides.append(_CODEX_DISABLE_LOGIN_SHELL)
         provider_env_key = (
-            _HARNESS_PROVIDER_ENV_KEY
-            if effective_base_url is not None
-            else _CODEX_OPENAI_API_KEY
+            _HARNESS_PROVIDER_ENV_KEY if effective_base_url is not None else _CODEX_OPENAI_API_KEY
         )
         overrides.append(
             f"shell_environment_policy.filters.{_toml_key(provider_env_key)}="
@@ -2050,9 +2105,21 @@ def _stop_reason_from_turn(turn_done: TurnCompletedNotification) -> StopReason:
             retry_status="exhausted",
             message=err.message if err is not None else "turn failed",
         )
-    # ``in_progress`` should not appear on a turn/completed notification, but
-    # surface as a budget-exhausted-ish marker rather than silently.
-    return BudgetExhausted(reason="max_turns")
+    # ``in_progress`` should not appear on a turn/COMPLETED notification —
+    # codex is contradicting itself. Surface it rather than swallowing it,
+    # but NOT as ``BudgetExhausted``: a budget stop is a legible, expected
+    # outcome that the UI now explains in so many words ("this turn hit the
+    # runtime's maximum step count"), and telling the user that about a
+    # protocol inconsistency is a confident lie. It reads as an anomaly,
+    # which is what it is.
+    return Error(
+        category="execution_error",
+        retry_status="exhausted",
+        # ``status.value``, not ``status`` — this string lands in the user's
+        # error card, and ``repr`` of the enum would leak
+        # ``<TurnStatus.in_progress: 'inProgress'>`` into it.
+        message=f"codex reported a completed turn still in status {status.value!r}",
+    )
 
 
 _BREAKDOWN_FIELDS = (

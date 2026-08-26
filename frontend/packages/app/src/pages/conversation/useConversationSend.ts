@@ -20,8 +20,10 @@ import {
   type SessionMessageHostRef,
   type SkillView,
   type UseSessionAttachmentsResult,
+  type UseStagedAttachmentsResult,
+  type SessionAttachmentItem,
 } from "@valuz/core";
-import type { ConversationTurn } from "@valuz/shared";
+import { supportsPlanMode, type ConversationTurn } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import type { I18nKey } from "@valuz/shared";
 import { resolveBrainOverride } from "../conversation-brain-override";
@@ -51,6 +53,7 @@ type ConversationSendParams = {
   selectedRuntimeId: RuntimeId | null;
   selectedEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   selectedPermissionMode: "default" | "auto_review" | "full_access";
+  selectedSessionMode: "default" | "plan" | "goal";
   selectedMcpSlugs: string[];
   selectedComposerSkill: SkillView | null;
   /** ADR — client-declared host location of this conversation panel (e.g.
@@ -67,10 +70,13 @@ type ConversationSendParams = {
   sessionAttachments: UseSessionAttachmentsResult["attachments"];
   sidebarSessions: SessionListItem[];
   resolveExecTarget: () => ExecutionTarget | undefined;
-  attachKbDocs: UseSessionAttachmentsResult["attachKbDocs"];
-  attachLocalFiles: UseSessionAttachmentsResult["attachLocalFiles"];
-  removeSessionAttachmentRow: UseSessionAttachmentsResult["remove"];
-  markPendingConsumed: UseSessionAttachmentsResult["markPendingConsumed"];
+  attachKbDocs: UseStagedAttachmentsResult["attachKbDocs"];
+  attachLocalFiles: UseStagedAttachmentsResult["attachLocalFiles"];
+  removeSessionAttachmentRow: (attachmentId: string) => Promise<void>;
+  claimStagedAttachments: () => SessionAttachmentItem[];
+  restageAttachments: (rows: SessionAttachmentItem[]) => void;
+  settleAttachments: (rows: Array<{ id: string }>) => void;
+  refreshBoundAttachments: (sessionId?: string) => Promise<void>;
   refreshEvents: (sessionId: string | null) => Promise<void>;
   refreshActiveSession: (sessionId: string | null) => Promise<void>;
   fetchSidebarSessions: () => Promise<void>;
@@ -158,6 +164,7 @@ export function useConversationSend({
   selectedRuntimeId,
   selectedEffort,
   selectedPermissionMode,
+  selectedSessionMode,
   selectedMcpSlugs,
   selectedComposerSkill,
   hostRef,
@@ -171,7 +178,10 @@ export function useConversationSend({
   attachKbDocs,
   attachLocalFiles,
   removeSessionAttachmentRow,
-  markPendingConsumed,
+  claimStagedAttachments,
+  restageAttachments,
+  settleAttachments,
+  refreshBoundAttachments,
   refreshEvents,
   refreshActiveSession,
   fetchSidebarSessions,
@@ -315,6 +325,22 @@ export function useConversationSend({
           }
         }
       }
+      // Session working mode: the composer's plan toggle is staged
+      // locally while no session exists (create carries no ``mode``
+      // field by design — one kernel-validated write path). Apply it
+      // BEFORE the first message goes out so the first turn's runtime
+      // reconcile already enters plan mode. Await matters: a fire-and-
+      // forget PATCH could lose the race against sendMessage.
+      if (
+        selectedSessionMode === "plan" &&
+        supportsPlanMode(created.runtime_provider)
+      ) {
+        try {
+          created = await sessionsApi.updateMode(created.id, "plan");
+        } catch {
+          /* non-fatal — the session simply stays in default mode */
+        }
+      }
       // 10-new-conversation-guidance slice 3: remember which agent this 临时对话
       // used so the next new conversation pre-selects it.
       if (isChat && selectedAgentSlug) setLastTempAgent(selectedAgentSlug);
@@ -414,6 +440,9 @@ export function useConversationSend({
       // Project-detail flow has no equivalent bug because its
       // ``handleSend`` is a plain function (no closure cache).
       selectedPermissionMode,
+      // Same closure-staleness trap as permission mode: the plan toggle
+      // is read at creation time to PATCH the fresh session.
+      selectedSessionMode,
       selectedEffort,
       selectedAgentSlug,
       // Gates ``brainOverride``: a bound agent owns the brain until the user
@@ -447,7 +476,7 @@ export function useConversationSend({
       // async parse status — so the composer chips + panel show progress.
       try {
         // navigate:false — stay on /conversation/new while attaching.
-        await attachKbDocs(ids, () => ensureSession(false));
+        await attachKbDocs(ids);
       } catch {
         toast.error(t("common.failed" as Parameters<typeof t>[0]));
       }
@@ -461,7 +490,7 @@ export function useConversationSend({
   const handleLocalFilesAttach = useCallback(
     (files: File[]) => {
       // navigate:false — stay on /conversation/new while attaching.
-      void attachLocalFiles(files, () => ensureSession(false));
+      void attachLocalFiles(files);
     },
     [attachLocalFiles, ensureSession],
   );
@@ -534,11 +563,20 @@ export function useConversationSend({
     // even while ensureSession + uploads + POST /messages are still
     // round-tripping. Without this the page sits idle for ~500-3000ms
     // depending on session creation + Claude SDK warm-up.
-    // Attachments are already uploaded (on attach); the optimistic bubble
-    // lists this turn's pending rows so chips show instantly.
-    const queuedAttachmentMeta = sessionAttachments
-      .filter((a) => !a.consumed_at)
-      .map((a) => ({ name: a.filename, size: a.size_bytes }));
+    // Held across the awaits below so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
+    // Claim here, at the top, and let everything downstream use the result.
+    //
+    // Both the bubble's chips and the ids the turn binds come from this one
+    // answer, so they cannot disagree. Deriving the chips from a render value
+    // instead is what left the message with no attachment on the draft path:
+    // the page had only just mounted, its staging read had not resolved, and
+    // the list was empty at exactly the moment this ran.
+    claimed = claimStagedAttachments();
+    const queuedAttachmentMeta = claimed.map((a) => ({
+      name: a.filename,
+      size: a.size_bytes,
+    }));
     pinNextTurnToTopRef.current = true;
     keepCurrentTurnAtTopRef.current = true;
     const sentAt = Date.now();
@@ -621,8 +659,20 @@ export function useConversationSend({
         selectedProviderId,
         selectedModelId,
         hostRef,
+        claimed.map((a) => a.id),
       );
       if (!detail?.id) throw new Error("Failed to send message.");
+      // The bind is durable now, so the conversation's own list can see it.
+      // Read here rather than off a busy transition: on the handoff path this
+      // page mounts with ``sending`` already true, so a false→true edge never
+      // happens and a refresh hung off one never runs.
+      //
+      // Let the rows go only once that read has landed. Settling first would
+      // reopen the gap this closes — for the length of the GET the panel would
+      // again hold neither the in-flight copy nor the bound one.
+      void refreshBoundAttachments(session.id).finally(() =>
+        settleAttachments(claimed),
+      );
       // The desktop sidebar's per-project session lists are derived from
       // ``/v1/runs`` (ProjectLayoutBase), NOT from the session store the
       // optimistic updates below write to — so without a poke here a brand-new
@@ -630,12 +680,6 @@ export function useConversationSend({
       // Force the shared poller now; the resulting ``liveRunIds`` transition
       // also triggers the layout's finished-runs refresh.
       refreshRunningRuns();
-      // Attachments are per-turn: the backend ships this turn's pending
-      // set with the message, then stamps those rows ``consumed_at`` once
-      // the turn runs. Optimistically mark them consumed so they drop out
-      // of the composer's staging chips immediately (they stay in the
-      // panel's "uploaded files" history).
-      markPendingConsumed();
       // ``send_message`` kicks the turn off in the BACKGROUND and returns
       // immediately — its status snapshot is stale-prone in BOTH directions:
       //  (a) taken before the kernel flips to "running" inside ``run_turn``
@@ -684,6 +728,8 @@ export function useConversationSend({
       );
       setSelectedSessionId(detail.id);
     } catch (cause) {
+      // The turn did not go out; the files are still the composer's.
+      restageAttachments(claimed);
       // The backend may attach an i18n key to a business error (structured
       // ``detail.key``) and let the client render it — e.g. a commercial
       // billing rejection. Prefer that key; otherwise show the raw message.

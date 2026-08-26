@@ -62,6 +62,13 @@ class SessionListItem:
     # Surfaced on the list so the composer can render the EffortSelector's
     # current value without a second fetch.
     effort: str | None = None
+    # Session working mode (kernel ``Session.mode``,
+    # docs/design/session-modes.md): ``default`` | ``plan`` | ``goal``.
+    # Surfaced on the list so the composer's Plan chip reflects the
+    # session's current mode without a second fetch. Mutable via
+    # ``PATCH /v1/sessions/{id}/mode``; the runtime can also exit a mode
+    # on its own (``session.mode_changed{by:"runtime"}``).
+    mode: str = "default"
     # A ``run_in_background`` task is still executing in this session. Same
     # fact and same source as ``RunSummary.background`` (both read
     # ``kernel_client.bg_busy_session_ids()``), so the conversation header,

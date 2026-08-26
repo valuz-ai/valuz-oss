@@ -1,7 +1,7 @@
 """Validate MCP result source metadata and project it into Valuz Evidence.
 
 MCP servers keep business data in ``content`` / ``structuredContent`` and may
-describe its source semantics in ``_meta["cn.valuz/citation-source"]``.  This
+describe its source semantics in ``_meta["dev.valuz/source-metadata"]``.  This
 module is the trust-boundary adapter: it verifies the descriptor against the
 exact result snapshot, then creates Valuz-private direct Evidence or one lazy
 structured Collection.  External MCP servers never allocate Valuz handles.
@@ -19,8 +19,11 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
-MCP_SOURCE_METADATA_KEY = "cn.valuz/citation-source"
+MCP_SOURCE_METADATA_KEY = "dev.valuz/source-metadata"
+MCP_LEGACY_SOURCE_METADATA_KEY = "cn.valuz/citation-source"
 MCP_SOURCE_TRANSPORT_KEY = "_valuz_mcp_source_transport_v1"
+MCP_SOURCE_CONTENT_TRANSPORT_KEY = "_valuz_mcp_source_content_transport_v1"
+MCP_SOURCE_CONTENT_TRANSPORT_PREFIX = "VALUZ_INTERNAL_MCP_SOURCE_V1:"
 
 _MAX_DESCRIPTOR_CHARS = 256_000
 _MAX_RESOURCES = 64
@@ -35,6 +38,15 @@ _SUPPORTED_RESOURCE_KINDS = {
     "document-summary",
     "structured-collection",
     "operational",
+}
+_PROVENANCE_ORIGIN_STATUSES = {"available", "not-provided", "mixed"}
+_PROVENANCE_ORIGIN_SCOPES = {"resource", "item"}
+_PROVENANCE_DERIVATION_CLASSES = {
+    "direct",
+    "normalized",
+    "extracted",
+    "aggregated",
+    "calculated",
 }
 
 
@@ -77,7 +89,8 @@ def wrap_mcp_result_metadata_for_transport(
     """
 
     meta = getattr(result, "meta", None)
-    if not isinstance(meta, Mapping) or MCP_SOURCE_METADATA_KEY not in meta:
+    descriptor = _descriptor_from_meta(meta)
+    if descriptor is None:
         return result
     model_copy = getattr(result, "model_copy", None)
     if not callable(model_copy):
@@ -86,12 +99,174 @@ def wrap_mcp_result_metadata_for_transport(
     transport = {
         MCP_SOURCE_TRANSPORT_KEY: {
             "serverName": server_name,
-            "descriptor": copy.deepcopy(meta[MCP_SOURCE_METADATA_KEY]),
+            "descriptor": copy.deepcopy(descriptor),
             "hasStructuredContent": structured_content is not None,
             "structuredContent": copy.deepcopy(structured_content),
         }
     }
     return model_copy(update={"structuredContent": transport})
+
+
+def wrap_mcp_result_metadata_in_content_for_transport(
+    result: Any,
+    *,
+    server_name: str,
+) -> Any:
+    """Preserve MCP source metadata through content-only runtime bridges.
+
+    Claude's MCP bridge forwards only ``CallToolResult.content`` to its hook
+    callbacks.  Append one internal text block containing the descriptor and
+    original structured payload before that lossy conversion.  The Claude
+    PostToolUse hook removes this block before the result reaches the model.
+    """
+
+    # Failed MCP calls cannot contribute Evidence, and Claude reports them via
+    # a failure hook that does not expose a mutable tool response.  Do not put
+    # an internal transport marker on a path where it cannot be removed.
+    if bool(getattr(result, "isError", False)):
+        return result
+    meta = getattr(result, "meta", None)
+    descriptor = _descriptor_from_meta(meta)
+    if descriptor is None:
+        return result
+    model_copy = getattr(result, "model_copy", None)
+    if not callable(model_copy):
+        return result
+    structured_content = getattr(result, "structuredContent", None)
+    transport = {
+        MCP_SOURCE_CONTENT_TRANSPORT_KEY: {
+            "serverName": server_name,
+            "descriptor": copy.deepcopy(descriptor),
+            "hasStructuredContent": structured_content is not None,
+            "structuredContent": copy.deepcopy(structured_content),
+        }
+    }
+    marker = MCP_SOURCE_CONTENT_TRANSPORT_PREFIX + json.dumps(
+        transport,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        from mcp.types import TextContent
+
+        content = list(getattr(result, "content", ()) or ())
+        content.append(TextContent(type="text", text=marker))
+    except (ImportError, TypeError, ValueError):
+        return result
+    return model_copy(update={"content": content})
+
+
+def unwrap_mcp_source_content_transport(
+    content: Any,
+) -> tuple[Any | None, Any | None, Any | None]:
+    """Remove Claude's internal content sidecar.
+
+    Returns ``(descriptor, structuredContent, restored_content)``.  A non-None
+    ``restored_content`` means an internal marker was found and removed.  A
+    duplicated marker returns no descriptor, so source adaptation fails closed
+    without leaking either marker to the model.
+    """
+
+    normalized = _json_value(content)
+    restored, transports, found = _strip_content_transport(normalized)
+    if not found:
+        return None, None, None
+    if len(transports) != 1:
+        return None, None, restored
+    transport = transports[0]
+    descriptor = transport.get("descriptor")
+    structured_content = (
+        transport.get("structuredContent") if transport.get("hasStructuredContent") else None
+    )
+    return descriptor, structured_content, restored
+
+
+def _strip_content_transport(
+    value: Any,
+) -> tuple[Any, list[Mapping[str, Any]], bool]:
+    if isinstance(value, str):
+        parsed = _decode_content_transport_marker(value)
+        if parsed is not None:
+            return "", [parsed], True
+
+        marker_boundary = f"\n{MCP_SOURCE_CONTENT_TRANSPORT_PREFIX}"
+        marker_index = value.rfind(marker_boundary)
+        if marker_index >= 0:
+            parsed = _decode_content_transport_marker(value[marker_index + 1 :])
+            if parsed is not None:
+                return value[:marker_index], [parsed], True
+
+        stripped = value.strip()
+        if stripped.startswith(("[", "{")):
+            try:
+                decoded = json.loads(stripped)
+            except (TypeError, ValueError):
+                return value, [], False
+            restored, transports, found = _strip_content_transport(decoded)
+            if found:
+                return (
+                    json.dumps(restored, ensure_ascii=False, separators=(",", ":")),
+                    transports,
+                    True,
+                )
+        return value, [], False
+
+    if isinstance(value, list):
+        restored_items: list[Any] = []
+        list_transports: list[Mapping[str, Any]] = []
+        found = False
+        for item in value:
+            marker = _content_block_transport(item)
+            if marker is not None:
+                list_transports.append(marker)
+                found = True
+                continue
+            restored_items.append(item)
+        return restored_items, list_transports, found
+
+    if isinstance(value, Mapping):
+        restored = dict(value)
+        mapping_transports: list[Mapping[str, Any]] = []
+        found = False
+        blocks = value.get("content")
+        if isinstance(blocks, list):
+            clean_blocks, block_transports, block_found = _strip_content_transport(blocks)
+            restored["content"] = clean_blocks
+            mapping_transports.extend(block_transports)
+            found = found or block_found
+        for key in ("result", "data"):
+            nested = value.get(key)
+            if not isinstance(nested, (Mapping, list, str)):
+                continue
+            clean_nested, nested_transports, nested_found = _strip_content_transport(nested)
+            if nested_found:
+                restored[key] = clean_nested
+                mapping_transports.extend(nested_transports)
+                found = True
+        return restored, mapping_transports, found
+
+    return value, [], False
+
+
+def _content_block_transport(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping) and value.get("type") == "text":
+        return _decode_content_transport_marker(value.get("text"))
+    if isinstance(value, str):
+        return _decode_content_transport_marker(value)
+    return None
+
+
+def _decode_content_transport_marker(value: Any) -> Mapping[str, Any] | None:
+    if not isinstance(value, str) or not value.startswith(MCP_SOURCE_CONTENT_TRANSPORT_PREFIX):
+        return None
+    try:
+        decoded = json.loads(value[len(MCP_SOURCE_CONTENT_TRANSPORT_PREFIX) :])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(decoded, Mapping) or set(decoded) != {MCP_SOURCE_CONTENT_TRANSPORT_KEY}:
+        return None
+    transport = decoded.get(MCP_SOURCE_CONTENT_TRANSPORT_KEY)
+    return transport if isinstance(transport, Mapping) else None
 
 
 def unwrap_mcp_source_transport(
@@ -175,7 +350,11 @@ def adapt_mcp_source_result(
     else:
         target = _content_from_wire(wire)
     target = _json_value(target)
-    if target is None or not _valid_result_hash(target, result_spec.get("hash")):
+    if target is None or not _valid_result_hash(
+        target,
+        result_spec.get("hash"),
+        compatible_content=_content_from_wire(wire),
+    ):
         return None
 
     captured_at = _bounded_string(result_spec.get("capturedAt"), 128) or _now_iso()
@@ -293,14 +472,29 @@ def _descriptor_from_wire(value: Any) -> Any | None:
     if not isinstance(value, Mapping):
         return None
     meta = value.get("_meta") or value.get("meta")
-    if isinstance(meta, Mapping) and MCP_SOURCE_METADATA_KEY in meta:
-        return meta[MCP_SOURCE_METADATA_KEY]
+    descriptor = _descriptor_from_meta(meta)
+    if descriptor is not None:
+        return descriptor
     for key in ("result", "data"):
         nested = value.get(key)
         found = _descriptor_from_wire(nested)
         if found is not None:
             return found
     return None
+
+
+def _descriptor_from_meta(value: Any) -> Any | None:
+    """Read the canonical source descriptor with conflict-safe legacy support."""
+
+    if not isinstance(value, Mapping):
+        return None
+    current = value.get(MCP_SOURCE_METADATA_KEY)
+    legacy = value.get(MCP_LEGACY_SOURCE_METADATA_KEY)
+    if current is not None and legacy is not None:
+        if _canonical_json(current) != _canonical_json(legacy):
+            return None
+        return current
+    return current if current is not None else legacy
 
 
 def _structured_content_from_wire(value: Any) -> Any | None:
@@ -322,14 +516,137 @@ def _content_from_wire(value: Any) -> Any:
     return value
 
 
-def _valid_result_hash(target: Any, value: Any) -> bool:
+def _valid_result_hash(
+    target: Any,
+    value: Any,
+    *,
+    compatible_content: Any | None = None,
+) -> bool:
     if not isinstance(value, Mapping) or value.get("algorithm") != "sha256":
         return False
     expected = value.get("value")
     if not isinstance(expected, str) or len(expected) != 64:
         return False
     candidates = {_sha256(target), _sha256(_drop_none(target))}
+    candidates.update(_compatible_content_hashes(target, compatible_content))
     return expected.casefold() in candidates
+
+
+@dataclass(frozen=True)
+class _JsonNumberLexeme:
+    raw: str
+
+
+def _compatible_content_hashes(target: Any, content: Any) -> set[str]:
+    """Hash JSON compatibility text without losing number spellings.
+
+    MCP structured-output servers commonly repeat ``structuredContent`` as a
+    JSON text content block for older clients.  A JSON decoder preserves the
+    number value but not its spelling (for example ``1.0000`` becomes ``1.0``),
+    so a descriptor that hashes the wire-level canonical JSON cannot always be
+    verified from the decoded object alone.
+
+    Accept that wire spelling only when the text decodes to exactly the same
+    JSON value as the trusted structured target.  This keeps the hash bound to
+    the result while remaining independent of any server or tool name.
+    """
+
+    hashes: set[str] = set()
+    target_canonical = _canonical_json(target)
+    for text in _json_compatibility_texts(content):
+        stripped = text.strip()
+        if not stripped.startswith(("{", "[")):
+            continue
+        try:
+            decoded = json.loads(
+                stripped,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
+            )
+            if _canonical_json(decoded) != target_canonical:
+                continue
+            lexical = json.loads(
+                stripped,
+                object_pairs_hook=_unique_json_object,
+                parse_int=_JsonNumberLexeme,
+                parse_float=_JsonNumberLexeme,
+                parse_constant=_reject_json_constant,
+            )
+            canonical = _canonical_json_with_number_lexemes(lexical)
+        except (TypeError, ValueError):
+            continue
+        hashes.add(hashlib.sha256(canonical.encode()).hexdigest())
+    return hashes
+
+
+def _json_compatibility_texts(content: Any) -> list[str]:
+    normalized = _json_value(content)
+    if isinstance(normalized, str):
+        return [normalized]
+    if isinstance(normalized, Mapping):
+        text = normalized.get("text")
+        if normalized.get("type") == "text" and isinstance(text, str):
+            return [text]
+        return []
+    if not isinstance(normalized, list):
+        return []
+    texts: list[str] = []
+    for block in normalized:
+        if not isinstance(block, Mapping) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str):
+            texts.append(text)
+    return texts
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = item
+    return result
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def _canonical_json_with_number_lexemes(value: Any) -> str:
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, _JsonNumberLexeme):
+        return _python_number_lexeme(value.raw)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, list):
+        return "[" + ",".join(_canonical_json_with_number_lexemes(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        items = (
+            json.dumps(str(key), ensure_ascii=False, separators=(",", ":"))
+            + ":"
+            + _canonical_json_with_number_lexemes(value[key])
+            for key in sorted(value)
+        )
+        return "{" + ",".join(items) + "}"
+    raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
+
+
+def _python_number_lexeme(value: str) -> str:
+    if value == "-0":
+        return "0"
+    lower = value.casefold()
+    if "e" not in lower:
+        return value
+    mantissa, exponent = lower.split("e", 1)
+    sign = "-" if exponent.startswith("-") else "+"
+    digits = exponent.lstrip("+-").rjust(2, "0")
+    return f"{mantissa}e{sign}{digits}"
 
 
 def _validated_search_retrieval(
@@ -810,12 +1127,15 @@ def _structured_collection_envelope(
     normalized_item_paths: list[str] = []
     for item_path in allowed_item_paths if isinstance(allowed_item_paths, list) else []:
         pointer = _pointer(item_path)
-        if pointer in {None, ""}:
+        if pointer is None or pointer == "":
             return None
         normalized_item_paths.append(pointer)
     dataset_id = _bounded_string(dataset.get("id"), 512)
     resource_id = _bounded_string(resource.get("resourceId"), 512)
     if not dataset_id or not resource_id:
+        return None
+    provenance = _normalize_resource_provenance(resource.get("provenance"))
+    if "provenance" in resource and provenance is None:
         return None
     provider = descriptor.get("provider")
     provider = provider if isinstance(provider, Mapping) else {}
@@ -864,7 +1184,7 @@ def _structured_collection_envelope(
         collection_addressing["allowedItemPaths"] = normalized_item_paths
     if normalized_schema:
         collection_addressing["fieldSchemaRef"] = normalized_schema
-    return {
+    envelope = {
         "version": 1,
         "kind": "structured-evidence-collection",
         "collectionHandle": f"evc_mcp_{digest}",
@@ -878,6 +1198,98 @@ def _structured_collection_envelope(
         "semantics": semantics,
         "contentHash": _content_hash(snapshot),
     }
+    if provenance:
+        envelope["provenance"] = provenance
+    return envelope
+
+
+def _normalize_resource_provenance(value: Any) -> dict[str, Any] | None:
+    """Validate the optional public lineage mapping without copying business values."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        return None
+    origin = value.get("origin")
+    derivation = value.get("derivation")
+    if not isinstance(origin, Mapping) or not isinstance(derivation, Mapping):
+        return None
+    status = origin.get("status")
+    scope = origin.get("scope")
+    if status not in _PROVENANCE_ORIGIN_STATUSES or scope not in _PROVENANCE_ORIGIN_SCOPES:
+        return None
+    normalized_origin: dict[str, Any] = {"status": status, "scope": scope}
+    mapping = origin.get("mapping")
+    if mapping is not None:
+        if not isinstance(mapping, Mapping):
+            return None
+        normalized_mapping: dict[str, str] = {}
+        for key in ("sourceName", "sourceUrl", "sourceId", "documentId", "publishedAt"):
+            if key not in mapping:
+                continue
+            pointer = _pointer(mapping.get(key))
+            if pointer is None:
+                return None
+            normalized_mapping[key] = pointer
+        if len(normalized_mapping) != len(mapping):
+            return None
+        if normalized_mapping:
+            normalized_origin["mapping"] = normalized_mapping
+    if status == "not-provided" and "mapping" in normalized_origin:
+        return None
+    if status in {"available", "mixed"} and "mapping" not in normalized_origin:
+        return None
+
+    derivation_class = derivation.get("class")
+    if derivation_class not in _PROVENANCE_DERIVATION_CLASSES:
+        return None
+    normalized_derivation: dict[str, Any] = {"class": derivation_class}
+    method_ref = derivation.get("methodRef")
+    if method_ref is not None:
+        if not isinstance(method_ref, Mapping):
+            return None
+        method_id = _bounded_string(method_ref.get("id"), 512)
+        revision = _bounded_string(method_ref.get("revision"), 512)
+        if not method_id or not revision or len(method_ref) != 2:
+            return None
+        normalized_derivation["methodRef"] = {"id": method_id, "revision": revision}
+    input_pointers = derivation.get("inputPointers")
+    if input_pointers is not None:
+        if not isinstance(input_pointers, list) or len(input_pointers) > 64:
+            return None
+        normalized_inputs: list[str] = []
+        for raw_pointer in input_pointers:
+            pointer = _pointer(raw_pointer)
+            if pointer is None:
+                return None
+            normalized_inputs.append(pointer)
+        normalized_derivation["inputPointers"] = normalized_inputs
+    if set(derivation) - {"class", "methodRef", "inputPointers"}:
+        return None
+
+    normalized: dict[str, Any] = {
+        "origin": normalized_origin,
+        "derivation": normalized_derivation,
+    }
+    temporal = value.get("temporal")
+    if temporal is not None:
+        if not isinstance(temporal, Mapping):
+            return None
+        normalized_temporal: dict[str, str] = {}
+        for key in ("dataAsOf", "observedAt"):
+            if key not in temporal:
+                continue
+            pointer = _pointer(temporal.get(key))
+            if pointer is None:
+                return None
+            normalized_temporal[key] = pointer
+        if len(normalized_temporal) != len(temporal):
+            return None
+        if normalized_temporal:
+            normalized["temporal"] = normalized_temporal
+    if set(value) - {"origin", "temporal", "derivation"}:
+        return None
+    return normalized
 
 
 def _shift_root_envelopes(envelopes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1017,10 +1429,15 @@ def _now_iso() -> str:
 
 
 __all__ = [
+    "MCP_LEGACY_SOURCE_METADATA_KEY",
+    "MCP_SOURCE_CONTENT_TRANSPORT_KEY",
+    "MCP_SOURCE_CONTENT_TRANSPORT_PREFIX",
     "MCP_SOURCE_METADATA_KEY",
     "MCP_SOURCE_TRANSPORT_KEY",
     "McpSourceAdaptation",
     "adapt_mcp_source_result",
+    "unwrap_mcp_source_content_transport",
     "unwrap_mcp_source_transport",
+    "wrap_mcp_result_metadata_in_content_for_transport",
     "wrap_mcp_result_metadata_for_transport",
 ]

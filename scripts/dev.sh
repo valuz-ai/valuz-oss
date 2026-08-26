@@ -116,6 +116,45 @@ install_backend() {
     # carrying the package costs nothing when tracing is off.
     uv sync --extra dev --extra postgres --extra tracing
     ok "backend deps ready"
+    install_dsh_runtime
+}
+
+install_dsh_runtime() {
+    # The DeepSeek Harness runtime is a Node subprocess launched from the
+    # vendored closure (backend/vendor/dsh-runtime — pins + lockfile committed,
+    # node_modules fetched on demand). Only build-desktop.sh used to fetch it,
+    # so every dev checkout showed the runtime as unavailable until the user
+    # found scripts/vendor-dsh-runtime.sh by hand. Vendor it here, idempotently.
+    #
+    # Fail-open on purpose: a missing npm or an offline install leaves the dsh
+    # runtime unavailable (exactly today's behavior) without blocking the
+    # backend/frontend the other three runtimes need.
+    if [[ -n "${VALUZ_DSH_RUNTIME_BIN:-}" || -n "${VALUZ_DSH_ROOT:-}" ]]; then
+        # Explicit launch override (packaged bin / source checkout) — the
+        # closure is not what composition.py will use, don't fetch it.
+        return 0
+    fi
+    local vendor_dir="$BACKEND_DIR/vendor/dsh-runtime"
+    local entry="$vendor_dir/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+    local installed_lock="$vendor_dir/node_modules/.package-lock.json"
+    # ``npm ci`` writes node_modules/.package-lock.json; a committed lockfile
+    # newer than it means the pins moved (e.g. git pull) → refresh.
+    if [[ -f "$entry" && -f "$installed_lock" \
+        && ! "$vendor_dir/package-lock.json" -nt "$installed_lock" ]]; then
+        return 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        warn "npm not found — DeepSeek Harness runtime stays unavailable" \
+            "(install Node, then run scripts/vendor-dsh-runtime.sh)"
+        return 0
+    fi
+    info "vendoring dsh runtime closure (first run: ~30s)…"
+    if bash "$ROOT_DIR/scripts/vendor-dsh-runtime.sh" >/dev/null; then
+        ok "dsh runtime closure ready"
+    else
+        warn "dsh runtime vendoring failed — DeepSeek Harness runtime stays" \
+            "unavailable (run scripts/vendor-dsh-runtime.sh manually to see why)"
+    fi
 }
 
 start_backend() {

@@ -52,6 +52,16 @@ export interface Agent {
    * found" against the local backend. Absent = runs on the active target.
    */
   exec_target_id?: string;
+  /**
+   * Short tag for the composer row (e.g. 分享), set by whoever produced the
+   * row. Deriving it from ``exec_target_id`` alone means silently rendering
+   * nothing whenever that target has not been registered yet — a race the
+   * reader experiences as "the tag is missing".
+   */
+  badge_label?: string;
+  /** Palette for {@link badge_label} — "shared" / "remote" match the library's
+   *  own tags, so the same agent reads the same in both places. */
+  badge_tone?: "shared" | "remote";
 }
 
 /** One派驻 of an agent — the project (project) it's deployed into. */

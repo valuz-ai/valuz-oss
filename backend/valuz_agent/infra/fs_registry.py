@@ -329,6 +329,16 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def ptc_skill_root(self, user_id: str) -> Path:
+        """Root for generated PTC code-face skills (``ptc-tools-<hash>`` dirs).
+
+        Host-written at codegen time, attached to sessions by absolute path,
+        and linked into each cwd by the kernel's skills materializer.
+        """
+        path = self.data_dir(user_id) / "ptc" / "skills"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def docs_preview_dir(self, user_id: str) -> Path:
         path = self.docs_root(user_id) / "preview"
         path.mkdir(parents=True, exist_ok=True)

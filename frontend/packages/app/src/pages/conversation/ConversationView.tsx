@@ -54,6 +54,11 @@ export interface ConversationViewProps {
    *  chrome hooks (``useProjectOutlet`` / ``useContextPanel`` /
    *  ``useProjectHandoff`` / ``useTitleActions``) run in this variant. */
   variant?: ConversationViewVariant;
+  /** Enables the composer's chat/task mode toggle (the project-home
+   *  composer's). In task mode Send hands the draft to this callback —
+   *  typically a ``tasksApi.kickoff`` — instead of the conversation send;
+   *  return ``true`` to clear the draft. Absent → chat-only, unchanged. */
+  onSendTask?: (goal: string) => Promise<boolean> | boolean;
 }
 
 /**
@@ -123,8 +128,6 @@ function ConversationViewPage(props: ConversationViewProps) {
     searchParams: core.searchParams,
     selectedProjectId: core.selectedProjectId,
     draft: core.draft,
-    attachmentsParsing: core.attachmentsParsing,
-    markPendingConsumed: core.markPendingConsumed,
     historyCursorRef: core.historyCursorRef,
     projectSendHandoffRef: core.projectSendHandoffRef,
     handoffSessionIdRef: core.handoffSessionIdRef,
@@ -132,7 +135,8 @@ function ConversationViewPage(props: ConversationViewProps) {
     setPendingUserMessage: core.setPendingUserMessage,
     setTurnStartAnchor: core.setTurnStartAnchor,
     setSending: core.setSending,
-    setParsingConfirmOpen: core.setParsingConfirmOpen,
+    restageAttachments: core.restageAttachments,
+    adoptAttachments: core.adoptAttachments,
     getDisplayBusy: () => core.displayBusy,
     performEnqueue: core.performEnqueue,
     performSend: core.performSend,
@@ -287,6 +291,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               where that makes no sense. */}
           {composerSuppressed ? null : (
             <ComposerPane
+              onSendTask={props.onSendTask}
               showScrollBottom={core.showScrollBottom}
               handleScrollToBottom={core.handleScrollToBottom}
               displayBusy={core.displayBusy}
@@ -320,7 +325,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               effectiveAgentSlug={core.effectiveAgentSlug}
               handleSend={handleSend}
               interruptRef={core.interruptRef}
-              sessionAttachments={core.sessionAttachments}
+              sessionAttachments={core.stagedAttachments}
               handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
               composerAgents={core.composerAgents}
               sessionAgentSlug={core.sessionAgentSlug}
@@ -350,6 +355,8 @@ function ConversationViewPage(props: ConversationViewProps) {
               id={core.id}
               selectedEffort={core.selectedEffort}
               setSelectedEffort={core.setSelectedEffort}
+              selectedSessionMode={core.selectedSessionMode}
+              setSelectedSessionMode={core.setSelectedSessionMode}
               selectedAgentSkillItems={core.selectedAgentSkillItems}
               composerMentionSkills={core.composerMentionSkills}
               availableSkills={core.availableSkills}
@@ -358,8 +365,6 @@ function ConversationViewPage(props: ConversationViewProps) {
               connectorOptions={core.connectorOptions}
               selectedMcpSlugs={core.selectedMcpSlugs}
               toggleConnector={core.toggleConnector}
-              parsingConfirmOpen={core.parsingConfirmOpen}
-              setParsingConfirmOpen={core.setParsingConfirmOpen}
               performSend={core.performSend}
             />
           )}
@@ -442,6 +447,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
       <BackgroundTaskStrip tasks={core.runningBgTasks} />
 
       <ComposerPane
+              onSendTask={props.onSendTask}
         showScrollBottom={core.showScrollBottom}
         handleScrollToBottom={core.handleScrollToBottom}
         displayBusy={core.displayBusy}
@@ -475,7 +481,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
         effectiveAgentSlug={core.effectiveAgentSlug}
         handleSend={core.handleSend}
         interruptRef={core.interruptRef}
-        sessionAttachments={core.sessionAttachments}
+        sessionAttachments={core.stagedAttachments}
         handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
         composerAgents={core.composerAgents}
         sessionAgentSlug={core.sessionAgentSlug}
@@ -505,6 +511,8 @@ function ConversationViewPanel(props: ConversationViewProps) {
         id={core.id}
         selectedEffort={core.selectedEffort}
         setSelectedEffort={core.setSelectedEffort}
+        selectedSessionMode={core.selectedSessionMode}
+        setSelectedSessionMode={core.setSelectedSessionMode}
         selectedAgentSkillItems={core.selectedAgentSkillItems}
         composerMentionSkills={core.composerMentionSkills}
         availableSkills={core.availableSkills}
@@ -513,8 +521,6 @@ function ConversationViewPanel(props: ConversationViewProps) {
         connectorOptions={core.connectorOptions}
         selectedMcpSlugs={core.selectedMcpSlugs}
         toggleConnector={core.toggleConnector}
-        parsingConfirmOpen={core.parsingConfirmOpen}
-        setParsingConfirmOpen={core.setParsingConfirmOpen}
         performSend={core.performSend}
       />
 

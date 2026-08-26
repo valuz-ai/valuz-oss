@@ -118,9 +118,38 @@ def build_task_coverage_continuation_prompt(
     )
 
 
+def should_run_task_coverage(
+    *,
+    enabled: bool,
+    skip_structural_post_run: bool,
+    called_external_tool: bool,
+    has_assistant_text: bool,
+    stop_reason_type: str | None,
+) -> bool:
+    """The situational gate Task Coverage SHARES with Citation/Audit.
+
+    The two post-run features keep independent user toggles (``enabled``), but
+    every situational condition is judged together: a turn that requested a
+    structural deliverable (A2UI or a product confirmation card), brought in
+    no external information, or produced no assistant prose skips BOTH —
+    Citation/Audit through the observer's own guards, Task Coverage through
+    this predicate. ``end_turn`` is the one coverage-mechanical extra: a
+    continuation can only ride a cleanly ended native thread.
+    """
+
+    return (
+        enabled
+        and not skip_structural_post_run
+        and called_external_tool
+        and has_assistant_text
+        and stop_reason_type == "end_turn"
+    )
+
+
 __all__ = [
     "TASK_COVERAGE_CONTINUATION_PROMPT",
     "TASK_COVERAGE_NOOP_TOOL_NAME",
     "build_task_coverage_continuation_prompt",
     "build_task_coverage_noop_tool",
+    "should_run_task_coverage",
 ]

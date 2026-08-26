@@ -20,7 +20,9 @@ import {
   useCapabilities,
   useSessionArtifacts,
   useSessionAttachments,
+  useStagedAttachments,
   type MemberWithAgent,
+  resolveApiBase,
 } from "@valuz/core";
 import {
   type ApprovalCardSubject,
@@ -386,6 +388,8 @@ export function useConversationOrchestration({
     setSelectedPermissionMode,
     selectedEffort,
     setSelectedEffort,
+    selectedSessionMode,
+    setSelectedSessionMode,
     selectedMcpSlugs,
     connectorOptions,
     toggleConnector,
@@ -562,7 +566,6 @@ export function useConversationOrchestration({
   const pinNextTurnToTopRef = useRef(false);
   const keepCurrentTurnAtTopRef = useRef(false);
   // Open while confirming a send that would ship still-parsing attachments.
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   const sidebarSessions = useSessionStore((state) => state.sessions);
   const setSidebarSessions = useSessionStore((state) => state.setSessions);
   const fetchSidebarSessions = useSessionStore((state) => state.fetchSessions);
@@ -576,15 +579,91 @@ export function useConversationOrchestration({
   // hook's own setter (kept aliased so existing optimistic splices still
   // work). Local files now upload the moment they're attached, so there is no
   // separate not-yet-uploaded ``File[]`` queue for them anymore.
+  // TWO sets, because they answer two questions.
+  //
+  // ``staged`` is what the composer is holding: uploaded, not yet claimed by a
+  // turn, owner-scoped and blind to sessions. ``bound`` is what this
+  // conversation has been sent. Serving both from one hook is what broke the
+  // send — creating the session re-keyed the composer's state and dropped the
+  // staged rows, so the turn went out claiming nothing.
   const {
-    attachments: sessionAttachments,
-    setAttachments: setSessionAttachments,
-    hasParsing: attachmentsParsing,
+    attachments: stagedAttachments,
+    inFlight: inFlightAttachments,
+    hasPending: attachmentsParsing,
     attachLocalFiles,
     attachKbDocs,
-    remove: removeSessionAttachmentRow,
-    markPendingConsumed,
-  } = useSessionAttachments(selectedSessionId);
+    remove: removeStagedAttachment,
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+    adopt: adoptAttachments,
+    settle: settleAttachments,
+  } = useStagedAttachments(
+    // The backend this conversation runs on. A draft has no session to route
+    // on, so it follows its project.
+    selectedProjectId
+      ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
+      : undefined,
+  );
+  const {
+    attachments: boundAttachments,
+    remove: removeBoundAttachment,
+    refresh: refreshBoundAttachments,
+  } = useSessionAttachments(
+    selectedSessionId,
+    // Files this page knows are on their way but did not send itself: the
+    // project composer posts and navigates without waiting, so its turn's
+    // files bind after this page has already read. Naming them here is what
+    // makes the read wait for them.
+    useMemo(() => inFlightAttachments.map((a) => a.id), [inFlightAttachments]),
+  );
+  // Once the conversation's own list can see a file, this page stops holding
+  // it: bound is the durable answer and in-flight was only ever the stand-in.
+  useEffect(() => {
+    if (inFlightAttachments.length === 0) return;
+    const bound = new Set(boundAttachments.map((a) => a.id));
+    const landed = inFlightAttachments.filter((a) => bound.has(a.id));
+    if (landed.length > 0) settleAttachments(landed);
+  }, [boundAttachments, inFlightAttachments, settleAttachments]);
+  // What the panel shows: this conversation's files — bound, on their way, and
+  // staged for the next turn.
+  //
+  // The middle group is why this is not just bound + staged. A claim takes the
+  // rows out of staging immediately but the bind is only durable once the POST
+  // returns, so leaving them out here emptied the panel for the length of the
+  // send — a session-create plus a message round trip on a cloud project,
+  // seconds during which the message bubble beside it already showed the file.
+  //
+  // De-duplicated because the two ends overlap by design: ``settle`` runs
+  // after the refresh that fetched the same row as bound, so for one render a
+  // file is legitimately in both.
+  const sessionAttachments = useMemo(() => {
+    const seen = new Set<string>();
+    return [
+      ...boundAttachments,
+      ...inFlightAttachments,
+      ...stagedAttachments,
+    ].filter((a) => !seen.has(a.id) && seen.add(a.id));
+  }, [boundAttachments, inFlightAttachments, stagedAttachments]);
+  const removeSessionAttachmentRow = useCallback(
+    async (attachmentId: string) => {
+      if (stagedAttachments.some((a) => a.id === attachmentId)) {
+        await removeStagedAttachment(attachmentId);
+        return;
+      }
+      // In flight or already bound, the row exists server-side either way; drop
+      // it from the in-flight set too so the panel does not re-show it when the
+      // turn's refresh lands.
+      settleAttachments([{ id: attachmentId }]);
+      await removeBoundAttachment(attachmentId);
+    },
+    [
+      stagedAttachments,
+      removeStagedAttachment,
+      removeBoundAttachment,
+      settleAttachments,
+    ],
+  );
+
   // Agent-delivered artifacts (the "生成文件" list) — recorded by the
   // ``deliver_artifacts`` MCP tool. Loads on session change; refreshed on
   // turn-end (below) so newly delivered files appear without a manual reload.
@@ -922,6 +1001,26 @@ export function useConversationOrchestration({
     projectSkills,
   });
 
+  // Host-pinned project: an embedded panel that declared a REAL project as
+  // its ``createDefaults.projectId`` (a workspace panel) behaves like the
+  // project home composer — the 📁 chip pre-selects that project (bootstrap,
+  // via ``presetProjectId`` above) AND the location bar locks, so a panel
+  // draft can never detach from its project. The ``chat-default`` sentinel
+  // and stale ids resolve to no row and leave everything unchanged.
+  const pinnedProject = useMemo(
+    () =>
+      createDefaults?.projectId
+        ? (projects.find(
+            (w) => w.id === createDefaults.projectId && w.kind === "project",
+          ) ?? null)
+        : null,
+    [createDefaults?.projectId, projects],
+  );
+  const execBarLockedWithPin = execBarLocked || pinnedProject != null;
+  const sessionExecOriginWithPin =
+    sessionExecOrigin ??
+    (pinnedProject ? (pinnedProject.exec_origin ?? "local") : undefined);
+
   // Seed the override controls from the bound agent's brain for a NEW agent
   // conversation. Runs on first bind and whenever the agent changes (the
   // agent picker clears ``composerTouched``); a user override sets
@@ -1019,6 +1118,7 @@ export function useConversationOrchestration({
       setSelectedProjectId,
       setSessions,
       setSelectedSessionId,
+      presetProjectId: createDefaults?.projectId ?? null,
     });
 
   // Safety net for a turn that dies before the kernel ever accepts it (a
@@ -1196,6 +1296,7 @@ export function useConversationOrchestration({
     selectedRuntimeId,
     selectedEffort,
     selectedPermissionMode,
+    selectedSessionMode,
     selectedMcpSlugs,
     selectedComposerSkill,
     hostRef,
@@ -1209,7 +1310,10 @@ export function useConversationOrchestration({
     attachKbDocs,
     attachLocalFiles,
     removeSessionAttachmentRow,
-    markPendingConsumed,
+    claimStagedAttachments,
+    restageAttachments,
+    settleAttachments,
+    refreshBoundAttachments,
     refreshEvents,
     refreshActiveSession,
     fetchSidebarSessions,
@@ -1253,10 +1357,6 @@ export function useConversationOrchestration({
       if (!draft.trim()) return;
       if (displayBusy) {
         void performEnqueue();
-        return;
-      }
-      if (attachmentsParsing) {
-        setParsingConfirmOpen(true);
         return;
       }
       void performSend();
@@ -1393,10 +1493,12 @@ export function useConversationOrchestration({
       skipNextSessionStateResetRef.current = false;
       return;
     }
-    setSessionAttachments([]);
+    // ``boundAttachments`` resets itself on the session change; the STAGED set
+    // deliberately does not — a file the person is still holding is not part of
+    // the conversation they just left.
     setFileTree([]);
     closeArtifact();
-  }, [closeArtifact, selectedSessionId, setSessionAttachments]);
+  }, [closeArtifact, selectedSessionId]);
 
   // Drive the right-panel collapsed state from per-session data:
   //   * Project projects always have meaningful panel content
@@ -1496,7 +1598,9 @@ export function useConversationOrchestration({
     projectSendHandoffRef,
     handoffSessionIdRef,
     historyCursorRef,
-    markPendingConsumed,
+    claimStagedAttachments,
+    restageAttachments,
+    adoptAttachments,
     attachmentsParsing,
     setPendingUserMessage,
     setTurnStartAnchor,
@@ -1549,10 +1653,6 @@ export function useConversationOrchestration({
       if (!draft.trim()) return;
       if (displayBusy) {
         void performEnqueue();
-        return;
-      }
-      if (attachmentsParsing) {
-        setParsingConfirmOpen(true);
         return;
       }
       void performSend();
@@ -1608,10 +1708,11 @@ export function useConversationOrchestration({
     isProjectProject,
     interruptRef,
     sessionAttachments,
+    stagedAttachments,
     handleRemoveSessionAttachment,
     composerAgents,
-    execBarLocked,
-    sessionExecOrigin,
+    execBarLocked: execBarLockedWithPin,
+    sessionExecOrigin: sessionExecOriginWithPin,
     execTargetId,
     setExecTargetId,
     setSelectedProviderId,
@@ -1630,6 +1731,8 @@ export function useConversationOrchestration({
     setSelectedPermissionMode,
     selectedEffort,
     setSelectedEffort,
+    selectedSessionMode,
+    setSelectedSessionMode,
     selectedAgentSkillItems,
     composerMentionSkills,
     availableSkills,
@@ -1638,8 +1741,6 @@ export function useConversationOrchestration({
     connectorOptions,
     selectedMcpSlugs,
     toggleConnector,
-    parsingConfirmOpen,
-    setParsingConfirmOpen,
     // KB picker overlay
     kbPickerOpen,
     setKbPickerOpen,

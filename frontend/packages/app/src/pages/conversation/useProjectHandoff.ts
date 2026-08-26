@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, type Location } from "react-router-dom";
-import { recordEntityOrigin } from "@valuz/core";
+import { recordEntityOrigin, type SessionAttachmentItem } from "@valuz/core";
 import { canSendProjectHandoff } from "../conversation-project-handoff";
 import { dropHandoffFromHistory } from "../conversation-handoff-history";
 import { NEW_SESSION_ID } from "./session-events";
@@ -14,12 +14,6 @@ type ProjectHandoffParams = {
   selectedProjectId: string | null;
   draft: string;
   /** True while any session attachment is still parsing. */
-  attachmentsParsing: boolean;
-  /** ``useSessionAttachments.markPendingConsumed`` — the handoff-consume
-   *  effect stamps the already-sent turn's pending rows (explicit id +
-   *  sentAt because the page's own ``selectedSessionId`` may not have
-   *  settled when the handoff is consumed). */
-  markPendingConsumed: (sessionId?: string, consumedAt?: number) => void;
   historyCursorRef: { current: number };
   /** Owned by ``useConversationOrchestration`` (shared with
    *  ``useConversationSend`` / ``useConversationHistory`` /
@@ -56,7 +50,10 @@ type ProjectHandoffParams = {
     } | null,
   ) => void;
   setSending: (sending: boolean) => void;
-  setParsingConfirmOpen: (open: boolean) => void;
+  /** Adopt files a sending composer handed over — see the draft handoff. */
+  restageAttachments: (rows: SessionAttachmentItem[]) => void;
+  /** Take on files another page already sent into this conversation. */
+  adoptAttachments: (rows: SessionAttachmentItem[]) => void;
   /** ``displayBusy`` is derived below the hook call site in the page (it
    *  needs useInputQueue's returns), so it arrives as a deferring getter —
    *  read only inside ``handleSend``, at send time, exactly as the original
@@ -90,8 +87,6 @@ export function useProjectHandoff({
   searchParams,
   selectedProjectId,
   draft,
-  attachmentsParsing,
-  markPendingConsumed,
   historyCursorRef,
   projectSendHandoffRef,
   handoffSessionIdRef,
@@ -99,7 +94,8 @@ export function useProjectHandoff({
   setPendingUserMessage,
   setTurnStartAnchor,
   setSending,
-  setParsingConfirmOpen,
+  restageAttachments,
+  adoptAttachments,
   getDisplayBusy,
   performEnqueue,
   performSend,
@@ -127,7 +123,22 @@ export function useProjectHandoff({
   useEffect(() => {
     const handoff = (
       location.state as {
-        handoff?: { text?: string; sentAt?: number };
+        handoff?: {
+          text?: string;
+          sentAt?: number;
+          attachments?: Array<{ name: string; size: number }>;
+          /**
+           * The same files as rows, when the handing-over page has them.
+           *
+           * ``attachments`` is chip material — a name and a size, enough to
+           * draw the bubble, and all the draft path can offer while an upload
+           * is still a placeholder. The panel needs the rows themselves, and
+           * cannot read them back: the sending page posts and navigates
+           * without waiting, so this page's attachment read races a bind that
+           * has not happened. Carrying them closes that gap.
+           */
+          attachmentRows?: SessionAttachmentItem[];
+        };
       } | null
     )?.handoff;
     const text = handoff?.text?.trim();
@@ -145,17 +156,18 @@ export function useProjectHandoff({
     if (Date.now() - sentAt > HANDOFF_MAX_AGE_MS) return;
     consumedHandoffSessionIdsRef.current.add(id);
     handoffSessionIdRef.current = id;
-    // The handing-over page already POSTed this turn (see ``performChatSend``
-    // in ProjectDetailPage) — every pending attachment of this session that
-    // existed at ``sentAt`` shipped with it. This page's own send path never
-    // runs for a handoff, so consume them here: the first attachments load
-    // was issued before the server stamped the rows, and without the
-    // watermark its still-pending result would pin the already-sent files
-    // back onto the composer.
-    markPendingConsumed(id, sentAt);
+    // The files are already spent — the handing-over page claimed them and
+    // shipped their ids with the turn — but they are not readable back yet:
+    // that page posts and navigates without waiting, so this page's attachment
+    // read raced the bind and came up empty, and nothing else re-read. Hold
+    // them as in flight and the panel is right immediately; the conversation's
+    // own list takes over the moment it can see them.
+    if (handoff?.attachmentRows?.length) {
+      adoptAttachments(handoff.attachmentRows);
+    }
     setPendingUserMessage({
       text,
-      attachments: [],
+      attachments: handoff?.attachments ?? [],
       fromSeq: historyCursorRef.current,
       sentAt,
     });
@@ -167,14 +179,7 @@ export function useProjectHandoff({
     // handing-over navigation sets ``handoff`` and it carries nothing else, so
     // clearing the whole entry is safe here.
     dropHandoffFromHistory();
-  }, [
-    id,
-    location.state,
-    location.pathname,
-    location.search,
-    navigate,
-    markPendingConsumed,
-  ]);
+  }, [id, location.state, location.pathname, location.search, navigate]);
 
   // Send entry point. While a turn is running, a follow-up is queued (drains
   // after the active turn). Otherwise it blocks on attachments still parsing —
@@ -195,10 +200,6 @@ export function useProjectHandoff({
     // as the Composer's queue affordance (also ``displayBusy``) advertises.
     if (getDisplayBusy()) {
       void performEnqueue();
-      return;
-    }
-    if (attachmentsParsing) {
-      setParsingConfirmOpen(true);
       return;
     }
     void performSend();
@@ -251,6 +252,7 @@ export function useProjectHandoff({
           permissionMode?: PermissionMode;
           projectId?: string;
           execOrigin?: string;
+          attachments?: SessionAttachmentItem[];
         };
       } | null
     )?.projectSend;
@@ -301,6 +303,9 @@ export function useProjectHandoff({
     // Held until the send settles, so the flag outlives the ``state: null``
     // navigation above; the ``finally`` also covers a failed send, which
     // would otherwise suppress the welcome on this page forever.
+    // Take ownership of the files the sending composer handed over, so this
+    // page's own send claims them like any other.
+    if (send?.attachments?.length) restageAttachments(send.attachments);
     setProjectSendInFlight(true);
     void performSend(text).finally(() => setProjectSendInFlight(false));
     // ``performSend`` is a plain function, so it changes identity every render;

@@ -149,7 +149,7 @@ async def _build_additional_context(
         except Exception:  # noqa: BLE001 — never block a turn on docs lookup
             bindings = []
         if bindings:
-            kb_section = await _format_kb_scope(ds, bindings)
+            kb_section = await _format_kb_scope(ds, bindings, user_id)
             if kb_section:
                 sections.append(kb_section)
 
@@ -194,7 +194,7 @@ async def _build_additional_context(
     return "\n\n".join(sections)
 
 
-async def _format_kb_scope(ds, bindings, user_id: str | None = None) -> str:  # type: ignore[no-untyped-def]
+async def _format_kb_scope(ds, bindings, user_id: str) -> str:  # type: ignore[no-untyped-def]
     """Render the KB binding set as a compact, model-readable summary.
 
     Walks ``ProjectKbBindingRow`` rows (kb / folder / document kinds)
@@ -204,22 +204,31 @@ async def _format_kb_scope(ds, bindings, user_id: str | None = None) -> str:  # 
     tree). Returns an empty string when nothing resolves (orphaned
     bindings, etc.).
     """
+    # ``user_id`` is REQUIRED, and every datastore call below must carry it.
+    # The datastore went owner-scoped and four calls here kept their old
+    # one-argument shape, so the first ``kb``-kind binding raised TypeError —
+    # which took the WHOLE additional-context block down with it (the caller
+    # swallows), including the current-time section. The docs skill tells the
+    # model "the binding scope is announced in <additional-context>; consult it
+    # before guessing" — so an empty announcement reads as "no knowledge base",
+    # and the agent web-searched a question whose answer sat in a bound KB.
+    # Binding a knowledge base is exactly what switched its retrieval off.
     max_docs_per_kb = 8
 
     by_kb: dict[str, dict[str, object]] = {}
 
     for b in bindings:
         if b.binding_kind == "kb":
-            kb = await ds.get_kb(b.target_id)
+            kb = await ds.get_kb(user_id, b.target_id)
             if not kb:
                 continue
             entry = by_kb.setdefault(kb.id, {"name": kb.name, "all": False, "items": []})
             entry["all"] = True
         elif b.binding_kind == "folder":
-            folder = await ds.get_folder(b.target_id)
+            folder = await ds.get_folder(user_id, b.target_id)
             if not folder:
                 continue
-            kb = await ds.get_kb(folder.kb_id)
+            kb = await ds.get_kb(user_id, folder.kb_id)
             if not kb:
                 continue
             entry = by_kb.setdefault(kb.id, {"name": kb.name, "all": False, "items": []})
@@ -230,7 +239,7 @@ async def _format_kb_scope(ds, bindings, user_id: str | None = None) -> str:  # 
             doc = await ds.get_by_id(user_id, b.target_id)
             if not doc:
                 continue
-            kb = await ds.get_kb(doc.kb_id)
+            kb = await ds.get_kb(user_id, doc.kb_id)
             if not kb:
                 continue
             entry = by_kb.setdefault(kb.id, {"name": kb.name, "all": False, "items": []})

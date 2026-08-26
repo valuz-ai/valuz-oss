@@ -93,9 +93,7 @@ async def confirm_automation_proposal(
     """
     from valuz_agent.integrations.automations_mcp_server import _resolve_session_context
 
-    project_id, project_kind, bound_agent_slug = await _resolve_session_context(
-        session_id, user_id
-    )
+    project_id, project_kind, bound_agent_slug = await _resolve_session_context(session_id, user_id)
     create_payload = AutomationService.build_create_payload(
         name=payload.name,
         prompt_template=payload.prompt_template,
@@ -106,6 +104,8 @@ async def confirm_automation_proposal(
         project_id=project_id,
         session_agent_slug=bound_agent_slug,
         worktree=payload.worktree,
+        playbook_definition_id=payload.playbook_definition_id,
+        playbook_version=payload.playbook_version,
     )
     # MCP-from-chat: forward the calling session's project so library agents land
     # in the user's current chat project rather than a freshly created one.
@@ -136,8 +136,7 @@ async def automation_proposal_status(
     mapping = await svc.confirmed_origin_map(payload.tool_call_ids, user_id=user_id)
     return AutomationProposalStatusResponse(
         confirmed={
-            tid: AutomationProposalStatusEntry(automation_id=aid)
-            for tid, aid in mapping.items()
+            tid: AutomationProposalStatusEntry(automation_id=aid) for tid, aid in mapping.items()
         }
     )
 
@@ -179,9 +178,7 @@ async def list_project_targets(
     projects, no ephemeral chat rows" stays adjacent to the create logic
     that consumes it. The frontend renders the response verbatim.
     """
-    return AutomationProjectTargetsResponse(
-        targets=await svc.list_project_targets(user_id=user_id)
-    )
+    return AutomationProjectTargetsResponse(targets=await svc.list_project_targets(user_id=user_id))
 
 
 @router.get("/{automation_id}")
@@ -266,8 +263,4 @@ async def list_automation_runs(
     svc: AutomationService = Depends(get_automation_service),
 ) -> dict[str, list[AutomationRunItemResponse]]:
     """List execution history for an automation."""
-    return {
-        "runs": await svc.list_runs(
-            automation_id, limit=limit, cursor=cursor, user_id=user_id
-        )
-    }
+    return {"runs": await svc.list_runs(automation_id, limit=limit, cursor=cursor, user_id=user_id)}

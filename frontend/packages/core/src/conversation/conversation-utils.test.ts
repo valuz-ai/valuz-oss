@@ -615,6 +615,85 @@ describe("buildTurns — user interrupt", () => {
   });
 });
 
+describe("buildTurns — budget exhausted", () => {
+  it("should mark budgetHalt when a turn with no output stops on max_cost", () => {
+    // The exact shape the kernel emits once the CLI rejects a query over
+    // ``--max-budget-usd``: a COMPLETED turn carrying only the user message,
+    // no assistant blocks, no run.failed. Without budgetHalt this renders
+    // as a blank reply with no explanation.
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "继续", message_id: "u1" }),
+      evt(2, "session.idle", {
+        stop_reason: JSON.stringify({
+          type: "budget_exhausted",
+          reason: "max_cost",
+        }),
+      }),
+    ]);
+
+    expect(turns[0]!.budgetHalt).toBe("max_cost");
+    expect(turns[0]!.blocks).toEqual([]);
+  });
+
+  it("should mark budgetHalt as max_turns when the step ceiling is hit", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "go", message_id: "u1" }),
+      evt(2, "message.assistant.text_delta", {
+        text: "Partial",
+        message_id: "a1",
+      }),
+      evt(3, "session.idle", {
+        stop_reason: JSON.stringify({
+          type: "budget_exhausted",
+          reason: "max_turns",
+        }),
+      }),
+    ]);
+
+    expect(turns[0]!.budgetHalt).toBe("max_turns");
+  });
+
+  it("should still mark budgetHalt when the reason is missing or unknown", () => {
+    // Regression guard: returning null here would drop the turn straight back
+    // into the silent-blank-reply bug. Surface it without naming a cause.
+    for (const stop of [
+      JSON.stringify({ type: "budget_exhausted" }),
+      JSON.stringify({ type: "budget_exhausted", reason: "max_tokens" }),
+    ]) {
+      const turns = buildTurns([
+        evt(1, "message.user", { text: "继续", message_id: "u1" }),
+        evt(2, "session.idle", { stop_reason: stop }),
+      ]);
+      expect(turns[0]!.budgetHalt).toBe("unknown");
+    }
+  });
+
+  it("should leave budgetHalt unset when the turn ends normally", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "done", message_id: "u1" }),
+      evt(2, "session.idle", { stop_reason: "end_turn" }),
+    ]);
+
+    expect(turns[0]!.budgetHalt).toBeUndefined();
+  });
+
+  it("should not confuse a budget stop with a cancel or an interruption", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "继续", message_id: "u1" }),
+      evt(2, "session.idle", {
+        stop_reason: JSON.stringify({
+          type: "budget_exhausted",
+          reason: "max_cost",
+        }),
+      }),
+    ]);
+
+    expect(turns[0]!.cancelled).toBeFalsy();
+    expect(turns[0]!.interrupted).toBeFalsy();
+    expect(turns[0]!.failedMessage).toBeNull();
+  });
+});
+
 describe("buildTurns — runtime interrupt (not user cancel)", () => {
   it("marks session.idle with category 'interrupted' as interrupted, not cancelled", () => {
     const bare = buildTurns([
@@ -1178,7 +1257,7 @@ describe("buildTurns — concurrent subagent events (parent_tool_use_id)", () =>
       evt(2, "tool.call.started", {
         id: "t1",
         tool_use_id: "t1",
-        name: "mcp__valuz-stock__index_quote",
+        name: "mcp__valuz-data__index_quote",
         parent_tool_use_id: "agent-1",
       }),
     ]);

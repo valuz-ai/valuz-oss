@@ -14,7 +14,11 @@ export interface PlatformCapabilities {
     destDir: string,
   ) => Promise<{ copied: number; errors: string[] }>;
   deleteFile: (path: string) => Promise<{ success: boolean; error?: string }>;
-  revealInFinder: (path: string) => Promise<void>;
+  /** Open a path with the OS. Resolves to the OS's complaint when it could
+   *  not — empty string on success — so a caller can say WHY nothing opened
+   *  instead of leaving the click silent. Hosts that cannot open anything
+   *  resolve to "" as well; they have nothing to report. */
+  revealInFinder: (path: string) => Promise<string>;
   /**
    * Read a local file's text content (for previewing a ``kind==="local"`` file
    * client-side — the backend never proxies bytes). Large files are truncated.

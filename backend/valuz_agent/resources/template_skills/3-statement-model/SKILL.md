@@ -1,6 +1,6 @@
 ---
 name: 3-statement-model
-description: Three-statement financial model for global equities (focus US / HK / A-shares, also other markets). Builds integrated IS/BS/CF models using valuz-stock (income_statement / balance_sheet / cashflow_statement / revenue_breakdown / company_overview) for three-statement history and revenue drivers, and valuz-search (earnings_search / document_raw_content) for earnings reports, calls, research, minutes, and filings. Applies the accounting standard of each issuer (US GAAP / IFRS / CAS) and notes where line items differ by standard.
+description: Three-statement financial model for global equities (focus US / HK / A-shares, also other markets). Builds integrated IS/BS/CF models using valuz-data (get_financial_statements(statement_type=income|balance|cash_flow) / get_company) for three-statement history and revenue drivers, and valuz-search (search_documents / get_document(kind="raw_content")) for earnings reports, calls, research, minutes, and filings. Applies the accounting standard of each issuer (US GAAP / IFRS / CAS) and notes where line items differ by standard.
 ---
 
 # 3-statement-model
@@ -27,64 +27,64 @@ Line items and conventions differ by the standard the issuer reports under. Dete
 
 ## Data Sources
 
-Use `valuz-stock` to pull three-statement history and line-item data; use `valuz-search` to retrieve original earnings reports and filings.
+Use `valuz-data` to pull three-statement history and line-item data; use `valuz-search` to retrieve original earnings reports and filings.
 
-**Symbol format (note at first tool use):** `valuz-stock` takes a **bare ticker** (`AAPL` / `00700` / `600519`); `valuz-search` takes `market:ticker` (`US:AAPL` / `HK:00700` / `SH:600519`).
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 
-### `valuz-stock` — 三表历史数据、财务科目、营收拆分、公司画像
+### `valuz-data` — 三表历史数据、财务科目、营收拆分、公司画像
 
 ```text
-income_statement(symbol, period=annual, limit=5)    → 利润表 / Income Statement
-balance_sheet(symbol, period=annual, limit=5)       → 资产负债表 / Balance Sheet
-cashflow_statement(symbol, period=annual, limit=5)  → 现金流量表 / Cash Flow Statement
-revenue_breakdown(symbol)                            → 营收拆分 / Revenue breakdown (建模驱动)
-company_overview(symbol)                             → 公司画像 / Company overview
+get_financial_statements(statement_type="income", symbol, period="annual", limit=5) → 利润表
+get_financial_statements(statement_type="balance", symbol, period="annual", limit=5) → 资产负债表
+get_financial_statements(statement_type="cash_flow", symbol, period="annual", limit=5) → 现金流量表
+get_financial_statements(statement_type="revenue_breakdown", symbol) → 营收拆分
+get_company(kind="profile", symbol) → 公司画像
 ```
 
 - `period` accepts `annual` or `quarterly`; `limit` controls how many periods to return (use a multi-period `limit` for historical depth).
-- Tickers span markets: US (`AAPL`), HK (`00700`), A-share (`600519`), and others — always **bare** for `valuz-stock`.
+- Tickers span markets: US (`AAPL`), HK (`00700`), A-share (`600519`), and others — always **bare** for `valuz-data`.
 
 ### `valuz-search` — 财报、公告原文检索
 
 Retrieve original earnings reports, earnings calls, research, minutes, and regulatory filings to source and verify line items, disclosures, and footnotes.
 
 ```text
-earnings_search(query, symbols=["US:AAPL"])  → 定位财报文档 / Find earnings filings
-document_raw_content(...)                      → 取财报原文 / Fetch full filing text (科目口径核对)
-document_fetch(...)                            → 取文档结构化内容 / Fetch document content
+search_documents(category="all", query, symbols=["US:AAPL"])  → 定位财报文档 / Find earnings filings
+get_document(kind="raw_content", document_id=...)                      → 取财报原文 / Fetch full filing text (科目口径核对)
+get_document_chunks(kind="list", document_id=...)                            → 取文档结构化内容 / Fetch document content
 ```
 
-Use `earnings_search` (valuz-search) to locate the relevant filing, then `document_raw_content` / `document_fetch` (valuz-search) to pull the original text for line-item / 科目口径 reconciliation. Symbols use `market:ticker`.
+Use `search_documents` (valuz-search) to locate the relevant filing, then `get_document(kind="raw_content")` / `get_document_chunks` (valuz-data) to pull the original text for line-item / 科目口径 reconciliation. Symbols use `market:ticker`.
 
 ## Workflow
 
 ### Step 1: Data Retrieval
 
-用 `income_statement` / `balance_sheet` / `cashflow_statement`(valuz-stock, period=annual, limit=5)拉 5 年历史三表；营收驱动用 `revenue_breakdown`(valuz-stock)，公司画像用 `company_overview`(valuz-stock)；财报原文/科目口径核对用 `earnings_search`+`document_raw_content`(valuz-search)。Pull 3-5 years of historical financials.
+用 `get_financial_statements`(valuz-data, period=annual, limit=5)拉 5 年历史三表；营收驱动用 `get_financial_statements`(valuz-data)，公司画像用 `get_company`(valuz-data)；财报原文/科目口径核对用 `search_documents`(valuz-search)+`get_document(kind="raw_content")`(valuz-data)。Pull 3-5 years of historical financials.
 
-**Symbol format:** `valuz-stock` 裸代码（`AAPL` / `00700` / `600519`）；`valuz-search` `market:ticker`（`US:AAPL` / `HK:00700` / `SH:600519`）。
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 
 **Verify units carefully:**
 - Reporting unit varies by issuer/market (e.g. 元 / 千元 / thousands / millions)
 - Normalize to a consistent unit before modeling
 
 ```text
-# Pull all three statements (valuz-stock, bare ticker)
-income_statement(symbol, period=annual, limit=5)
-balance_sheet(symbol, period=annual, limit=5)
-cashflow_statement(symbol, period=annual, limit=5)
+# Pull all three statements (valuz-data, canonical MARKET:LOCAL symbol)
+get_financial_statements(statement_type="income", symbol, period="annual", limit=5)
+get_financial_statements(statement_type="balance", symbol, period="annual", limit=5)
+get_financial_statements(statement_type="cash_flow", symbol, period="annual", limit=5)
 # Revenue drivers + company profile
-revenue_breakdown(symbol)
-company_overview(symbol)
+get_financial_statements(statement_type="revenue_breakdown", symbol)
+get_company(kind="profile", symbol)
 # Reconcile line items against original filings (valuz-search, market:ticker)
-earnings_search(query, symbols=["US:AAPL"])  →  document_raw_content(...)
+search_documents(category="all", query, symbols=["US:AAPL"])  →  get_document(kind="raw_content", document_id=...)
 ```
 
 ### Step 2: Historical Analysis
 
 Document key trends:
 
-- **Revenue growth**: YoY %, CAGR over 3-5 years (拆分驱动用 `revenue_breakdown`)
+- **Revenue growth**: YoY %, CAGR over 3-5 years (拆分驱动用 `get_financial_statements`)
 - **Gross margin**: 毛利率 — track expansion/contraction
 - **Operating margin**: 营业利润率
 - **Net margin**: 净利率
@@ -236,7 +236,7 @@ Follow the same professional conventions as the base `xlsx-author` skill:
 - **Sheet links**: Green font (RGB: 0,128,0)
 - **Currency**: issuer reporting currency with thousands separator
 - **Percentages**: 0.0% format
-- **Cell comments**: "Source: valuz-stock `income_statement`/`balance_sheet`/`cashflow_statement` (or valuz-search `document_raw_content`), [date], [field], [ticker]"
+- **Cell comments**: "Source: valuz-data `get_financial_statements` (or valuz-data `get_document(kind="raw_content")`), [date], [field], [ticker]"
 
 ### Number Format Conventions
 
@@ -276,10 +276,10 @@ Before delivering:
 
 ## Data Source Priority
 
-用 `income_statement` / `balance_sheet` / `cashflow_statement` / `revenue_breakdown` / `company_overview`(valuz-stock, 裸代码)取三表历史与科目数据，用 `earnings_search`+`document_raw_content`(valuz-search, `market:ticker`)取财报/公告原文。
+用 `get_financial_statements` / `get_company`(valuz-data, MARKET:LOCAL 规范代码)取三表历史与科目数据，用 `search_documents`+`get_document(kind="raw_content")`(valuz-search, `market:ticker`)取财报/公告原文。
 
-1. **valuz-stock** (`income_statement` / `balance_sheet` / `cashflow_statement` / `revenue_breakdown` / `company_overview`) — three-statement history, financial line items, revenue drivers, company profile
-2. **valuz-search** (`earnings_search` → `document_raw_content` / `document_fetch`) — original earnings reports, calls, research, minutes, filings
+1. **valuz-data** (`get_financial_statements` / `get_company`) — three-statement history, financial line items, revenue drivers, company profile
+2. **valuz-search + valuz-data** (`search_documents` → `get_document(kind="raw_content")` / `get_document_chunks`) — original earnings reports, calls, research, minutes, filings
 3. **Web search** — only if the above are insufficient; mark `[UNSOURCED]`
 
 ## Output Checklist

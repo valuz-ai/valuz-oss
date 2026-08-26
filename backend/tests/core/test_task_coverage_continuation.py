@@ -4,6 +4,7 @@ from src.core.task_coverage_continuation import (
     TASK_COVERAGE_CONTINUATION_PROMPT,
     TASK_COVERAGE_NOOP_TOOL_NAME,
     build_task_coverage_continuation_prompt,
+    should_run_task_coverage,
 )
 
 
@@ -52,3 +53,22 @@ def test_builder_adds_only_static_review_guidance() -> None:
     assert "tool_patterns" not in prompt
     assert "candidate_selection" not in prompt
     assert "repair" not in prompt.lower()
+
+
+def test_shared_gate_requires_every_situational_condition() -> None:
+    """Coverage and Citation/Audit share the situational gates; only the
+    feature toggles are independent."""
+    base = {
+        "enabled": True,
+        "skip_structural_post_run": False,
+        "called_external_tool": True,
+        "has_assistant_text": True,
+        "stop_reason_type": "end_turn",
+    }
+    assert should_run_task_coverage(**base) is True
+    assert should_run_task_coverage(**{**base, "enabled": False}) is False
+    assert should_run_task_coverage(**{**base, "skip_structural_post_run": True}) is False
+    assert should_run_task_coverage(**{**base, "called_external_tool": False}) is False
+    assert should_run_task_coverage(**{**base, "has_assistant_text": False}) is False
+    assert should_run_task_coverage(**{**base, "stop_reason_type": "error"}) is False
+    assert should_run_task_coverage(**{**base, "stop_reason_type": None}) is False

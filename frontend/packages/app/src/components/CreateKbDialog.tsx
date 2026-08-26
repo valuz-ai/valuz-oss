@@ -28,6 +28,18 @@ export interface CreateKbDialogProps {
   /** ``"managed"`` hides the local-directory picker and creates a
    * backend-managed KB root (cloud / headless). */
   directoryFieldMode?: DirectoryFieldMode;
+  /** Whether a backend-managed root is one the backend itself rescans.
+   *
+   * True for a headless server, whose managed root is an ordinary directory
+   * someone can drop files into out of band — the periodic scan is how those
+   * files are ever noticed. False for a backend with no such directory, where
+   * documents only ever arrive through the API: there, offering "auto-discover
+   * new files" promises a scan that will never run and can never find
+   * anything.
+   *
+   * Only consulted for a managed root. A user-picked local directory is always
+   * scannable, so the option stands on its own there. */
+  managedRootAutoDiscovers?: boolean;
   onSubmit: (data: {
     name: string;
     /** Undefined when ``directoryFieldMode="managed"`` or a remote
@@ -45,6 +57,7 @@ export const CreateKbDialog = ({
   open,
   onOpenChange,
   directoryFieldMode = "picker",
+  managedRootAutoDiscovers = true,
   onSubmit,
 }: CreateKbDialogProps) => {
   const { t } = useTranslation();
@@ -67,6 +80,10 @@ export const CreateKbDialog = ({
   const isRemoteTarget = targetUsesManagedCwd(effectiveTarget);
   const propManaged = directoryFieldMode === "managed";
   const effectiveManaged = propManaged || isRemoteTarget;
+  // Evaluated per selected target, not once for the dialog: on a multi-target
+  // edition the same dialog creates a scannable local KB and an unscannable
+  // remote one depending on what the user picks a line above.
+  const canAutoDiscover = !effectiveManaged || managedRootAutoDiscovers;
   const pickDirectory = async (): Promise<string | null> => {
     const own = effectiveTarget?.selectDirectory;
     if (own) return (await own())?.path ?? null;
@@ -85,7 +102,11 @@ export const CreateKbDialog = ({
       await onSubmit({
         name: name.trim(),
         root_path: effectiveManaged ? undefined : rootPath.trim(),
-        auto_discover: autoDiscover,
+        // Sent as false rather than as whatever the hidden checkbox happens to
+        // hold: it defaults to checked, so a KB the user never saw the option
+        // for would otherwise be created asking for a scan that cannot happen
+        // — and the KB detail page would then display it as enabled.
+        auto_discover: canAutoDiscover && autoDiscover,
         target_id: targets.length >= 2 ? effectiveTarget?.id : undefined,
       });
       onOpenChange(false);
@@ -157,16 +178,18 @@ export const CreateKbDialog = ({
               />
             </FormField>
           )}
-          <label className="flex items-center gap-2">
-            <Checkbox
-              checked={autoDiscover}
-              onCheckedChange={(checked) => setAutoDiscover(checked === true)}
-              className="border-surface-border-hover data-[state=checked]:border-brand data-[state=checked]:bg-brand data-[state=checked]:text-white"
-            />
-            <span className="text-sm text-ink-body">
-              {t("knowledge.autoDiscover" as Parameters<typeof t>[0])}
-            </span>
-          </label>
+          {canAutoDiscover ? (
+            <label className="flex items-center gap-2">
+              <Checkbox
+                checked={autoDiscover}
+                onCheckedChange={(checked) => setAutoDiscover(checked === true)}
+                className="border-surface-border-hover data-[state=checked]:border-brand data-[state=checked]:bg-brand data-[state=checked]:text-white"
+              />
+              <span className="text-sm text-ink-body">
+                {t("knowledge.autoDiscover" as Parameters<typeof t>[0])}
+              </span>
+            </label>
+          ) : null}
         </div>
         <DialogFooter className="px-[18px] pt-1 pb-4">
           <Button

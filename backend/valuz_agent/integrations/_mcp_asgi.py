@@ -116,9 +116,29 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
         }
         # Owner comes from the VERIFIED token — never a shared secret or a trusted
         # header. A forged sub / unknown owner fails verification.
-        credential_claims = await _verify_token_owner(headers.get("x-valuz-internal"))
+        raw_token = headers.get("x-valuz-internal")
+        credential_claims = await _verify_token_owner(raw_token)
         if credential_claims is None:
-            response = PlainTextResponse("Forbidden", status_code=403)
+            # Say WHY. A 403 with a bare body cost a multi-hour hunt across
+            # ingress, secrets, and kernel images: every sandbox call to every
+            # built-in MCP was failing here and the access log showed only the
+            # status. The reason goes to the log AND the body — this is an
+            # internal endpoint, its only callers are our own runtimes, and
+            # "no header" vs "bad token" is exactly the fork the next person
+            # needs first.
+            reason = "missing X-Valuz-Internal header" if not raw_token else "credential rejected"
+            # The first 8 chars distinguish every credential shape in play —
+            # a per-owner JWT ("eyJhbGci"), a managed capability ("vxe_…"),
+            # and an unresolved runtime-context marker ("__runtim") — and none
+            # of them is secret at that length.
+            logger.warning(
+                "Internal MCP 403 (%s): path=%s token_len=%d token_head=%s",
+                reason,
+                scope.get("path", ""),
+                len(raw_token or ""),
+                (raw_token or "")[:8],
+            )
+            response = PlainTextResponse(f"Forbidden: {reason}", status_code=403)
             await response(scope, receive, send)
             return
 
@@ -131,7 +151,16 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
         # A managed credential may be bound to one session. Legacy owner
         # credentials have ``session_id=None`` and retain owner-wide behavior.
         if credential_claims.session_id is not None and credential_claims.session_id != session_id:
-            response = PlainTextResponse("Forbidden", status_code=403)
+            logger.warning(
+                "Internal MCP 403 (session-bound credential mismatch): "
+                "credential session=%s request session=%s path=%s",
+                credential_claims.session_id,
+                session_id,
+                scope.get("path", ""),
+            )
+            response = PlainTextResponse(
+                "Forbidden: credential bound to another session", status_code=403
+            )
             await response(scope, receive, send)
             return
         owner_id = credential_claims.user_id
@@ -139,7 +168,19 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
         # The session must belong to the authenticated owner (cross-owner guard).
         session_owner = await _resolve_session_owner(session_id)
         if session_owner != owner_id:
-            response = PlainTextResponse("Forbidden", status_code=403)
+            logger.warning(
+                "Internal MCP 403 (session owner mismatch): session=%s "
+                "resolved_owner=%s token_owner=%s path=%s",
+                session_id,
+                session_owner,
+                owner_id,
+                scope.get("path", ""),
+            )
+            response = PlainTextResponse(
+                "Forbidden: session not owned by credential owner"
+                + (" (session unknown here)" if session_owner is None else ""),
+                status_code=403,
+            )
             await response(scope, receive, send)
             return
 

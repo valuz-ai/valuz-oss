@@ -16,4 +16,8 @@ export interface ResourceCategory<T> {
   /** If true, items matched by this category are NOT removed from the
    *  assignment pool — they can also appear in later categories. */
   multiAssign?: boolean;
+  /** Optional logical identity used to collapse duplicate rows inside this
+   *  category only. The row identity from ``CategorizedList.getId`` still
+   *  controls assignment to later categories. */
+  groupBy?: (item: T) => string;
 }

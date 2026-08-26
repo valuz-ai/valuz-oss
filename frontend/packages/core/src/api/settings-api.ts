@@ -70,6 +70,8 @@ export interface PreferencesResponse {
   conversation_citations_enabled: boolean;
   conversation_verification_enabled: boolean;
   conversation_task_coverage_enabled: boolean;
+  /** Programmatic Tool Calling — agents batch data-tool calls via Python. */
+  ptc_enabled: boolean;
 }
 
 export interface PreferencesPatchPayload {
@@ -80,6 +82,7 @@ export interface PreferencesPatchPayload {
   conversation_citations_enabled?: boolean;
   conversation_verification_enabled?: boolean;
   conversation_task_coverage_enabled?: boolean;
+  ptc_enabled?: boolean;
 }
 
 /**

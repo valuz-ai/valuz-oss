@@ -19,6 +19,88 @@ from src.core.time_utils import now_ms
 from src.core.types import Error, Session
 
 
+async def _pending_message_ids(
+    store: StorePort,
+    user_id: str,
+    session_id: str,
+    pending_ids: set[str],
+) -> dict[str, str]:
+    """Resolve pending ids to their owning message rows.
+
+    ``message_id`` is a relational column on persisted events, not part of the
+    event JSON returned by every StorePort implementation. Recovery used to
+    look only at ``event.data["message_id"]`` and therefore skipped real
+    runtime events after a host restart. Walk message-scoped history only for
+    the small set of unresolved pendings so the storage abstraction remains
+    unchanged.
+    """
+    found: dict[str, str] = {}
+    offset = 0
+    page_size = 200
+    while pending_ids - found.keys():
+        messages = await store.list_messages_for_session(
+            user_id, session_id, limit=page_size, offset=offset
+        )
+        if not messages:
+            break
+        for message in messages:
+            events = await store.get_events_for_message(
+                user_id, message.id, limit=1000, offset=0
+            )
+            for event in events:
+                if event.type != "requires_action":
+                    continue
+                pending_id = event.data.get("pending_id")
+                if isinstance(pending_id, str) and pending_id in pending_ids:
+                    found.setdefault(pending_id, message.id)
+        if len(messages) < page_size:
+            break
+        offset += page_size
+    return found
+
+
+async def seal_pending(
+    store: StorePort,
+    user_id: str,
+    session_id: str,
+    pending_id: str,
+) -> tuple[Event, str] | None:
+    """Expire one still-open pending and return its event plus message id."""
+    events = await store.get_events(
+        user_id,
+        session_id,
+        types=("requires_action", "action_resolved"),
+        limit=1000,
+    )
+    is_open = False
+    for event in events:
+        if event.data.get("pending_id") != pending_id:
+            continue
+        if event.type == "requires_action":
+            is_open = True
+        elif event.type == "action_resolved":
+            is_open = False
+    if not is_open:
+        return None
+
+    message_ids = await _pending_message_ids(
+        store, user_id, session_id, {pending_id}
+    )
+    message_id = message_ids.get(pending_id)
+    if message_id is None:
+        return None
+    resolved = Event(
+        type="action_resolved",
+        data={
+            "pending_id": pending_id,
+            "decision": "expired",
+            "resolved_by": "system",
+        },
+    )
+    await store.append_event(user_id, session_id, message_id, resolved)
+    return resolved, message_id
+
+
 async def seal_session_pendings(store: StorePort, user_id: str, session_id: str) -> int:
     """Seal one session's still-open ``requires_action`` events with a synthetic
     ``action_resolved(decision="expired", resolved_by="system")``.
@@ -31,18 +113,19 @@ async def seal_session_pendings(store: StorePort, user_id: str, session_id: str)
         types=("requires_action", "action_resolved"),
         limit=1000,
     )
-    open_pendings: dict[str, str] = {}  # pending_id → message_id
+    open_pending_ids: set[str] = set()
     for ev in events:
         pid = ev.data.get("pending_id")
         if not isinstance(pid, str):
             continue
         if ev.type == "requires_action":
-            msg_id = ev.data.get("message_id")
-            if isinstance(msg_id, str):
-                open_pendings.setdefault(pid, msg_id)
+            open_pending_ids.add(pid)
         elif ev.type == "action_resolved":
-            open_pendings.pop(pid, None)
-    for pid, msg_id in open_pendings.items():
+            open_pending_ids.discard(pid)
+    message_ids = await _pending_message_ids(
+        store, user_id, session_id, open_pending_ids
+    )
+    for pid, msg_id in message_ids.items():
         await store.append_event(
             user_id,
             session_id,
@@ -56,7 +139,7 @@ async def seal_session_pendings(store: StorePort, user_id: str, session_id: str)
                 },
             ),
         )
-    return len(open_pendings)
+    return len(message_ids)
 
 
 async def reset_stranded(store: StorePort, session: Session) -> None:

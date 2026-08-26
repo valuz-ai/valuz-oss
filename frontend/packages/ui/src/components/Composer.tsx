@@ -13,9 +13,12 @@ import {
   FolderClosed,
   Gauge,
   Hand,
+  Lightbulb,
   Link2,
+  ListTodo,
   Loader2,
   Lock,
+  MessageSquare,
   Paperclip,
   Plus,
   GitBranch,
@@ -241,6 +244,20 @@ export interface RuntimeSelectorItem {
   unavailableReason?: string | null;
 }
 
+/** Tag palette, shared with the resource library so one agent looks the same
+ *  wherever it is listed: 分享 teal, 远程 green, anything else neutral. */
+const AGENT_BADGE_TONE: Record<string, string> = {
+  shared:
+    "bg-[color-mix(in_oklab,var(--accent-teal)_14%,var(--background))] text-[color-mix(in_oklab,var(--accent-teal)_62%,var(--foreground))]",
+  remote: "bg-success-light text-success-text",
+};
+
+function agentBadgeClass(tone: string | undefined): string {
+  return tone
+    ? (AGENT_BADGE_TONE[tone] ?? "bg-surface-soft text-ink-meta")
+    : "bg-surface-soft text-ink-meta";
+}
+
 export interface ComposerAgentItem {
   /** Project-local agent handle (the ``agent_slug``). */
   slug: string;
@@ -261,6 +278,7 @@ export interface ComposerAgentItem {
    * owns the wording.
    */
   badgeLabel?: string;
+  badgeTone?: "shared" | "remote";
 }
 
 export interface ComposerProjectItem {
@@ -395,6 +413,25 @@ export interface ComposerProps {
    * UI surfaces that still need a read-only display.
    */
   permissionModeLocked?: boolean;
+  /**
+   * Session working mode (kernel ``Session.mode``,
+   * docs/design/session-modes.md). When set together with
+   * ``onSessionModeChange`` and ``planModeAvailable``, the "+" menu
+   * grows a "Plan mode" toggle entry and — while ``plan`` is active —
+   * an orange chip renders next to the approval-mode picker (click to
+   * turn off, mirroring the codex/dsh composers). ``undefined`` hides
+   * the affordance entirely (back-compat).
+   */
+  sessionMode?: "default" | "plan" | "goal" | null;
+  /** Called when the user toggles plan mode from the composer. */
+  onSessionModeChange?: (mode: "default" | "plan") => void;
+  /**
+   * Whether the session's runtime supports plan mode. Only
+   * ``claude_agent`` lowers plan natively today (codex follows with
+   * its ``collaborationMode`` wiring); deepagents / deepseek_harness
+   * have no native primitive and the server 400s them.
+   */
+  planModeAvailable?: boolean;
   /**
    * Worktree isolation toggle for the NEW conversation this composer will
    * create. Hidden when undefined (back-compat) or `available: false`
@@ -572,6 +609,9 @@ export const Composer = ({
   permissionMode,
   onPermissionModeChange,
   permissionModeLocked = false,
+  sessionMode,
+  onSessionModeChange,
+  planModeAvailable = false,
   worktree,
   onWorktreeToggle,
   effort,
@@ -1363,7 +1403,15 @@ export const Composer = ({
   const selectedPermissionShortLabel =
     PERMISSION_LABELS[effectivePermissionMode].shortLabel;
   const runtimeLacksAutoReview =
-    selectedRuntimeId === "deepagents" || selectedRuntimeId === "deepseek_harness";
+    selectedRuntimeId === "deepagents" ||
+    selectedRuntimeId === "deepseek_harness";
+
+  // Session working mode (docs/design/session-modes.md). The composer
+  // only *toggles* plan; goal is entered elsewhere (task path). The "+"
+  // menu entry and the active chip both need the handler AND runtime
+  // support — a session on deepagents/dsh gets neither affordance.
+  const planActive = sessionMode === "plan";
+  const planToggleVisible = planModeAvailable && onSessionModeChange !== undefined;
 
   // EFFORT_LABELS — visible labels for the reasoning-budget selector
   // (kernel V5+bba3014 ``ModelSettings.effort``). No "Default" slot:
@@ -1612,7 +1660,9 @@ export const Composer = ({
               data-placeholder={t(
                 (mode === "task"
                   ? "composer.taskPlaceholder"
-                  : "conversation.inputPlaceholder") as Parameters<typeof t>[0],
+                  : planActive
+                    ? "composer.planPlaceholder"
+                    : "conversation.inputPlaceholder") as Parameters<typeof t>[0],
               )}
               data-empty={currentValue ? undefined : ""}
               className={cn(
@@ -1644,37 +1694,69 @@ export const Composer = ({
             the card frame than the send button on the right. Dropping
             the duplicate keeps both icons at the same 8 px inset from
             the card frame. */}
-        <div className="flex items-center justify-between pt-1">
-          <div className="flex items-center gap-1.5">
+        {/* A narrow panel (a resized chat card, a small window) must shrink
+            this row, not overflow it: without ``min-w-0`` on both groups the
+            flex items keep their intrinsic width and the trailing chips are
+            clipped by the card. The row never wraps — it stays one line and
+            its contents give way instead (mode toggle drops to icons, chips
+            truncate). */}
+        <div className="flex items-center justify-between gap-x-2 pt-1">
+          <div className="flex min-w-0 items-center gap-1.5">
             {/* PRD-PAAT §3.2 unified composer: ``[Chat | Task]`` mode
                 toggle. Only rendered when the host wires ``onModeChange``
                 so the conversation page (chat-only) stays unaffected. */}
             {onModeChange && (
-              <div className="flex h-7 items-center rounded-lg bg-surface-soft p-0.5 text-xs">
+              <div className="flex h-7 shrink-0 items-center rounded-lg bg-surface-soft p-0.5 text-xs">
                 {(["chat", "task"] as const).map((m) => {
                   const active = mode === m;
+                  const label = t(
+                    (m === "task"
+                      ? "composer.modeTask"
+                      : "composer.modeChat") as Parameters<typeof t>[0],
+                  );
+                  const ModeIcon = m === "task" ? ListTodo : MessageSquare;
+                  // Spells out what the mode does — the label alone ("对话" /
+                  // "任务") does not, and below the breakpoint the label is
+                  // gone entirely.
+                  const tip = t(
+                    (m === "task"
+                      ? "composer.modeTaskTip"
+                      : "composer.modeChatTip") as Parameters<typeof t>[0],
+                  );
                   return (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => {
-                        if (!active) onModeChange(m);
-                      }}
-                      className={cn(
-                        "flex h-6 items-center rounded-md px-2 font-medium transition-colors duration-[120ms]",
-                        active
-                          ? m === "task"
-                            ? "bg-brand text-white shadow-button"
-                            : "bg-card text-ink-heading shadow-sm"
-                          : "text-ink-body hover:text-ink-heading",
-                      )}
-                    >
-                      {t(
-                        (m === "task"
-                          ? "composer.modeTask"
-                          : "composer.modeChat") as Parameters<typeof t>[0],
-                      )}
-                    </button>
+                    // Labels while the card is wide enough; icons once it is
+                    // not, so the trailing chips keep their room. The tooltip
+                    // carries the explanation either way.
+                    <TooltipProvider key={m} delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!active) onModeChange(m);
+                            }}
+                            aria-label={label}
+                            className={cn(
+                              "flex h-6 items-center justify-center rounded-md px-1.5 font-medium transition-colors duration-[120ms] @[420px]/composer:px-2",
+                              active
+                                ? m === "task"
+                                  ? "bg-brand text-white shadow-button"
+                                  : "bg-card text-ink-heading shadow-sm"
+                                : "text-ink-body hover:text-ink-heading",
+                            )}
+                          >
+                            <ModeIcon
+                              className="block h-3.5 w-3.5 shrink-0 @[420px]/composer:hidden"
+                              aria-hidden="true"
+                            />
+                            <span className="hidden @[420px]/composer:inline">
+                              {label}
+                            </span>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{tip}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   );
                 })}
               </div>
@@ -1732,6 +1814,46 @@ export const Composer = ({
                       max: String(MAX_SESSION_ATTACHMENTS),
                     })}
                   </p>
+                )}
+                {/* Plan-mode toggle (docs/design/session-modes.md) —
+                    mirrors the codex composer's Add-menu entry. While
+                    active, the orange chip next to the approval picker
+                    is the turn-off affordance; this entry flips both
+                    ways for discoverability. */}
+                {planToggleVisible && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        onSessionModeChange?.(planActive ? "default" : "plan")
+                      }
+                    >
+                      <Lightbulb
+                        className={cn(
+                          "h-4 w-4",
+                          planActive ? "text-warning-text" : "text-ink-meta",
+                        )}
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-ink-heading">
+                          {t("composer.planMode" as Parameters<typeof t>[0])}
+                        </div>
+                        <div className="truncate text-2xs text-ink-meta">
+                          {planActive
+                            ? t(
+                                "composer.planModeTurnOff" as Parameters<
+                                  typeof t
+                                >[0],
+                              )
+                            : t(
+                                "composer.planModeHint" as Parameters<
+                                  typeof t
+                                >[0],
+                              )}
+                        </div>
+                      </div>
+                    </DropdownMenuItem>
+                  </>
                 )}
                 {(showSkillButton || connectors.length > 0) && (
                   <DropdownMenuSeparator />
@@ -1981,7 +2103,8 @@ export const Composer = ({
                       .filter((mode) => PERMISSION_META[mode].visible)
                       .map((mode) => {
                         const selected = effectivePermissionMode === mode;
-                        const disabled = mode === "auto_review" && runtimeLacksAutoReview;
+                        const disabled =
+                          mode === "auto_review" && runtimeLacksAutoReview;
                         const item = PERMISSION_LABELS[mode];
                         const meta = PERMISSION_META[mode];
                         const ItemIcon = meta.icon;
@@ -2041,6 +2164,33 @@ export const Composer = ({
                 )}
               </div>
             )}
+            {/* Plan-mode active chip — renders right after the approval
+                picker (mirrors the codex/dsh composer bars). Click = turn
+                off. Entry point lives in the "+" menu; this chip is the
+                always-visible state + exit affordance while active. */}
+            {planToggleVisible && planActive && (
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-pressed
+                      className="inline-flex h-7 items-center gap-1 rounded-lg bg-warning-light px-2 text-xs leading-none text-warning-text transition-colors duration-[120ms] hover:opacity-80"
+                      onClick={() => onSessionModeChange?.("default")}
+                    >
+                      <Lightbulb className="block h-3 w-3 shrink-0" />
+                      <span className="max-w-[100px] truncate leading-none">
+                        {t("composer.planChip" as Parameters<typeof t>[0])}
+                      </span>
+                      <X className="block h-3 w-3 shrink-0" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {t("composer.planChipTooltip" as Parameters<typeof t>[0])}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             {/* Worktree isolation toggle — only for projects that are git
                 repos (``worktree.available``). A simple on/off chip, not a
                 dropdown: the choice is binary and frozen at session
@@ -2076,7 +2226,7 @@ export const Composer = ({
               </TooltipProvider>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             {/* 09-assistant 📁 project chip — switches the conversation
                 between 临时对话 (chat-default) and a project project.
                 Sits immediately before the 🤖 agent chip so the two read
@@ -2239,7 +2389,7 @@ export const Composer = ({
                       <button
                         type="button"
                         className={cn(
-                          "flex h-7 items-center gap-1 rounded-lg px-2 text-xs transition-colors duration-[120ms]",
+                          "flex h-7 min-w-0 items-center gap-1 rounded-lg px-2 text-xs transition-colors duration-[120ms]",
                           canOpen
                             ? "text-ink-body hover:bg-surface-soft hover:text-ink-heading"
                             : "cursor-not-allowed text-ink-muted",
@@ -2265,12 +2415,13 @@ export const Composer = ({
                           <span className="max-w-[200px] truncate text-ink-heading leading-none">
                             {triggerLabel}
                           </span>
-                          {/* The bound model as a muted hint inside the trigger
-                              — always shown (Default, library agent, or project
-                              member) so the button reads e.g. "行业分析师 ·
-                              Sonnet 4.6". The picker lives in the dropdown rows. */}
+                          {/* The bound model as a muted hint, so the button
+                              reads e.g. "行业分析师 · Sonnet 4.6". It is the
+                              widest, least-acted-on part of the row, so a
+                              narrow card drops it first — the model is still
+                              shown, and picked, on the dropdown rows. */}
                           {triggerModelLabel && (
-                            <span className="max-w-[120px] truncate leading-none text-ink-muted">
+                            <span className="hidden max-w-[120px] truncate leading-none text-ink-muted @[360px]/composer:inline">
                               {triggerModelLabel}
                             </span>
                           )}
@@ -2288,345 +2439,367 @@ export const Composer = ({
                             data-slot="composer-agent-menu"
                             className="fixed z-[100] min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg"
                           >
-                          <div
-                            className={cn(
-                              "p-1",
-                              // Collapsed mode is just 默认 + Agent (short) and
-                              // must NOT clip the Agent roster flyout; the flat
-                              // project list keeps its own scroll.
-                              !allowAgentBrainOverride &&
-                                "max-h-[300px] overflow-y-auto",
-                            )}
-                          >
-                            {/* "Default" entry (no agent): an agentless quick
+                            <div
+                              className={cn(
+                                "p-1",
+                                // Collapsed mode is just 默认 + Agent (short) and
+                                // must NOT clip the Agent roster flyout; the flat
+                                // project list keeps its own scroll.
+                                !allowAgentBrainOverride &&
+                                  "max-h-[300px] overflow-y-auto",
+                              )}
+                            >
+                              {/* "Default" entry (no agent): an agentless quick
                                 chat on the system default brain, editable in the
                                 rows below. Only in the agentless-capable composer
                                 (new conversation), not project member-pick. */}
-                            {allowAgentBrainOverride && (
-                              <button
-                                type="button"
-                                // Frozen on a locked agent run (nothing editable);
-                                // a locked Default run stays hoverable so the
-                                // effort can still be changed.
-                                disabled={agentLocked && !!selectedAgentSlug}
-                                className={cn(
-                                  "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent",
-                                  // Highlight only while its 二级菜单 is open;
-                                  // selection is shown by the ✓, not a persistent
-                                  // grey background (avoids two adjacent greys).
-                                  defaultBrainMenuOpen && "bg-surface-muted",
-                                )}
-                                onMouseEnter={() => {
-                                  setAgentSubmenu(null);
-                                  setAgentListMenuOpen(false);
-                                  // Hover previews the runtime/model/effort
-                                  // 二级菜单 whenever it could apply — including
-                                  // while an AGENT is still the selection
-                                  // (picking a runtime/model from it then
-                                  // switches to Default, see the row handlers).
-                                  // Only a locked agent run keeps it closed
-                                  // (nothing in it would be editable).
-                                  if (!(agentLocked && selectedAgentSlug))
-                                    setDefaultBrainMenuOpen(true);
-                                }}
-                                onClick={() => {
-                                  // Selection is frozen once a session exists; the
-                                  // submenu (effort) is still reachable on hover.
-                                  if (agentLocked) return;
-                                  onAgentChange?.(null);
-                                  setDefaultBrainMenuOpen(true);
-                                }}
-                              >
-                                <span className="flex min-w-0 flex-1 flex-col">
-                                  <span className="truncate text-[12.5px] text-ink-heading">
-                                    {t(
-                                      "conversation.defaultBrain" as Parameters<
-                                        typeof t
-                                      >[0],
-                                    )}
-                                  </span>
-                                  <span className="truncate text-2xs text-ink-meta">
-                                    {selectedRuntimeLabel} ·{" "}
-                                    {selectedModelLabel}
-                                  </span>
-                                </span>
-                                {!selectedAgentSlug && (
-                                  <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                )}
-                                {/* ▸ shows whenever the submenu can open — hidden
-                                    on a locked agent run (everything frozen). */}
-                                {!(agentLocked && selectedAgentSlug) && (
-                                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-meta" />
-                                )}
-                              </button>
-                            )}
-                            {allowAgentBrainOverride ? (
-                              // New-conversation composer: collapse the roster
-                              // into a single "Agent" entry (parallel to 默认);
-                              // its 二级菜单 lists the agents + 添加 Agent.
-                              <div
-                                className="relative"
-                                onMouseEnter={() => {
-                                  setDefaultBrainMenuOpen(false);
-                                  setAgentSubmenu(null);
-                                  // No agent switching once the session is locked
-                                  // — the roster stays closed; the entry is inert
-                                  // (like the frozen Default selection).
-                                  if (!agentLocked) setAgentListMenuOpen(true);
-                                }}
-                              >
+                              {allowAgentBrainOverride && (
                                 <button
                                   type="button"
-                                  disabled={agentLocked}
+                                  // Frozen on a locked agent run (nothing editable);
+                                  // a locked Default run stays hoverable so the
+                                  // effort can still be changed.
+                                  disabled={agentLocked && !!selectedAgentSlug}
                                   className={cn(
                                     "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent",
-                                    // Grey only while the roster 二级菜单 is open;
-                                    // selection is the ✓, not a persistent grey.
-                                    agentListMenuOpen && "bg-surface-muted",
+                                    // Highlight only while its 二级菜单 is open;
+                                    // selection is shown by the ✓, not a persistent
+                                    // grey background (avoids two adjacent greys).
+                                    defaultBrainMenuOpen && "bg-surface-muted",
                                   )}
+                                  onMouseEnter={() => {
+                                    setAgentSubmenu(null);
+                                    setAgentListMenuOpen(false);
+                                    // Hover previews the runtime/model/effort
+                                    // 二级菜单 whenever it could apply — including
+                                    // while an AGENT is still the selection
+                                    // (picking a runtime/model from it then
+                                    // switches to Default, see the row handlers).
+                                    // Only a locked agent run keeps it closed
+                                    // (nothing in it would be editable).
+                                    if (!(agentLocked && selectedAgentSlug))
+                                      setDefaultBrainMenuOpen(true);
+                                  }}
                                   onClick={() => {
+                                    // Selection is frozen once a session exists; the
+                                    // submenu (effort) is still reachable on hover.
                                     if (agentLocked) return;
-                                    setAgentListMenuOpen(true);
+                                    onAgentChange?.(null);
+                                    setDefaultBrainMenuOpen(true);
                                   }}
                                 >
                                   <span className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-[12.5px] text-ink-heading">
-                                      {selectedAgent
-                                        ? selectedAgent.name
-                                        : t(
-                                            "conversation.selectAgent" as Parameters<
-                                              typeof t
-                                            >[0],
-                                          )}
+                                      {t(
+                                        "conversation.defaultBrain" as Parameters<
+                                          typeof t
+                                        >[0],
+                                      )}
                                     </span>
-                                    {selectedAgent && (
-                                      <span className="truncate text-2xs text-ink-meta">
-                                        {selectedAgent.runtimeLabel} ·{" "}
-                                        {selectedAgent.modelLabel}
-                                      </span>
-                                    )}
+                                    <span className="truncate text-2xs text-ink-meta">
+                                      {selectedRuntimeLabel} ·{" "}
+                                      {selectedModelLabel}
+                                    </span>
                                   </span>
-                                  {!!selectedAgentSlug && (
+                                  {!selectedAgentSlug && (
                                     <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
                                   )}
-                                  {/* No ▸ when locked — the roster can't open. */}
-                                  {!agentLocked && (
+                                  {/* ▸ shows whenever the submenu can open — hidden
+                                    on a locked agent run (everything frozen). */}
+                                  {!(agentLocked && selectedAgentSlug) && (
                                     <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-meta" />
                                   )}
                                 </button>
-                                {agentListMenuOpen && (
-                                  <div
-                                    ref={measureAgentListV}
-                                    className={cn(
-                                      "absolute z-50 flex max-h-[320px] min-w-[200px] flex-col rounded-lg border border-surface-border bg-surface shadow-lg",
-                                      submenuSide === "left"
-                                        ? "right-full mr-2"
-                                        : "left-full ml-2",
-                                      agentListVAlign === "top"
-                                        ? "top-0"
-                                        : "bottom-0",
-                                    )}
-                                  >
-                                    <div className="min-h-0 flex-1 overflow-y-auto p-1">
-                                      {agents && agents.length > 0 ? (
-                                        agents.map((a) => {
-                                          const selected =
-                                            a.slug === selectedAgentSlug;
-                                          return (
-                                            <button
-                                              key={a.slug}
-                                              type="button"
-                                              disabled={agentLocked}
-                                              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent"
-                                              onClick={() => {
-                                                if (agentLocked) return;
-                                                onAgentChange?.(a.slug);
-                                                setAgentOpen(false);
-                                              }}
-                                            >
-                                              <span className="flex min-w-0 flex-1 flex-col">
-                                                <span className="truncate text-[12.5px] text-ink-heading">
-                                                  {a.name}
-                                                </span>
-                                                <span className="truncate text-2xs text-ink-meta">
-                                                  {a.runtimeLabel} ·{" "}
-                                                  {a.modelLabel}
-                                                </span>
-                                              </span>
-                                              {selected && (
-                                                <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                              )}
-                                            </button>
-                                          );
-                                        })
-                                      ) : (
-                                        <div className="px-2 py-3 text-center text-xs text-ink-meta">
-                                          {t(
-                                            "conversation.noAgents" as Parameters<
-                                              typeof t
-                                            >[0],
-                                          )}
-                                        </div>
-                                      )}
-                                    </div>
-                                    {onAddAgent && !agentLocked && (
-                                      // Pinned footer — stays visible even when
-                                      // the agent list above it scrolls.
-                                      <div className="relative shrink-0 p-1 before:absolute before:inset-x-1.5 before:top-0 before:h-px before:bg-[color:var(--fg-3)]">
-                                        <button
-                                          type="button"
-                                          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-ink-heading transition-colors hover:bg-[color:var(--fg-1)]"
-                                          onClick={() => {
-                                            setAgentOpen(false);
-                                            onAddAgent();
-                                          }}
-                                        >
-                                          <Plus className="h-4 w-4 shrink-0 text-ink-meta" />
-                                          <span className="truncate">
-                                            {t(
-                                              "conversation.addAgent" as Parameters<
-                                                typeof t
-                                              >[0],
-                                            )}
-                                          </span>
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            ) : agents && agents.length > 0 ? (
-                              agents.map((a) => {
-                                const selected = a.slug === selectedAgentSlug;
-                                return (
+                              )}
+                              {allowAgentBrainOverride ? (
+                                // New-conversation composer: collapse the roster
+                                // into a single "Agent" entry (parallel to 默认);
+                                // its 二级菜单 lists the agents + 添加 Agent.
+                                <div
+                                  className="relative"
+                                  onMouseEnter={() => {
+                                    setDefaultBrainMenuOpen(false);
+                                    setAgentSubmenu(null);
+                                    // No agent switching once the session is locked
+                                    // — the roster stays closed; the entry is inert
+                                    // (like the frozen Default selection).
+                                    if (!agentLocked)
+                                      setAgentListMenuOpen(true);
+                                  }}
+                                >
                                   <button
-                                    key={a.slug}
                                     type="button"
                                     disabled={agentLocked}
-                                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent"
+                                    className={cn(
+                                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent",
+                                      // Grey only while the roster 二级菜单 is open;
+                                      // selection is the ✓, not a persistent grey.
+                                      agentListMenuOpen && "bg-surface-muted",
+                                    )}
                                     onClick={() => {
                                       if (agentLocked) return;
-                                      onAgentChange?.(a.slug);
-                                      setAgentOpen(false);
+                                      setAgentListMenuOpen(true);
                                     }}
                                   >
                                     <span className="flex min-w-0 flex-1 flex-col">
-                                      <span className="flex min-w-0 items-center gap-1.5">
-                                        <span className="truncate text-[12.5px] text-ink-heading">
-                                          {a.name}
+                                      <span className="truncate text-[12.5px] text-ink-heading">
+                                        {selectedAgent
+                                          ? selectedAgent.name
+                                          : t(
+                                              "conversation.selectAgent" as Parameters<
+                                                typeof t
+                                              >[0],
+                                            )}
+                                      </span>
+                                      {selectedAgent && (
+                                        <span className="truncate text-2xs text-ink-meta">
+                                          {selectedAgent.runtimeLabel} ·{" "}
+                                          {selectedAgent.modelLabel}
                                         </span>
-                                        {a.badgeLabel && (
-                                          <span className="shrink-0 rounded-sm bg-surface-soft px-1 py-0 text-micro leading-[1.4] text-ink-meta">
-                                            {a.badgeLabel}
-                                          </span>
-                                        )}
-                                      </span>
-                                      <span className="truncate text-2xs text-ink-meta">
-                                        {a.runtimeLabel} · {a.modelLabel}
-                                      </span>
+                                      )}
                                     </span>
-                                    {selected && (
+                                    {!!selectedAgentSlug && (
                                       <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
                                     )}
+                                    {/* No ▸ when locked — the roster can't open. */}
+                                    {!agentLocked && (
+                                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-meta" />
+                                    )}
                                   </button>
-                                );
-                              })
-                            ) : (
-                              <div className="px-2 py-3 text-center text-xs text-ink-meta">
-                                {t(
-                                  "conversation.noAgents" as Parameters<
-                                    typeof t
-                                  >[0],
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          {/* Runtime / model / effort are the "默认" (no-agent)
+                                  {agentListMenuOpen && (
+                                    <div
+                                      ref={measureAgentListV}
+                                      className={cn(
+                                        "absolute z-50 flex max-h-[320px] min-w-[200px] flex-col rounded-lg border border-surface-border bg-surface shadow-lg",
+                                        submenuSide === "left"
+                                          ? "right-full mr-2"
+                                          : "left-full ml-2",
+                                        agentListVAlign === "top"
+                                          ? "top-0"
+                                          : "bottom-0",
+                                      )}
+                                    >
+                                      <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                                        {agents && agents.length > 0 ? (
+                                          agents.map((a) => {
+                                            const selected =
+                                              a.slug === selectedAgentSlug;
+                                            return (
+                                              <button
+                                                key={a.slug}
+                                                type="button"
+                                                disabled={agentLocked}
+                                                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent"
+                                                onClick={() => {
+                                                  if (agentLocked) return;
+                                                  onAgentChange?.(a.slug);
+                                                  setAgentOpen(false);
+                                                }}
+                                              >
+                                                <span className="flex min-w-0 flex-1 flex-col">
+                                                  <span className="flex min-w-0 items-center gap-1.5">
+                                                    <span className="truncate text-[12.5px] text-ink-heading">
+                                                      {a.name}
+                                                    </span>
+                                                    {/* Same tag as the other
+                                                      agent list below — this
+                                                      one is the popover users
+                                                      actually open. */}
+                                                    {a.badgeLabel && (
+                                                      <span
+                                                        className={`shrink-0 rounded-sm px-1 py-0 text-micro leading-[1.4] ${agentBadgeClass(a.badgeTone)}`}
+                                                      >
+                                                        {a.badgeLabel}
+                                                      </span>
+                                                    )}
+                                                  </span>
+                                                  <span className="truncate text-2xs text-ink-meta">
+                                                    {a.runtimeLabel} ·{" "}
+                                                    {a.modelLabel}
+                                                  </span>
+                                                </span>
+                                                {selected && (
+                                                  <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
+                                                )}
+                                              </button>
+                                            );
+                                          })
+                                        ) : (
+                                          <div className="px-2 py-3 text-center text-xs text-ink-meta">
+                                            {t(
+                                              "conversation.noAgents" as Parameters<
+                                                typeof t
+                                              >[0],
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                      {onAddAgent && !agentLocked && (
+                                        // Pinned footer — stays visible even when
+                                        // the agent list above it scrolls.
+                                        <div className="relative shrink-0 p-1 before:absolute before:inset-x-1.5 before:top-0 before:h-px before:bg-[color:var(--fg-3)]">
+                                          <button
+                                            type="button"
+                                            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-ink-heading transition-colors hover:bg-[color:var(--fg-1)]"
+                                            onClick={() => {
+                                              setAgentOpen(false);
+                                              onAddAgent();
+                                            }}
+                                          >
+                                            <Plus className="h-4 w-4 shrink-0 text-ink-meta" />
+                                            <span className="truncate">
+                                              {t(
+                                                "conversation.addAgent" as Parameters<
+                                                  typeof t
+                                                >[0],
+                                              )}
+                                            </span>
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : agents && agents.length > 0 ? (
+                                agents.map((a) => {
+                                  const selected = a.slug === selectedAgentSlug;
+                                  return (
+                                    <button
+                                      key={a.slug}
+                                      type="button"
+                                      disabled={agentLocked}
+                                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-default disabled:hover:bg-transparent"
+                                      onClick={() => {
+                                        if (agentLocked) return;
+                                        onAgentChange?.(a.slug);
+                                        setAgentOpen(false);
+                                      }}
+                                    >
+                                      <span className="flex min-w-0 flex-1 flex-col">
+                                        <span className="flex min-w-0 items-center gap-1.5">
+                                          <span className="truncate text-[12.5px] text-ink-heading">
+                                            {a.name}
+                                          </span>
+                                          {a.badgeLabel && (
+                                            <span
+                                              className={`shrink-0 rounded-sm px-1 py-0 text-micro leading-[1.4] ${agentBadgeClass(a.badgeTone)}`}
+                                            >
+                                              {a.badgeLabel}
+                                            </span>
+                                          )}
+                                        </span>
+                                        <span className="truncate text-2xs text-ink-meta">
+                                          {a.runtimeLabel} · {a.modelLabel}
+                                        </span>
+                                      </span>
+                                      {selected && (
+                                        <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
+                                      )}
+                                    </button>
+                                  );
+                                })
+                              ) : (
+                                <div className="px-2 py-3 text-center text-xs text-ink-meta">
+                                  {t(
+                                    "conversation.noAgents" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            {/* Runtime / model / effort are the "默认" (no-agent)
                               entry's brain, shown as its 二级菜单 — a flyout to
                               the left of the popover, opened by hovering the
                               Default row. Agents run on their own brain (shown
                               in the trigger) and carry no controls here. */}
-                          {allowAgentBrainOverride &&
-                            !(agentLocked && selectedAgentSlug) &&
-                            defaultBrainMenuOpen && (
-                              <div
-                                className={cn(
-                                  "absolute top-1 z-50 min-w-[200px] rounded-lg border border-surface-border bg-surface p-1 shadow-lg",
-                                  submenuSide === "left"
-                                    ? "right-full mr-1"
-                                    : "left-full ml-1",
-                                )}
-                              >
-                                {(
-                                  [
-                                    {
-                                      key: "runtime" as const,
-                                      label: t(
-                                        "agent.runtimeLabel" as Parameters<
-                                          typeof t
-                                        >[0],
-                                      ),
-                                      value: selectedRuntimeLabel,
-                                    },
-                                    {
-                                      key: "model" as const,
-                                      label: t(
-                                        "agent.model" as Parameters<
-                                          typeof t
-                                        >[0],
-                                      ),
-                                      value: selectedModelLabel,
-                                    },
-                                    {
-                                      key: "effort" as const,
-                                      label: t(
-                                        "effort.label" as Parameters<
-                                          typeof t
-                                        >[0],
-                                      ),
-                                      value: selectedEffortLabel,
-                                    },
-                                  ] as const
-                                ).map((row) => (
-                                  <div key={row.key} className="relative">
-                                    <button
-                                      type="button"
-                                      className={cn(
-                                        "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors",
-                                        row.key !== "effort" && modelLocked
-                                          ? "cursor-default"
-                                          : "hover:bg-[color:var(--fg-1)]",
-                                        agentSubmenu === row.key &&
-                                          "bg-surface-muted",
-                                      )}
-                                      onMouseEnter={() => {
-                                        if (row.key !== "effort" && modelLocked)
-                                          return;
-                                        setAgentSubmenu(row.key);
-                                      }}
-                                      onClick={() => {
-                                        if (row.key !== "effort" && modelLocked)
-                                          return;
-                                        setAgentSubmenu((s) =>
-                                          s === row.key ? null : row.key,
-                                        );
-                                      }}
-                                    >
-                                      <span className="shrink-0 text-ink-body">
-                                        {row.label}
-                                      </span>
-                                      <span className="inline-flex min-w-0 items-center gap-1 text-ink-meta">
-                                        <span className="max-w-[130px] truncate">
-                                          {row.value}
-                                        </span>
-                                        {!(
+                            {allowAgentBrainOverride &&
+                              !(agentLocked && selectedAgentSlug) &&
+                              defaultBrainMenuOpen && (
+                                <div
+                                  className={cn(
+                                    "absolute top-1 z-50 min-w-[200px] rounded-lg border border-surface-border bg-surface p-1 shadow-lg",
+                                    submenuSide === "left"
+                                      ? "right-full mr-1"
+                                      : "left-full ml-1",
+                                  )}
+                                >
+                                  {(
+                                    [
+                                      {
+                                        key: "runtime" as const,
+                                        label: t(
+                                          "agent.runtimeLabel" as Parameters<
+                                            typeof t
+                                          >[0],
+                                        ),
+                                        value: selectedRuntimeLabel,
+                                      },
+                                      {
+                                        key: "model" as const,
+                                        label: t(
+                                          "agent.model" as Parameters<
+                                            typeof t
+                                          >[0],
+                                        ),
+                                        value: selectedModelLabel,
+                                      },
+                                      {
+                                        key: "effort" as const,
+                                        label: t(
+                                          "effort.label" as Parameters<
+                                            typeof t
+                                          >[0],
+                                        ),
+                                        value: selectedEffortLabel,
+                                      },
+                                    ] as const
+                                  ).map((row) => (
+                                    <div key={row.key} className="relative">
+                                      <button
+                                        type="button"
+                                        className={cn(
+                                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors",
                                           row.key !== "effort" && modelLocked
-                                        ) && (
-                                          <ChevronRight className="h-3 w-3 shrink-0" />
+                                            ? "cursor-default"
+                                            : "hover:bg-[color:var(--fg-1)]",
+                                          agentSubmenu === row.key &&
+                                            "bg-surface-muted",
                                         )}
-                                      </span>
-                                    </button>
-                                    {/* Secondary flyout — pops out to the left of
+                                        onMouseEnter={() => {
+                                          if (
+                                            row.key !== "effort" &&
+                                            modelLocked
+                                          )
+                                            return;
+                                          setAgentSubmenu(row.key);
+                                        }}
+                                        onClick={() => {
+                                          if (
+                                            row.key !== "effort" &&
+                                            modelLocked
+                                          )
+                                            return;
+                                          setAgentSubmenu((s) =>
+                                            s === row.key ? null : row.key,
+                                          );
+                                        }}
+                                      >
+                                        <span className="shrink-0 text-ink-body">
+                                          {row.label}
+                                        </span>
+                                        <span className="inline-flex min-w-0 items-center gap-1 text-ink-meta">
+                                          <span className="max-w-[130px] truncate">
+                                            {row.value}
+                                          </span>
+                                          {!(
+                                            row.key !== "effort" && modelLocked
+                                          ) && (
+                                            <ChevronRight className="h-3 w-3 shrink-0" />
+                                          )}
+                                        </span>
+                                      </button>
+                                      {/* Secondary flyout — pops out to the left of
                                         the agent popover (which is right-anchored).
                                         Anchors to the row's top when the composer
                                         sits in the upper half of the window (menu
@@ -2634,168 +2807,169 @@ export const Composer = ({
                                         the lower half (menu opens upward), so the
                                         list grows toward the open space instead of
                                         off-screen. */}
-                                    {agentSubmenu === row.key && (
-                                      <div
-                                        ref={measureRowMenuV}
-                                        className={cn(
-                                          "absolute z-50 max-h-[240px] min-w-[200px] overflow-y-auto rounded-lg border border-surface-border bg-surface p-1 shadow-lg",
-                                          // mr-2/ml-2 (not mr-1): this flyout
-                                          // anchors to the row, which sits inside
-                                          // the 二级's p-1 padding — the extra 4px
-                                          // restores a gap equal to 一级↔二级.
-                                          submenuSide === "left"
-                                            ? "right-full mr-2"
-                                            : "left-full ml-2",
-                                          rowMenuVAlign === "top"
-                                            ? "top-0"
-                                            : "bottom-0",
-                                        )}
-                                      >
-                                        {row.key === "runtime" &&
-                                          runtimes.map((r) => (
-                                            <button
-                                              key={r.id}
-                                              type="button"
-                                              disabled={!r.available}
-                                              className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-not-allowed disabled:opacity-50"
-                                              onClick={() => {
-                                                // Picking a runtime is a
-                                                // DEFAULT-brain choice: if an
-                                                // agent was still selected,
-                                                // switch to Default so the pick
-                                                // actually applies.
-                                                if (selectedAgentSlug)
-                                                  onAgentChange?.(null);
-                                                onRuntimeChange?.(r.id);
-                                                setAgentSubmenu(null);
-                                              }}
-                                            >
-                                              <span className="truncate text-ink-heading">
-                                                {r.displayName}
-                                              </span>
-                                              {r.id === selectedRuntimeId && (
-                                                <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                              )}
-                                            </button>
-                                          ))}
-                                        {row.key === "model" &&
-                                          Array.from(
-                                            providers
-                                              .reduce((map, m) => {
-                                                const g = map.get(
-                                                  m.providerId,
-                                                ) ?? {
-                                                  name: m.providerName,
-                                                  items:
-                                                    [] as ModelSelectorItem[],
-                                                };
-                                                g.items.push(m);
-                                                map.set(m.providerId, g);
-                                                return map;
-                                              }, new Map<string, { name: string; items: ModelSelectorItem[] }>())
-                                              .entries(),
-                                          ).map(([pid, g]) => (
-                                            <div key={pid}>
-                                              <div className="px-2 pt-1.5 pb-0.5 text-2xs font-medium tracking-wide text-ink-meta uppercase">
-                                                {g.name}
-                                              </div>
-                                              {g.items.map((m) => {
-                                                const sel =
-                                                  m.providerId ===
-                                                    selectedProviderId &&
-                                                  m.modelId === selectedModelId;
-                                                return (
-                                                  <button
-                                                    key={`${m.providerId}::${m.modelId}`}
-                                                    type="button"
-                                                    className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--fg-1)]"
-                                                    onClick={() => {
-                                                      // Same as runtime: a
-                                                      // model pick belongs to
-                                                      // the Default brain.
-                                                      if (selectedAgentSlug)
-                                                        onAgentChange?.(null);
-                                                      onModelChange?.(
-                                                        m.providerId,
-                                                        m.modelId,
-                                                      );
-                                                      setAgentSubmenu(null);
-                                                    }}
-                                                  >
-                                                    <span className="min-w-0 flex-1 truncate text-ink-heading">
-                                                      {modelLabel(m.modelId)}
-                                                    </span>
-                                                    {/* Hint (e.g. points multiplier) sits in
-                                                        its own right-aligned column, and the
-                                                        check slot is always reserved so the
-                                                        numbers line up across rows. */}
-                                                    <ModelSelectionHint
-                                                      hint={m.selectionHint}
-                                                    />
-                                                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                                                      {sel && (
-                                                        <Check className="h-3.5 w-3.5 text-ink-heading" />
-                                                      )}
-                                                    </span>
-                                                  </button>
-                                                );
-                                              })}
-                                            </div>
-                                          ))}
-                                        {row.key === "effort" &&
-                                          EFFORT_ORDER.map((level) => {
-                                            const sel = effortKey === level;
-                                            return (
+                                      {agentSubmenu === row.key && (
+                                        <div
+                                          ref={measureRowMenuV}
+                                          className={cn(
+                                            "absolute z-50 max-h-[240px] min-w-[200px] overflow-y-auto rounded-lg border border-surface-border bg-surface p-1 shadow-lg",
+                                            // mr-2/ml-2 (not mr-1): this flyout
+                                            // anchors to the row, which sits inside
+                                            // the 二级's p-1 padding — the extra 4px
+                                            // restores a gap equal to 一级↔二级.
+                                            submenuSide === "left"
+                                              ? "right-full mr-2"
+                                              : "left-full ml-2",
+                                            rowMenuVAlign === "top"
+                                              ? "top-0"
+                                              : "bottom-0",
+                                          )}
+                                        >
+                                          {row.key === "runtime" &&
+                                            runtimes.map((r) => (
                                               <button
-                                                key={level}
+                                                key={r.id}
                                                 type="button"
-                                                className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--fg-1)]"
+                                                disabled={!r.available}
+                                                className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--fg-1)] disabled:cursor-not-allowed disabled:opacity-50"
                                                 onClick={() => {
-                                                  onEffortChange?.(level);
+                                                  // Picking a runtime is a
+                                                  // DEFAULT-brain choice: if an
+                                                  // agent was still selected,
+                                                  // switch to Default so the pick
+                                                  // actually applies.
+                                                  if (selectedAgentSlug)
+                                                    onAgentChange?.(null);
+                                                  onRuntimeChange?.(r.id);
                                                   setAgentSubmenu(null);
                                                 }}
                                               >
                                                 <span className="truncate text-ink-heading">
-                                                  {EFFORT_LABELS[level].label}
+                                                  {r.displayName}
                                                 </span>
-                                                {sel && (
+                                                {r.id === selectedRuntimeId && (
                                                   <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
                                                 )}
                                               </button>
-                                            );
-                                          })}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          {/* Project mode keeps the inline 添加 Agent footer; the
+                                            ))}
+                                          {row.key === "model" &&
+                                            Array.from(
+                                              providers
+                                                .reduce((map, m) => {
+                                                  const g = map.get(
+                                                    m.providerId,
+                                                  ) ?? {
+                                                    name: m.providerName,
+                                                    items:
+                                                      [] as ModelSelectorItem[],
+                                                  };
+                                                  g.items.push(m);
+                                                  map.set(m.providerId, g);
+                                                  return map;
+                                                }, new Map<string, { name: string; items: ModelSelectorItem[] }>())
+                                                .entries(),
+                                            ).map(([pid, g]) => (
+                                              <div key={pid}>
+                                                <div className="px-2 pt-1.5 pb-0.5 text-2xs font-medium tracking-wide text-ink-meta uppercase">
+                                                  {g.name}
+                                                </div>
+                                                {g.items.map((m) => {
+                                                  const sel =
+                                                    m.providerId ===
+                                                      selectedProviderId &&
+                                                    m.modelId ===
+                                                      selectedModelId;
+                                                  return (
+                                                    <button
+                                                      key={`${m.providerId}::${m.modelId}`}
+                                                      type="button"
+                                                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--fg-1)]"
+                                                      onClick={() => {
+                                                        // Same as runtime: a
+                                                        // model pick belongs to
+                                                        // the Default brain.
+                                                        if (selectedAgentSlug)
+                                                          onAgentChange?.(null);
+                                                        onModelChange?.(
+                                                          m.providerId,
+                                                          m.modelId,
+                                                        );
+                                                        setAgentSubmenu(null);
+                                                      }}
+                                                    >
+                                                      <span className="min-w-0 flex-1 truncate text-ink-heading">
+                                                        {modelLabel(m.modelId)}
+                                                      </span>
+                                                      {/* Hint (e.g. points multiplier) sits in
+                                                        its own right-aligned column, and the
+                                                        check slot is always reserved so the
+                                                        numbers line up across rows. */}
+                                                      <ModelSelectionHint
+                                                        hint={m.selectionHint}
+                                                      />
+                                                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                                                        {sel && (
+                                                          <Check className="h-3.5 w-3.5 text-ink-heading" />
+                                                        )}
+                                                      </span>
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            ))}
+                                          {row.key === "effort" &&
+                                            EFFORT_ORDER.map((level) => {
+                                              const sel = effortKey === level;
+                                              return (
+                                                <button
+                                                  key={level}
+                                                  type="button"
+                                                  className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--fg-1)]"
+                                                  onClick={() => {
+                                                    onEffortChange?.(level);
+                                                    setAgentSubmenu(null);
+                                                  }}
+                                                >
+                                                  <span className="truncate text-ink-heading">
+                                                    {EFFORT_LABELS[level].label}
+                                                  </span>
+                                                  {sel && (
+                                                    <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
+                                                  )}
+                                                </button>
+                                              );
+                                            })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            {/* Project mode keeps the inline 添加 Agent footer; the
                               collapsed (new-conversation) mode moves it into the
                               Agent roster 二级菜单 above. */}
-                          {onAddAgent &&
-                            !agentLocked &&
-                            !allowAgentBrainOverride && (
-                              <div className="relative p-1 before:absolute before:inset-x-1.5 before:top-0 before:h-px before:bg-[color:var(--fg-3)]">
-                                <button
-                                  type="button"
-                                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-ink-heading transition-colors hover:bg-[color:var(--fg-1)]"
-                                  onClick={() => {
-                                    setAgentOpen(false);
-                                    onAddAgent();
-                                  }}
-                                >
-                                  <Plus className="h-4 w-4 shrink-0 text-ink-meta" />
-                                  <span className="truncate">
-                                    {t(
-                                      "conversation.addAgent" as Parameters<
-                                        typeof t
-                                      >[0],
-                                    )}
-                                  </span>
-                                </button>
-                              </div>
-                            )}
+                            {onAddAgent &&
+                              !agentLocked &&
+                              !allowAgentBrainOverride && (
+                                <div className="relative p-1 before:absolute before:inset-x-1.5 before:top-0 before:h-px before:bg-[color:var(--fg-3)]">
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-ink-heading transition-colors hover:bg-[color:var(--fg-1)]"
+                                    onClick={() => {
+                                      setAgentOpen(false);
+                                      onAddAgent();
+                                    }}
+                                  >
+                                    <Plus className="h-4 w-4 shrink-0 text-ink-meta" />
+                                    <span className="truncate">
+                                      {t(
+                                        "conversation.addAgent" as Parameters<
+                                          typeof t
+                                        >[0],
+                                      )}
+                                    </span>
+                                  </button>
+                                </div>
+                              )}
                           </div>,
                           document.body,
                         )}
@@ -3174,7 +3348,7 @@ export const Composer = ({
               <button
                 type="button"
                 className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-[120ms]",
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms]",
                   "@min-[500px]/composer:w-auto @min-[500px]/composer:gap-1 @min-[500px]/composer:px-2 @min-[500px]/composer:text-xs @min-[500px]/composer:font-medium",
                   hasContent && !sendDisabled
                     ? "bg-brand text-white hover:bg-brand-hover"
@@ -3194,7 +3368,7 @@ export const Composer = ({
               <button
                 type="button"
                 className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-[120ms]",
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms]",
                   hasContent && !sendDisabled
                     ? "bg-brand text-white hover:bg-brand-hover"
                     : "bg-brand/40 text-white/60",
@@ -3217,16 +3391,6 @@ export const Composer = ({
       {footerBar ? (
         <div className="mx-auto -mt-2 max-w-[760px]">{footerBar}</div>
       ) : null}
-
-      {/* PRD-PAAT §3.2 task-mode hint card — sits below the composer
-          and explains the lead-Agent ownership model in one line so
-          the user knows why ``send`` here behaves differently. */}
-      {mode === "task" && (
-        <div className="mx-auto mt-2 flex max-w-[760px] items-center justify-center gap-2 px-3 py-1.5 text-center text-2xs text-ink-meta">
-          <Zap className="h-3 w-3 shrink-0 text-ink-muted" strokeWidth={2} />
-          <span>{t("composer.taskHint" as Parameters<typeof t>[0])}</span>
-        </div>
-      )}
     </div>
   );
 };

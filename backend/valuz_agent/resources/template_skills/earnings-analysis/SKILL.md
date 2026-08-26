@@ -1,6 +1,6 @@
 ---
 name: earnings-analysis
-description: Post-earnings quarterly update reports for global companies under coverage (focus US / HK / A-shares, also other markets). Analyzes earnings flashes/formal filings, generates variance tables (actual vs consensus vs prior), flags key drivers, and drafts structured earnings notes in sell-side format. Pulls actual/historical financials, guidance, and indicator values via valuz-stock, and retrieves earnings reports, calls, research, minutes, and filings via valuz-search. Triggers on "财报分析", "季度业绩点评", "年报/中报点评", "earnings review", or "[company] earnings".
+description: Post-earnings quarterly update reports for global companies under coverage (focus US / HK / A-shares, also other markets). Analyzes earnings flashes/formal filings, generates variance tables (actual vs consensus vs prior), flags key drivers, and drafts structured earnings notes in sell-side format. Pulls actual/historical financials, guidance, and indicator values via valuz-data, and retrieves earnings reports, calls, research, minutes, and filings via valuz-search. Triggers on "财报分析", "季度业绩点评", "年报/中报点评", "earnings review", or "[company] earnings".
 ---
 
 # earnings-analysis
@@ -13,37 +13,37 @@ Create professional **季度/年度业绩点评报告**, analyzing results for g
 
 ### Tools
 
-- **valuz-stock** — 实际/历史财务、指引、指标数值数据.
+- **valuz-data** — 实际/历史财务、指引、指标数值数据.
 - **valuz-search** — 财报、电话会、公告、纪要检索.
 
-Use **valuz-stock** to pull actual financials; use **valuz-search** to retrieve the underlying earnings reports, earnings-call transcripts, consensus research, and filings.
+Use **valuz-data** to pull actual financials; use **valuz-search** to retrieve the underlying earnings reports, earnings-call transcripts, consensus research, and filings.
 
-> **Symbol formats differ across the two servers:** valuz-stock 用裸代码（`AAPL` / `00700` / `600519`）；valuz-search 用 `market:ticker`（`US:AAPL` / `HK:00700` / `SH:600519`）。
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 
 ```python
-# 实际/历史财务 — valuz-stock (裸代码)
-income_statement(symbol="AAPL", period="quarterly", limit=8)   → 利润表 (季度)
-income_statement(symbol="AAPL", period="annual", limit=5)      → 利润表 (年度)
-balance_sheet(symbol="AAPL", period="quarterly", limit=8)      → 资产负债表
-cashflow_statement(symbol="AAPL", period="quarterly", limit=8) → 现金流量表
-revenue_breakdown(symbol="AAPL", period="quarterly")           → 分业务/分地区收入
-company_overview(symbol="AAPL")                                → 公司概览
-stock_quote(symbol="AAPL")                                     → 行情, PE/PB/PS
-earnings_calendar(symbol="AAPL")                               → 财报日历
+# 实际/历史财务 — valuz-data
+get_financial_statements(statement_type="income", symbol="US:AAPL", period="quarterly", limit=8) → 利润表
+get_financial_statements(statement_type="balance", symbol="US:AAPL", period="quarterly", limit=8) → 资产负债表
+get_financial_statements(statement_type="cash_flow", symbol="US:AAPL", period="quarterly", limit=8) → 现金流量表
+get_financial_statements(statement_type="revenue_breakdown", symbol="US:AAPL", period="quarterly") → 分业务/分地区收入
+get_company(kind="profile", symbol="US:AAPL") → 公司概览
+get_snapshots(symbol="US:AAPL") → 价格、涨跌、成交量
+get_valuations(kind="latest", symbol="US:AAPL") → PE/PB/PS、市值
+get_calendar(kind="earnings", symbol="US:AAPL") → 财报日历
 
 # 财报原文 / 电话会 / 公告 / 一致预期 — valuz-search (market:ticker)
-earnings_search(symbols=["US:AAPL"])      → 交易所财报
-conferences_search(symbols=["US:AAPL"])   → 业绩电话会纪要/演示
-filings_search(symbols=["US:AAPL"])       → 公告
-reports_search(symbols=["US:AAPL"])       → 机构研报 / 一致预期
-document_raw_content(...)                 → 取上述检索结果的原文（指引 vs 实际）
+search_documents(category="earnings_reports", symbols="US:AAPL") → 交易所财报
+search_documents(category="earnings_calls", symbols="US:AAPL") → 业绩电话会纪要/演示
+search_documents(category="filings", symbols="US:AAPL") → 公告
+search_documents(category="research_reports", symbols="US:AAPL") → 机构研报 / 一致预期
+get_document_chunks(kind="list", document_id=...) → 取上述检索结果的可引用原文 chunk
 ```
 
 ### Secondary Sources (via valuz-search)
 
-- **交易所财报 / 公告** — retrieve with `earnings_search` / `filings_search`, pull full text with `document_raw_content` (covers SEC EDGAR、港交所披露易、巨潮资讯等各市场披露平台)
-- **业绩电话会 / 业绩说明会** — `conferences_search` (纪要/演示), full text via `document_raw_content`
-- **机构研报 / 一致预期** — `reports_search` (analyst consensus & sell-side views)
+- **交易所财报 / 公告** — retrieve with `search_documents`, pull full text with `get_document(kind="raw_content")` (covers SEC EDGAR、港交所披露易、巨潮资讯等各市场披露平台)
+- **业绩电话会 / 业绩说明会** — `search_documents` (纪要/演示), full text via `get_document(kind="raw_content")`
+- **机构研报 / 一致预期** — `search_documents` (analyst consensus & sell-side views)
 
 ## Key Financial Terms (Chinese → English)
 
@@ -66,14 +66,14 @@ document_raw_content(...)                 → 取上述检索结果的原文（�
 ### Step 1: Pull the Earnings Print
 
 **Data to collect:**
-- Current quarter / full year income statement — actual via `income_statement` (valuz-stock); original filing via `earnings_search` + `document_raw_content` (valuz-search)
-- Balance sheet and cash flow statement — `balance_sheet` / `cashflow_statement` (valuz-stock)
-- Management commentary / 业绩说明会 / earnings-call transcript — `conferences_search` + `document_raw_content` (valuz-search)
-- Company press release / 公告 — `filings_search` + `document_raw_content` (valuz-search)
+- Current quarter / full year income statement — actual via `get_financial_statements` (valuz-data); original filing via `search_documents` (valuz-search) + `get_document(kind="raw_content")` (valuz-data)
+- Balance sheet and cash flow statement — `get_financial_statements` (valuz-data)
+- Management commentary / 业绩说明会 / earnings-call transcript — `search_documents` (valuz-search) + `get_document(kind="raw_content")` (valuz-data)
+- Company press release / 公告 — `search_documents` (valuz-search) + `get_document(kind="raw_content")` (valuz-data)
 
 **Verify against:**
-- Previous quarter guidance (管理层指引) — pull from prior 电话会 via `conferences_search` + `document_raw_content`, compare to actuals
-- Consensus estimates (一致预期) — `reports_search` (valuz-search) if available
+- Previous quarter guidance (管理层指引) — pull from prior 电话会 via `search_documents` + `get_document(kind="raw_content")`, compare to actuals
+- Consensus estimates (一致预期) — `search_documents` (valuz-search) if available
 
 ### Step 2: Build the Variance Table
 
@@ -95,14 +95,14 @@ document_raw_content(...)                 → 取上述检索结果的原文（�
   - **低于预期**: <-10%
 
 **Consensus sources:**
-- 实际数用 `income_statement` / `cashflow_statement` (valuz-stock)；一致预期用 `reports_search` (valuz-search)；财报原文/电话会指引/公告用 `earnings_search` / `conferences_search` / `filings_search` + `document_raw_content` (valuz-search)
+- 实际数用 `get_financial_statements` (valuz-data)；一致预期用 `search_documents` (valuz-search)；财报原文/电话会指引/公告用 `search_documents` (valuz-search) + `get_document(kind="raw_content")` (valuz-data)
 - If unavailable, note `[UNSOURCED]`
 
 ### Step 3: Analyze Key Drivers
 
 **Revenue:**
 - Volume vs price decomposition
-- Segment revenue breakdown (if disclosed) — `revenue_breakdown` (valuz-stock)
+- Segment revenue breakdown (if disclosed) — `get_financial_statements` (valuz-data)
 - New product / customer contribution
 - Industry volume trends
 
@@ -144,10 +144,10 @@ Based on current quarter results and management guidance:
 ### Step 5: Valuation Update
 
 **Current valuation metrics:**
-- Current stock price + daily change — `stock_quote` (valuz-stock)
-- PE (动 / 静), PB, PS — `stock_quote` (valuz-stock)
+- Current stock price + daily change — `get_snapshots` (valuz-data)
+- PE (动 / 静), PB, PS — `get_snapshots` (valuz-data)
 - EV/EBITDA (if applicable)
-- 52-week high/low, YTD performance — `stock_quote` (valuz-stock)
+- 52-week high/low, YTD performance — `get_snapshots` (valuz-data)
 - Relative to sector median
 
 **Post-earnings re-rating assessment:**
@@ -204,7 +204,7 @@ Based on current quarter results and management guidance:
 
 **Before delivering:**
 
-- [ ] All numbers sourced from valuz-stock (`income_statement` / `balance_sheet` / `cashflow_statement` / `revenue_breakdown` / `stock_quote`) or valuz-search (`earnings_search` / `conferences_search` / `filings_search` / `reports_search` + `document_raw_content`)
+- [ ] All numbers sourced from valuz-data (`get_financial_statements` / `get_snapshots`) or valuz-search (`search_documents` + `get_document(kind="raw_content")`)
 - [ ] Variance table complete with actual/consensus/prior
 - [ ] Beat/miss flagged with % surprise
 - [ ] Key drivers identified and explained
@@ -244,13 +244,13 @@ Filing cadence varies by market — confirm the relevant regime:
 **Format for data citations:**
 
 ```
-Source: valuz-search, earnings_search(symbols=["US:AAPL"]) → document_raw_content(...), [Company] 2024 年度报告 / annual report, p.[X], [URL if applicable]
-Source: valuz-stock, income_statement(symbol="AAPL", period="quarterly")
-Source: valuz-search, reports_search(symbols=["US:AAPL"]) — 一致预期, accessed [Date]
-Source: valuz-search, conferences_search(symbols=["US:AAPL"]) → document_raw_content(...) — 电话会/业绩说明会, accessed [Date]
+Source: valuz-search, search_documents(category="all", symbols=["US:AAPL"]) → get_document(kind="raw_content", document_id=...), [Company] 2024 年度报告 / annual report, p.[X], [URL if applicable]
+Source: valuz-data, get_financial_statements(statement_type="income", symbol="US:AAPL", period="quarterly")
+Source: valuz-search, search_documents(category="all", symbols=["US:AAPL"]) — 一致预期, accessed [Date]
+Source: valuz-search, search_documents(category="all", symbols=["US:AAPL"]) → get_document(kind="raw_content", document_id=...) — 电话会/业绩说明会, accessed [Date]
 ```
 
-**Symbols across markets:** valuz-stock 裸代码 US `AAPL` / HK `00700` / A-share `600519`；valuz-search `market:ticker` US `US:AAPL` / HK `HK:00700` / A-share `SH:600519`.
+**Symbols across markets:** valuz-data MARKET:LOCAL 规范代码 US `AAPL` / HK `00700` / A-share `600519`；valuz-search `market:ticker` US `US:AAPL` / HK `HK:00700` / A-share `SH:600519`.
 
 **For figures not from primary sources:**
 ```

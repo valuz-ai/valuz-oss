@@ -32,7 +32,6 @@ import {
   useTranslation,
 } from "@valuz/core";
 import {
-  MarketplaceSourcePill,
   marketplaceIcon,
   tintFor,
 } from "../marketplace-ui";
@@ -306,11 +305,12 @@ export function MarketplacePluginDialog({
                 )}
               </div>
               <div className="min-w-0 flex-1">
+                {/* No source pill here: every plugin's source maps to
+                    ``plugin``, so it only repeated the type chip beside it. */}
                 <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                   <span className="rounded border border-surface-border bg-surface-soft px-1.5 py-px font-mono text-2xs text-ink-meta">
                     {tr("marketplace.modalTypePlugin")}
                   </span>
-                  <MarketplaceSourcePill source={item.source} />
                   <Badge variant="metaOutline">
                     {composition === "with_connectors"
                       ? tr("marketplace.compositionWithConnectors")

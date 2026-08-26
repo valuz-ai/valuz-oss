@@ -15,6 +15,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import PureWindowsPath
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ToolCallRequest
@@ -202,6 +203,104 @@ class ToolErrorTolerantMiddleware(AgentMiddleware):
                 name=tool_name,
                 status="error",
             )
+
+
+# deepagents filesystem tools whose path arguments run through the
+# middleware-layer ``validate_path`` (deepagents/middleware/filesystem.py),
+# which hard-rejects drive-letter paths before any backend sees them.
+_FS_TOOL_PATH_ARGS: dict[str, tuple[str, ...]] = {
+    "ls": ("path",),
+    "read_file": ("file_path",),
+    "write_file": ("file_path",),
+    "edit_file": ("file_path",),
+    "glob": ("path",),
+}
+
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def virtualize_windows_path(value: str, root_parts: tuple[str, ...]) -> str | None:
+    """The virtual form of an in-workspace Windows absolute path, else ``None``.
+
+    ``C:\\...\\<root>`` itself maps to ``"/"``; anything deeper maps to
+    ``"/<relative posix>"`` — the same containment semantics the shell
+    backend's ``_resolve_path`` already applies to POSIX absolutes.
+    Containment is judged case-insensitively (Windows filesystems are), the
+    remainder keeps its original casing. Out-of-root drive paths, UNC paths,
+    and everything non-drive-lettered return ``None`` (leave untouched).
+    """
+    if not _WINDOWS_DRIVE_RE.match(value):
+        return None
+    parts = PureWindowsPath(value).parts
+    if len(parts) < len(root_parts):
+        return None
+    if tuple(p.casefold() for p in parts[: len(root_parts)]) != tuple(
+        p.casefold() for p in root_parts
+    ):
+        return None
+    return "/" + "/".join(parts[len(root_parts) :])
+
+
+class WindowsPathVirtualizerMiddleware(AgentMiddleware):
+    """Translate in-workspace Windows absolute paths to the virtual dialect.
+
+    Every turn's user prompt carries ``workspace_cwd: <cwd>`` (core
+    ``prompt_builder``), and on Windows the model naturally echoes that
+    drive-letter path into filesystem tool calls. deepagents'
+    middleware-layer ``validate_path`` rejects any ``^[a-zA-Z]:`` path
+    outright — before the shell backend's ``_resolve_path`` (which already
+    accepts in-workspace absolutes) can run. On POSIX the same echo works by
+    coincidence because an absolute path is also a well-formed virtual path.
+
+    This middleware closes the gap at the one seam that has the workspace
+    root: rewrite the path argument of the five filesystem tools when it is
+    a drive-letter path lexically under the root. Out-of-root paths stay
+    untouched so upstream's honest rejection still applies. A no-op unless
+    the workspace root itself is drive-letter-shaped, so POSIX sessions pay
+    one regex check at construction and nothing per call.
+    """
+
+    def __init__(self, workspace_root: str | None) -> None:
+        root = workspace_root or ""
+        self._active = bool(_WINDOWS_DRIVE_RE.match(root))
+        self._root_parts: tuple[str, ...] = (
+            PureWindowsPath(root).parts if self._active else ()
+        )
+
+    def _rewritten(self, request: ToolCallRequest) -> ToolCallRequest:
+        if not self._active:
+            return request
+        tool_call = request.tool_call
+        arg_names = _FS_TOOL_PATH_ARGS.get(str(tool_call.get("name") or ""))
+        if not arg_names:
+            return request
+        args = tool_call.get("args")
+        if not isinstance(args, dict):
+            return request
+        replaced: dict[str, str] = {}
+        for arg in arg_names:
+            value = args.get(arg)
+            if isinstance(value, str):
+                virtual = virtualize_windows_path(value, self._root_parts)
+                if virtual is not None:
+                    replaced[arg] = virtual
+        if not replaced:
+            return request
+        return request.override(tool_call={**tool_call, "args": {**args, **replaced}})
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        return handler(self._rewritten(request))
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        return await handler(self._rewritten(request))
 
 
 class InvalidToolCallPairMiddleware(AgentMiddleware):
@@ -1213,7 +1312,7 @@ def _structured_fallback_collection(
         title_parts.append(formula)
     source: dict[str, Any] = {
         "sourceId": source_id,
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "tool-result",
         "sourceCategory": str(spec.get("sourceCategory") or "financials"),
         "title": " · ".join(title_parts)[:1_024],

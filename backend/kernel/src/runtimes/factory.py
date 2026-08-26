@@ -27,6 +27,7 @@ from src.core.agent_config import AgentConfig
 from src.core.events import EventSink
 from src.core.runtime_port import RuntimePort
 from src.core.tool_registry import build_toolkit_for_config
+from src.ptc.executor import maybe_expose_execute_code
 from src.core.tools import ToolKit
 from src.core.types import ApiProtocol, RuntimeProvider, Session
 from src.runtimes.network_egress import (
@@ -94,6 +95,11 @@ def create_runtime(
 ) -> RuntimePort:
     """Create the runtime that hosts ``session.model`` for this agent."""
     resolved_toolkit = toolkit or build_toolkit_for_config(config.tools)
+    # PTC: a session whose host stamped ``metadata["ptc"].servers`` gets the
+    # kernel-owned ``execute_code`` tool without any agent_config surgery —
+    # the metadata key is the opt-in signal, updatable through the existing
+    # session PATCH surface, and the exposure reverses when the key goes.
+    maybe_expose_execute_code(resolved_toolkit, session)
     provider = session.runtime_provider
 
     # Validate api_protocol against the chosen runtime as defense in
@@ -147,6 +153,15 @@ def create_runtime(
             raise ValueError(
                 "DeepSeekHarnessRuntime requires both `model` and `model_provider` "
                 "(the dsh subprocess reads credentials from its environment)."
+            )
+        if not (session.model_provider.base_url or "").strip():
+            # dsh's own empty-endpoint fallback is DeepSeek's public API —
+            # silently wrong for any other channel's key. Fail at creation
+            # with an actionable message instead of a confusing 401 later.
+            raise ValueError(
+                "DeepSeekHarnessRuntime requires an explicit `model_provider.base_url` "
+                "(the dsh adapter posts to `{base_url}/chat/completions` and has no "
+                "safe first-party default for a non-DeepSeek channel)."
             )
         from src.runtimes.deepseek_harness.runtime import DeepSeekHarnessRuntime
 

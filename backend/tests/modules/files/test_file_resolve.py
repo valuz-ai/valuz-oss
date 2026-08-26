@@ -175,3 +175,68 @@ class TestResolveOne:
         d = await _resolve_one(ref, "u", [tmp_path.resolve()])
         assert d.error == "not_found" and not d.exists
         assert not d.capabilities.can_download
+
+
+class TestOwnerAllowedRoots:
+    """The prefix allowlist IS the isolation line, so what it omits is a
+    permission failure the user reads as a broken button.
+
+    A knowledge base on the desktop can point at any folder the user picked —
+    the same freedom a ``project``-kind project has, and the reason projects are
+    already enumerated here. Libraries were not, so every document in one
+    resolved as ``forbidden``: "open the original file" failed for a library the
+    caller had just built, while the managed tree beside it worked.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_user_picked_library_folder_is_owned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from valuz_agent.modules.files import service as files_service
+
+        picked = tmp_path / "anydoc smoke"
+        (picked).mkdir()
+        doc = picked / "analyze.py"
+        doc.write_text("x", encoding="utf-8")
+
+        async def _no_projects(_user_id: str):
+            return []
+
+        async def _one_library(_user_id: str):
+            return [str(picked)]
+
+        monkeypatch.setattr("valuz_agent.modules.projects.service.project_root_paths", _no_projects)
+        monkeypatch.setattr("valuz_agent.modules.docs.service.owner_kb_root_paths", _one_library)
+
+        roots = await files_service.owner_allowed_roots("owner-1")
+
+        assert files_service.assert_owned(doc, roots) == doc.resolve()
+
+    @pytest.mark.asyncio
+    async def test_a_folder_no_library_points_at_is_still_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Widening the allowlist must widen it by exactly one prefix per
+        library — not by the parent they happen to share."""
+        from valuz_agent.modules.files import service as files_service
+
+        picked = tmp_path / "library"
+        picked.mkdir()
+        outsider = tmp_path / "someone-elses"
+        outsider.mkdir()
+        secret = outsider / "notes.md"
+        secret.write_text("x", encoding="utf-8")
+
+        async def _no_projects(_user_id: str):
+            return []
+
+        async def _one_library(_user_id: str):
+            return [str(picked)]
+
+        monkeypatch.setattr("valuz_agent.modules.projects.service.project_root_paths", _no_projects)
+        monkeypatch.setattr("valuz_agent.modules.docs.service.owner_kb_root_paths", _one_library)
+
+        roots = await files_service.owner_allowed_roots("owner-1")
+
+        with pytest.raises(PermissionError):
+            files_service.assert_owned(secret, roots)

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   Activity,
   BookOpen,
+  BookOpenText,
   Bot,
   ChevronDown,
   Clock,
@@ -46,7 +47,6 @@ import { DeleteConfirmDialog } from "../components/common/DeleteConfirmDialog";
 import { ForkIcon } from "../components/common/ForkIcon";
 import type { NavLinkComponent } from "./AppShell";
 import { useI18n } from "../hooks/use-i18n";
-import { assetUrl } from "@valuz/shared";
 
 export interface DesktopSidebarItem {
   id: string;
@@ -132,6 +132,7 @@ const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   knowledge: BookOpen,
   skills: Zap,
   scheduled: Clock,
+  playbooks: BookOpenText,
   activity: Activity,
   system: Activity,
   settings: Settings,
@@ -634,7 +635,6 @@ export interface DesktopSidebarProps {
    * bottom-left account / org menu. Rendered in both collapsed and expanded
    * states. */
   sidebarFooter?: ReactNode;
-  mascotSrc?: string | null;
   LinkComponent?: NavLinkComponent;
   primaryActionHref?: string;
   /** Fires whenever the primary action ("新对话") is clicked, in addition to
@@ -691,7 +691,6 @@ export const DesktopSidebar = ({
   sidebarHeader,
   sidebarExtraItems,
   sidebarFooter,
-  mascotSrc,
   LinkComponent = DefaultNavLink,
   primaryActionHref = "/conversation/new",
   onPrimaryAction,
@@ -710,7 +709,6 @@ export const DesktopSidebar = ({
   collapsed = false,
 }: DesktopSidebarProps) => {
   const { t } = useI18n();
-  const resolvedMascotSrc = mascotSrc ?? assetUrl("mascot.png");
   const [projectRenamingId, setProjectRenamingId] = useState<string | null>(
     null,
   );
@@ -1317,28 +1315,10 @@ export const DesktopSidebar = ({
               </div>
             </nav>
 
-            {/* Mascot — anchored absolutely at the bottom area
-                (above the settings link), z-0 so the scrollable nav
-                sits above it. When the session list is short, the
-                empty space at the bottom of the nav reveals the
-                mascot. When the user expands a project / the Chats
-                group and the list gets long, the nav scrolls over the
-                mascot — line-drawing bleeds through behind the
-                links so it's still felt without obscuring text. */}
-            {resolvedMascotSrc ? (
-              <img
-                src={resolvedMascotSrc}
-                alt=""
-                aria-hidden="true"
-                className="pointer-events-none absolute bottom-[64px] left-1/2 z-0 h-[170px] w-auto -translate-x-1/2 select-none opacity-60"
-              />
-            ) : null}
-
             {/* Bottom-pinned: Library + Settings. Library (Agents / Skills /
                 Connectors / Knowledge) sits right above Settings so resource
                 management groups with app config; the scrollable nav above
-                stays focused on project verbs + projects. ``relative z-10``
-                so links sit in front of the absolute-positioned mascot; the
+                stays focused on project verbs + projects. The
                 opaque ``bg-background`` (the sidebar's own colour) hides the
                 scrollable nav when a long list scrolls up behind it instead of
                 letting the text bleed through. */}
