@@ -456,6 +456,10 @@ export const CreateAgentDialog = ({
 
             {/* ② Agent 自定义指令 */}
             <DialogField label={t("agent.tabInstructions")}>
+              {/* ``field-sizing-fixed`` restores ``rows``: the shared Textarea
+                  grows with its content, which meant this box opened short for
+                  a blank create and tall for a copy (seeded with the source
+                  agent's instructions). Same dialog, two different shapes. */}
               <Textarea
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}
@@ -463,7 +467,7 @@ export const CreateAgentDialog = ({
                 placeholder={t(
                   "agent.instructionsPlaceholder" as Parameters<typeof t>[0],
                 )}
-                className="text-xs leading-6"
+                className="field-sizing-fixed text-xs leading-6"
               />
             </DialogField>
 
