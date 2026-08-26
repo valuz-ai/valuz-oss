@@ -15,10 +15,7 @@ import {
   type GroupImperativeHandle,
   type Layout,
 } from "../components/ui/resizable";
-import {
-  NORMAL_PANEL_LAYOUT,
-  resolveRightPanelLayoutTransition,
-} from "./right-panel-layout";
+import { resolveRightPanelLayoutTransition } from "./right-panel-layout";
 
 /**
  * Props passed to a nav link component. Matches react-router-dom's `Link`
@@ -85,6 +82,11 @@ interface AppShellProps extends PropsWithChildren {
    * separator. Disabled by default so master-detail layouts keep their
    * existing fixed sizing unless the host explicitly opts in. */
   rightPanelResizable?: boolean;
+  /** Opening width of the resizable right card. A fixed ``"345px"`` suits a
+   *  master-detail or conversation page; a page whose panel is a working
+   *  surface (workspace, company hub) passes a share like ``"35%"`` so the
+   *  split reads the same on every window. */
+  rightPanelDefaultSize?: string;
   /** Controlled half-window preset for the resizable right card. Returning to
    * false restores the last user-selected normal layout. */
   rightPanelMaximized?: boolean;
@@ -108,17 +110,22 @@ const isActivePath = (activePath: string, itemPath: string) => {
 const rememberedNormalPanelLayouts = new Map<string, Layout>();
 
 function ResizableShellPanels({
+  defaultSize,
   mainPanel,
   maximized,
   resizeLabel,
   rightPanel,
 }: {
+  defaultSize: string;
   mainPanel: ReactNode;
   maximized: boolean;
   resizeLabel?: string;
   rightPanel: ReactNode;
 }) {
-  const layoutId = "app-shell-panels";
+  // Keyed by the size the page asked for: a conversation card (fixed px) and
+  // a workspace panel (a share of the window) are different layouts, and one
+  // shared key let whichever page opened first dictate the other's width.
+  const layoutId = `app-shell-panels:${defaultSize}`;
   const [initialNormalLayout] = useState<Layout | null>(
     () => rememberedNormalPanelLayouts.get(layoutId) ?? null,
   );
@@ -149,11 +156,7 @@ function ResizableShellPanels({
       id={layoutId}
       className="min-w-0 flex-1"
       groupRef={panelGroupRef}
-      // The group remembers a panel's size by id across mount/unmount, so
-      // ``defaultSize`` only lands the first time ``shell-right`` registers.
-      // Handing it an explicit layout keeps the standard split authoritative
-      // for a session that never dragged the divider.
-      defaultLayout={initialNormalLayout ?? NORMAL_PANEL_LAYOUT}
+      defaultLayout={initialNormalLayout ?? undefined}
       onLayoutChanged={(layout) => {
         if (maximized) return;
         normalPanelLayoutRef.current = layout;
@@ -176,7 +179,7 @@ function ResizableShellPanels({
           />
           <ResizablePanel
             id="shell-right"
-            defaultSize="35%"
+            defaultSize={defaultSize}
             minSize="320px"
             maxSize="70%"
             style={{ overflow: "visible" }}
@@ -206,6 +209,7 @@ export const AppShell = ({
   navItems = [],
   notice,
   right,
+  rightPanelDefaultSize = "345px",
   rightPanelMaximized = false,
   rightPanelResizable = false,
   rightPanelResizeLabel,
@@ -374,7 +378,14 @@ export const AppShell = ({
         >
           {useResizablePanels ? (
             <ResizableShellPanels
+              // Remount when the page asks for a different size class: the
+              // group registers ``shell-right`` once and ``defaultSize`` only
+              // lands on that first registration, so a later switch (a page
+              // declaring "35%" after the shell already opened at the default)
+              // would otherwise be ignored.
+              key={rightPanelDefaultSize}
               mainPanel={mainPanel}
+              defaultSize={rightPanelDefaultSize}
               maximized={rightPanelMaximized}
               resizeLabel={rightPanelResizeLabel}
               rightPanel={rightPanelCard}

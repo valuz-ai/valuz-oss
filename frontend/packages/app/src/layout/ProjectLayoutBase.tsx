@@ -218,6 +218,10 @@ export function ProjectLayoutBase({
   const [headerClassName, setHeaderClassName] = useState<string | undefined>();
   const [hideHeader, setHideHeader] = useState(false);
   const [asideClassName, setAsideClassName] = useState<string | undefined>();
+  const [rightPanelDefaultSize, setRightPanelDefaultSize] = useState<
+    string | undefined
+  >();
+  const [masterDetailLayout, setMasterDetailLayout] = useState(false);
   const [mainClassName, setMainClassName] = useState<string | undefined>();
   const [contentInnerClassName, setContentInnerClassName] = useState<
     string | undefined
@@ -773,6 +777,8 @@ export function ProjectLayoutBase({
     setHeaderClassName,
     setHideHeader,
     setAsideClassName,
+    setRightPanelDefaultSize,
+    setMasterDetailLayout,
     setMainClassName,
     setContentInnerClassName,
   };
@@ -786,10 +792,13 @@ export function ProjectLayoutBase({
       </span>
     ));
   const resolvedRightPanel = controlledRightPanel ?? rightPanel;
-  // Skills / Connectors / Agents use the right-panel slot for a master-detail layout
-  // (list + detail), not a collapsible side panel — so the collapse toggle
-  // is meaningless there and is hidden.
+  // Skills / Connectors / Agents use the right-panel slot for a master-detail
+  // layout (list + detail), not a collapsible side panel — so the collapse
+  // toggle is meaningless there and is hidden. Overlay editions route their
+  // own master-detail pages, which this path list cannot know about; those
+  // declare it through ``setMasterDetailLayout`` instead.
   const suppressRightPanelToggle =
+    masterDetailLayout ||
     location.pathname.startsWith("/skills") ||
     location.pathname.startsWith("/connectors") ||
     location.pathname.startsWith("/agents");
@@ -1085,12 +1094,13 @@ export function ProjectLayoutBase({
         hideHeader={hideHeader}
         contentClassName="overflow-y-auto p-0"
         asideClassName={
-          resolvedRightPanel ? (asideClassName ?? "w-[480px]") : undefined
+          resolvedRightPanel ? (asideClassName ?? "w-[345px]") : undefined
         }
         // Keep the main route under one stable panel owner while an async
         // context panel loads, opens, or closes. The panel node itself is not
         // the capability signal; changing this flag with the node remounts the
         // conversation and repeats its bootstrap requests indefinitely.
+        rightPanelDefaultSize={rightPanelDefaultSize}
         rightPanelResizable={!suppressRightPanelToggle}
         rightPanelMaximized={rightPanelMaximized}
         rightPanelResizeLabel={t("sidebar.resizePanel")}
