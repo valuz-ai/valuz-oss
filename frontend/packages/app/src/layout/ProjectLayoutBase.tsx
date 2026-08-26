@@ -1070,8 +1070,12 @@ export function ProjectLayoutBase({
               if (!trimmed) return;
               projectsApi
                 .rename(projectId, trimmed)
-                .then(() => {
+                .then((updated) => {
                   toast.success(t("sidebar.renamed"));
+                  // Publish the new name before the list refetch lands: any
+                  // open project page reads it from this store, and waiting
+                  // for the round trip left the page showing the old name.
+                  useProjectStore.getState().upsertProject(updated);
                   void fetchProjects();
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
