@@ -58,6 +58,7 @@ describe("ArtifactSplitPane preview shortcut", () => {
         {
           path: "first.md",
           name: "first.md",
+          revision: null,
           artifact: null,
           content: null,
           target: null,
@@ -67,6 +68,7 @@ describe("ArtifactSplitPane preview shortcut", () => {
         {
           path: "second.pdf",
           name: "second.pdf",
+          revision: null,
           artifact: null,
           content: null,
           target: null,

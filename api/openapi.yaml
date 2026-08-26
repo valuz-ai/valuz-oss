@@ -5145,6 +5145,10 @@ components:
         name: {type: string}
         mimeType: {type: string, nullable: true}
         size: {type: integer, nullable: true}
+        # Opaque change token. Equal values mean the bytes are unchanged;
+        # any difference means re-read. Cheap enough for an open preview to
+        # poll — clients must not parse it or infer an order from it.
+        revision: {type: string, nullable: true}
         exists: {type: boolean}
         previewKind:
           type: string

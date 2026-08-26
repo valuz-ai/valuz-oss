@@ -23,6 +23,11 @@ export interface ArtifactFileLocation {
  *  twice focuses the existing tab rather than duplicating it. */
 export interface ArtifactTab {
   path: string;
+  /**
+   * Change token from the last read. The watcher compares it against a fresh
+   * resolve to decide whether anything is worth re-reading.
+   */
+  revision: string | null;
   /** Label for the tab strip. Falls back to the last path segment until the
    *  descriptor resolves, so a tab never renders nameless while loading. */
   name: string;
@@ -59,7 +64,22 @@ interface UseArtifactFileOptions {
    * accumulate invisible tabs that the user has no way to close.
    */
   multiTab?: boolean;
+  /**
+   * How often to check whether the open documents changed on disk, in ms.
+   * ``0`` turns the watcher off — for a surface showing a file nothing is
+   * expected to write to, or a test that does not want a timer.
+   */
+  watchIntervalMs?: number;
 }
+
+/**
+ * Default poll cadence. Slow enough that a preview costs one small resolve
+ * every few seconds (no content is transferred), fast enough that a file an
+ * agent just rewrote catches up before the user goes looking for a refresh
+ * button. The conversation page also pushes writes in as they are reported,
+ * so this is the floor on staleness, not the typical latency.
+ */
+export const ARTIFACT_WATCH_INTERVAL_MS = 4000;
 
 export interface UseArtifactFileResult {
   /** Open documents, in the order they were opened (= tab strip order). */
@@ -108,6 +128,7 @@ export function useArtifactFile({
   missingErrorMessage,
   baseRef,
   multiTab = false,
+  watchIntervalMs = ARTIFACT_WATCH_INTERVAL_MS,
 }: UseArtifactFileOptions): UseArtifactFileResult {
   const [tabs, setTabs] = useState<ArtifactTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -228,6 +249,7 @@ export function useArtifactFile({
       const pending: ArtifactTab = {
         path: key,
         name: fileNameOf(key),
+        revision: null,
         artifact: null,
         content: null,
         target: openTarget ?? null,
@@ -291,6 +313,7 @@ export function useArtifactFile({
           artifact: result.artifact,
           content: result.content,
           name: result.artifact?.name ?? fileNameOf(key),
+          revision: descriptor.revision,
           error: null,
         });
       } catch (cause) {
@@ -398,6 +421,90 @@ export function useArtifactFile({
     },
     [loadDocument, locate, tabs],
   );
+
+  /**
+   * ── Watch the open documents for changes ──────────────────────────────
+   *
+   * One batched ``resolve`` on a timer, comparing each tab's change token.
+   * Nothing is downloaded here and nothing re-renders when the answer is "no
+   * change" — that is what makes it safe to run under an open preview. A tab
+   * whose token moved is then re-read silently, so the current bytes stay on
+   * screen until the new ones land.
+   *
+   * Why poll at all when the conversation already reports what the agent
+   * wrote: that signal only covers the file-editing tools. A shell redirect,
+   * an MCP server, a second session, or the user's own editor changes the
+   * file with nothing to announce it. Polling is indifferent to who wrote,
+   * and — because it rides the same resolve the preview already uses — works
+   * the same whether the file is local or on a cloud execution plane.
+   *
+   * Paused while the document is hidden: a background tab has no preview to
+   * keep fresh, and it comes back through the visibility listener.
+   */
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  useEffect(() => {
+    if (!projectId || !watchIntervalMs) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      const open = tabsRef.current;
+      // Nothing open, or the window is in the background: skip the round trip
+      // entirely and try again next tick.
+      if (
+        open.length > 0 &&
+        (typeof document === "undefined" || !document.hidden)
+      ) {
+        const located = open.map((tab) => ({ tab, location: locate(tab.path) }));
+        try {
+          const { results } = await filesApi.resolve(
+            located.map(({ location }) => buildFileRef(location.absolutePath)),
+            { baseRef: resolveBaseRef },
+          );
+          if (cancelled) return;
+          const byRef = new Map(results.map((item) => [item.ref, item]));
+          await Promise.all(
+            located.map(({ tab, location }) => {
+              const fresh = byRef.get(buildFileRef(location.absolutePath));
+              // Unknown, gone, or unchanged — leave the tab exactly as it is.
+              // A vanished file keeps its last content rather than blanking:
+              // an agent rewriting in place can be observed mid-swap.
+              if (!fresh || !fresh.exists || fresh.error) return undefined;
+              if (fresh.revision === null) return undefined;
+              if (fresh.revision === tab.revision) return undefined;
+              return loadDocument(tab.path, location, tab.target, {
+                silent: true,
+              });
+            }),
+          );
+        } catch {
+          // A failed poll is not worth surfacing — the tab still shows the
+          // content it has, and the next tick tries again.
+        }
+      }
+      if (cancelled) return;
+      timer = setTimeout(() => void tick(), watchIntervalMs);
+    };
+
+    timer = setTimeout(() => void tick(), watchIntervalMs);
+    const onVisible = () => {
+      // Coming back to the window is the moment staleness is most visible.
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [
+    loadDocument,
+    locate,
+    projectId,
+    resolveBaseRef,
+    watchIntervalMs,
+  ]);
 
   useEffect(
     () => () => {

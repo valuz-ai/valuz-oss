@@ -18,6 +18,7 @@ function descriptor(overrides: Partial<ResolvedFileDescriptor> = {}): ResolvedFi
     expiresAt: null,
     name: "report.md",
     mimeType: "text/markdown",
+    revision: "r1",
     size: 12,
     exists: true,
     previewKind: "markdown",
