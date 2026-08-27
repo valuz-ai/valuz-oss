@@ -137,3 +137,39 @@ def test_codex_keeps_view_image_tool_when_undeclared() -> None:
     for settings in (None, ModelSettings(effort="high")):
         ov = _build_config_overrides(_codex_session(settings), None, "alias")
         assert "include_view_image_tool=false" not in ov
+
+
+# ── deepagents: backend read gate ────────────────────────────────────
+#
+# The upstream FilesystemBackend base64s every non-text extension and the
+# middleware turns that into a multimodal content block — so the deepagents
+# runtime has a real image path into the request, and the gate must live on
+# the one backend every file read goes through.
+
+
+def test_deepagents_gated_backend_rejects_multimodal_reads(tmp_path) -> None:  # noqa: ANN001
+    from src.runtimes.deepagents.runtime import _build_local_shell_backend
+
+    (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    (tmp_path / "notes.md").write_text("hello")
+
+    backend = _build_local_shell_backend(str(tmp_path), reject_multimodal_reads=True)
+    denied = backend.read("/shot.png")
+    assert denied.error is not None and "does not accept image" in denied.error
+    # Text reads flow untouched even while the gate is armed.
+    ok = backend.read("/notes.md")
+    assert ok.error is None and ok.file_data is not None
+    assert "hello" in ok.file_data["content"]
+
+
+def test_deepagents_ungated_backend_still_serves_binary_reads(tmp_path) -> None:  # noqa: ANN001
+    """Three-state regression: no declaration → binary reads base64 exactly
+    as upstream deepagents does today."""
+    from src.runtimes.deepagents.runtime import _build_local_shell_backend
+
+    (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    backend = _build_local_shell_backend(str(tmp_path))
+    result = backend.read("/shot.png")
+    assert result.error is None and result.file_data is not None
+    assert result.file_data.get("encoding") == "base64"
