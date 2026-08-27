@@ -23,8 +23,6 @@ from valuz_agent.modules.skills.datastore import SkillDatastore
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT_MARKER = ".valuz/root"
-
 # Kernel V5+1aae940 collapses ``permission_mode`` to a 3-value enum;
 # every legacy value (set on dev DBs by the previous host code) maps to
 # ``full_access`` per the migration's data coerce. This helper applies
@@ -397,7 +395,6 @@ class ProjectService:
                 raise ValueError(f"Directory already bound to project '{existing.name}'")
         else:
             resolved_root = _managed_project_root(user_id, "project")
-        _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
         row = ProjectRow(
             id=new_id,
             name=name,
@@ -459,7 +456,6 @@ class ProjectService:
             # cwd under fs_registry.project_root(user_id) (mirrors chat projects) so
             # they're still cross-machine portable.
             resolved_root = _managed_project_root(user_id, "project")
-        _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
         row = ProjectRow(
             id=new_id,
             name=name,
