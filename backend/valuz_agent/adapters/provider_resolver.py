@@ -371,6 +371,51 @@ async def resolve_model_max_input_tokens(
     return None
 
 
+async def resolve_model_input_modalities(
+    *,
+    provider_id: str | None,
+    model_id: str,
+    providers: ProviderDatastore,
+    user_id: str | None,
+) -> tuple[str, ...] | None:
+    """The channel-declared input modalities for ``model_id``, or ``None``.
+
+    Mirror of ``resolve_model_max_input_tokens`` for the capability
+    declaration (docs/design/model-capability): pure read at session-creation
+    time, snapshotted into kernel ``ModelSettings.input_modalities``.
+    Three-state — ``None`` (the normal case) means "not declared" and every
+    runtime keeps today's behavior; a declared tuple missing ``"image"``
+    means the model explicitly rejects image input and runtimes gate image
+    reads on it. Same channel-consultation order as the input-window
+    resolver; never raises.
+    """
+    if not model_id or user_id is None:
+        return None
+    from valuz_agent.modules.providers.service import declared_model_input_modalities
+
+    if provider_id:
+        row = await providers.get_by_id(user_id, provider_id)
+        if row is not None:
+            return declared_model_input_modalities(row, model_id)
+        for ch in await ext.llm_provider.list(user_id=user_id):
+            if ch.id == provider_id:
+                model = next((m for m in ch.models if m.id == model_id), None)
+                return model.input_modalities if model is not None else None
+        return None
+
+    for candidate in await providers.list_providers(user_id):
+        if not candidate.enabled:
+            continue
+        declared = declared_model_input_modalities(candidate, model_id)
+        if declared is not None:
+            return declared
+    for ch in await ext.llm_provider.list(user_id=user_id):
+        model = next((m for m in ch.models if m.id == model_id), None)
+        if model is not None and model.input_modalities is not None:
+            return model.input_modalities
+    return None
+
+
 async def resolve_runtime_provider(
     *,
     provider_id: str,
@@ -432,6 +477,7 @@ __all__ = [
     "ModelProvider",
     "ProviderNotResolvable",
     "RuntimeProvider",
+    "resolve_model_input_modalities",
     "resolve_model_max_input_tokens",
     "resolve_model_provider",
     "resolve_runtime_provider",

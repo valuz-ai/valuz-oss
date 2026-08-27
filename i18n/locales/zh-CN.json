@@ -2488,6 +2488,9 @@
       "zoomInLabel": "放大图片",
       "zoomOut": "缩小",
       "zoomOutLabel": "缩小图片"
+    },
+    "modelBadge": {
+      "image": "图片"
     }
   },
   "agent": {

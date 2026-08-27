@@ -197,7 +197,6 @@ async def _enforce_budget(session: object, user_id: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-
 def mint_session_id() -> str:
     """The id a new session gets, and the only place that decides its shape.
 
@@ -210,6 +209,7 @@ def mint_session_id() -> str:
     to pick.
     """
     return uuid4().hex
+
 
 class SessionService:
     """Business façade over the V5 kernel session machinery.
@@ -712,6 +712,7 @@ class SessionService:
         """
         from valuz_agent.adapters.provider_resolver import (
             ProviderNotResolvable,
+            resolve_model_input_modalities,
             resolve_model_max_input_tokens,
             resolve_model_provider,
             resolve_runtime_provider,
@@ -897,6 +898,12 @@ class SessionService:
         # set"). That's a per-model constraint — clear effort on those specific
         # agents — not a reason to drop it runtime-wide.
         effective_effort = override_effort or getattr(agent, "effort", None)
+        declared_modalities = await resolve_model_input_modalities(
+            provider_id=provider_id,
+            model_id=effective_model,
+            providers=self._providers,
+            user_id=user_id,
+        )
         model_settings = ModelSettingsSchema(
             effort=_coerce_session_effort(effective_effort) if effective_effort else None,
             # Channel-declared input window (gateway aliases only; None for
@@ -907,6 +914,11 @@ class SessionService:
                 model_id=effective_model,
                 providers=self._providers,
                 user_id=user_id,
+            ),
+            # Channel-declared input capability (three-state) — runtimes gate
+            # agent image reads on an explicit no-image declaration.
+            input_modalities=(
+                list(declared_modalities) if declared_modalities is not None else None
             ),
         )
 
@@ -1148,6 +1160,7 @@ class SessionService:
         # without a provider.
         from valuz_agent.adapters.provider_resolver import (
             ProviderNotResolvable,
+            resolve_model_input_modalities,
             resolve_model_max_input_tokens,
             resolve_model_provider,
             resolve_runtime_provider,
@@ -1355,6 +1368,12 @@ class SessionService:
         # accepts reasoning_effort; deepseek-v4-flash 400s on it), not a
         # runtime-wide one. Don't strip it for deepagents wholesale.
         effective_effort = _coerce_session_effort(effort)
+        declared_modalities = await resolve_model_input_modalities(
+            provider_id=resolved_provider_id,
+            model_id=resolution.model,
+            providers=self._providers,
+            user_id=user_id,
+        )
         model_settings = ModelSettingsSchema(
             effort=effective_effort,
             # Channel-declared input window (gateway aliases only) — see the
@@ -1364,6 +1383,10 @@ class SessionService:
                 model_id=resolution.model,
                 providers=self._providers,
                 user_id=user_id,
+            ),
+            # Channel-declared input capability — see the agent path above.
+            input_modalities=(
+                list(declared_modalities) if declared_modalities is not None else None
             ),
         )
 
@@ -2311,16 +2334,16 @@ class SessionService:
 
         target_effort = _coerce_session_effort(effort)
         previous = session.model_settings or ModelSettingsSchema()
+        # ``model_copy(update=...)`` — NOT a field-by-field rebuild — so every
+        # other declared setting (max_input_tokens, input_modalities, whatever
+        # comes next) survives an effort change without this site knowing
+        # about it. A hand-enumerated constructor here once risked silently
+        # wiping the capability declaration on every effort PATCH.
         updated = await kernel_client.update_session(
             user_id,
             session_id,
             UpdateSessionRequest(
-                model_settings=ModelSettingsSchema(
-                    temperature=previous.temperature,
-                    max_tokens=previous.max_tokens,
-                    effort=target_effort,
-                    max_input_tokens=previous.max_input_tokens,
-                )
+                model_settings=previous.model_copy(update={"effort": target_effort})
             ),
         )
         return _session_to_detail(updated)

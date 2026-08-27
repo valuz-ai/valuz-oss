@@ -135,6 +135,27 @@ class ModelSettings:
     max_tokens: int | None = None
     effort: EffortLevel | None = None
     max_input_tokens: int | None = None
+    # Channel-declared input modalities (``"text"`` / ``"image"``). Three-state
+    # like ``max_input_tokens``: ``None`` = not declared — every runtime keeps
+    # today's behavior; a declared tuple missing ``"image"`` = the model
+    # explicitly rejects image input, and runtimes gate agent image reads on it
+    # (``model_rejects_images``) so a tool-read image block never reaches a
+    # model that would 400 on it. Snapshotted at session creation, not
+    # live-reconcilable (the model is locked per session).
+    input_modalities: tuple[str, ...] | None = None
+
+
+def model_rejects_images(settings: ModelSettings | None) -> bool:
+    """True when the session's model explicitly declares no image input.
+
+    The ONE shared predicate for every image-gating consumer (claude PreToolUse
+    deny, codex ``include_view_image_tool`` override) — mirroring dsh's single
+    ``contentHasImage`` walk, so consumers cannot silently diverge on the
+    three-state semantics: ``None`` settings or ``None`` modalities = not
+    declared = never gate.
+    """
+    modalities = settings.input_modalities if settings is not None else None
+    return modalities is not None and "image" not in modalities
 
 
 # -- MCP server config (tagged union) --

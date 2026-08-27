@@ -98,6 +98,7 @@ from src.core.types import (
     Session,
     UserMessage,
     is_bare_completion,
+    model_rejects_images,
 )
 from src.core.usage import diff_model_usage
 
@@ -346,6 +347,41 @@ MODEL_MAP: dict[str, str] = {
 # its input and suppress the generic tool_use/tool_result pair so the UI
 # trace doesn't double-render it.
 CLAUDE_TODO_TOOL_NAME = "TodoWrite"
+
+# ── Model-capability image gate (docs/design/model-capability) ─────────
+#
+# File suffixes the CLI's ``Read`` tool renders into image content blocks:
+# raster images plus PDF (Read paginates PDFs as page images). When the
+# session's model declares no image input (``model_rejects_images``), a
+# PreToolUse deny on these reads keeps the block out of the next request —
+# the only lever we have, since the request itself is assembled inside the
+# vendor CLI. Image PATHS in the prompt are fine; the parsed text extract
+# (``Attachment.parsed_path``) remains the model's readable route.
+IMAGE_READ_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".pdf")
+
+# Written for the MODEL (English on purpose — consistent with every other
+# model-facing string in the kernel, and read by the very models weak enough
+# to lack vision). The turn keeps running; the model self-corrects.
+IMAGE_READ_DENY_REASON = (
+    "The current model does not accept image input, so this file cannot be "
+    "read as an image. If the attachment listing shows an extracted-text "
+    "path for it, read that text file instead; otherwise operate on the file "
+    "by path only, and tell the user if the task truly requires viewing the "
+    "image."
+)
+
+
+def _is_image_file_read(tool_name: str, tool_input: Any) -> bool:
+    """True when this tool call would render an image into the conversation.
+
+    Only the CLI's built-in ``Read`` produces image blocks from local files.
+    MCP tools that return images are an accepted known gap (design §10 Q4).
+    """
+    if tool_name != "Read" or not isinstance(tool_input, dict):
+        return False
+    path = tool_input.get("file_path")
+    return isinstance(path, str) and path.lower().endswith(IMAGE_READ_SUFFIXES)
+
 
 # Dynamic-workflow progress surfacing. The ``Workflow`` tool launches a run in a
 # background runtime and returns immediately; ``/workflows`` (the live TUI) is
@@ -2408,7 +2444,15 @@ class ClaudeAgentRuntime:
         | None
     ):
         configured_hooks = self.config.hooks
-        if not configured_hooks and not self._citation_compaction_enabled:
+        # Model-capability image gate (docs/design/model-capability, commercial
+        # repo): when the session's model explicitly declares no image input,
+        # a PreToolUse deny stops the CLI's Read from ever producing an image
+        # block. It MUST ride hooks, not ``can_use_tool`` — ``full_access``
+        # maps to bypassPermissions where that callback never fires, and it
+        # must be a soft per-tool deny, not the turn-terminating
+        # ``continue_=False`` the before_tool mapping uses.
+        image_gate = model_rejects_images(self.model_settings)
+        if not configured_hooks and not self._citation_compaction_enabled and not image_gate:
             return None
 
         hooks: Hooks | None = configured_hooks
@@ -2428,14 +2472,30 @@ class ClaudeAgentRuntime:
             list[HookMatcher],
         ] = {}
 
-        if self._citation_compaction_enabled or (
-            hooks is not None and hooks._handlers.get("before_tool")
+        if (
+            image_gate
+            or self._citation_compaction_enabled
+            or (hooks is not None and hooks._handlers.get("before_tool"))
         ):
 
             async def pre_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
                 data: dict[str, Any] = dict(input_data)
+                if image_gate and _is_image_file_read(
+                    str(data.get("tool_name") or ""), data.get("tool_input")
+                ):
+                    # Soft deny the model can react to (fires in every
+                    # permission mode, bypassPermissions included) — the turn
+                    # keeps running and the model self-corrects onto the
+                    # parsed text extract.
+                    return SyncHookJSONOutput(
+                        hookSpecificOutput={
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": IMAGE_READ_DENY_REASON,
+                        }
+                    )
                 if hooks is not None and hooks._handlers.get("before_tool"):
                     r = await hooks.fire(
                         "before_tool",

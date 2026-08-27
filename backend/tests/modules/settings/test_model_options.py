@@ -165,6 +165,21 @@ class TestBuildModelOptions:
         assert model.label == "Valuz Pro"
         assert model.selection_hint == "2×"
 
+    def test_preserves_declared_input_modalities(self) -> None:
+        """The capability declaration rides into the picker read model;
+        undeclared stays None (three-state) so pickers render no badge."""
+        declared = LLMModel(id="text-only", input_modalities=("text",))
+        undeclared = _m("plain")
+        card = (
+            build_model_options([_pin(models=[declared, undeclared])], _NO_DEFAULT)
+            .groups[0]
+            .providers[0]
+        )
+
+        by_id = {m.model_id: m for m in card.models}
+        assert by_id["text-only"].input_modalities == ["text"]
+        assert by_id["plain"].input_modalities is None
+
     def test_derives_runtimes_from_compatible(self) -> None:
         """An anthropic channel: models leave runtimes None → derived from the
         channel's compatible_protocols."""
