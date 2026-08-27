@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { SkillView } from "@valuz/core";
 
 import {
+  alwaysOnSkillItems,
   libraryEnabledSkillItems,
+  projectComposerSkillItems,
   resolveAgentSkillItems,
 } from "./agent-skill-items";
 
@@ -96,5 +98,86 @@ describe("resolveAgentSkillItems", () => {
     // only an ``all_available`` policy (handled by the caller) means "all of
     // them". Conflating the two is the bug this pair of helpers separates.
     expect(resolveAgentSkillItems([], [[skill({ slug: "dcf" })]])).toEqual([]);
+  });
+});
+
+describe("alwaysOnSkillItems", () => {
+  it("picks out only what the backend flagged as always-on", () => {
+    const items = alwaysOnSkillItems([
+      skill({ slug: "skill-creator", always_on: true }),
+      skill({ slug: "stock-analysis", library_enabled: true }),
+    ]);
+    expect(items.map((i) => i.slug)).toEqual(["skill-creator"]);
+  });
+
+  it("does not gate the baseline on the library switch", () => {
+    // The host injects these whatever the switch says, so hiding one would
+    // under-report a skill the session genuinely carries.
+    const items = alwaysOnSkillItems([
+      skill({ slug: "citation", always_on: true, library_enabled: false }),
+    ]);
+    expect(items.map((i) => i.slug)).toEqual(["citation"]);
+  });
+});
+
+describe("projectComposerSkillItems", () => {
+  const CATALOG = [
+    skill({ slug: "dcf", library_enabled: true }),
+    skill({ slug: "stock-analysis", library_enabled: true }),
+    skill({ slug: "skill-creator", always_on: true }),
+    skill({ slug: "citation", always_on: true }),
+  ];
+
+  it("gives an explicit agent its bindings PLUS the always-on baseline", () => {
+    // The reported bug: a self-created agent showed nothing for ``/skill-``
+    // even though ``skill-creator`` rides every session.
+    const items = projectComposerSkillItems(
+      { skills: ["dcf"], resource_policy: "explicit" },
+      CATALOG,
+    );
+    expect(items.map((i) => i.slug)).toEqual([
+      "dcf",
+      "skill-creator",
+      "citation",
+    ]);
+  });
+
+  it("still withholds library skills an explicit agent never bound", () => {
+    // Offering ``stock-analysis`` here would insert a ``/slug`` the runtime
+    // cannot resolve — the host does not materialize it for this agent.
+    const items = projectComposerSkillItems(
+      { skills: ["dcf"], resource_policy: "explicit" },
+      CATALOG,
+    );
+    expect(items.map((i) => i.slug)).not.toContain("stock-analysis");
+  });
+
+  it("gives an all_available agent the library plus the baseline", () => {
+    const items = projectComposerSkillItems(
+      { skills: [], resource_policy: "all_available" },
+      CATALOG,
+    );
+    expect(items.map((i) => i.slug)).toEqual([
+      "dcf",
+      "stock-analysis",
+      "skill-creator",
+      "citation",
+    ]);
+  });
+
+  it("leaves an agent that bound nothing with just the baseline", () => {
+    const items = projectComposerSkillItems(
+      { skills: [], resource_policy: "explicit" },
+      CATALOG,
+    );
+    expect(items.map((i) => i.slug)).toEqual(["skill-creator", "citation"]);
+  });
+
+  it("lists a baseline skill once when the agent also bound it", () => {
+    const items = projectComposerSkillItems(
+      { skills: ["skill-creator"], resource_policy: "explicit" },
+      CATALOG,
+    );
+    expect(items.map((i) => i.slug)).toEqual(["skill-creator", "citation"]);
   });
 });

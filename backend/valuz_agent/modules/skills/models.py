@@ -113,6 +113,11 @@ class SkillView(BaseModel):
     # page makes the skill available to a new (non-project) conversation's inline
     # ``/`` picker.
     library_enabled: bool = False
+    # Part of the always-on baseline every session carries regardless of what
+    # the agent binds (``capability_resolver.always_on_skill_paths``). Neither
+    # ``enabled`` nor ``library_enabled`` gates it, so a client answering "what
+    # can this conversation run" has to add these to the agent's own bindings.
+    always_on: bool = False
     tags: list[str] = Field(default_factory=list)
     slug: str = ""
     icon: str | None = None

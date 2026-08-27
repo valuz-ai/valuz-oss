@@ -1,5 +1,11 @@
 /** @vitest-environment jsdom */
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "@valuz/shared/i18n";
@@ -144,7 +150,11 @@ vi.mock("@valuz/app/components", () => ({
   RowActionsMenu: () => null,
   formatCreatedAt: (ms: number) => String(ms),
 }));
-vi.mock("../lib/agent-skill-items", () => ({ resolveAgentSkillItems: () => [] }));
+// The ``/`` picker's contents are covered by agent-skill-items.test.ts; this
+// file only needs the page to render, so the helper returns an empty list.
+vi.mock("../lib/agent-skill-items", () => ({
+  projectComposerSkillItems: () => [],
+}));
 vi.mock("../lib/file-tree", () => ({ toFileTree: () => [] }));
 vi.mock("../components/AttachmentParsingDialog", () => ({
   AttachmentParsingDialog: () => null,
@@ -215,7 +225,11 @@ vi.mock("../../../core/src/api/projects-api", async (orig) => {
     ...actual,
     projectsApi: {
       ...(actual as { projectsApi: object }).projectsApi,
-      get: vi.fn(async () => ({ id: h.currentId, name: "Proj", instructions_md: "" })),
+      get: vi.fn(async () => ({
+        id: h.currentId,
+        name: "Proj",
+        instructions_md: "",
+      })),
       listFiles: vi.fn(async () => ({ files: [] })),
       getMcpServers: vi.fn(async () => ({ slugs: [] })),
     },
@@ -419,9 +433,7 @@ const playbookDialogProps = (): PlaybookDialogProps | null =>
     : null;
 
 const rightPanelProps = (): RightPanelProps | null =>
-  h.rightPanel &&
-  typeof h.rightPanel === "object" &&
-  "props" in h.rightPanel
+  h.rightPanel && typeof h.rightPanel === "object" && "props" in h.rightPanel
     ? (h.rightPanel as { props: RightPanelProps }).props
     : null;
 
@@ -463,7 +475,9 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
   it("renders rows with data-anchor-key on all three tabs", async () => {
     const { container, getByRole } = renderPage();
     await waitFor(() =>
-      expect(container.querySelector('[data-anchor-key="task-t1"]')).toBeTruthy(),
+      expect(
+        container.querySelector('[data-anchor-key="task-t1"]'),
+      ).toBeTruthy(),
     );
     // All tab: both the session and the task carry anchor keys.
     expect(anchorKeys(container, "task-")).toContain("task-t1");
@@ -472,13 +486,17 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     // Chat tab.
     fireEvent.click(getByRole("tab", { name: /chat|对话/i }));
     await waitFor(() =>
-      expect(container.querySelector('[data-anchor-key="chat-s1"]')).toBeTruthy(),
+      expect(
+        container.querySelector('[data-anchor-key="chat-s1"]'),
+      ).toBeTruthy(),
     );
 
     // Tasks tab.
     fireEvent.click(getByRole("tab", { name: /task|任务/i }));
     await waitFor(() =>
-      expect(container.querySelector('[data-anchor-key="task-t1"]')).toBeTruthy(),
+      expect(
+        container.querySelector('[data-anchor-key="task-t1"]'),
+      ).toBeTruthy(),
     );
   });
 
@@ -581,9 +599,7 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
       expect(channelsApi.deleteFeishuChat).toHaveBeenCalledWith("chat-1", "A"),
     );
     await waitFor(() => expect(h.setRightPanel).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(rightPanelProps()?.chatBindings).toEqual([]),
-    );
+    await waitFor(() => expect(rightPanelProps()?.chatBindings).toEqual([]));
   });
 
   it("defaults the composer to the requested Lead agent from team activation", async () => {

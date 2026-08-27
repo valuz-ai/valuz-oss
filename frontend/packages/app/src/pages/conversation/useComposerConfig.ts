@@ -16,13 +16,11 @@ import {
   type SessionListItem,
   type SkillView,
 } from "@valuz/core";
-import {
-  type ComposerAgentItem,
-  type RuntimeStartLocation,
-} from "@valuz/ui";
+import { type ComposerAgentItem, type RuntimeStartLocation } from "@valuz/ui";
 import { modelLabel } from "@valuz/shared";
 import {
   libraryEnabledSkillItems,
+  projectComposerSkillItems,
   resolveAgentSkillItems,
   type AgentSkillItem,
 } from "../../lib/agent-skill-items";
@@ -214,7 +212,8 @@ export function useComposerConfig({
   // hostname — only crowded the row.
   const agentTargetBadge = useCallback(
     (agentTargetId: string | undefined): string | undefined => {
-      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      if (!agentTargetId || agentTargetId === providerTargetId)
+        return undefined;
       const target = executionTargets.find((t) => t.id === agentTargetId);
       if (!target) return undefined;
       return t(
@@ -226,7 +225,8 @@ export function useComposerConfig({
 
   const agentTargetTone = useCallback(
     (agentTargetId: string | undefined): "shared" | "remote" | undefined => {
-      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      if (!agentTargetId || agentTargetId === providerTargetId)
+        return undefined;
       const target = executionTargets.find((t) => t.id === agentTargetId);
       if (!target) return undefined;
       return target.selectable === false ? "shared" : "remote";
@@ -339,22 +339,17 @@ export function useComposerConfig({
   // (skills are the agent's equipment), so ``/`` surfaces exactly what that
   // agent runs with.
   //
-  // Which is NOT always its ``skills`` array: an ``all_available`` agent
-  // (Valurion) reports an empty one and gets the owner's live library resolved
-  // into the session at creation time instead. Reading the array alone left
-  // every project conversation on such an agent with an empty picker — the
-  // library switch was on, the skills were loaded and usable, and ``/`` still
-  // showed nothing.
+  // Which is NOT its ``skills`` array: that array omits both the library an
+  // ``all_available`` agent receives at session-creation time and the always-on
+  // baseline the host injects into every session. ``projectComposerSkillItems``
+  // owns the rule (shared with the project-detail composer).
   const selectedAgentSkillItems = useMemo(() => {
     if (!effectiveAgentSlug) return [];
     const agent = projectAgents.find(
       (m) => m.member.agent_slug === effectiveAgentSlug,
     )?.agent;
-    if (agent?.resource_policy === "all_available") {
-      return libraryEnabledSkillItems(availableSkills);
-    }
-    return resolveSkillItems(agent?.skills);
-  }, [effectiveAgentSlug, projectAgents, resolveSkillItems, availableSkills]);
+    return projectComposerSkillItems(agent, availableSkills);
+  }, [effectiveAgentSlug, projectAgents, availableSkills]);
 
   // The ``/`` picker list for a NEW (non-project) conversation: the union of
   // the library-ENABLED skills and the selected agent's bound skills, deduped

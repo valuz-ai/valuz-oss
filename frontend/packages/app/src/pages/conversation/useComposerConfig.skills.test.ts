@@ -104,6 +104,8 @@ describe("project conversation ``/`` skill list", () => {
     skill({ slug: "stock-analysis", library_enabled: true }),
     skill({ slug: "dcf", library_enabled: true }),
     skill({ slug: "switched-off", library_enabled: false }),
+    // Rides every session whatever the agent binds.
+    skill({ slug: "skill-creator", always_on: true }),
   ];
 
   it("offers the library to an all_available agent that binds nothing", () => {
@@ -123,10 +125,11 @@ describe("project conversation ``/`` skill list", () => {
     expect(result.current.selectedAgentSkillItems.map((i) => i.slug)).toEqual([
       "stock-analysis",
       "dcf",
+      "skill-creator",
     ]);
   });
 
-  it("still shows only what an explicit agent bound", () => {
+  it("shows an explicit agent its bindings plus the always-on baseline", () => {
     const { result } = renderForProject({
       projectAgents: [
         member("analyst", { skills: ["dcf"], resource_policy: "explicit" }),
@@ -137,10 +140,11 @@ describe("project conversation ``/`` skill list", () => {
 
     expect(result.current.selectedAgentSkillItems.map((i) => i.slug)).toEqual([
       "dcf",
+      "skill-creator",
     ]);
   });
 
-  it("leaves an explicit agent that bound nothing with an empty picker", () => {
+  it("leaves an explicit agent that bound nothing with just the baseline", () => {
     // "Bound to nothing" and "bound to everything" must stay distinguishable;
     // only the policy separates them.
     const { result } = renderForProject({
@@ -151,7 +155,9 @@ describe("project conversation ``/`` skill list", () => {
       catalog: CATALOG,
     });
 
-    expect(result.current.selectedAgentSkillItems).toEqual([]);
+    expect(result.current.selectedAgentSkillItems.map((i) => i.slug)).toEqual([
+      "skill-creator",
+    ]);
   });
 
   it("reads a member from a backend that predates the field as explicit", () => {
@@ -163,6 +169,7 @@ describe("project conversation ``/`` skill list", () => {
 
     expect(result.current.selectedAgentSkillItems.map((i) => i.slug)).toEqual([
       "dcf",
+      "skill-creator",
     ]);
   });
 });

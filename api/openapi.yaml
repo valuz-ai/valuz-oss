@@ -6891,6 +6891,17 @@ components:
             the Skills page removes the skill from the inline `/` picker of a
             new (non-project) conversation. Project conversations are unaffected
             (they surface the selected agent's bound skills directly).
+        always_on:
+          type: boolean
+          default: false
+          description: |
+            This skill is part of the always-on baseline every session carries,
+            whatever the agent binds — the host materialises it at session
+            creation for chat, project and task runs alike. Neither `enabled`
+            nor `library_enabled` gates it. A client listing "what can this
+            conversation actually run" (the composer's `/` picker) must include
+            these on top of the agent's own bindings, or it under-reports the
+            session by exactly this set.
         tags:
           type: array
           items:

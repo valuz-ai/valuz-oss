@@ -83,9 +83,10 @@ def _creation_origin_from_index_row(row: Any) -> CreationOrigin:
 def _manifest_defaults_to_library_enabled(manifest: Any) -> bool:
     # Official/bundled skills stay visible out of the box. User/project skills
     # merely discovered on disk start disabled until the user turns them on.
-    return getattr(manifest, "scope", None) == "official" or getattr(
-        manifest, "origin_label", None
-    ) == "Built-in"
+    return (
+        getattr(manifest, "scope", None) == "official"
+        or getattr(manifest, "origin_label", None) == "Built-in"
+    )
 
 
 async def _after_skill_saved_hook(db: Any, user_id: str, skill: SkillView, origin: str) -> None:
@@ -544,6 +545,22 @@ class SkillLibraryService:
             for s in skills:
                 if s.path in disabled_paths:
                     s.library_enabled = False
+
+        # Mark the always-on baseline. These ride EVERY session the host builds
+        # — chat, project and task alike — no matter what the agent binds, so a
+        # client asking "what can this conversation run" cannot derive them from
+        # ``enabled`` / ``library_enabled`` / the agent's bindings. Resolved the
+        # same way the session builder resolves them, and matched on the
+        # resolved path so a symlinked or relative catalog entry still lines up.
+        from valuz_agent.adapters.capability_resolver import always_on_skill_paths
+
+        baseline = {
+            str(Path(p).resolve(strict=False)) for p in always_on_skill_paths(user_id=user_id)
+        }
+        if baseline:
+            for s in skills:
+                if s.path and str(Path(s.path).resolve(strict=False)) in baseline:
+                    s.always_on = True
 
         return SkillsCatalog(project_id=project_id, skills=skills)
 
