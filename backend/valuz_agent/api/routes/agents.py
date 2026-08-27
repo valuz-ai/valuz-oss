@@ -203,6 +203,13 @@ class AgentSummary(BaseModel):
     provider_id: str | None = None
     # Reasoning-effort budget; null = no override (runtime SDK default).
     effort: EffortLevel | None = None
+    # How this member resolves resources. ``all_available`` members (Valurion)
+    # carry an EMPTY ``skills`` on purpose — the real set is resolved from the
+    # owner's library at session-creation time. Without this field a client
+    # reading ``skills`` alone cannot tell "bound to nothing" from "bound to
+    # everything", and renders an empty skill picker for an agent that in fact
+    # holds the whole library.
+    resource_policy: Literal["explicit", "all_available"] = "explicit"
 
 
 class MemberWithAgentResponse(BaseModel):
@@ -234,6 +241,11 @@ def _agent_to_summary(
         connectors=connectors,
         provider_id=meta.get("provider_id"),
         effort=getattr(agent, "effort", None),
+        # ``build_agent_config`` always stamps this into metadata; the default
+        # only covers a config built before that (or by a test fixture).
+        resource_policy=(
+            "all_available" if meta.get("resource_policy") == "all_available" else "explicit"
+        ),
     )
 
 

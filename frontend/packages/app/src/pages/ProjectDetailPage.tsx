@@ -66,6 +66,7 @@ import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import { RUNTIME_DISPLAY_NAME, memoryApi, useTranslation } from "@valuz/core";
 import {
+  libraryEnabledSkillItems,
   resolveAgentSkillItems,
   type AgentSkillItem,
 } from "../lib/agent-skill-items";
@@ -516,14 +517,22 @@ export const ProjectDetailPage = () => {
   // Active agent = the remembered pick for the current mode. Switching mode
   // swaps the agent to that mode's memory (Chat agent ↔ last Lead).
   const selectedAgentSlug = agentByMode[composerMode];
-  // The selected member agent's bound skills — the draft composer's ``/`` list.
+  // The selected member agent's skills — the draft composer's ``/`` list.
   // Projects can't attach skills ad-hoc, so ``/`` surfaces exactly that agent's
   // skills (resolved to display names via the project skill catalog).
+  //
+  // An ``all_available`` agent (Valurion) is the exception: it binds nothing
+  // and receives the owner's live library at session-creation time, so its
+  // picker comes from the catalog rather than from an array that is empty by
+  // design. Same rule as the conversation composer (``useComposerConfig``).
   const selectedAgentSkillItems = useMemo<AgentSkillItem[]>(() => {
     if (!selectedAgentSlug) return [];
     const agent = rawMembers.find(
       (m) => m.member.agent_slug === selectedAgentSlug,
     )?.agent;
+    if (agent?.resource_policy === "all_available") {
+      return libraryEnabledSkillItems(skillCatalog);
+    }
     return resolveAgentSkillItems(agent?.skills, [skillCatalog]);
   }, [selectedAgentSlug, rawMembers, skillCatalog]);
   const [loading, setLoading] = useState(true);
