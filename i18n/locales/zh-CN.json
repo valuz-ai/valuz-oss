@@ -2254,6 +2254,7 @@
     "restartNow": "立即重启",
     "restarting": "正在重启…",
     "updateAvailable": "发现新版本",
+    "downloadingTitle": "正在下载新版本",
     "retry": "重试"
   },
   "ui": {
