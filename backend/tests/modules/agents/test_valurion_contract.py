@@ -274,6 +274,37 @@ def test_deployed_valurion_summary_uses_the_request_language() -> None:
     assert _agent_to_summary(agent, "en-US").name == "Valurion"
 
 
+def test_deployed_member_summary_reports_its_resource_policy() -> None:
+    """A member's empty ``skills`` means two different things.
+
+    Valurion binds nothing and receives the owner's whole library at
+    session-creation time; a standard agent that bound nothing has nothing.
+    The summary is what the composer's ``/`` picker reads, so it has to carry
+    the policy — otherwise the picker cannot tell the two apart and renders an
+    empty skill list for an agent holding the entire library.
+    """
+
+    def summary(**meta: object):
+        return _agent_to_summary(
+            SimpleNamespace(
+                id="agent:x",
+                name="X",
+                model="claude-sonnet-4-6",
+                runtime_provider="claude_agent",
+                instructions="",
+                skills=(),
+                effort=None,
+                metadata={"connector_bindings": [], **meta},
+            )
+        )
+
+    assert summary(resource_policy="all_available").resource_policy == "all_available"
+    assert summary(resource_policy="explicit").resource_policy == "explicit"
+    # A config built before the field existed is read as explicit, never as
+    # "holds everything" — the safe direction for an unknown.
+    assert summary().resource_policy == "explicit"
+
+
 async def test_copy_does_not_leak_internal_keys_into_the_managed_mutation(
     db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

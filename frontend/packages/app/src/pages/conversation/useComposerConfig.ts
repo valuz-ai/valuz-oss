@@ -22,6 +22,7 @@ import {
 } from "@valuz/ui";
 import { modelLabel } from "@valuz/shared";
 import {
+  libraryEnabledSkillItems,
   resolveAgentSkillItems,
   type AgentSkillItem,
 } from "../../lib/agent-skill-items";
@@ -333,31 +334,36 @@ export function useComposerConfig({
     [availableSkills, projectSkills],
   );
 
-  // The bound skills of the currently selected member agent — the ``/`` picker
-  // list for a PROJECT conversation. Project chats can't attach skills ad-hoc
-  // (skills are the agent's equipment), so ``/`` surfaces exactly that agent's
-  // skills.
+  // The skills of the currently selected member agent — the ``/`` picker list
+  // for a PROJECT conversation. Project chats can't attach skills ad-hoc
+  // (skills are the agent's equipment), so ``/`` surfaces exactly what that
+  // agent runs with.
+  //
+  // Which is NOT always its ``skills`` array: an ``all_available`` agent
+  // (Valurion) reports an empty one and gets the owner's live library resolved
+  // into the session at creation time instead. Reading the array alone left
+  // every project conversation on such an agent with an empty picker — the
+  // library switch was on, the skills were loaded and usable, and ``/`` still
+  // showed nothing.
   const selectedAgentSkillItems = useMemo(() => {
     if (!effectiveAgentSlug) return [];
     const agent = projectAgents.find(
       (m) => m.member.agent_slug === effectiveAgentSlug,
     )?.agent;
+    if (agent?.resource_policy === "all_available") {
+      return libraryEnabledSkillItems(availableSkills);
+    }
     return resolveSkillItems(agent?.skills);
-  }, [effectiveAgentSlug, projectAgents, resolveSkillItems]);
+  }, [effectiveAgentSlug, projectAgents, resolveSkillItems, availableSkills]);
 
   // The ``/`` picker list for a NEW (non-project) conversation: the union of
   // the library-ENABLED skills and the selected agent's bound skills, deduped
   // by slug. A new conversation may have no agent (library skills only); the
   // global library switch (``library_enabled``) is what the Skills page toggles.
   const composerMentionSkills = useMemo<AgentSkillItem[]>(() => {
-    const libraryItems: AgentSkillItem[] = availableSkills
-      .filter((s) => s.library_enabled !== false)
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        slug: s.slug,
-        description: s.description,
-      }));
+    // Same catalog predicate the ``all_available`` branch above uses, so the
+    // two composers can't disagree about what "in my library" means.
+    const libraryItems = libraryEnabledSkillItems(availableSkills);
     const agentEntries = isTempConversation
       ? myAgents.find((a) => a.slug === effectiveAgentSlug)?.skills
       : undefined;

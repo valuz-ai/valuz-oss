@@ -19,6 +19,39 @@ export interface AgentSkillItem {
  * name/description; an entry the catalogs don't know still resolves to its bare
  * slug so nothing silently disappears. Deduped by slug, order preserved.
  */
+/**
+ * The catalog entries an `all_available` agent can actually run.
+ *
+ * Mirrors the backend's `EffectiveResourceResolver` predicate — library switch
+ * on, entitled, materialized — so the `/` picker offers exactly what the
+ * session will be created with. A skill failing any of these is dropped rather
+ * than shown-and-then-silently-absent at run time.
+ *
+ * Deduped by slug: one slug can appear in the catalog more than once (a user
+ * copy shadowing the official package, say), and the picker must list it once.
+ */
+export function libraryEnabledSkillItems(
+  catalog: readonly SkillView[],
+): AgentSkillItem[] {
+  const items: AgentSkillItem[] = [];
+  const seen = new Set<string>();
+  for (const s of catalog) {
+    if (s.library_enabled === false) continue;
+    if (s.is_locked) continue;
+    if ((s.status ?? "available") !== "available") continue;
+    const key = s.slug ?? s.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({
+      id: s.id,
+      name: s.name,
+      slug: s.slug,
+      description: s.description,
+    });
+  }
+  return items;
+}
+
 export function resolveAgentSkillItems(
   entries: readonly string[] | null | undefined,
   catalogs: readonly (readonly SkillView[])[],

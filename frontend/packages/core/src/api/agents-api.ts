@@ -93,6 +93,16 @@ export interface AgentSummary {
   provider_id: string | null;
   /** Reasoning-effort budget; null = no override (runtime SDK default). */
   effort: EffortLevel | null;
+  /**
+   * How this member resolves resources. An ``all_available`` member (Valurion)
+   * reports an EMPTY ``skills`` by design — its real set is the owner's live
+   * library, resolved when the session is created. Read this before rendering
+   * ``skills``, or such an agent looks like it carries nothing.
+   *
+   * Optional so a client stays compatible with a backend that predates the
+   * field; absent is read as ``explicit``.
+   */
+  resource_policy?: "explicit" | "all_available";
 }
 
 export interface MemberWithAgent {
