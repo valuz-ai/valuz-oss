@@ -779,13 +779,13 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     from valuz_agent.integrations.automations_mcp_server import (
         automations_mcp_session_manager_run,
     )
-    from valuz_agent.integrations.playbooks_mcp_server import (
-        playbooks_mcp_session_manager_run,
-    )
     from valuz_agent.integrations.connectors_mcp_server import (
         connectors_mcp_session_manager_run,
     )
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_session_manager_run
+    from valuz_agent.integrations.playbooks_mcp_server import (
+        playbooks_mcp_session_manager_run,
+    )
     from valuz_agent.integrations.toolkit_mcp_server import (
         toolkit_mcp_session_managers_run,
     )
@@ -940,6 +940,15 @@ async def start_skills(app: FastAPI) -> None:
         sync_bundled_official_skills(owner)
     except Exception:
         pass
+
+    # Builtin plugins (e.g. office) sync alongside the bundled skill trees —
+    # same boot step, same idempotent content-hash convergence.
+    from valuz_agent.integrations.bundled_plugins import sync_bundled_builtin_plugins
+
+    try:
+        await sync_bundled_builtin_plugins(owner)
+    except Exception:
+        logger.exception("builtin plugin sync failed")
 
     from valuz_agent.api.deps import get_skill_service_for_user
 

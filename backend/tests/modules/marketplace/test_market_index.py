@@ -38,7 +38,12 @@ async def test_categories_sends_channel_and_locale() -> None:
     payload = await client.categories("skill", "zh-CN")
 
     assert seen["path"] == "/v1/marketplace/categories"
-    assert seen["params"] == {"kind": "skill", "locale": "zh-CN", "channel": "oss"}
+    assert seen["params"] == {
+        "kind": "skill",
+        "locale": "zh-CN",
+        "channel": "oss",
+        "distribution": "oss",
+    }
     assert payload == {"categories": [], "degraded": False}
 
 
@@ -93,6 +98,7 @@ async def test_list_items_sends_filters_and_pagination() -> None:
         "source": "skillhub",
         "q": "pdf",
         "channel": "oss",
+        "distribution": "oss",
     }
     assert payload["page"] == 2
 

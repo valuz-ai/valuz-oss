@@ -18,7 +18,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
-PluginSource = Literal["market", "local_dir", "zip", "url", "claude_plugin", "codebuddy_plugin"]
+PluginSource = Literal[
+    "market", "local_dir", "zip", "url", "claude_plugin", "codebuddy_plugin", "builtin"
+]
 PluginComposition = Literal["skills_only", "with_connectors"]
 PluginMemberKind = Literal["skill", "connector"]
 PluginOnConflict = Literal["skip", "overwrite"]
@@ -61,6 +63,12 @@ class PluginRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     root_path: Mapped[str] = mapped_column(Text)
     data_path: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    # Builtin plugins (``source="builtin"``) are app-managed: disable-able but
+    # not deletable — DELETE returns 409 and points at the enabled switch
+    # (docs/design/builtin-resources in the commercial repo, §6.5.4).
+    deletable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
     )
 
@@ -138,6 +146,7 @@ class PluginView(BaseModel):
     source_ref: str | None = None
     composition: PluginComposition
     enabled: bool = True
+    deletable: bool = True
     members: list[PluginMember] = Field(default_factory=list)
     skill_count: int = 0
     connector_count: int = 0

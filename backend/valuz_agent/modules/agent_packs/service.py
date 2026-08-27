@@ -27,7 +27,11 @@ from uuid import uuid4
 
 from valuz_agent.integrations.skills_official_bootstrap import materialize_template_skills
 from valuz_agent.modules.agent_packs.errors import PackImportFailed, PackNotFound
-from valuz_agent.modules.agent_packs.loader import load_builtin_pack, load_builtin_packs
+from valuz_agent.modules.agent_packs.loader import (
+    declared_builtin_pack_ids,
+    load_builtin_pack,
+    load_builtin_packs,
+)
 from valuz_agent.modules.agent_packs.manifest import (
     AgentPackManifest,
     PackAgent,
@@ -64,9 +68,12 @@ class AgentPackService:
 
     async def list_packs(self, user_id: str) -> list[dict[str, Any]]:
         """Every built-in pack as a localized DTO, annotated with library state
-        (``in_library`` per agent, ``added`` per pack)."""
+        (``in_library`` per agent, ``added`` per pack). The id set and its
+        order come from the builtin declaration port (packaged manifest on
+        OSS; cloud-declared in commercial editions)."""
         present = {a.slug for a in await self._agents.list_agents(user_id)}
-        return [self._to_dto(m, present) for m in load_builtin_packs()]
+        ids = await declared_builtin_pack_ids()
+        return [self._to_dto(m, present) for m in load_builtin_packs(ids)]
 
     async def get_pack(self, user_id: str, pack_id: str) -> dict[str, Any]:
         manifest = load_builtin_pack(pack_id)
@@ -129,6 +136,24 @@ class AgentPackService:
         bundled = [s.slug for s in manifest.skills if s.source == "bundled"]
         if bundled:
             await asyncio.to_thread(materialize_template_skills, bundled, user_id=user_id)
+            # The packaged template tree is retired (builtin-resources §5.4):
+            # whatever it no longer carries resolves from the market instead —
+            # the same source a market team template's url dependencies use.
+            from valuz_agent.infra.fs_registry import fs_registry as _fs_registry
+
+            official_root = _fs_registry.official_skill_root(user_id=user_id)
+            missing = [
+                s
+                for s in bundled
+                if not (official_root / s / "SKILL.md").is_file()
+                and not (official_root / s / "skill.md").is_file()
+            ]
+            if missing:
+                from valuz_agent.modules.agent_packs.market_fallback import (
+                    install_missing_bundled_skills,
+                )
+
+                await install_missing_bundled_skills(user_id, missing)
 
         # Install embedded (user-authored) skills carried inside the archive.
         embedded = [s.slug for s in manifest.skills if s.source == "embedded"]
