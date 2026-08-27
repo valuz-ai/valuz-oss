@@ -7,9 +7,10 @@ point it at a compatible implementation via
 The payloads returned here are already the ``Marketplace*`` DTO shapes
 (``MarketplaceCategoryList`` / ``MarketplaceItemList`` / ``MarketplaceItemDetail``)
 as raw JSON — the service layer only recomputes ``installed`` locally and
-validates through Pydantic. Every request carries ``channel`` (this
-install's edition/build channel) and ``locale`` (the caller's active
-locale).
+validates through Pydantic. Every request carries ``distribution`` (this
+install's edition/build channel — the parameter the index actually reads;
+``channel`` is still sent for older third-party indexes) and ``locale``
+(the caller's active locale).
 
 Shape and caching strategy mirror the two clients this module once replaced
 (``skillhub.py`` / ``modelscope.py``, now kept alongside it as the
@@ -236,7 +237,12 @@ class MarketIndexClient:
             raise MarketIndexUnavailableError("market index unavailable (memoized)")
         base = await self._resolve_base()
         url = f"{base}{path}"
-        query = {**params, "channel": self.channel}
+        # ``distribution`` is what the Valuz index reads; ``channel`` was the
+        # historical name and was silently ignored server-side, so every
+        # edition used to receive the oss composition
+        # (docs/design/builtin-resources — §2.6 in the commercial repo).
+        # Both are sent so older third-party indexes keep working.
+        query = {**params, "channel": self.channel, "distribution": self.channel}
         try:
             resp = await self._ensure_client().get(url, params=query)
             resp.raise_for_status()

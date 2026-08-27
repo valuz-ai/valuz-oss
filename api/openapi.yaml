@@ -5761,12 +5761,13 @@ components:
           items: {type: string}
         source:
           type: string
-          enum: [market, local_dir, zip, url, claude_plugin, codebuddy_plugin]
+          enum: [market, local_dir, zip, url, claude_plugin, codebuddy_plugin, builtin]
         source_ref: {type: string, nullable: true, description: "Market item id / directory path / URL."}
         composition:
           type: string
           enum: [skills_only, with_connectors]
         enabled: {type: boolean}
+        deletable: {type: boolean, default: true, description: "False for builtin (app-managed) plugins — DELETE returns 409; disable instead."}
         members:
           type: array
           items: {$ref: "#/components/schemas/PluginMember"}

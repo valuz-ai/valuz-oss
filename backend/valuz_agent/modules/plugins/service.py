@@ -60,6 +60,7 @@ from valuz_agent.modules.plugins.errors import (
     PluginFetchFailed,
     PluginInstallFailed,
     PluginInvalid,
+    PluginNotDeletable,
     PluginNotFound,
     PluginSourceUnavailable,
 )
@@ -313,13 +314,20 @@ class PluginService:
         url: str | None = None,
         market_item_id: str | None = None,
         on_conflict: PluginOnConflict = "skip",
+        builtin: bool = False,
     ) -> PluginInstallResult:
+        """``builtin=True`` installs an app-managed builtin plugin: the row is
+        marked ``source="builtin"`` / ``deletable=False`` and its member
+        skills land in the read-only official root (design D3) instead of the
+        user library."""
         acquired = await self._acquire(
             user_id, zip_bytes=zip_bytes, path=path, url=url, market_item_id=market_item_id
         )
         try:
             loaded = await asyncio.to_thread(self._load, acquired.root)
-            result = await self._install_loaded(user_id, loaded, acquired, on_conflict=on_conflict)
+            result = await self._install_loaded(
+                user_id, loaded, acquired, on_conflict=on_conflict, builtin=builtin
+            )
         finally:
             self._cleanup(acquired)
         if acquired.source == "market" and self._installs is not None and acquired.source_ref:
@@ -366,6 +374,10 @@ class PluginService:
 
     async def uninstall(self, user_id: str, plugin_id: str) -> PluginUninstallResult:
         row = await self._require(user_id, plugin_id)
+        if not row.deletable:
+            # Builtin plugins are app-managed: disable-able, never deletable
+            # (a revoked declaration flips ``deletable`` back — D5).
+            raise PluginNotDeletable()
         result = PluginUninstallResult()
         for comp in await self._ds.list_components(user_id, row.id):
             kept_reason = await self._release_member(user_id, row.id, comp)
@@ -538,16 +550,27 @@ class PluginService:
         acquired: _Acquired,
         *,
         on_conflict: PluginOnConflict,
+        builtin: bool = False,
     ) -> PluginInstallResult:
         name = staged.manifest.name
         existing = await self._ds.get_by_name(user_id, name)
-        if existing is not None and not self._same_source(existing, acquired.source_ref):
+        if existing is not None and not builtin and not self._same_source(
+            existing, acquired.source_ref
+        ):
             raise PluginConflict(
                 f"Plugin '{name}' is already installed from another source "
                 f"({existing.source}); uninstall it first"
             )
+        if existing is not None and builtin and existing.source != "builtin":
+            # A user install already claimed the name — the builtin sync must
+            # not clobber it (create-only conservatism; logged by the caller).
+            raise PluginConflict(
+                f"Plugin '{name}' is already installed from source '{existing.source}'"
+            )
         source: PluginSource = (
-            acquired.source if staged.format == "agent_plugins" else staged.format
+            "builtin"
+            if builtin
+            else (acquired.source if staged.format == "agent_plugins" else staged.format)
         )
         warnings: list[str] = []
 
@@ -589,7 +612,10 @@ class PluginService:
 
         for skill in loaded.skills:
             prev = prev_components.get(("skill", skill.slug))
-            outcome = await self._place_skill(user_id, library, skill, prev, on_conflict)
+            if builtin:
+                outcome = await self._place_skill_builtin(user_id, skill)
+            else:
+                outcome = await self._place_skill(user_id, library, skill, prev, on_conflict)
             if outcome.action == "failed":
                 skipped.append(
                     PluginSkippedMember(kind="skill", slug=skill.slug, reason=outcome.reason or "")
@@ -679,11 +705,14 @@ class PluginService:
                     root_path=str(root),
                     data_path=str(data_dir),
                     enabled=True,
+                    deletable=not builtin,
                 ),
             )
             status: Literal["installed", "updated", "already_installed"] = "installed"
         else:
             row = existing
+            if builtin:
+                row.deletable = False
             if (
                 row.version != loaded.manifest.version
                 or row.manifest_json != manifest_json
@@ -831,6 +860,36 @@ class PluginService:
             logger.exception("plugins: failed to install skill %s", skill.slug)
             return _MemberOutcome(
                 origin=prev_origin, content_differs=False, action="failed", reason=str(exc)
+            )
+
+    async def _place_skill_builtin(self, user_id: str, skill: SkillSpec) -> _MemberOutcome:
+        """Land a builtin plugin's member skill in the read-only official root
+        (design D3), with the same ``.bundled-version`` content-hash
+        convergence the bundled skill trees use — an unchanged pass leaves the
+        tree byte-for-byte identical (§7.3)."""
+        from valuz_agent.integrations.skills_official_bootstrap import (
+            BUNDLED_VERSION_FILE,
+            _copy_skill,
+            _hash_directory,
+        )
+
+        dest_root = fs_registry.official_skill_root(user_id=user_id)
+        dest_root.mkdir(parents=True, exist_ok=True)
+        dest = dest_root / skill.slug
+        try:
+            version_hash = await asyncio.to_thread(_hash_directory, skill.path)
+            marker = dest / BUNDLED_VERSION_FILE
+            if dest.exists() and marker.exists():
+                if marker.read_text(encoding="utf-8").strip() == version_hash:
+                    return _MemberOutcome(
+                        origin="installed", content_differs=False, action="unchanged"
+                    )
+            await asyncio.to_thread(_copy_skill, skill.path, dest, version_hash)
+            return _MemberOutcome(origin="installed", content_differs=False, action="installed")
+        except Exception as exc:  # noqa: BLE001 — one bad member must not sink the install
+            logger.exception("plugins: failed to install builtin skill %s", skill.slug)
+            return _MemberOutcome(
+                origin="installed", content_differs=False, action="failed", reason=str(exc)
             )
 
     async def _replace_skill(self, user_id: str, skill: SkillSpec, lib_dir: Path) -> None:
@@ -1192,6 +1251,13 @@ class PluginService:
         for comp in components:
             if comp.kind == "skill":
                 installed = (library.skill_root / comp.slug / "SKILL.md").is_file()
+                if not installed and row.source == "builtin":
+                    # Builtin plugin members land in the official root (D3).
+                    installed = (
+                        fs_registry.official_skill_root(user_id=row.user_id)
+                        / comp.slug
+                        / "SKILL.md"
+                    ).is_file()
             else:
                 installed = comp.slug in library.connectors
             members.append(
@@ -1223,6 +1289,7 @@ class PluginService:
             source_ref=row.source_ref,
             composition="with_connectors" if row.mcp_json else "skills_only",
             enabled=bool(row.enabled),
+            deletable=bool(row.deletable),
             members=members,
             skill_count=skill_count,
             connector_count=connector_count,

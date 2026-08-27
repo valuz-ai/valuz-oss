@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "office",
+  "version": "1.0.0",
+  "description": "Create and edit Word, Excel, and PowerPoint documents (docx / xlsx / pptx).",
+  "author": {"name": "Valuz"},
+  "license": "MIT",
+  "keywords": ["office", "docx", "xlsx", "pptx"]
+}

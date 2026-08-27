@@ -32,6 +32,10 @@ from valuz_agent.ports.automation_runtime import (
     InProcessAutomationRuntime,
 )
 from valuz_agent.ports.billing import BillingPort, NoopBillingProvider
+from valuz_agent.ports.builtin_declaration import (
+    BuiltinResourceDeclarationPort,
+    PackagedBuiltinDeclarations,
+)
 from valuz_agent.ports.cache import CachePort, FileCache
 from valuz_agent.ports.capability_policy import HostCapabilityPolicyPort
 from valuz_agent.ports.citation_documents import CitationDocumentResolverPort
@@ -177,6 +181,13 @@ class Extensions:
         # registration is live without a process restart. See
         # docs/design/a2ui-dynamic-components.md.
         self.a2ui_components = A2UIComponentRegistry()
+        # What this install treats as builtin (skills / connectors / agent
+        # templates / plugins). OSS reads the packaged manifests only; the
+        # commercial overlay binds a cloud-backed resolver that falls back to
+        # the same packaged set offline. See ports/builtin_declaration.py.
+        self.builtin_declarations: BuiltinResourceDeclarationPort = (
+            PackagedBuiltinDeclarations()
+        )
         # Resolve a file's absolute path into a client-usable access address
         # (see docs/design/file-address-resolution.md). OSS default returns the
         # local absolute path (bundled desktop reads it directly); the commercial

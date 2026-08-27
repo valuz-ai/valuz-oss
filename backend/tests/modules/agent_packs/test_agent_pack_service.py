@@ -221,14 +221,26 @@ async def test_import_pack_registers_connectors(svc: AgentPackService) -> None:
     assert len(again) == 1
 
 
-async def test_import_pack_materializes_skills(svc: AgentPackService, tmp_path) -> None:
-    # bundled skills land in the official-skills dir on import (deferred from
-    # boot), so they're in the library and resolvable at session time. The
-    # content team is the one that still ships bundled skills.
+async def test_import_pack_resolves_retired_bundled_skills_from_market(
+    svc: AgentPackService, tmp_path, monkeypatch
+) -> None:
+    # The packaged template tree is retired (builtin-resources §5.4): a pack's
+    # ``bundled`` skills that the package no longer carries resolve from the
+    # market. The import must hand exactly the missing slugs to the fallback.
+    requested: list[list[str]] = []
+
+    async def _fake_install(user_id: str, slugs: list[str]) -> list[str]:
+        requested.append(list(slugs))
+        return list(slugs)
+
+    monkeypatch.setattr(
+        "valuz_agent.modules.agent_packs.market_fallback.install_missing_bundled_skills",
+        _fake_install,
+    )
     await svc.import_pack(USER, "content", **DEPLOY)
-    skills_dir = tmp_path / "official-skills"
-    assert (skills_dir / "xhs-topic-method" / "SKILL.md").is_file()
-    assert (skills_dir / "xhs-note-writing").is_dir()
+    assert requested, "market fallback was not invoked for retired bundled skills"
+    assert "xhs-topic-method" in requested[0]
+    assert "xhs-note-writing" in requested[0]
 
 
 async def test_import_pack_notifies_bundled_skill_lifecycle(

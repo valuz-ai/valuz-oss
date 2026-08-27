@@ -68,3 +68,44 @@ def load_builtin_packs(ids: tuple[str, ...] = BUILTIN_PACK_IDS) -> list[AgentPac
         if manifest is not None:
             out.append(manifest)
     return out
+
+
+async def declared_builtin_pack_ids() -> tuple[str, ...]:
+    """Pack ids from the builtin declaration port, in ``display_order``.
+
+    Falls back to ``BUILTIN_PACK_IDS`` when the declaration set carries no
+    ``agent_team_template`` entries (manifest-less build) or the port errors —
+    listing packs must never fail because a declaration read did.
+    """
+    from valuz_agent.ports.builtin_declaration import get_builtin_declarations_port
+
+    try:
+        declarations = await get_builtin_declarations_port().declarations()
+    except Exception:  # noqa: BLE001 — fall back, never break the listing
+        logger.exception("builtin declaration read failed; using packaged pack ids")
+        return BUILTIN_PACK_IDS
+    entries = sorted(
+        declarations.by_kind("agent_team_template"), key=lambda d: d.display_order
+    )
+    return tuple(d.slug for d in entries) or BUILTIN_PACK_IDS
+
+
+async def declared_onboarding_pack_ids() -> tuple[str, ...]:
+    """The onboarding-recommended subset (``onboarding_default`` flag), in
+    ``display_order``; falls back to ``ONBOARDING_PACK_IDS``."""
+    from valuz_agent.ports.builtin_declaration import get_builtin_declarations_port
+
+    try:
+        declarations = await get_builtin_declarations_port().declarations()
+    except Exception:  # noqa: BLE001
+        logger.exception("builtin declaration read failed; using packaged onboarding ids")
+        return ONBOARDING_PACK_IDS
+    entries = sorted(
+        (
+            d
+            for d in declarations.by_kind("agent_team_template")
+            if d.onboarding_default
+        ),
+        key=lambda d: d.display_order,
+    )
+    return tuple(d.slug for d in entries) or ONBOARDING_PACK_IDS

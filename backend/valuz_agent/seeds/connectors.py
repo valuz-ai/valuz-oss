@@ -8,6 +8,8 @@ an authorized snapshot through their control plane.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +29,8 @@ def _localized(value: object, fallback: str) -> str:
     return value if isinstance(value, str) and value else fallback
 
 
-def _builtin_entries() -> list[dict]:
-    entries: list[dict] = []
+def _builtin_entries() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     for item in load_catalog():
         members = item.get("connectors")
         candidates = members if isinstance(members, list) else [item]
@@ -38,8 +40,52 @@ def _builtin_entries() -> list[dict]:
     return entries
 
 
-async def seed_builtin_connectors(db: AsyncSession, *, user_id: str) -> None:
-    """Insert missing built-ins without initiating or fabricating OAuth."""
+def _catalog_entry(slug: str) -> dict[str, Any] | None:
+    for item in load_catalog():
+        members = item.get("connectors")
+        candidates = members if isinstance(members, list) else [item]
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate.get("slug") == slug:
+                return candidate
+    return None
+
+
+async def _declared_entries() -> list[dict[str, Any]]:
+    """The connector set from the builtin declaration port.
+
+    A declaration's ``connector_config`` wins; a packaged-manifest entry that
+    only points at the catalog (``asset: connector_catalog.json#<slug>``)
+    resolves through the catalog. An empty declared set falls back to the
+    catalog's ``builtin: true`` rows so a build without a manifest keeps
+    today's behavior.
+    """
+    from valuz_agent.ports.builtin_declaration import get_builtin_declarations_port
+
+    try:
+        declarations = await get_builtin_declarations_port().declarations()
+    except Exception:  # noqa: BLE001 — seeding must never block boot
+        return _builtin_entries()
+    entries: list[dict[str, Any]] = []
+    for decl in declarations.by_kind("connector"):
+        if decl.provisioning != "provisioned":
+            continue
+        entry = dict(decl.connector_config or _catalog_entry(decl.slug) or {})
+        if not entry.get("slug"):
+            entry["slug"] = decl.slug
+        if entry.get("url") or entry.get("command"):
+            entries.append(entry)
+    return entries or _builtin_entries()
+
+
+async def seed_builtin_connectors(
+    db: AsyncSession, *, user_id: str, entries: list[dict[str, Any]] | None = None
+) -> None:
+    """Insert missing built-ins without initiating or fabricating OAuth.
+
+    The slug set comes from the builtin declaration port (packaged manifest
+    on OSS, cloud-backed in commercial editions); ``entries`` overrides it for
+    tests / callers that already resolved a declaration set.
+    """
 
     existing = set(
         (
@@ -48,7 +94,7 @@ async def seed_builtin_connectors(db: AsyncSession, *, user_id: str) -> None:
             )
         ).scalars()
     )
-    for entry in _builtin_entries():
+    for entry in entries if entries is not None else await _declared_entries():
         slug = str(entry["slug"])
         if slug in existing:
             continue

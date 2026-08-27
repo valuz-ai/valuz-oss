@@ -31,6 +31,13 @@ class PluginConflict(ConflictError):
     message = "A plugin with this name is already installed from another source"
 
 
+class PluginNotDeletable(ConflictError):
+    """A builtin (app-managed) plugin cannot be uninstalled — disable it instead."""
+
+    error_code = 409_752
+    message = "Builtin plugins cannot be uninstalled; disable the plugin instead"
+
+
 class PluginInstallFailed(BadRequestError):
     """Bad archive / caps exceeded / unusable source path."""
 

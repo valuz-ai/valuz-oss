@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "type": "skill",
+      "slug": "skill-creator",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "official_skills/skill-creator",
+      "display_order": 0
+    },
+    {
+      "type": "skill",
+      "slug": "valuz-handbook",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "official_skills/valuz-handbook",
+      "display_order": 1
+    },
+    {
+      "type": "skill",
+      "slug": "browser",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "builtin_skills/browser",
+      "display_order": 2
+    },
+    {
+      "type": "skill",
+      "slug": "citation",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "builtin_skills/citation",
+      "display_order": 3
+    },
+    {
+      "type": "skill",
+      "slug": "valuz-project-docs",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "builtin_skills/valuz-project-docs",
+      "display_order": 4
+    },
+    {
+      "type": "plugin",
+      "slug": "office",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "bundled_plugins/office",
+      "runtime_scope": "any",
+      "display_order": 0
+    },
+    {
+      "type": "connector",
+      "slug": "valuz-search",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "connector_catalog.json#valuz-search",
+      "display_order": 0
+    },
+    {
+      "type": "connector",
+      "slug": "valuz-data",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "connector_catalog.json#valuz-data",
+      "display_order": 1
+    },
+    {
+      "type": "agent_template",
+      "slug": "valurion",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "manifest": {
+        "effort": "high"
+      },
+      "display_order": 0
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "product-strategy",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/product-strategy",
+      "onboarding_default": false,
+      "display_order": 0
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "design-prototype",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/design-prototype",
+      "onboarding_default": false,
+      "display_order": 1
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "development-engineering",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/development-engineering",
+      "onboarding_default": true,
+      "display_order": 2
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "qa-testing",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/qa-testing",
+      "onboarding_default": false,
+      "display_order": 3
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "investment",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/investment",
+      "onboarding_default": true,
+      "display_order": 4
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "supply-chain-tracking",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/supply-chain-tracking",
+      "onboarding_default": false,
+      "display_order": 5
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "competitive-intelligence",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/competitive-intelligence",
+      "onboarding_default": false,
+      "display_order": 6
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "content-growth",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/content-growth",
+      "onboarding_default": false,
+      "display_order": 7
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "campaign-event",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/campaign-event",
+      "onboarding_default": false,
+      "display_order": 8
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "content",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/content",
+      "onboarding_default": true,
+      "display_order": 9
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "short-video-growth",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/short-video-growth",
+      "onboarding_default": false,
+      "display_order": 10
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "contract-review",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/contract-review",
+      "onboarding_default": false,
+      "display_order": 11
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "compliance-review",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/compliance-review",
+      "onboarding_default": false,
+      "display_order": 12
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "academic-research",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/academic-research",
+      "onboarding_default": false,
+      "display_order": 13
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "training-program",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/training-program",
+      "onboarding_default": false,
+      "display_order": 14
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "recruiting-evaluation",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/recruiting-evaluation",
+      "onboarding_default": false,
+      "display_order": 15
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "chinese-metaphysics",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/chinese-metaphysics",
+      "onboarding_default": false,
+      "display_order": 16
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "health-report",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/health-report",
+      "onboarding_default": false,
+      "display_order": 17
+    },
+    {
+      "type": "agent_team_template",
+      "slug": "tarot-astrology",
+      "version": "1.0.0",
+      "provisioning": "available",
+      "asset": "agent_packs/tarot-astrology",
+      "onboarding_default": false,
+      "display_order": 18
+    }
+  ]
+}
