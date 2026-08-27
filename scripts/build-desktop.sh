@@ -372,7 +372,14 @@ if ! $SKIP_NODE; then
   [ -f "$DSH_VENDOR_DIR/package-lock.json" ] || \
     die "Missing $DSH_VENDOR_DIR/package-lock.json. Refresh: bash scripts/vendor-dsh-runtime.sh --update"
   log "Installing dsh runtime closure (npm ci) ..."
-  ( cd "$DSH_VENDOR_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error )
+  # ``--install-links`` is passed explicitly rather than left to the vendor
+  # dir's .npmrc: the lockfile is written in the install-links shape (real
+  # copies, no symlinks — Phase A5 stages ``node_modules`` alone, so a link
+  # into ../valuz-plugins would dangle in the packaged app), and if npm does
+  # not pick that setting up it reads the same lock as out of sync and fails
+  # the whole build with EUSAGE. Passing it on the command line makes the
+  # install shape independent of which .npmrc npm happens to see.
+  ( cd "$DSH_VENDOR_DIR" && npm ci --omit=dev --install-links --no-audit --no-fund --loglevel=error )
   [ -f "$DSH_VENDOR_DIR/node_modules/$DSH_ENTRY_REL" ] || \
     die "npm ci did not produce $DSH_ENTRY_REL"
 
