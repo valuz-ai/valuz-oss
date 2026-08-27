@@ -148,16 +148,23 @@ export const UpdateToast = () => {
             ) : isError ? (
               <AlertCircle className="h-4 w-4 shrink-0 text-error-text" />
             ) : (
-              <Download className="h-4 w-4 shrink-0 text-blue-500" />
+              <Download className="h-4 w-4 shrink-0 text-brand" />
             )}
             {/* Title only — the version rides on row 2 so it's never squeezed
-                out by the action button in the fixed-width card. */}
+                out by the action button in the fixed-width card. The exception
+                is while downloading: row 2 is the progress bar then, so the
+                version has nowhere else to go — and the action button is
+                hidden, which is exactly the room it needs. */}
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
+              {/* While the download runs, "update available" is the one thing
+                  the user already knows — say what is happening instead. */}
               {isError
                 ? t("updater.errorTitle" as Parameters<typeof t>[0])
                 : isDownloaded
                   ? t("updater.downloadedTitle" as Parameters<typeof t>[0])
-                  : t("updater.updateAvailable" as Parameters<typeof t>[0])}
+                  : isDownloading
+                    ? `${t("updater.downloadingTitle" as Parameters<typeof t>[0])}${version ? ` v${version}` : ""}`
+                    : t("updater.updateAvailable" as Parameters<typeof t>[0])}
             </span>
             {isDownloaded ? (
               <Button

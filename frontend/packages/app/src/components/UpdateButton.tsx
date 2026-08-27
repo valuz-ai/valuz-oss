@@ -24,7 +24,7 @@ export const UpdateButton = ({ onClick }: UpdateButtonProps) => {
           <button
             type="button"
             onClick={onClick}
-            className="flex h-[22px] w-[22px] animate-pulse items-center justify-center rounded-[5px] text-blue-500 transition-colors hover:bg-surface-muted"
+            className="flex h-[22px] w-[22px] animate-pulse items-center justify-center rounded-[5px] text-brand transition-colors hover:bg-surface-muted"
           >
             <Download className="h-4 w-4" />
           </button>

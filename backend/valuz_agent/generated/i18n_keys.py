@@ -2965,6 +2965,7 @@ I18nKey = Literal[
     "updater.downloadedTitle",
     "updater.downloading",
     "updater.downloadingDesc",
+    "updater.downloadingTitle",
     "updater.errorCheckDesc",
     "updater.errorDownloadDesc",
     "updater.errorTitle",

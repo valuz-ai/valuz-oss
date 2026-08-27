@@ -110,16 +110,21 @@ export const UpdateWindowApp = () => {
           {isDownloaded ? (
             <CheckCircle className="h-12 w-12 text-green-500" />
           ) : (
-            <Download className="h-12 w-12 text-blue-500" />
+            <Download className="h-12 w-12 text-brand" />
           )}
         </div>
 
         {/* Title */}
         <div className="text-center">
           <h1 className="text-lg font-semibold text-ink-body">
+            {/* Three states, not two: while the download runs the title said
+                "update available", which is the one thing the user already
+                knows by then. */}
             {isDownloaded
               ? _t("updater.downloadedTitle")
-              : _t("updater.updateAvailable")}
+              : isDownloading
+                ? _t("updater.downloadingTitle")
+                : _t("updater.updateAvailable")}
             {displayVersion}
           </h1>
           <p className="mt-1 text-sm text-ink-meta">
