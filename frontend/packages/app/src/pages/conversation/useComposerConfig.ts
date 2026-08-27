@@ -20,10 +20,10 @@ import { type ComposerAgentItem, type RuntimeStartLocation } from "@valuz/ui";
 import { modelLabel } from "@valuz/shared";
 import {
   libraryEnabledSkillItems,
-  projectComposerSkillItems,
   resolveAgentSkillItems,
   type AgentSkillItem,
 } from "../../lib/agent-skill-items";
+import { useAgentEffectiveSkills } from "../../hooks/use-agent-effective-skills";
 import { NEW_SESSION_ID } from "./session-events";
 
 type ComposerConfigParams = {
@@ -334,22 +334,28 @@ export function useComposerConfig({
     [availableSkills, projectSkills],
   );
 
-  // The skills of the currently selected member agent — the ``/`` picker list
-  // for a PROJECT conversation. Project chats can't attach skills ad-hoc
-  // (skills are the agent's equipment), so ``/`` surfaces exactly what that
-  // agent runs with.
+  // The ``/`` picker list for a PROJECT conversation: what a session for the
+  // selected member agent will ACTUALLY be created with, straight from the
+  // backend that composes it.
   //
-  // Which is NOT its ``skills`` array: that array omits both the library an
-  // ``all_available`` agent receives at session-creation time and the always-on
-  // baseline the host injects into every session. ``projectComposerSkillItems``
-  // owns the rule (shared with the project-detail composer).
-  const selectedAgentSkillItems = useMemo(() => {
-    if (!effectiveAgentSlug) return [];
-    const agent = projectAgents.find(
-      (m) => m.member.agent_slug === effectiveAgentSlug,
-    )?.agent;
-    return projectComposerSkillItems(agent, availableSkills);
-  }, [effectiveAgentSlug, projectAgents, availableSkills]);
+  // Deriving it here is what kept going wrong. The member's ``skills`` array is
+  // the bindings alone — it omits the always-on baseline the host injects into
+  // every session (so a self-created agent showed nothing for ``/skill-`` while
+  // ``skill-creator`` was loaded), and it is empty by design for an
+  // ``all_available`` agent that in fact holds the whole library.
+  const selectedMember = useMemo(
+    () =>
+      effectiveAgentSlug
+        ? projectAgents.find((m) => m.member.agent_slug === effectiveAgentSlug)
+        : undefined,
+    [effectiveAgentSlug, projectAgents],
+  );
+  const selectedAgentSkillItems = useAgentEffectiveSkills(
+    // The manifest is keyed by the LIBRARY slug; ``agent_slug`` is the
+    // project-local handle and 404s.
+    selectedMember?.member.source_agent_slug ?? null,
+    availableSkills,
+  );
 
   // The ``/`` picker list for a NEW (non-project) conversation: the union of
   // the library-ENABLED skills and the selected agent's bound skills, deduped

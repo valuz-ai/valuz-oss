@@ -437,7 +437,8 @@ class AgentService:
             canonical_fields = {
                 key: value
                 for key, value in canonical.items()
-                if key in {
+                if key
+                in {
                     "name",
                     "description",
                     "instructions",
@@ -456,8 +457,7 @@ class AgentService:
             }
             if canonical_fields:
                 created = (
-                    await self._agents.update_fields(user_id, slug, canonical_fields)
-                    or created
+                    await self._agents.update_fields(user_id, slug, canonical_fields) or created
                 )
         # A cloud-first port already committed the mutation. Calling the old
         # after-save hook in that case would create a reverse upload/dual
@@ -618,10 +618,15 @@ class AgentService:
         user_id: str,
         slug: str,
     ) -> Any:
-        """Resolve Valurion's current read-only resource view."""
+        """What a session for this agent would actually be created with.
+
+        Answers for EVERY agent, not just ``all_available`` ones. It used to
+        refuse an explicit agent, which left callers to re-derive the answer:
+        the composer's ``/`` picker read the agent's ``skills`` array and so
+        under-reported every session by the always-on baseline the host injects
+        into it. Session composition has one owner; this is it.
+        """
         row = await self.get_agent(user_id, slug)
-        if row.resource_policy != "all_available":
-            raise ValueError(f"agent '{row.slug}' uses explicit resources, not all_available")
         from valuz_agent.modules.agents.effective_resources import (
             EffectiveResourceResolver,
             current_execution_supports_stdio,
@@ -631,6 +636,11 @@ class AgentService:
             user_id,
             runtime=row.runtime,
             supports_stdio=current_execution_supports_stdio(),
+            # ``None`` asks for the live library; a sequence (even an empty
+            # one — an agent that bound nothing) asks for exactly the bindings.
+            bound_skill_slugs=(
+                None if row.resource_policy == "all_available" else list(row.skills or [])
+            ),
         )
 
     async def _cleanup_marketplace_install(self, user_id: str, slug: str) -> None:

@@ -150,10 +150,10 @@ vi.mock("@valuz/app/components", () => ({
   RowActionsMenu: () => null,
   formatCreatedAt: (ms: number) => String(ms),
 }));
-// The ``/`` picker's contents are covered by agent-skill-items.test.ts; this
-// file only needs the page to render, so the helper returns an empty list.
-vi.mock("../lib/agent-skill-items", () => ({
-  projectComposerSkillItems: () => [],
+// The ``/`` picker's contents come from the backend now (covered by
+// use-agent-effective-skills.test.tsx); this file only needs the page to render.
+vi.mock("../hooks/use-agent-effective-skills", () => ({
+  useAgentEffectiveSkills: () => [],
 }));
 vi.mock("../lib/file-tree", () => ({ toFileTree: () => [] }));
 vi.mock("../components/AttachmentParsingDialog", () => ({

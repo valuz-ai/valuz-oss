@@ -39,14 +39,6 @@ export interface SkillView {
    *  project. Scanned user skills default off; enabling makes the skill
    *  available to new conversations and agent skill pickers. */
   library_enabled?: boolean;
-  /**
-   * Part of the always-on baseline every session carries, whatever the agent
-   * binds — the host materialises it at session creation for chat, project and
-   * task runs alike. Neither `enabled` nor `library_enabled` gates it, so a
-   * picker showing "what can this conversation run" must add these on top of
-   * the agent's own bindings.
-   */
-  always_on?: boolean;
   tags: string[];
   slug?: string;
   icon?: string | null;

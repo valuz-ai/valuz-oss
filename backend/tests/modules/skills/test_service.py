@@ -437,47 +437,6 @@ class TestSameSlugCoexistence:
         assert official.library_enabled is True
         assert user.library_enabled is False
 
-    async def test_catalog_flags_the_always_on_baseline(self, svc, tmp_path, monkeypatch):
-        """The baseline rides every session no matter what the agent binds.
-
-        A client can't derive it from ``enabled`` / ``library_enabled`` / the
-        agent's bindings, so the catalog has to say so — otherwise the
-        composer's ``/`` picker under-reports the session by exactly this set
-        (the reported bug: a self-created agent showed nothing for ``/skill-``
-        while ``skill-creator`` was loaded and usable).
-        """
-        baseline_dir = tmp_path / "official" / "shared"
-        baseline_dir.mkdir(parents=True)
-        (baseline_dir / ".bundled-version").write_text("v1", encoding="utf-8")
-        await svc._ds.create("u", self._seed_official_row(str(baseline_dir)))
-        await svc._ds.create("u", self._seed_user_row(str(tmp_path / "user" / "other")))
-        svc._extra_sources = [self._ExplodingOfficialSource()]
-        monkeypatch.setattr(
-            "valuz_agent.adapters.capability_resolver.always_on_skill_paths",
-            lambda *, user_id: [str(baseline_dir)],
-        )
-
-        catalog = await svc.list_catalog("u", "ws-1")
-
-        flagged = {s.slug for s in catalog.skills if s.always_on}
-        assert flagged == {"shared"}
-
-    async def test_catalog_leaves_always_on_off_by_default(self, svc, tmp_path, monkeypatch):
-        official_dir = tmp_path / "official" / "shared"
-        official_dir.mkdir(parents=True)
-        (official_dir / ".bundled-version").write_text("v1", encoding="utf-8")
-        await svc._ds.create("u", self._seed_official_row(str(official_dir)))
-        await svc._ds.create("u", self._seed_user_row(str(tmp_path / "user" / "other")))
-        svc._extra_sources = [self._ExplodingOfficialSource()]
-        monkeypatch.setattr(
-            "valuz_agent.adapters.capability_resolver.always_on_skill_paths",
-            lambda *, user_id: [],
-        )
-
-        catalog = await svc.list_catalog("u", "ws-1")
-
-        assert all(s.always_on is False for s in catalog.skills)
-
 
 class TestListCatalog:
     async def test_should_return_name_and_description_fields(self, svc, skill_root):

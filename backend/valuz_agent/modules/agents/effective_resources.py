@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +62,10 @@ class EffectiveResourceManifest:
     connectors: tuple[EffectiveResource, ...]
     knowledge_bases: tuple[EffectiveResource, ...]
     warnings: tuple[ResourceWarning, ...]
+    # Which rule produced this set. ``all_available`` = the owner's live
+    # library; ``explicit`` = the agent's own bindings. The baseline is in
+    # both, so the field describes the SELECTION, not the whole content.
+    policy: str = "all_available"
 
     @property
     def skill_paths(self) -> list[str]:
@@ -77,7 +82,7 @@ class EffectiveResourceManifest:
     def session_metadata(self) -> dict[str, Any]:
         """Snapshot identifiers/status only; never secret, path, or body data."""
         return {
-            "policy": "all_available",
+            "policy": self.policy,
             "resolved_at": self.resolved_at,
             "skills": [item.id for item in self.skills],
             "connectors": [item.id for item in self.connectors],
@@ -87,7 +92,7 @@ class EffectiveResourceManifest:
 
     def to_api(self) -> dict[str, Any]:
         return {
-            "policy": "all_available",
+            "policy": self.policy,
             "resolved_at": self.resolved_at,
             "counts": {
                 "skills": len(self.skills),
@@ -122,13 +127,90 @@ class EffectiveResourceResolver:
             docs=sources.docs,
         )
 
+    @staticmethod
+    def _select_bound(
+        rows: list[Any],
+        bound_skill_slugs: Sequence[str],
+        warnings: list[ResourceWarning],
+    ) -> list[Any]:
+        """The index rows for an agent's bindings, in the order it bound them.
+
+        A binding the index cannot resolve is reported rather than dropped
+        silently — that is the same entry the session builder would drop, and
+        the user needs to know their agent is carrying a dead reference.
+        """
+        by_slug = {row.slug: row for row in rows if row.slug}
+        selected: list[Any] = []
+        seen: set[str] = set()
+        for entry in bound_skill_slugs:
+            # Agents persist a slug or an absolute path; the basename is the slug.
+            slug = PurePosixPath(str(entry)).name if "/" in str(entry) else str(entry)
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            row = by_slug.get(slug)
+            if row is None:
+                warnings.append(
+                    _warning(
+                        "skill",
+                        slug,
+                        "skill_unknown",
+                        "Agent binds a skill that is not in the library.",
+                    )
+                )
+                continue
+            selected.append(row)
+        return selected
+
+    @staticmethod
+    def _append_always_on(skills: list[EffectiveResource], user_id: str) -> None:
+        """Add the baseline every session carries, however the agent is scoped.
+
+        ``resolve_session_capabilities`` appends these unconditionally, so a
+        manifest that leaves them out is not the session's resource set. Deduped
+        against what is already listed by resolved path.
+        """
+        from valuz_agent.adapters.capability_resolver import always_on_skill_paths
+
+        listed = {item.runtime_ref for item in skills if item.runtime_ref}
+        for raw_path in always_on_skill_paths(user_id=user_id):
+            resolved = str(Path(raw_path).resolve(strict=False))
+            if resolved in listed:
+                continue
+            listed.add(resolved)
+            slug = Path(resolved).name
+            skills.append(
+                EffectiveResource(
+                    id=f"always-on:{slug}",
+                    slug=slug,
+                    name=slug,
+                    source="always_on",
+                    status="available",
+                    runtime_ref=resolved,
+                )
+            )
+
     async def resolve(
         self,
         user_id: str,
         *,
         runtime: str,
         supports_stdio: bool,
+        bound_skill_slugs: Sequence[str] | None = None,
     ) -> EffectiveResourceManifest:
+        """What a session for this agent will actually be created with.
+
+        ``bound_skill_slugs`` selects the policy. ``None`` is the
+        ``all_available`` view — the owner's entitled library. A sequence is
+        the ``explicit`` view: exactly those bindings, with the library switch
+        deliberately NOT consulted, because a binding survives it (the session
+        builder resolves bindings through ``resolve_skill_slugs_to_paths``,
+        which reads the index for a path and nothing else).
+
+        Either way the always-on baseline is appended, because
+        ``resolve_session_capabilities`` appends it to every session it builds.
+        Leaving it out made this manifest quietly under-report the session.
+        """
         if not user_id:
             raise ValueError("user_id is required")
 
@@ -137,16 +219,41 @@ class EffectiveResourceResolver:
         knowledge: list[EffectiveResource] = []
         warnings: list[ResourceWarning] = []
 
-        for row in await self._skills.list_skills(user_id):
-            if not row.library_enabled:
-                warnings.append(
-                    _warning("skill", row.id, "skill_disabled", "Skill is disabled.")
+        skill_rows = list(await self._skills.list_skills(user_id))
+        if bound_skill_slugs is not None:
+            skill_rows = self._select_bound(skill_rows, bound_skill_slugs, warnings)
+
+        for row in skill_rows:
+            if bound_skill_slugs is not None:
+                # An explicit binding is not subject to the library switch or
+                # the entitlement gate; only "is it on disk" applies.
+                path = Path(row.source_path).expanduser()
+                if not path.is_dir():
+                    warnings.append(
+                        _warning(
+                            "skill",
+                            row.id,
+                            "skill_path_missing",
+                            "Skill source is not materialized.",
+                        )
+                    )
+                    continue
+                skills.append(
+                    EffectiveResource(
+                        id=row.id,
+                        slug=row.slug,
+                        name=row.name,
+                        source=row.source,
+                        status="available",
+                        runtime_ref=str(path.resolve(strict=False)),
+                    )
                 )
                 continue
+            if not row.library_enabled:
+                warnings.append(_warning("skill", row.id, "skill_disabled", "Skill is disabled."))
+                continue
             if row.is_locked:
-                warnings.append(
-                    _warning("skill", row.id, "skill_locked", "Skill is not entitled.")
-                )
+                warnings.append(_warning("skill", row.id, "skill_locked", "Skill is not entitled."))
                 continue
             if row.status != "available":
                 warnings.append(
@@ -239,14 +346,15 @@ class EffectiveResourceResolver:
                 )
             )
 
+        self._append_always_on(skills, user_id)
+
         return EffectiveResourceManifest(
             owner_user_id=user_id,
             runtime=runtime,
+            policy="explicit" if bound_skill_slugs is not None else "all_available",
             resolved_at=now_ms(),
             skills=tuple(sorted(skills, key=lambda item: (item.name.casefold(), item.id))),
-            connectors=tuple(
-                sorted(connectors, key=lambda item: (item.name.casefold(), item.id))
-            ),
+            connectors=tuple(sorted(connectors, key=lambda item: (item.name.casefold(), item.id))),
             knowledge_bases=tuple(
                 sorted(knowledge, key=lambda item: (item.name.casefold(), item.id))
             ),

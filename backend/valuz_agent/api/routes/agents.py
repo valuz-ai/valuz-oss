@@ -320,13 +320,17 @@ async def get_agent_effective_resources(
     user_id: str = Depends(get_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict[str, Any]:
-    """Read-only, secret-free effective resources for all-available Agents."""
+    """Read-only, secret-free view of what a session for this Agent will carry.
+
+    Answers for any Agent. The 409 that used to reject an explicit-binding
+    Agent is gone: refusing them is what pushed clients into re-deriving
+    session composition from the ``skills`` array, which does not include the
+    always-on baseline every session gets.
+    """
     try:
         manifest = await svc.resolve_effective_resources(user_id, slug)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return manifest.to_api()
 
 

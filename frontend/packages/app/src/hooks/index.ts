@@ -28,3 +28,4 @@ export type {
   ConversationLocalFileLinkResolution,
 } from "./use-conversation-local-file-links";
 export { useCardGridColumns } from "./use-card-grid-columns";
+export { useAgentEffectiveSkills } from "./use-agent-effective-skills";

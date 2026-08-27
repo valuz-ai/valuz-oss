@@ -508,6 +508,8 @@ def _bump_skill_md_version(slug_dir: Path, chosen_slug: str) -> None:
     inject one after the opening `---`. Failures are swallowed — the file
     on disk is the source of truth either way.
     """
+    from valuz_agent.infra.frontmatter import split_frontmatter
+
     manifest = _detect_manifest(slug_dir)
     if manifest is None:
         return
@@ -521,13 +523,23 @@ def _bump_skill_md_version(slug_dir: Path, chosen_slug: str) -> None:
 
     if _FRONTMATTER_VERSION_RE.search(raw):
         rewritten = _FRONTMATTER_VERSION_RE.sub(new_line, raw, count=1)
-    elif raw.startswith("---\n"):
-        # Insert just after the opening fence so the field sits with the rest
-        # of the metadata.
-        rewritten = "---\n" + new_line + "\n" + raw[len("---\n") :]
     else:
-        # No frontmatter at all — wrap the file in one.
-        rewritten = f"---\n{new_line}\n---\n\n{raw}"
+        # Ask the shared splitter where the block is. A literal ``"---\n"``
+        # test here was only ever safe because ``read_text`` happens to apply
+        # universal newlines — read the file as bytes (as the skill catalog
+        # does) and a CRLF manifest would miss the block and fall into the
+        # wrap-it branch, burying the real frontmatter in a body no reader
+        # looks at. That shape is how three bundled skills lost their
+        # descriptions; don't leave the safety resting on an invisible
+        # coupling.
+        block, body = split_frontmatter(raw)
+        if block is not None:
+            # Insert just after the opening fence so the field sits with the
+            # rest of the metadata.
+            rewritten = f"---\n{new_line}\n{block}\n---\n{body}"
+        else:
+            # Genuinely no frontmatter — wrap the file in one.
+            rewritten = f"---\n{new_line}\n---\n\n{body}"
 
     try:
         manifest.write_text(rewritten, encoding="utf-8")
