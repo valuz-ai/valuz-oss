@@ -255,9 +255,12 @@ class FakeAgentDatastore:
         self.slugs = slugs if slugs is not None else {"qa-engineer"}
 
     async def get_agent(self, user_id: str, slug: str) -> object | None:
-        # Return any non-None to signal "present". Service only checks
-        # the truthiness on this path.
-        return object() if slug in self.slugs else None
+        # The library_agent create path now derives the instance slug from
+        # the source agent's display NAME (``derive_slug``), so the fake
+        # carries a name like a real AgentRow.
+        if slug not in self.slugs:
+            return None
+        return SimpleNamespace(name="QA Engineer")
 
 
 class FakeAgentService:
@@ -496,6 +499,38 @@ class TestChatLibraryAgentCreate:
     ) -> None:
         with pytest.raises(AgentNotFound):
             await service.create(_chat_lib_payload(agent_slug="ghost-agent"), user_id=TEST_USER_ID)
+
+    async def test_should_derive_ascii_instance_slug_for_cjk_source_slug(
+        self, service: AutomationService, agent_svc: FakeAgentService
+    ) -> None:
+        """A legacy library agent whose SLUG is non-ASCII (created before the
+        ASCII-slug rule landed) must not fail: the derived instance slug is
+        ASCII from the display NAME (``derive_slug``), never the raw CJK slug
+        (``"主力助手-f904da2d"`` would be rejected by ``deploy_agent``'s
+        ``is_valid_slug`` → an uncaught 500 on every create)."""
+
+        class _CjkAgent:
+            name = "主力助手"
+
+        original_get = service._agents.get_agent  # noqa: SLF001
+
+        async def _get_agent(user_id: str, slug: str):  # type: ignore[no-untyped-def]
+            if slug == "主力助手":
+                return _CjkAgent()
+            return await original_get(user_id, slug)
+
+        service._agents.get_agent = _get_agent  # type: ignore[assignment]  # noqa: SLF001
+        detail = await service.create(
+            _chat_lib_payload(agent_slug="主力助手"), user_id=TEST_USER_ID
+        )
+        ws_id, source_slug, instance_slug = agent_svc.instantiations[0]
+        assert source_slug == "主力助手"
+        assert ws_id == detail.project_id
+        # ASCII by construction, derived from the display name (CJK dropped →
+        # the ``agent-<digest>`` fallback), plus the uniqueness hash.
+        assert instance_slug.isascii()
+        assert instance_slug.startswith("agent-")
+        assert detail.agent_slug == instance_slug
 
     async def test_should_bind_to_explicit_chat_project_when_set(
         self,

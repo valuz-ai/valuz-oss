@@ -25,6 +25,8 @@ from datetime import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from valuz_agent.modules.automations.cron_utils import CronInterpreter
 from valuz_agent.modules.automations.schemas import CronTrigger
 
@@ -155,3 +157,108 @@ class TestEffectiveDefaultFallback:
         monkeypatch.setattr(p, "_read", _pref)
         monkeypatch.setattr(p, "detect_system_timezone", lambda: "America/Los_Angeles")
         assert await p.get_effective_default_timezone(MagicMock()) == "Asia/Tokyo"
+
+
+class TestInvalidTimeZone:
+    """A non-IANA timezone (Windows display name, typo) is a typed 422
+    validation error, never an uncaught pytz crash → 500."""
+
+    def _svc(self, default_tz: str = "UTC"):  # type: ignore[no-untyped-def]
+        from valuz_agent.modules.automations.service import AutomationService
+
+        return AutomationService(
+            db=MagicMock(),
+            event_bus=MagicMock(),
+            default_timezone=default_tz,
+        )
+
+    def test_windows_display_name_tz_raises_invalid_timezone(self) -> None:
+        from valuz_agent.modules.automations.errors import InvalidTimeZone
+
+        svc = self._svc()
+        with pytest.raises(InvalidTimeZone):
+            svc._validate_trigger(  # noqa: SLF001
+                CronTrigger(cron_expr="0 9 * * *", timezone="马来西亚半岛标准时间")
+            )
+
+    def test_typo_tz_raises_invalid_timezone(self) -> None:
+        from valuz_agent.modules.automations.errors import InvalidTimeZone
+
+        svc = self._svc()
+        with pytest.raises(InvalidTimeZone):
+            svc._validate_trigger(CronTrigger(cron_expr="0 9 * * *", timezone="Asia/Shangh"))  # noqa: SLF001
+
+    def test_default_tz_that_is_not_iana_also_raises(self) -> None:
+        """The same guard protects the service default — a Windows display
+        name persisted as the user default must not 500 either."""
+        from valuz_agent.modules.automations.errors import InvalidTimeZone
+
+        svc = self._svc(default_tz="马来西亚半岛标准时间")
+        with pytest.raises(InvalidTimeZone):
+            svc._validate_trigger(CronTrigger(cron_expr="0 9 * * *", timezone=None))  # noqa: SLF001
+
+    def test_validate_cron_route_guard(self) -> None:
+        from valuz_agent.modules.automations.errors import InvalidTimeZone
+
+        svc = self._svc()
+        with pytest.raises(InvalidTimeZone):
+            svc.validate_cron("0 9 * * *", "马来西亚半岛标准时间")
+
+    def test_valid_iana_still_passes(self) -> None:
+        svc = self._svc()
+        result = svc.validate_cron("0 9 * * *", "Asia/Shanghai")
+        assert result.valid is True
+        assert result.next_runs
+
+
+class TestWindowsTimezoneDetection:
+    """``detect_system_timezone`` must never return a non-IANA Windows
+    display name — the name that later crashed cron validation with a 500."""
+
+    def _fake_now(self, tzname_value: str | None):  # type: ignore[no-untyped-def]
+        """A ``datetime.now()`` whose ``astimezone().tzname()`` returns the
+        given display name (or raises) — stands in for a Windows host."""
+        import datetime as _dt
+
+        class _FakeZoneInfo:
+            def tzname(self) -> str:
+                if tzname_value is None:
+                    raise RuntimeError("no tzinfo")
+                return tzname_value
+
+        class _FakeNow(_dt.datetime):
+            def astimezone(self, tz=None):  # type: ignore[override]
+                return _FakeZoneInfo()
+
+        return lambda: _FakeNow(2026, 8, 28, 12, 0)
+
+    def test_registry_english_name_maps_to_iana(self, monkeypatch) -> None:
+        import sys as _sys
+
+        from valuz_agent.modules.settings import preferences as p
+
+        monkeypatch.setattr(
+            p, "_windows_zone_via_registry", lambda: "Malay Peninsula Standard Time"
+        )
+        monkeypatch.setattr(_sys, "platform", "win32")
+        assert p.detect_system_timezone() == "Asia/Kuala_Lumpur"
+
+    def test_zh_cn_display_name_maps_to_iana(self, monkeypatch) -> None:
+        import sys as _sys
+
+        from valuz_agent.modules.settings import preferences as p
+
+        monkeypatch.setattr(p, "_windows_zone_via_registry", lambda: None)
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setattr(p, "datetime", MagicMock(now=self._fake_now("马来西亚半岛标准时间")))
+        assert p.detect_system_timezone() == "Asia/Kuala_Lumpur"
+
+    def test_unmapped_name_falls_back_to_utc_never_verbatim(self, monkeypatch) -> None:
+        import sys as _sys
+
+        from valuz_agent.modules.settings import preferences as p
+
+        monkeypatch.setattr(p, "_windows_zone_via_registry", lambda: None)
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setattr(p, "datetime", MagicMock(now=self._fake_now("某个未知时区名称")))
+        assert p.detect_system_timezone() == "UTC"
