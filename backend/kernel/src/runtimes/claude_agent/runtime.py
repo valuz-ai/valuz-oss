@@ -90,6 +90,7 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
 from src.core.types import (
+    IMAGE_READ_SUFFIXES,
     BudgetExhausted,
     EndTurn,
     Error,
@@ -350,24 +351,25 @@ CLAUDE_TODO_TOOL_NAME = "TodoWrite"
 
 # ── Model-capability image gate (docs/design/model-capability) ─────────
 #
-# File suffixes the CLI's ``Read`` tool renders into image content blocks:
-# raster images plus PDF (Read paginates PDFs as page images). When the
-# session's model declares no image input (``model_rejects_images``), a
-# PreToolUse deny on these reads keeps the block out of the next request —
-# the only lever we have, since the request itself is assembled inside the
-# vendor CLI. Image PATHS in the prompt are fine; the parsed text extract
-# (``Attachment.parsed_path``) remains the model's readable route.
-IMAGE_READ_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".pdf")
-
+# ``IMAGE_READ_SUFFIXES`` (imported from core) is shared with the prompt
+# builder's attachment marker so the two can never disagree about which files
+# this model cannot take in.
+#
 # Written for the MODEL (English on purpose — consistent with every other
 # model-facing string in the kernel, and read by the very models weak enough
 # to lack vision). The turn keeps running; the model self-corrects.
+#
+# Deliberately does NOT promise a text extract: attachment parsing is async and
+# best-effort (it can be pending, unsupported, or skipped entirely), so naming
+# it as the route would send the model looking for a file that often isn't
+# there. Point at the parsing TOOL instead — generic wording, since which
+# document-parsing connector is mounted is a deployment concern.
 IMAGE_READ_DENY_REASON = (
     "The current model does not accept image input, so this file cannot be "
-    "read as an image. If the attachment listing shows an extracted-text "
-    "path for it, read that text file instead; otherwise operate on the file "
-    "by path only, and tell the user if the task truly requires viewing the "
-    "image."
+    "read into the conversation. Use a document-parsing tool to obtain its "
+    "text (an extracted-text path, when the attachment listing shows one, "
+    "works too), or operate on the file by path only. Tell the user if the "
+    "task truly requires seeing the file itself."
 )
 
 
@@ -838,6 +840,13 @@ class ClaudeAgentRuntime:
                 user_message,
                 cwd=self.workspace_root,
                 now=datetime.now().astimezone(),
+                # Prevention half of the image gate: tell the model up front so
+                # it doesn't spend a round-trip on a Read the hook will deny.
+                # Read off the SESSION (like codex does) — same value as
+                # ``self.model_settings`` since ``input_modalities`` is locked
+                # at session creation, and available on the synthetic session
+                # stubs the runtime tests drive ``run()`` with.
+                model_rejects_images=model_rejects_images(session.model_settings),
             )
             self._active_client = self._client
             self._active_task = asyncio.current_task()

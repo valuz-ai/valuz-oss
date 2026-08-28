@@ -232,12 +232,14 @@ CHECKPOINT_ROOT_ENV = "DEEPAGENTS_CHECKPOINT_ROOT"
 # same contract as the claude runtime's IMAGE_READ_DENY_REASON). Covers every
 # non-text read because the middleware would render ANY of them (image /
 # audio / video / file) into a content block a text-only model rejects.
+# Same contract (and same reasoning about not promising an extract) as the
+# claude runtime's IMAGE_READ_DENY_REASON.
 MULTIMODAL_READ_DENY_REASON = (
     "The current model does not accept image or other binary input, so this "
-    "file cannot be read into the conversation. If the attachment listing "
-    "shows an extracted-text path for it, read that text file instead; "
-    "otherwise operate on the file by path only, and tell the user if the "
-    "task truly requires viewing the file's contents."
+    "file cannot be read into the conversation. Use a document-parsing tool "
+    "to obtain its text (an extracted-text path, when the attachment listing "
+    "shows one, works too), or operate on the file by path only. Tell the "
+    "user if the task truly requires seeing the file itself."
 )
 
 # Explicit backend override. Unset (default) keeps the historical behaviour:
@@ -863,6 +865,8 @@ class DeepAgentsRuntime:
                 user_message,
                 cwd=self.workspace_root,
                 now=datetime.now().astimezone(),
+                # Prevention half of the image gate — see the claude runtime.
+                model_rejects_images=model_rejects_images(session.model_settings),
             )
             bare = is_bare_completion(session)
             if bare:
