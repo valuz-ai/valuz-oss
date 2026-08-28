@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/cmd"
@@ -12,8 +11,5 @@ var version = "dev"
 
 func main() {
 	cmd.SetVersion(version)
-	if err := cmd.Root().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	os.Exit(cmd.Execute(os.Args[1:], os.Stdout, os.Stderr))
 }
