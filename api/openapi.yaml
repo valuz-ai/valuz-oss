@@ -2869,18 +2869,18 @@ paths:
               $ref: "#/components/schemas/SessionMessageRequest"
       responses:
         "200":
-          description: Run response with events
+          description: Session detail after dispatching the turn
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SessionRunResponse"
+                $ref: "#/components/schemas/SessionDetail"
         "409":
           description: Session already running
 
-  /v1/sessions/{session_id}/messages/stream:
+  /v1/sessions/{session_id}/messages/sync:
     post:
-      summary: Send message and stream events via SSE
-      operationId: sendMessageStream
+      summary: Send message and wait for the turn to finish
+      operationId: sendMessageSync
       tags: [sessions]
       parameters:
         - name: session_id
@@ -2896,16 +2896,96 @@ paths:
               $ref: "#/components/schemas/SessionMessageRequest"
       responses:
         "200":
-          description: SSE event stream
+          description: Session detail and the events produced by the turn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRunResponse"
+        "409":
+          description: Session already running
+
+  /v1/sessions/{session_id}/events/stream:
+    get:
+      summary: Subscribe to live session events (SSE)
+      description: |
+        Server-sent events stream of session events. The stream is
+        long-lived: it never closes on its own (the client disconnects to
+        stop it) and emits a heartbeat frame after 15s of inactivity.
+
+        Reconnect semantics: pass ``after_seq`` to replay durable history
+        first, then the server switches to live frames. Live frames carry a
+        kernel-local seq while history frames carry the durable store seq —
+        the two are different spaces and must never be compared or merged.
+        The heartbeat frame's ``seq`` is the durable history cursor and is
+        the only value a client should persist and pass back. Deduplication
+        across live/history replay relies on ``event_uid`` only.
+      operationId: streamSessionEvents
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: after_seq
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Durable history cursor; replay events with seq > after_seq before switching to live.
+      responses:
+        "200":
+          description: text/event-stream of SessionEventFrame frames
           content:
             text/event-stream:
               schema:
                 type: string
-                description: Server-sent events with SessionEventEnvelope data
+                description: |
+                  Server-sent events. Each data payload is a flat
+                  SessionEventFrame JSON object (NOT the nested
+                  SessionEventEnvelope used by REST history). Payload
+                  values are all strings; structured fields are JSON-encoded
+                  strings. Heartbeat frames have no event_type and carry the
+                  durable cursor in ``seq``.
         "404":
           description: Session not found
-        "409":
-          description: Session already running
+
+  /v1/sessions/{session_id}/events/window:
+    get:
+      summary: Turn-aligned event window (pagination)
+      operationId: listSessionEventWindow
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: before_seq
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Durable cursor of the first event on the current page; pass the previous page's first item seq for earlier history.
+        - name: turn_limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+          description: Maximum number of turns to include per page.
+      responses:
+        "200":
+          description: A page of turn-aligned events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionEventWindowResponse"
+        "404":
+          description: Session not found
 
   /v1/sessions/{session_id}/interrupt:
     post:
@@ -3203,7 +3283,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SessionRunResponse"
+                $ref: "#/components/schemas/SessionDetail"
 
   /v1/sessions/{session_id}/permission-mode:
     patch:
@@ -7991,6 +8071,17 @@ components:
             kernel default of ``full_access``. DeepAgents rejects
             ``auto_review`` (400). Mutable post-create via
             ``PATCH /v1/sessions/{id}/permission-mode``.
+        agent_slug:
+          type: string
+          nullable: true
+          description: |
+            Agent to bind this conversation to. When set, instructions /
+            skills / connectors come from the agent, and runtime / model /
+            provider / effort default to the agent's brain. An explicit
+            model_id / provider_id / runtime_id / effort above OVERRIDES the
+            agent's default for this one session only — the agent itself is
+            never modified, and the values are frozen for the session
+            (ADR-006). ``null`` keeps the classic model-picker path.
         effort:
           type: string
           nullable: true
@@ -8023,17 +8114,6 @@ components:
             ``[a-zA-Z0-9._-]``, ``/`` allowed and flattened to ``+``).
             Reuses the existing worktree of that name (fast-resume) or
             names the new one; auto-generated when omitted.
-        agent_slug:
-          type: string
-          nullable: true
-          description: |
-            Agent to bind this conversation to. When set, instructions /
-            skills / connectors come from the agent, and runtime / model /
-            provider / effort default to the agent's brain. An explicit
-            model_id / provider_id / runtime_id / effort above OVERRIDES the
-            agent's default for this one session only — the agent itself is
-            never modified, and the values are frozen for the session
-            (ADR-006). ``null`` keeps the classic model-picker path.
 
     SessionPermissionModeRequest:
       type: object
@@ -8956,6 +9036,71 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SessionEventEnvelope"
+
+    SessionEventWindowResponse:
+      type: object
+      required: [session_id, items, has_more]
+      properties:
+        session_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionEventEnvelope"
+        has_more:
+          type: boolean
+          description: >-
+            True when an earlier page exists. Pass the previous page's first
+            item seq as ``before_seq`` to page further back.
+
+    SessionEventFrame:
+      type: object
+      required: [seq, event_type]
+      description: >-
+        Flat SSE frame payload as serialized on the wire (data: line of the
+        ``GET /v1/sessions/{id}/events/stream`` stream). This is the live
+        frame shape — NOT the nested SessionEventEnvelope used by REST
+        history endpoints. Two seq spaces exist: live frames carry a
+        kernel-local seq, history frames carry the durable store seq; they
+        must never be compared or merged. The heartbeat frame carries only
+        ``seq`` (the durable history cursor, the only value safe to persist
+        for reconnect) — it has no event_type. Deduplication across
+        live/history replay relies on ``event_uid`` only.
+      properties:
+        seq:
+          type: integer
+          description: >-
+            Kernel-local seq for live frames; durable store seq for
+            heartbeat frames. Not comparable across the two spaces.
+        event_type:
+          type: string
+          nullable: true
+          description: >-
+            Legacy event type (e.g. ``message.user``, ``message.assistant.delta``,
+            ``message.assistant.thinking``, ``tool.call.started``,
+            ``runtime.engine.usage``, ``run.failed``, ``session.idle``,
+            ``session.requires_action``, ``session.action_resolved``,
+            ``session.todos.update``). Null on heartbeat frames.
+        payload:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Flat string map — every value is stringified (booleans become
+            "true"/"false", dicts/lists become JSON-encoded strings). The
+            turn-association key ``message_id`` is carried in the payload
+            when the event belongs to a turn.
+        timestamp:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix epoch milliseconds (UTC).
+        event_uid:
+          type: string
+          nullable: true
+          description: >-
+            Store-independent event identity, identical to the uid on the
+            REST envelope. Used for dedup across live/history replay.
 
     SessionRunResponse:
       type: object
