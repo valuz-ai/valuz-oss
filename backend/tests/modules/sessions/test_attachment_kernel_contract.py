@@ -65,6 +65,48 @@ def test_prompt_renders_source_only_when_unparsed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# model-capability marker (docs/design/model-capability, commercial repo)
+# ---------------------------------------------------------------------------
+
+
+def test_unparsed_image_is_marked_when_the_model_takes_no_images() -> None:
+    """Prevention half of the image gate: the model is told, on the file's own
+    line, that this one is not readable — so it doesn't spend a round-trip
+    discovering it through the runtime's tool-level deny."""
+    msg = UserMessage(
+        text="what is in the screenshot?",
+        attachments=(Attachment(source_path="/ws/shot.PNG"), Attachment(source_path="/ws/a.pdf")),
+    )
+    out = build_user_prompt(msg, cwd="/ws", now=_NOW, model_rejects_images=True)
+    assert "- /ws/shot.PNG  [this model cannot read it" in out
+    assert "- /ws/a.pdf  [this model cannot read it" in out
+
+
+def test_marker_is_absent_for_text_files_and_for_undeclared_models() -> None:
+    """Three-state: no declaration → no marker anywhere. And even for a gated
+    model, a non-image attachment reads normally."""
+    msg = UserMessage(
+        text="check these",
+        attachments=(Attachment(source_path="/ws/shot.png"), Attachment(source_path="/ws/n.txt")),
+    )
+    assert "cannot read it" not in build_user_prompt(msg, cwd="/ws", now=_NOW)
+    gated = build_user_prompt(msg, cwd="/ws", now=_NOW, model_rejects_images=True)
+    assert "- /ws/n.txt" in gated and "- /ws/n.txt  [" not in gated
+
+
+def test_extract_wins_over_the_marker() -> None:
+    """When a parse exists it IS the readable route — naming it is the whole
+    instruction, so the line stays identical for gated and ungated models."""
+    msg = UserMessage(
+        text="summarize",
+        attachments=(Attachment(source_path="/ws/scan.png", parsed_path="/ws/scan.md"),),
+    )
+    out = build_user_prompt(msg, cwd="/ws", now=_NOW, model_rejects_images=True)
+    assert "- /ws/scan.png  (extracted text: /ws/scan.md)" in out
+    assert "cannot read it" not in out
+
+
+# ---------------------------------------------------------------------------
 # converters — round-trip both fields + legacy-filepath back-compat
 # ---------------------------------------------------------------------------
 

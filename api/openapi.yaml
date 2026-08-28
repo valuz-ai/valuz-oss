@@ -6312,6 +6312,17 @@ components:
           items: {type: string}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
+        resource_policy:
+          type: string
+          enum: [explicit, all_available]
+          default: explicit
+          description: >-
+            How this member resolves its resources. ``explicit`` = only the
+            slugs in ``skills``/``connectors``; ``all_available`` = the owner's
+            live library, resolved at session-creation time, which is why
+            ``skills`` is empty for such a member. Clients that render an
+            agent's skills (the composer's ``/`` picker) must branch on this
+            rather than reading ``skills`` alone.
     MemberWithAgent:
       type: object
       required: [member, agent]

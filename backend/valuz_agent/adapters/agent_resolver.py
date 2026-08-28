@@ -1189,8 +1189,12 @@ async def build_member_session(
     # provider fallback. Skipped when the caller didn't wire resolver deps
     # (same env-fallback path as the provider resolution above).
     declared_window: int | None = None
+    declared_modalities: tuple[str, ...] | None = None
     if providers is not None:
-        from valuz_agent.adapters.provider_resolver import resolve_model_max_input_tokens
+        from valuz_agent.adapters.provider_resolver import (
+            resolve_model_input_modalities,
+            resolve_model_max_input_tokens,
+        )
 
         declared_window = await resolve_model_max_input_tokens(
             provider_id=pinned_provider_id,
@@ -1198,9 +1202,21 @@ async def build_member_session(
             providers=providers,  # type: ignore[arg-type]
             user_id=user_id,
         )
+        declared_modalities = await resolve_model_input_modalities(
+            provider_id=pinned_provider_id,
+            model_id=model_override or agent.model,
+            providers=providers,  # type: ignore[arg-type]
+            user_id=user_id,
+        )
     model_settings = (
-        ModelSettingsSchema(effort=agent_effort, max_input_tokens=declared_window)
-        if agent_effort or declared_window
+        ModelSettingsSchema(
+            effort=agent_effort,
+            max_input_tokens=declared_window,
+            input_modalities=(
+                list(declared_modalities) if declared_modalities is not None else None
+            ),
+        )
+        if agent_effort or declared_window or declared_modalities
         else None
     )
 

@@ -123,6 +123,11 @@ def session_to_data(session: Session) -> SessionData:
                 max_tokens=session.model_settings.max_tokens,
                 effort=session.model_settings.effort,
                 max_input_tokens=session.model_settings.max_input_tokens,
+                input_modalities=(
+                    list(session.model_settings.input_modalities)
+                    if session.model_settings.input_modalities is not None
+                    else None
+                ),
             )
             if session.model_settings is not None
             else None

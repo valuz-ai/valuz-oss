@@ -55,3 +55,12 @@ class PreviewExpired(GoneError):
 class ProjectConfigInvalid(UnprocessableEntityError):
     error_code = 422_504
     message = "Project configuration is invalid or corrupted"
+
+
+class SkillManifestDescriptionInvalid(UnprocessableEntityError):
+    error_code = 422_505
+    message = (
+        "Refusing to write a SKILL.md whose description is empty or a bare "
+        "frontmatter delimiter — that value only ever comes from a failed "
+        "manifest read, and persisting it destroys the real description"
+    )

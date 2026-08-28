@@ -294,6 +294,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               where that makes no sense. */}
           {composerSuppressed ? null : (
             <ComposerPane
+              discardStagedAttachments={core.discardStagedAttachments}
               onSendTask={props.onSendTask}
               showScrollBottom={core.showScrollBottom}
               handleScrollToBottom={core.handleScrollToBottom}
@@ -453,7 +454,8 @@ function ConversationViewPanel(props: ConversationViewProps) {
       <BackgroundTaskStrip tasks={core.runningBgTasks} />
 
       <ComposerPane
-              onSendTask={props.onSendTask}
+        discardStagedAttachments={core.discardStagedAttachments}
+        onSendTask={props.onSendTask}
         showScrollBottom={core.showScrollBottom}
         handleScrollToBottom={core.handleScrollToBottom}
         displayBusy={core.displayBusy}

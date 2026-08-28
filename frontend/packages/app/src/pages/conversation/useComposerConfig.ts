@@ -16,15 +16,14 @@ import {
   type SessionListItem,
   type SkillView,
 } from "@valuz/core";
-import {
-  type ComposerAgentItem,
-  type RuntimeStartLocation,
-} from "@valuz/ui";
+import { type ComposerAgentItem, type RuntimeStartLocation } from "@valuz/ui";
 import { modelLabel } from "@valuz/shared";
 import {
+  libraryEnabledSkillItems,
   resolveAgentSkillItems,
   type AgentSkillItem,
 } from "../../lib/agent-skill-items";
+import { useAgentEffectiveSkills } from "../../hooks/use-agent-effective-skills";
 import { NEW_SESSION_ID } from "./session-events";
 
 type ComposerConfigParams = {
@@ -213,7 +212,8 @@ export function useComposerConfig({
   // hostname — only crowded the row.
   const agentTargetBadge = useCallback(
     (agentTargetId: string | undefined): string | undefined => {
-      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      if (!agentTargetId || agentTargetId === providerTargetId)
+        return undefined;
       const target = executionTargets.find((t) => t.id === agentTargetId);
       if (!target) return undefined;
       return t(
@@ -225,7 +225,8 @@ export function useComposerConfig({
 
   const agentTargetTone = useCallback(
     (agentTargetId: string | undefined): "shared" | "remote" | undefined => {
-      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      if (!agentTargetId || agentTargetId === providerTargetId)
+        return undefined;
       const target = executionTargets.find((t) => t.id === agentTargetId);
       if (!target) return undefined;
       return target.selectable === false ? "shared" : "remote";
@@ -333,31 +334,37 @@ export function useComposerConfig({
     [availableSkills, projectSkills],
   );
 
-  // The bound skills of the currently selected member agent — the ``/`` picker
-  // list for a PROJECT conversation. Project chats can't attach skills ad-hoc
-  // (skills are the agent's equipment), so ``/`` surfaces exactly that agent's
-  // skills.
-  const selectedAgentSkillItems = useMemo(() => {
-    if (!effectiveAgentSlug) return [];
-    const agent = projectAgents.find(
-      (m) => m.member.agent_slug === effectiveAgentSlug,
-    )?.agent;
-    return resolveSkillItems(agent?.skills);
-  }, [effectiveAgentSlug, projectAgents, resolveSkillItems]);
+  // The ``/`` picker list for a PROJECT conversation: what a session for the
+  // selected member agent will ACTUALLY be created with, straight from the
+  // backend that composes it.
+  //
+  // Deriving it here is what kept going wrong. The member's ``skills`` array is
+  // the bindings alone — it omits the always-on baseline the host injects into
+  // every session (so a self-created agent showed nothing for ``/skill-`` while
+  // ``skill-creator`` was loaded), and it is empty by design for an
+  // ``all_available`` agent that in fact holds the whole library.
+  const selectedMember = useMemo(
+    () =>
+      effectiveAgentSlug
+        ? projectAgents.find((m) => m.member.agent_slug === effectiveAgentSlug)
+        : undefined,
+    [effectiveAgentSlug, projectAgents],
+  );
+  const selectedAgentSkillItems = useAgentEffectiveSkills(
+    // The manifest is keyed by the LIBRARY slug; ``agent_slug`` is the
+    // project-local handle and 404s.
+    selectedMember?.member.source_agent_slug ?? null,
+    availableSkills,
+  );
 
   // The ``/`` picker list for a NEW (non-project) conversation: the union of
   // the library-ENABLED skills and the selected agent's bound skills, deduped
   // by slug. A new conversation may have no agent (library skills only); the
   // global library switch (``library_enabled``) is what the Skills page toggles.
   const composerMentionSkills = useMemo<AgentSkillItem[]>(() => {
-    const libraryItems: AgentSkillItem[] = availableSkills
-      .filter((s) => s.library_enabled !== false)
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        slug: s.slug,
-        description: s.description,
-      }));
+    // Same catalog predicate the ``all_available`` branch above uses, so the
+    // two composers can't disagree about what "in my library" means.
+    const libraryItems = libraryEnabledSkillItems(availableSkills);
     const agentEntries = isTempConversation
       ? myAgents.find((a) => a.slug === effectiveAgentSlug)?.skills
       : undefined;

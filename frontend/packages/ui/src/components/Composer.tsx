@@ -133,6 +133,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./ui/tooltip";
+import { ModelCapabilityBadge } from "./shared/ModelCapabilityBadge";
 import { ModelSelectionHint } from "./shared/ModelSelectionHint";
 import {
   DropdownMenu,
@@ -223,6 +224,8 @@ export interface ModelSelectorItem {
   providerName: string;
   modelId: string;
   selectionHint?: string | null;
+  /** Declared input modalities; absent/null = not declared → no badge. */
+  inputModalities?: string[] | null;
   isDefault: boolean;
   source?: string;
 }
@@ -1411,7 +1414,8 @@ export const Composer = ({
   // menu entry and the active chip both need the handler AND runtime
   // support — a session on deepagents/dsh gets neither affordance.
   const planActive = sessionMode === "plan";
-  const planToggleVisible = planModeAvailable && onSessionModeChange !== undefined;
+  const planToggleVisible =
+    planModeAvailable && onSessionModeChange !== undefined;
 
   // EFFORT_LABELS — visible labels for the reasoning-budget selector
   // (kernel V5+bba3014 ``ModelSettings.effort``). No "Default" slot:
@@ -1662,7 +1666,9 @@ export const Composer = ({
                   ? "composer.taskPlaceholder"
                   : planActive
                     ? "composer.planPlaceholder"
-                    : "conversation.inputPlaceholder") as Parameters<typeof t>[0],
+                    : "conversation.inputPlaceholder") as Parameters<
+                  typeof t
+                >[0],
               )}
               data-empty={currentValue ? undefined : ""}
               className={cn(
@@ -2903,6 +2909,11 @@ export const Composer = ({
                                                         its own right-aligned column, and the
                                                         check slot is always reserved so the
                                                         numbers line up across rows. */}
+                                                      <ModelCapabilityBadge
+                                                        modalities={
+                                                          m.inputModalities
+                                                        }
+                                                      />
                                                       <ModelSelectionHint
                                                         hint={m.selectionHint}
                                                       />
@@ -3216,6 +3227,9 @@ export const Composer = ({
                                           check slot is always reserved so the
                                           numbers line up whether or not a row
                                           is selected. */}
+                                      <ModelCapabilityBadge
+                                        modalities={item.inputModalities}
+                                      />
                                       <ModelSelectionHint
                                         hint={item.selectionHint}
                                       />

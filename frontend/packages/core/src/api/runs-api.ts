@@ -67,6 +67,54 @@ export interface RunsListParams {
   limit?: number;
 }
 
+/** Fold provider rows into fan-out rows: first writer of a session id wins
+ *  (a reachable target's own row is the richer one), then sort by recency so
+ *  the two sources interleave instead of stacking. */
+function mergeRuns(base: RunSummary[], extra: RunSummary[]): RunSummary[] {
+  const seen = new Set(base.map((run) => run.session_id));
+  const out = [...base];
+  for (const run of extra) {
+    if (seen.has(run.session_id)) continue;
+    seen.add(run.session_id);
+    out.push(run);
+  }
+  return out.sort((a, b) => b.updated_at - a.updated_at);
+}
+
+/**
+ * Runs an edition can reach that no execution target lists.
+ *
+ * The sibling of ``setExtraProjectsProvider``, for the same reason. A narrow
+ * grant (an agent shared to you) opens one project on someone else's machine
+ * but is deliberately excluded from the list fan-out — asking that host to
+ * "list everything you have" only earns a refusal. So its project arrives
+ * through the projects provider and then sits in the sidebar with an empty
+ * accordion, because the conversations inside it never come from anywhere.
+ *
+ * This is where they come from. The provider answers for the same scope the
+ * caller asked for (``params``) and owns tagging ``exec_origin`` on what it
+ * returns, exactly as the fan-out does for the targets it can reach.
+ */
+export type ExtraRunsProvider = (
+  params?: RunsListParams,
+) => Promise<RunSummary[]>;
+
+let _extraRuns: ExtraRunsProvider | null = null;
+
+export function setExtraRunsProvider(provider: ExtraRunsProvider | null): void {
+  _extraRuns = provider;
+}
+
+async function extraRuns(params?: RunsListParams): Promise<RunSummary[]> {
+  if (!_extraRuns) return [];
+  try {
+    return await _extraRuns(params);
+  } catch {
+    // Never let a narrow-grant host's hiccup empty the activity list.
+    return [];
+  }
+}
+
 const listRuns = async (params?: RunsListParams): Promise<RunsResponse> => {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
@@ -77,14 +125,22 @@ const listRuns = async (params?: RunsListParams): Promise<RunsResponse> => {
   // index (session / task / project ids all ride on a run row). Zero targets
   // (OSS) keeps the single-backend path unchanged.
   if (getListFanOutTargets().length === 0) {
-    return fetchJson(`/v1/runs${suffix}`);
+    // Still merge: a build with one execution target can hold narrow grants.
+    const [own, extra] = await Promise.all([
+      fetchJson<RunsResponse>(`/v1/runs${suffix}`),
+      extraRuns(params),
+    ]);
+    return { runs: mergeRuns(own.runs, extra) };
   }
-  const outcome = await fanOutTargets((target, signal) =>
-    fetchJson<RunsResponse>(`/v1/runs${suffix}`, {
-      baseUrl: target.baseUrl,
-      signal,
-    }),
-  );
+  const [outcome, extra] = await Promise.all([
+    fanOutTargets((target, signal) =>
+      fetchJson<RunsResponse>(`/v1/runs${suffix}`, {
+        baseUrl: target.baseUrl,
+        signal,
+      }),
+    ),
+    extraRuns(params),
+  ]);
   const seen = new Set<string>();
   const merged: RunSummary[] = [];
   for (const { target, value } of outcome.values) {
@@ -102,8 +158,7 @@ const listRuns = async (params?: RunsListParams): Promise<RunsResponse> => {
     }
   }
   // Interleave both backends by recency instead of target order.
-  merged.sort((a, b) => b.updated_at - a.updated_at);
-  return { runs: merged };
+  return { runs: mergeRuns(merged, extra) };
 };
 
 export const runsApi = {

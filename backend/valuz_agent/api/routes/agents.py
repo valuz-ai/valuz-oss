@@ -203,6 +203,13 @@ class AgentSummary(BaseModel):
     provider_id: str | None = None
     # Reasoning-effort budget; null = no override (runtime SDK default).
     effort: EffortLevel | None = None
+    # How this member resolves resources. ``all_available`` members (Valurion)
+    # carry an EMPTY ``skills`` on purpose — the real set is resolved from the
+    # owner's library at session-creation time. Without this field a client
+    # reading ``skills`` alone cannot tell "bound to nothing" from "bound to
+    # everything", and renders an empty skill picker for an agent that in fact
+    # holds the whole library.
+    resource_policy: Literal["explicit", "all_available"] = "explicit"
 
 
 class MemberWithAgentResponse(BaseModel):
@@ -234,6 +241,11 @@ def _agent_to_summary(
         connectors=connectors,
         provider_id=meta.get("provider_id"),
         effort=getattr(agent, "effort", None),
+        # ``build_agent_config`` always stamps this into metadata; the default
+        # only covers a config built before that (or by a test fixture).
+        resource_policy=(
+            "all_available" if meta.get("resource_policy") == "all_available" else "explicit"
+        ),
     )
 
 
@@ -308,13 +320,17 @@ async def get_agent_effective_resources(
     user_id: str = Depends(get_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict[str, Any]:
-    """Read-only, secret-free effective resources for all-available Agents."""
+    """Read-only, secret-free view of what a session for this Agent will carry.
+
+    Answers for any Agent. The 409 that used to reject an explicit-binding
+    Agent is gone: refusing them is what pushed clients into re-deriving
+    session composition from the ``skills`` array, which does not include the
+    always-on baseline every session gets.
+    """
     try:
         manifest = await svc.resolve_effective_resources(user_id, slug)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return manifest.to_api()
 
 

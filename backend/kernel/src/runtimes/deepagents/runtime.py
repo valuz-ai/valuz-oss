@@ -47,6 +47,7 @@ import httpx
 from deepagents import SubAgent, create_deep_agent
 from deepagents.backends import LocalShellBackend
 from deepagents.backends.protocol import FileData, ReadResult
+from deepagents.backends.utils import _get_file_type as _deepagents_file_type
 from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
@@ -70,6 +71,7 @@ from src.core.types import (
     StopReason,
     UserMessage,
     is_bare_completion,
+    model_rejects_images,
 )
 from src.runtimes.deepagents._patches import (
     MAIN_GRAPH_RECURSION_LIMIT,
@@ -225,6 +227,20 @@ def _sanitize_anthropic_request_payload(payload: dict[str, Any]) -> dict[str, An
 # ``DEEPAGENTS_CHECKPOINT_BACKEND`` (see _checkpoint_backend).
 DEFAULT_CHECKPOINT_ROOT = "./deepagents_checkpoints"
 CHECKPOINT_ROOT_ENV = "DEEPAGENTS_CHECKPOINT_ROOT"
+
+# Model-capability image gate — written for the MODEL (English on purpose,
+# same contract as the claude runtime's IMAGE_READ_DENY_REASON). Covers every
+# non-text read because the middleware would render ANY of them (image /
+# audio / video / file) into a content block a text-only model rejects.
+# Same contract (and same reasoning about not promising an extract) as the
+# claude runtime's IMAGE_READ_DENY_REASON.
+MULTIMODAL_READ_DENY_REASON = (
+    "The current model does not accept image or other binary input, so this "
+    "file cannot be read into the conversation. Use a document-parsing tool "
+    "to obtain its text (an extracted-text path, when the attachment listing "
+    "shows one, works too), or operate on the file by path only. Tell the "
+    "user if the task truly requires seeing the file itself."
+)
 
 # Explicit backend override. Unset (default) keeps the historical behaviour:
 # sandbox → file, local → sqlite. A deployment that wants the SAME on-disk
@@ -456,12 +472,25 @@ class _WorkspaceLocalShellBackend(LocalShellBackend):
         except ValueError:
             return p.as_posix()
 
+    # Model-capability image gate (docs/design/model-capability, commercial
+    # repo). The upstream ``FilesystemBackend.read`` base64s every non-text
+    # extension and the filesystem middleware turns that into a multimodal
+    # content block (image/audio/video/file) in the NEXT model request — a
+    # model that explicitly declares no image input 400s on any of them. The
+    # backend is the one choke point every deepagents file read goes through,
+    # so the gate lives here as a tool-level soft error the model can react
+    # to (parity with the claude PreToolUse deny / codex tool removal).
+    # Default False = undeclared models keep today's behavior (three-state).
+    reject_multimodal_reads: bool = False
+
     def read(
         self,
         file_path: str,
         offset: int = 0,
         limit: int = 2_000,
     ) -> ReadResult:
+        if self.reject_multimodal_reads and _deepagents_file_type(file_path) != "text":
+            return ReadResult(error=MULTIMODAL_READ_DENY_REASON)
         if not file_path.startswith("/large_tool_results/"):
             return super().read(file_path, offset=offset, limit=limit)
 
@@ -495,22 +524,32 @@ class _WorkspaceLocalShellBackend(LocalShellBackend):
         return super().execute(translated, timeout=timeout)
 
 
-def _build_local_shell_backend(workspace_root: str | None) -> LocalShellBackend:
+def _build_local_shell_backend(
+    workspace_root: str | None,
+    *,
+    reject_multimodal_reads: bool = False,
+) -> LocalShellBackend:
     """Create a backend that maps DeepAgents virtual paths into the workspace.
 
     Built-in summarization writes to virtual absolute paths such as
     ``/conversation_history/<thread>.md``. Without ``virtual_mode=True`` those
     paths target the host filesystem root, where desktop runs fail and retry
     summarization instead of completing the turn.
+
+    ``reject_multimodal_reads`` arms the model-capability image gate on the
+    backend (see ``_WorkspaceLocalShellBackend.read``).
     """
 
     if workspace_root:
-        return _WorkspaceLocalShellBackend(
+        backend = _WorkspaceLocalShellBackend(
             root_dir=workspace_root,
             inherit_env=True,
             virtual_mode=True,
         )
-    return _WorkspaceLocalShellBackend(inherit_env=True, virtual_mode=True)
+    else:
+        backend = _WorkspaceLocalShellBackend(inherit_env=True, virtual_mode=True)
+    backend.reject_multimodal_reads = reject_multimodal_reads
+    return backend
 
 
 # langchain TodoListMiddleware tool name (auto-included by deepagents). Treated
@@ -826,6 +865,8 @@ class DeepAgentsRuntime:
                 user_message,
                 cwd=self.workspace_root,
                 now=datetime.now().astimezone(),
+                # Prevention half of the image gate — see the claude runtime.
+                model_rejects_images=model_rejects_images(session.model_settings),
             )
             bare = is_bare_completion(session)
             if bare:
@@ -1625,7 +1666,12 @@ class DeepAgentsRuntime:
         # EMPTY env — no PATH — so anything outside the shell's compiled-in
         # default path fails to resolve: the chrome-devtools wrapper, and in dev
         # even npx/node (nvm). See docs/design/browser-feature.md §8.
-        backend = _build_local_shell_backend(self.workspace_root)
+        backend = _build_local_shell_backend(
+            self.workspace_root,
+            # Model-capability image gate: a model that explicitly declares no
+            # image input must not receive multimodal read blocks.
+            reject_multimodal_reads=model_rejects_images(self.model_settings),
+        )
 
         t_build = time.monotonic()
         tools = self._build_tools()

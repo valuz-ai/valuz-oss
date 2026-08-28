@@ -17,6 +17,7 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
+  ModelCapabilityBadge,
   ModelSelectionHint,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
@@ -139,7 +140,11 @@ export const AgentModelPicker = ({
     for (const m of models) {
       let g = groups.find((x) => x.providerId === m.providerId);
       if (!g) {
-        g = { providerId: m.providerId, providerName: m.providerName, rows: [] };
+        g = {
+          providerId: m.providerId,
+          providerName: m.providerName,
+          rows: [],
+        };
         groups.push(g);
       }
       g.rows.push(m);
@@ -165,6 +170,7 @@ export const AgentModelPicker = ({
               <span className="min-w-0 flex-1 truncate">
                 {modelLabel(m.modelId)}
               </span>
+              <ModelCapabilityBadge modalities={m.inputModalities} />
               <ModelSelectionHint hint={m.selectionHint} />
             </SelectItem>
           ))}

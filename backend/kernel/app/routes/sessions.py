@@ -342,6 +342,7 @@ def _model_settings_from_schema(s: ModelSettingsSchema | None) -> ModelSettings 
         max_tokens=s.max_tokens,
         effort=s.effort,
         max_input_tokens=s.max_input_tokens,
+        input_modalities=(tuple(s.input_modalities) if s.input_modalities is not None else None),
     )
 
 

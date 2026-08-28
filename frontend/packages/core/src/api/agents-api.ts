@@ -93,6 +93,16 @@ export interface AgentSummary {
   provider_id: string | null;
   /** Reasoning-effort budget; null = no override (runtime SDK default). */
   effort: EffortLevel | null;
+  /**
+   * How this member resolves resources. An ``all_available`` member (Valurion)
+   * reports an EMPTY ``skills`` by design — its real set is the owner's live
+   * library, resolved when the session is created. Read this before rendering
+   * ``skills``, or such an agent looks like it carries nothing.
+   *
+   * Optional so a client stays compatible with a backend that predates the
+   * field; absent is read as ``explicit``.
+   */
+  resource_policy?: "explicit" | "all_available";
 }
 
 export interface MemberWithAgent {
@@ -184,7 +194,9 @@ export interface EffectiveAgentResourceWarning {
 }
 
 export interface EffectiveAgentResources {
-  policy: "all_available";
+  /** Which rule selected the set: the agent's own bindings, or the owner's
+   *  live library. The always-on baseline is in both. */
+  policy: "explicit" | "all_available";
   resolved_at: number;
   counts: {
     skills: number;
@@ -363,9 +375,19 @@ export const agentsApi = {
     return result;
   },
 
-  getEffectiveResources(slug: string): Promise<EffectiveAgentResources> {
+  /** What a session for this agent would actually be created with.
+   *
+   *  Answers for ANY agent — an explicit-binding one reports its bindings, an
+   *  ``all_available`` one the owner's live library, and both include the
+   *  always-on baseline the host injects into every session. Do not re-derive
+   *  this from ``agent.skills``: that array is the bindings alone. */
+  getEffectiveResources(
+    slug: string,
+    opts: { baseUrl?: string } = {},
+  ): Promise<EffectiveAgentResources> {
     return fetchJson(
       `/v1/agents/${encodeURIComponent(slug)}/effective-resources`,
+      opts.baseUrl ? { baseUrl: opts.baseUrl } : undefined,
     );
   },
 

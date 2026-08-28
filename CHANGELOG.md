@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-28
+
+### Added
+
+- **Plan mode, native on every runtime that has one** — a "Plan mode" toggle in
+  the composer, `PATCH /v1/sessions/{session_id}/mode` on the host, `mode` on
+  both session DTO shapes, and live `session.mode_changed` reconcile, so a
+  runtime-driven exit turns the chip off without a refetch. Claude gets the
+  working loop from the host route alone (#1059 @jiaoqsh); codex goes native
+  through the app-server's experimental `collaborationMode` — plan turns are
+  sticky, forced to a read-only sandbox, and republish the model's proposed
+  plan as a pinned plan card whose approve-and-run button PATCHes the mode back
+  and sends the execution turn, while `request_user_input` always parks as the
+  clarifying-questions card (#1064 #1069 @jiaoqsh); and dsh runs the same loop
+  through the first-party plan plugin, where approval continues the *same* turn
+  natively instead of restarting it (#1077 @jiaoqsh). deepagents stays a 400 by
+  design. Ships `docs/design/session-modes.md`, referenced from six code sites
+  but never present in this repo.
+- **Playbook detail page, and a page can declare its layout** — a playbook is a
+  versioned document that runs on demand, so `/playbooks/:playbookId` is
+  deliberately its own page rather than a share of the automation detail; back
+  returns to wherever you came from. `AppShell` takes `rightPanelDefaultSize`
+  and pages declare `setMasterDetailLayout(true)`, replacing a hardcoded path
+  list an overlay edition could never extend. Also: the composer mode toggle
+  falls back to icons in a narrow composer, the import dialog stops reloading on
+  every render and lets a name clash be resolved by editing the new name, and a
+  renamed project publishes at once (#1063 @St0neWan9).
+- **Builtin resources are a declaration, not code constants** —
+  `BuiltinResourceDeclarationPort` reads a packaged manifest that edition
+  overlays merge over, `PluginSource` gains `builtin` with a `deletable` column
+  (migration 0042), boot syncs `resources/bundled_plugins/` (new: `office` —
+  docx/xlsx/pptx), and seeds plus the agent-pack listing read the port.
+  Marketplace index requests now carry `distribution=`, the parameter the index
+  actually reads — `channel=` was silently ignored server-side, so every edition
+  received the oss composition. OSS behaviour is byte-identical
+  (#1082 @St0neWan9).
+- **An open preview follows the agent's edits** — a document open in the preview
+  pane is a live view, not a snapshot. The turn-end hook refreshed the file tree
+  and the artifact list but never the open document, so the agent would rewrite
+  the file on screen and the reader kept the old bytes (#1072 @St0neWan9).
+- **Copying an agent goes through the create form** — the detail header opened a
+  yes/no confirmation instead, and the shared textarea's `field-sizing-content`
+  made the instructions box open short for a blank create and tall for a
+  seeded copy; `field-sizing-fixed` restores `rows={8}` either way
+  (#1081 @St0neWan9).
+- **An update download says it is downloading** — every update surface titled
+  itself "update available" for the whole download, the one thing the user
+  already knows once the bar is moving. The toast, the modal, and the standalone
+  update window get a third state, the toast puts the version back in that title
+  (row 2 is the progress bar while downloading, so it had nowhere else to go),
+  and the download icon moves off a hardcoded blue onto the brand token
+  (#1087 @St0neWan9).
+- **Clear the project chip without opening its menu** — hovering swaps the
+  chevron for a clear action that drops straight back to a temporary
+  conversation (#1068 @St0neWan9).
+
+### Changed
+
+- **Operation confirmation cards are one shape** — playbook and automation cards
+  align on shared semantic surfaces and standard button actions, the playbook
+  prompt renders as markdown in the standard wide dialog behind a compact
+  details icon, a failed automation proposal can be retried, legacy proposal
+  triggers are normalized instead of rejected, the kernel skips post-run checks
+  for confirmation cards, and workspace resources refresh once a confirmation
+  resolves (#1037 #1063 @St0neWan9).
+- **A self-published marketplace card says what it is** — every item we publish
+  ourselves carried an "official" pill, which names a provenance the reader
+  cannot act on; the card now names the item type, while anything ingested keeps
+  naming the store it came from (#1057 @St0neWan9). The type words are plainer
+  and a plugin dialog no longer says "plugin" twice, in a chip and a pill that
+  could never say anything else (#1058 @St0neWan9).
+- **A large document preview renders a screenful at a time** — cost tracks DOM
+  nodes, and a spreadsheet flattened to markdown builds one per cell: 16,000
+  cells cost 3,274 ms against 261 ms of prose at equal size. The preview now
+  windows (#1071 @Ready22Race).
+- **A finished run refreshes only the project that owned it** — the sidebar
+  effect was keyed on the whole running set, so one agent working re-read every
+  project times the number of execution targets, a dozen `/v1/runs` calls in the
+  same tick several times a turn (#1079 @St0neWan9).
+
+### Fixed
+
+- **Desktop updates download the differential again** — the cache purge deleted
+  the very file `electron-updater` diffs the next release against
+  (`update.zip` / `installer.exe` / `package.7z`), so every update on every
+  platform pulled the whole ~600 MB package and MacUpdater logged the fallback
+  every single time (#1056 @St0neWan9).
+- **An occupied skill name costs one link, not the session** — a real directory
+  the harness did not write is left alone by design, but the create that
+  followed raised `FileExistsError` and killed every turn of the project, with a
+  retry that never worked (#1070 @Ready22Race).
+- **An agent slug stays ASCII** — a slug is a machine handle that rides in URL
+  segments, dispatch parameters and, since shared agents, an HTTP header, which
+  httpx encodes as ASCII. A CJK-named agent's share died on every run with an
+  opaque 502; in production 2 of 10 shares carried a non-ASCII slug and both
+  were dead (#1062 @Ready22Race).
+- **Copying an agent no longer leaks an internal key** — `copy_agent` marked
+  provenance with `_source` in the create payload, which was forwarded whole
+  into the managed mutation and rejected as an undeclared field, so every copy
+  of every agent answered 422 (#1080 @St0neWan9).
+- **An agent that holds the whole library says so in `/`** — an all-available
+  agent deliberately persists an empty explicit skills list and resolves the
+  owner's enabled library at session creation, but the composer read only the
+  explicit list, so slash discovery looked empty while direct slash execution
+  worked. The member summary now carries the resource policy, and explicit
+  agents stay on their bound skills (#1086 @Ready22Race).
+- **A project cwd no longer gets a dead `.valuz/root` marker** — nothing in the
+  backend, kernel, frontend, or any overlay ever read it, and on a
+  user-picked folder it showed up as untracked in `git status` with nothing to
+  say what wrote it (#1083 @Ready22Race).
+- **The agent library is a union over machines** — fanning out over every
+  execution target listed the same account's agents once per target; only
+  `device:*` targets hold a library this machine has never seen, and a target
+  nobody asked for is no longer announced as degraded (#1067 @St0neWan9).
+- **A large knowledge document no longer freezes the tab** — the preview
+  endpoint is bounded (a 755 KB spreadsheet parses into 1.05 MB of markdown),
+  and the blob on disk deliberately stays whole so `doc_read` never tells the
+  agent it read a document it had only seen part of (#1065 @Ready22Race).
+- **A document cut at the 5 MiB cap says so** — the citation preview provider
+  destructured only `content`, so the reader asserted `truncated: false` and
+  presented a truncated document as complete (#1061 @Ready22Race).
+- **The knowledge document detail gets its width, its viewer, and its clicks
+  back** — the detail asked for the wide side in units the resizable shell no
+  longer read (#1066 @Ready22Race); changing the requested panel width remounted
+  the panel group, and with it the page inside it, throwing a click on a
+  document back to the list of knowledge bases (#1073 @Ready22Race); and the
+  windowing had replaced the shared file viewer, taking the preview/source
+  toggle, the reading column and the truncation notice with it — the windowing
+  now lives inside the viewer, which every artifact markdown preview gets
+  (#1076 @Ready22Race).
+- **A parse attempt time that is epoch milliseconds renders as a time** — a
+  numeric string goes down the date-*string* parser, so the parse history showed
+  the raw number next to "parse failed"; both shapes are accepted now
+  (#1078 @Ready22Race).
+
+### Docs & Chore
+
+- **The release build passes `--install-links` explicitly** — a tag failed on
+  all four platforms with `EUSAGE` because npm read the vendored dsh runtime
+  lockfile as out of sync; the lockfile is written in the install-links shape
+  and the setting lived only in the vendor dir's `.npmrc`, which npm does not
+  always pick up (#1084 @St0neWan9).
+- **A scratch perf harness and its build are out of the tree** — #1073 was
+  staged with `git add -A` and brought 1,301 files along, one of which
+  repointed the web UI's `index.html` at the scratch entry and broke the real
+  build (#1075 @Ready22Race).
+
 ## [0.5.0] - 2026-08-25
 
 ### Added

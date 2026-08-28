@@ -43,3 +43,27 @@ def test_malformed_stored_value_degrades_to_none() -> None:
     for bad in ("200000", -1, 0, 1.5, {}):
         back = dict_to_model_settings({"max_input_tokens": bad})
         assert back is not None and back.max_input_tokens is None, bad
+
+
+def test_input_modalities_round_trips() -> None:
+    s = ModelSettings(effort="high", input_modalities=("text",))
+    d = model_settings_to_dict(s)
+    assert d is not None and d["input_modalities"] == ["text"]
+    back = dict_to_model_settings(d)
+    assert back is not None
+    assert back.input_modalities == ("text",)
+
+
+def test_input_modalities_omitted_when_none() -> None:
+    d = model_settings_to_dict(ModelSettings(effort="low"))
+    assert d is not None and "input_modalities" not in d
+    back = dict_to_model_settings(d)
+    assert back is not None and back.input_modalities is None
+
+
+def test_malformed_input_modalities_degrades_to_none() -> None:
+    """Three-state safety: a bad stored value must read as "not declared",
+    never as a gate."""
+    for bad in ("text", [], [1, 2], [""], {}):
+        back = dict_to_model_settings({"input_modalities": bad})
+        assert back is not None and back.input_modalities is None, bad

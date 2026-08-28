@@ -323,6 +323,8 @@ def model_settings_to_dict(s: ModelSettings | None) -> dict[str, Any] | None:
         out["effort"] = s.effort
     if s.max_input_tokens is not None:
         out["max_input_tokens"] = s.max_input_tokens
+    if s.input_modalities is not None:
+        out["input_modalities"] = list(s.input_modalities)
     return out
 
 
@@ -340,11 +342,20 @@ def dict_to_model_settings(data: dict[str, Any] | None) -> ModelSettings | None:
     max_input_tokens = data.get("max_input_tokens")
     if not isinstance(max_input_tokens, int) or max_input_tokens <= 0:
         max_input_tokens = None
+    # Same tolerance for the capability declaration: anything but a non-empty
+    # list of strings degrades to "not declared" — a malformed stored value
+    # must never gate a model.
+    raw_modalities = data.get("input_modalities")
+    input_modalities: tuple[str, ...] | None = None
+    if isinstance(raw_modalities, list) and raw_modalities:
+        cleaned = tuple(v for v in raw_modalities if isinstance(v, str) and v)
+        input_modalities = cleaned or None
     return ModelSettings(
         temperature=data.get("temperature"),
         max_tokens=data.get("max_tokens"),
         effort=effort,
         max_input_tokens=max_input_tokens,
+        input_modalities=input_modalities,
     )
 
 

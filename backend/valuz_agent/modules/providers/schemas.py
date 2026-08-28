@@ -48,6 +48,13 @@ class LLMModel:
             auto-compaction triggers at the real window instead of a fixed
             fallback. At session creation the host snapshots it into kernel
             ``ModelSettings.max_input_tokens``.
+        input_modalities: Input modalities the model accepts (vocabulary:
+            ``"text"`` / ``"image"``), declared by the producing side.
+            Three-state: ``None`` → "not declared" — every consumer keeps
+            today's behavior (never guessed from the model name); a declared
+            tuple missing ``"image"`` → the model explicitly rejects image
+            input, and runtimes gate image reads on it. Unknown values are
+            ignored by consumers (forward compatibility).
     """
 
     id: str
@@ -55,6 +62,7 @@ class LLMModel:
     selection_hint: str | None = None
     runtimes: tuple[str, ...] | None = None
     max_input_tokens: int | None = None
+    input_modalities: tuple[str, ...] | None = None
 
 
 @dataclass

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sparkles, MessageSquarePlus, FolderOpen } from "lucide-react";
+import { toast } from "sonner";
 import {
   ActionCardGrid,
   Composer,
@@ -129,9 +130,13 @@ export const ConversationsHomePage = () => {
     remove: removeAttachment,
     claim: claimStagedAttachments,
     restage: restageAttachments,
+    discard: discardAttachments,
   } = useStagedAttachments(
-    // The backend this chat will run on — see ProjectDetailPage.
-    resolveExecTarget()?.baseUrl,
+    // The backend this chat will run on — see ProjectDetailPage. Passed as a
+    // GETTER, not a value: the person can switch 本地/云端 with the composer
+    // open, and a value captured at render is the wrong answer the moment
+    // they do. Resolved when the upload actually happens.
+    () => resolveExecTarget()?.baseUrl,
   );
 
   // Observed origin of the minted quick-chat session — drives the locked
@@ -589,24 +594,17 @@ export const ConversationsHomePage = () => {
               // model/runtime — lock the pickers once that happens.
               modelLocked={sessionId != null}
               uploadOnAttach
-              existingAttachmentCount={
-                stagedAttachments.length
-              }
-              pinnedAttachments={stagedAttachments
-                .map((a) => ({
-                  id: a.id,
-                  name: a.filename,
-                  parseStatus: a.parse_status as
-                    "parsing" | "ready" | "failed" | "native" | undefined,
-                  sourceKind: a.source_kind,
-                }))}
+              existingAttachmentCount={stagedAttachments.length}
+              pinnedAttachments={stagedAttachments.map((a) => ({
+                id: a.id,
+                name: a.filename,
+                parseStatus: a.parse_status as
+                  "parsing" | "ready" | "failed" | "native" | undefined,
+                sourceKind: a.source_kind,
+              }))}
               onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
-              onLocalUpload={(files) =>
-                void attachLocalFiles(files)
-              }
-              onFileDrop={(files) =>
-                void attachLocalFiles(files)
-              }
+              onLocalUpload={(files) => void attachLocalFiles(files)}
+              onFileDrop={(files) => void attachLocalFiles(files)}
               sending={sending}
               autoFocus
               footerBar={
@@ -615,6 +613,18 @@ export const ConversationsHomePage = () => {
                   lockedOriginId={mintedSessionOrigin}
                   targetId={execTargetId}
                   onTargetChange={(targetId) => {
+                    // Attachment ids are backend-local, like the provider ids
+                    // below: a staged file only exists on the backend it was
+                    // uploaded to, so carrying the chips across a switch sends
+                    // a turn naming ids the new backend has never seen — it
+                    // binds nothing and the message goes out without the file.
+                    // Dropped BEFORE the switch so the delete reaches the
+                    // backend holding them, and announced, because a chip
+                    // disappearing on its own explains nothing.
+                    if (stagedAttachments.length > 0) {
+                      void discardAttachments();
+                      toast.info(t("conversation.attachmentsClearedOnSwitch"));
+                    }
                     setExecTargetId(targetId);
                     // Provider ids are backend-local. Clear the old pick while
                     // the newly selected service's list is loading.
@@ -643,7 +653,6 @@ export const ConversationsHomePage = () => {
                 />
               }
             />
-
           </div>
         </div>
       </div>

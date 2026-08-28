@@ -24,10 +24,7 @@ import {
   type MemberWithAgent,
   resolveApiBase,
 } from "@valuz/core";
-import {
-  fileWritesInTurns,
-  type TurnFileWrite,
-} from "@valuz/shared";
+import { fileWritesInTurns, type TurnFileWrite } from "@valuz/shared";
 import {
   type ApprovalCardSubject,
   type ApprovalResolvedDecision,
@@ -49,6 +46,7 @@ import { useCitationDocumentPreview } from "../../components/CitationDocumentPre
 import { deriveTurnActive } from "../conversation-loading";
 import { createConversationBootstrapGuard } from "../conversation-bootstrap";
 import { getLastTempAgent } from "../../lib/last-temp-agent";
+import { resolveComposerUploadBase } from "./composer-upload-base";
 import { NEW_SESSION_ID } from "./session-events";
 import { useToolCallCards } from "./useToolCallCards";
 import { useSessionSubscription } from "./useSessionSubscription";
@@ -599,14 +597,20 @@ export function useConversationOrchestration({
     remove: removeStagedAttachment,
     claim: claimStagedAttachments,
     restage: restageAttachments,
+    discard: discardStagedAttachments,
     adopt: adoptAttachments,
     settle: settleAttachments,
   } = useStagedAttachments(
-    // The backend this conversation runs on. A draft has no session to route
-    // on, so it follows its project.
-    selectedProjectId
-      ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
-      : undefined,
+    // Where this conversation's files belong — see ``composer-upload-base``.
+    // A GETTER, not a value: the target can change while the composer is open
+    // and a render-time capture is the wrong backend the moment it does.
+    () =>
+      resolveComposerUploadBase({
+        selectedSessionId,
+        selectedProjectId,
+        execTargetBaseUrl: resolveExecTarget()?.baseUrl,
+        resolveBase: resolveApiBase,
+      }),
   );
   const {
     attachments: boundAttachments,
@@ -824,8 +828,7 @@ export function useConversationOrchestration({
   const fileWriteWatchSessionRef = useRef<string | null>(null);
   const refreshOpenArtifacts = artifactFile.refreshOpen;
   useEffect(() => {
-    const keyOf = (write: TurnFileWrite) =>
-      `${write.toolCallId}:${write.path}`;
+    const keyOf = (write: TurnFileWrite) => `${write.toolCallId}:${write.path}`;
     const writes = fileWritesInTurns(turns);
     if (fileWriteWatchSessionRef.current !== selectedSessionId) {
       fileWriteWatchSessionRef.current = selectedSessionId;
@@ -1645,6 +1648,7 @@ export function useConversationOrchestration({
     historyCursorRef,
     claimStagedAttachments,
     restageAttachments,
+    discardStagedAttachments,
     adoptAttachments,
     attachmentsParsing,
     setPendingUserMessage,

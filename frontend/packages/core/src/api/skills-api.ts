@@ -194,10 +194,14 @@ const fetchJson = createFetchJson(() => _apiBase);
 const SKILLS_TAG = "skills";
 const SKILLS_CACHE_TTL_MS = 30_000;
 
-function skillsCatalogCache(projectId?: string, options: SkillListOptions = {}) {
-  const state = options.libraryEnabled === undefined
-    ? "all"
-    : `library:${String(options.libraryEnabled)}`;
+function skillsCatalogCache(
+  projectId?: string,
+  options: SkillListOptions = {},
+) {
+  const state =
+    options.libraryEnabled === undefined
+      ? "all"
+      : `library:${String(options.libraryEnabled)}`;
   return {
     ttlMs: SKILLS_CACHE_TTL_MS,
     tags: [SKILLS_TAG, `skills:${projectId ?? "global"}:${state}`],
@@ -230,9 +234,7 @@ export const skillsApi = {
   },
 
   get(skillId: string, projectId?: string): Promise<SkillDetail> {
-    const qs = projectId
-      ? `?project_id=${encodeURIComponent(projectId)}`
-      : "";
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}${qs}`, {
       baseUrl: projectId
         ? resolveApiBase({ projectId }, "") || undefined
@@ -266,9 +268,7 @@ export const skillsApi = {
     payload: SkillUpdateRequest,
     projectId?: string,
   ): Promise<SkillView> {
-    const qs = projectId
-      ? `?project_id=${encodeURIComponent(projectId)}`
-      : "";
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
     const result = await fetchJson<SkillView>(
       `/v1/skills/${encodeURIComponent(skillId)}${qs}`,
       {
@@ -347,11 +347,14 @@ export const skillsApi = {
   async importArchiveConfirm(
     payload: SkillImportArchiveConfirmRequest,
   ): Promise<SkillView> {
-    const result = await fetchJson<SkillView>("/v1/skills/import/archive/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await fetchJson<SkillView>(
+      "/v1/skills/import/archive/confirm",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
     invalidateSkills();
     return result;
   },
@@ -369,11 +372,14 @@ export const skillsApi = {
   async importDirectoryConfirm(
     payload: SkillImportArchiveConfirmRequest,
   ): Promise<SkillView> {
-    const result = await fetchJson<SkillView>("/v1/skills/import/archive/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await fetchJson<SkillView>(
+      "/v1/skills/import/archive/confirm",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
     invalidateSkills();
     return result;
   },
@@ -407,9 +413,7 @@ export const skillsApi = {
   },
 
   listTags(projectId?: string): Promise<{ tags: string[] }> {
-    const qs = projectId
-      ? `?project_id=${encodeURIComponent(projectId)}`
-      : "";
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
     return fetchJson(`/v1/skills/tags${qs}`);
   },
 
@@ -417,9 +421,7 @@ export const skillsApi = {
     skillId: string,
     projectId?: string,
   ): Promise<SkillImportPreviewFile[]> {
-    const qs = projectId
-      ? `?project_id=${encodeURIComponent(projectId)}`
-      : "";
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/files${qs}`);
   },
 
@@ -428,9 +430,7 @@ export const skillsApi = {
     filePath: string,
     projectId?: string,
   ): Promise<{ path: string; content: string }> {
-    const qs = projectId
-      ? `?project_id=${encodeURIComponent(projectId)}`
-      : "";
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
     return fetchJson(
       `/v1/skills/${encodeURIComponent(skillId)}/files/${filePath}${qs}`,
     );
@@ -446,9 +446,7 @@ export const skillsApi = {
     },
     projectId?: string,
   ): Promise<{ path: string; content: string }> {
-    const qs = projectId
-      ? `?project_id=${encodeURIComponent(projectId)}`
-      : "";
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
     const result = await fetchJson<{ path: string; content: string }>(
       `/v1/skills/${encodeURIComponent(skillId)}/files${qs}`,
       {
@@ -462,13 +460,10 @@ export const skillsApi = {
   },
 
   projectCatalog(projectId: string): Promise<SkillsCatalog> {
-    return fetchJson(
-      `/v1/projects/${encodeURIComponent(projectId)}/skills`,
-      {
-        cache: skillsCatalogCache(projectId),
-        baseUrl: resolveApiBase({ projectId }, "") || undefined,
-      },
-    );
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}/skills`, {
+      cache: skillsCatalogCache(projectId),
+      baseUrl: resolveApiBase({ projectId }, "") || undefined,
+    });
   },
 
   // Project skill *binding* (scan / setSkillState / overwrite) removed —

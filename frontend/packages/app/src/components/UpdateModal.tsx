@@ -46,11 +46,16 @@ export const UpdateModal = ({
             {isDownloaded ? (
               <CheckCircle className="h-5 w-5 text-green-500" />
             ) : (
-              <Download className="h-5 w-5 text-blue-500" />
+              <Download className="h-5 w-5 text-brand" />
             )}
+            {/* Three states, not two: while the download runs the title said
+                "update available", which is the one thing the user already
+                knows by then. */}
             {isDownloaded
               ? t("updater.downloadedTitle" as Parameters<typeof t>[0])
-              : t("updater.updateAvailable" as Parameters<typeof t>[0])}
+              : isDownloading
+                ? t("updater.downloadingTitle" as Parameters<typeof t>[0])
+                : t("updater.updateAvailable" as Parameters<typeof t>[0])}
             {displayVersion}
           </DialogTitle>
           <DialogDescription>

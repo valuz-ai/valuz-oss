@@ -8,10 +8,7 @@ export type ProviderAuthType = "api_key" | "oauth";
  *   * deepagents   → ["anthropic", "openai-completion", "gemini"]
  */
 export type ApiProtocol =
-  | "anthropic"
-  | "openai-completion"
-  | "openai-response"
-  | "gemini";
+  "anthropic" | "openai-completion" | "openai-response" | "gemini";
 
 export interface ProviderDescriptor {
   kind: string;
@@ -52,6 +49,10 @@ export interface LLMModel {
   label: string | null;
   /** Optional suffix rendered only by model pickers (for example ``1.5×``). */
   selection_hint?: string | null;
+  /** Declared input modalities (``"text"`` / ``"image"``), three-state:
+   *  absent/``null`` → not declared — pickers render no capability badge, so
+   *  channels without declarations look exactly like today. */
+  input_modalities?: string[] | null;
   /** Runtimes this model can drive (``claude_agent`` / ``codex`` /
    *  ``deepagents``), declared by the producing side. ``null`` → not declared:
    *  derived from the channel's ``compatible_protocols`` + ``provider_kind``. */

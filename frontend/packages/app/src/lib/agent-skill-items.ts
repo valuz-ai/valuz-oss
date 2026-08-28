@@ -9,6 +9,38 @@ export interface AgentSkillItem {
   description?: string;
 }
 
+function toItem(s: SkillView): AgentSkillItem {
+  return { id: s.id, name: s.name, slug: s.slug, description: s.description };
+}
+
+/**
+ * The catalog entries an `all_available` agent can actually run.
+ *
+ * Mirrors the backend's `EffectiveResourceResolver` predicate — library switch
+ * on, entitled, materialized — so the `/` picker offers exactly what the
+ * session will be created with. A skill failing any of these is dropped rather
+ * than shown-and-then-silently-absent at run time.
+ *
+ * Deduped by slug: one slug can appear in the catalog more than once (a user
+ * copy shadowing the official package, say), and the picker must list it once.
+ */
+export function libraryEnabledSkillItems(
+  catalog: readonly SkillView[],
+): AgentSkillItem[] {
+  const items: AgentSkillItem[] = [];
+  const seen = new Set<string>();
+  for (const s of catalog) {
+    if (s.library_enabled === false) continue;
+    if (s.is_locked) continue;
+    if ((s.status ?? "available") !== "available") continue;
+    const key = s.slug ?? s.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(toItem(s));
+  }
+  return items;
+}
+
 /**
  * Resolve an agent's stored skill entries to composer `/`-picker items.
  *
@@ -39,16 +71,8 @@ export function resolveAgentSkillItems(
     if (!slug || seen.has(slug)) continue;
     seen.add(slug);
     const meta = bySlug.get(slug);
-    items.push(
-      meta
-        ? {
-            id: meta.id,
-            name: meta.name,
-            slug: meta.slug,
-            description: meta.description,
-          }
-        : { id: slug, name: slug, slug },
-    );
+    items.push(meta ? toItem(meta) : { id: slug, name: slug, slug });
   }
   return items;
 }
+

@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from src.core.types import UserMessage
+from src.core.types import IMAGE_READ_SUFFIXES, UserMessage
 
 WEEKDAY_NAMES = (
     "Monday",
@@ -35,8 +35,36 @@ WEEKDAY_NAMES = (
 )
 
 
-def build_user_prompt(message: UserMessage, cwd: str, now: datetime) -> str:
-    """Render a structured `UserMessage` into the SDK-ingested string."""
+# Per-FILE capability marker, appended to the attachment line of a file this
+# session's model cannot take in (English on purpose — same contract as every
+# other model-facing kernel string).
+#
+# Why per-file and not one global rule in the <system-reminder>: three places
+# already tell the model about uploads — this listing ("read them as needed"),
+# the host's ``<additional-context>`` section ("- name (raw file)"), and the
+# host system prompt. A blanket "do not Read images" would contradict both
+# listings inside the same prompt, and a contradiction is worse than silence
+# for exactly the weak models this feature targets. A marker ON the file's own
+# line states a fact about THAT file and can never fight an instruction about
+# another one.
+UNREADABLE_ATTACHMENT_NOTE = "this model cannot read it — parse it to text with a document tool"
+
+
+def build_user_prompt(
+    message: UserMessage,
+    cwd: str,
+    now: datetime,
+    *,
+    model_rejects_images: bool = False,
+) -> str:
+    """Render a structured `UserMessage` into the SDK-ingested string.
+
+    ``model_rejects_images`` marks the attachment lines this model cannot take
+    in (:data:`UNREADABLE_ATTACHMENT_NOTE`). Callers pass
+    ``src.core.types.model_rejects_images(...)`` — the same three-state
+    predicate the runtime gates on, so the marker and the gate can never
+    disagree about which files are affected.
+    """
     # Slash-command turns must reach the SDK verbatim. The Claude Code CLI
     # recognizes a slash command (`/goal`, `/clear`, a skill invocation, ...)
     # only when the message *is* exactly that command: a prepended
@@ -71,7 +99,11 @@ def build_user_prompt(message: UserMessage, cwd: str, now: datetime) -> str:
             # ``source_path`` is the original file (operate on this); when the
             # upstream parsed it, point the agent at the cheaper text extract too.
             if a.parsed_path:
+                # An extract exists — it IS the readable route, for every model.
+                # No marker needed: the line already names what to read.
                 lines.append(f"- {a.source_path}  (extracted text: {a.parsed_path})")
+            elif model_rejects_images and a.source_path.lower().endswith(IMAGE_READ_SUFFIXES):
+                lines.append(f"- {a.source_path}  [{UNREADABLE_ATTACHMENT_NOTE}]")
             else:
                 lines.append(f"- {a.source_path}")
         parts.append("\n".join(lines))

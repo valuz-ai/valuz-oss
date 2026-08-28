@@ -70,6 +70,24 @@ export interface UseStagedAttachmentsResult {
   /** Put claimed rows back — the send they were claimed for did not happen. */
   restage: (rows: SessionAttachmentItem[]) => void;
   /**
+   * Drop every staged file, deleting the rows this composer put up.
+   *
+   * For the one case where staging stops meaning anything: the backend the
+   * turn will run on changed. A staged row lives on the backend it was
+   * uploaded to and its id means nothing anywhere else, so a turn that names
+   * it on a different backend binds nothing — the message goes out without
+   * the person's file and neither side says a word. (Seen on qa: uploaded on
+   * 本地服务, sent on 云端服务.) Attachment ids are backend-local in exactly
+   * the way provider ids already are, and the composer already resets those
+   * on the same switch.
+   *
+   * Deletes rather than abandons, so the old backend is not left holding an
+   * orphan against the owner's staging cap. Call it BEFORE the base changes:
+   * it deletes through the base it was rendered with, which is the one that
+   * has the rows.
+   */
+  discard: () => Promise<void>;
+  /**
    * Take on files another page already sent, so this one can show them.
    *
    * The project composer posts and navigates without waiting, so the arriving
@@ -105,10 +123,35 @@ export function useStagedAttachments(
    * Where uploads and reads go. There is no session to route on, so the caller
    * names the backend — the same one its turn will run on. Omitted → the
    * module default.
+   *
+   * Prefer the FUNCTION form on any surface where the answer can change while
+   * the composer is open (an execution-target switch): it is called at the
+   * moment of each request, so an upload cannot land on a backend the person
+   * has already switched away from. The string form snapshots at render, which
+   * is only safe when the backend is fixed for the component's lifetime.
+   * Observed on qa with the string form: 云端服务 selected and the chip still
+   * reading 云端服务, yet the POST went to the local backend — the turn then
+   * named an id the cloud backend had never seen and the file was silently
+   * dropped from the message.
    */
-  baseUrl?: string,
+  baseUrl?: string | (() => string | undefined),
 ): UseStagedAttachmentsResult {
-  const opts = useMemo(() => (baseUrl ? { baseUrl } : undefined), [baseUrl]);
+  // Resolved per call. ``baseUrl`` is read through a ref so a caller passing an
+  // inline arrow does not invalidate every callback on every render.
+  const baseRef = useRef(baseUrl);
+  baseRef.current = baseUrl;
+  const optsNow = useCallback((): { baseUrl: string } | undefined => {
+    const b = baseRef.current;
+    const resolved = typeof b === "function" ? b() : b;
+    return resolved ? { baseUrl: resolved } : undefined;
+  }, []);
+  // Render-time value, used ONLY to key the polling effect so a switch
+  // restarts it against the new backend. Requests never read this.
+  const renderBase = typeof baseUrl === "function" ? baseUrl() : baseUrl;
+  const opts = useMemo(
+    () => (renderBase ? { baseUrl: renderBase } : undefined),
+    [renderBase],
+  );
   const [attachments, setState] = useState<SessionAttachmentItem[]>([]);
   // Claimed, sent, not yet confirmed bound. Plain state: unlike the staged set
   // nothing reads this mid-await — it exists to be rendered.
@@ -188,12 +231,12 @@ export function useStagedAttachments(
 
       for (const [file, row] of staged) {
         try {
-          const item = await sessionsApi.uploadAttachment(file, opts);
+          const item = await sessionsApi.uploadAttachment(file, optsNow());
           if (removedRef.current.delete(row.id)) {
             // Removed while in flight. The upload could not be cancelled, so
             // undo it — otherwise a file the person watched themselves remove
             // would still ship with the turn.
-            void sessionsApi.deleteAttachment(item.id, opts).catch(() => {
+            void sessionsApi.deleteAttachment(item.id, optsNow()).catch(() => {
               /* best-effort; at worst an unreferenced file */
             });
             continue;
@@ -208,13 +251,13 @@ export function useStagedAttachments(
         }
       }
     },
-    [opts, write],
+    [optsNow, write],
   );
 
   const attachKbDocs = useCallback(
     async (docIds: string[]) => {
       if (docIds.length === 0) return;
-      const { items } = await sessionsApi.addKbAttachments(docIds, opts);
+      const { items } = await sessionsApi.addKbAttachments(docIds, optsNow());
       // The endpoint answers with the rows it just created, so every one of
       // them is this composer's.
       for (const r of items) mineRef.current.add(r.id);
@@ -234,12 +277,12 @@ export function useStagedAttachments(
         return;
       }
       try {
-        await sessionsApi.deleteAttachment(attachmentId, opts);
+        await sessionsApi.deleteAttachment(attachmentId, optsNow());
       } catch {
         /* best-effort */
       }
     },
-    [opts, write],
+    [optsNow, write],
   );
 
   const claim = useCallback((): SessionAttachmentItem[] => {
@@ -253,6 +296,31 @@ export function useStagedAttachments(
     setInFlight((prev) => [...prev, ...claimed]);
     return claimed;
   }, [write]);
+
+  const discard = useCallback(async () => {
+    // Read the ref, not the render value: a switch can land between a render
+    // and the upload that is still resolving, and the ref is the set that
+    // actually exists.
+    const dropped = ref.current;
+    if (dropped.length === 0) return;
+    write(() => []);
+    for (const a of dropped) mineRef.current.delete(a.id);
+    await Promise.all(
+      dropped.map(async (a) => {
+        if (isPlaceholder(a)) {
+          // Still uploading. Recorded so the arriving row undoes itself —
+          // the same contract ``remove`` relies on.
+          removedRef.current.add(a.id);
+          return;
+        }
+        try {
+          await sessionsApi.deleteAttachment(a.id, optsNow());
+        } catch {
+          /* best-effort: the staging cap reclaims anything left behind */
+        }
+      }),
+    );
+  }, [optsNow, write]);
 
   const adopt = useCallback((rows: SessionAttachmentItem[]) => {
     if (rows.length === 0) return;
@@ -290,6 +358,7 @@ export function useStagedAttachments(
     remove,
     claim,
     restage,
+    discard,
     adopt,
     settle,
   };

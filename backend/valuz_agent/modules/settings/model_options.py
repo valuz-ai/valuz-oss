@@ -136,6 +136,11 @@ class ModelOption(BaseModel):
     # Presentation-only suffix shown by model pickers, never part of the model
     # label persisted or rendered by readonly surfaces.
     selection_hint: str | None = None
+    # Declared input modalities (``LLMModel.input_modalities``, three-state):
+    # ``None`` = not declared — pickers render nothing, so a channel with no
+    # declarations looks exactly like today. Presence drives a purely
+    # informational capability badge.
+    input_modalities: list[str] | None = None
     # Every runtime this model can run on (priority-ordered).
     runtimes: list[str]
     # Preferred runtime for a one-click pick. Always ``runtimes[0]``.
@@ -255,6 +260,9 @@ def _build_raw_provider(
                 provider_id=p.id,
                 label=m.label or m.id,
                 selection_hint=m.selection_hint,
+                input_modalities=(
+                    list(m.input_modalities) if m.input_modalities is not None else None
+                ),
                 runtimes=runtimes,
                 default_runtime=runtimes[0],
                 is_current_default=(p.id == current.provider_id and m.id == current.model),
