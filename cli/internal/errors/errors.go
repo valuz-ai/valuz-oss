@@ -106,11 +106,6 @@ func KindOf(err error) Kind {
 	return KindInternal
 }
 
-// secretLike matches fields that must never be rendered, in any mode.
-var secretLike = regexp.MustCompile(
-	`(?i)(token|authorization|bearer|api[_-]?key|secret|password|credential)`,
-)
-
 // Redact scrubs secret-like substrings from a message. Used by both the
 // human renderer and the debug trace; the JSON output protocol redacts at
 // the event level (see the output package) with the same policy.
@@ -119,10 +114,14 @@ func Redact(s string) string {
 }
 
 func redactValue(s string) string {
-	// Match "key=value" / "key: value" forms and bare JWT-like tokens.
+	// 1. "key=value" / "key: value" forms (mask the value, keep the key).
+	// 2. "Bearer <token>" space form.
+	// 3. bare JWT-ish tokens (segments without dots inside, so a long
+	//    first segment cannot swallow the whole token).
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\b((?:bearer|token|api[_-]?key|authorization|secret|password)\s*[:=]\s*)\S+`),
-		regexp.MustCompile(`\beyJ[A-Za-z0-9_.-]{10,}\.[A-Za-z0-9_.-]{10,}\.[A-Za-z0-9_.-]{10,}\b`),
+		regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9_.-]{8,}\b`),
+		regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{3,}\b`),
 	}
 	out := s
 	for _, re := range patterns {

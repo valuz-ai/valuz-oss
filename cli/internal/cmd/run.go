@@ -10,6 +10,7 @@ import (
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/output"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/runner"
 )
 
@@ -28,7 +29,8 @@ func newRunCmd() *cobra.Command {
 		runtimeID      string
 		permissionMode string
 		timeout        time.Duration
-		output         string
+		outputFormat   string
+		trajectory     string
 	)
 
 	cmd := &cobra.Command{
@@ -49,6 +51,12 @@ func newRunCmd() *cobra.Command {
 			}
 
 			runID := newRunID()
+			sink, err := output.NewSink(outputFormat, cmd.OutOrStdout(), trajectory)
+			if err != nil {
+				return errs.Wrap(errs.KindUsage, err, "init output sink")
+			}
+			defer sink.Close()
+
 			r := runner.New(
 				backend.NewControlClient(opts.BackendURL, bearerToken(opts)),
 				backend.NewStreamClient(opts.BackendURL, bearerToken(opts)),
@@ -65,13 +73,15 @@ func newRunCmd() *cobra.Command {
 				Prompt:         p,
 				Timeout:        timeout,
 				RunID:          runID,
+				EventSink:      sink,
 			})
 			if err != nil {
 				return err
 			}
-
-			if output == "json" {
-				printRunResultJSON(cmd.OutOrStdout(), res)
+			if outputFormat == "human" || outputFormat == "" {
+				fmt.Fprintln(cmd.OutOrStdout())
+				fmt.Fprintf(cmd.OutOrStdout(), "status: %s (session %s, %d tokens in / %d out)\n",
+					res.Status, res.SessionID, res.Usage.InputTokens, res.Usage.OutputTokens)
 			}
 			return nil
 		},
@@ -89,7 +99,8 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&runtimeID, "runtime", "", "runtime: claude_agent|codex|deepagents|deepseek_harness")
 	f.StringVar(&permissionMode, "permission-mode", "", "default|auto_review|full_access (default: default)")
 	f.DurationVar(&timeout, "timeout", 0, "wall-clock limit (e.g. 5m); 0 = unlimited")
-	f.StringVarP(&output, flagOutput, "o", "", "output format: human|json")
+	f.StringVarP(&outputFormat, flagOutput, "o", "", "output format: human|json|jsonl")
+	f.StringVar(&trajectory, "trajectory", "", "mirror the jsonl event stream to a file")
 	return cmd
 }
 
@@ -145,9 +156,4 @@ func bearerToken(opts *RootOptions) string {
 
 func newRunID() string {
 	return fmt.Sprintf("run-%d", time.Now().UnixNano())
-}
-
-func printRunResultJSON(w io.Writer, res *runner.Result) {
-	fmt.Fprintf(w, `{"schema_version":"valuz.run-result/v1","run_id":%q,"session_id":%q,"project_id":%q,"message_id":%q,"status":%q}`+"\n",
-		res.RunID, res.SessionID, res.ProjectID, res.MessageID, res.Status)
 }

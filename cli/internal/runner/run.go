@@ -12,6 +12,7 @@ import (
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/event"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/output"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/project"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/turn"
 )
@@ -28,6 +29,8 @@ type Options struct {
 	Prompt         string
 	Timeout        time.Duration // 0 = no wall-clock limit
 	RunID          string
+	// EventSink receives live RunEvents (jsonl protocol); nil = none.
+	EventSink *output.Sink
 }
 
 // Result is the aggregated outcome of a run (consumed by the output layer).
@@ -43,6 +46,7 @@ type Result struct {
 	Usage     turn.Usage
 	FinalText string
 	Error     string
+	NumTurns  int
 	StartedAt time.Time
 	Finished  time.Time
 }
@@ -54,6 +58,9 @@ type Runner struct {
 	Mapper  *event.Mapper
 	// Stdout receives human progress when non-nil.
 	Stdout io.Writer
+	// finalText accumulates the target turn's assistant text for the
+	// RunResult document.
+	finalText string
 }
 
 // New builds a runner.
@@ -114,7 +121,7 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	eventErr := make(chan error, 1)
 	go func() {
 		eventErr <- r.Stream.Stream(streamCtx, session.ID, 0, func(ctx context.Context, f *backend.SSEFrame) error {
-			return r.handleFrame(machine, f, o.RunID, session.ID, projectID)
+			return r.handleFrame(machine, f, o.RunID, session.ID, projectID, o.EventSink)
 		})
 	}()
 
@@ -145,6 +152,7 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	}
 
 	snap := machine.Snapshot()
+	finished := time.Now()
 	res := &Result{
 		RunID:     o.RunID,
 		SessionID: session.ID,
@@ -154,27 +162,64 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 		Runtime:   session.Runtime,
 		Model:     o.ModelID,
 		Usage:     snap.Usage,
+		FinalText: r.finalText,
+		NumTurns:  1, // one run, one new session, one turn (Slice 2 scope)
 		StartedAt: started,
-		Finished:  time.Now(),
+		Finished:  finished,
 	}
 
 	switch {
 	case runCtx.Err() == context.DeadlineExceeded:
-		res.Status = "timeout"
+		res.Status = output.StatusTimeout
 		streamCancel()
 	case streamErr != nil && !snap.Finished():
 		// Stream failed before terminal; surface as protocol/recovery
 		// error with the partial state attached.
 		return nil, errs.Wrap(errs.KindInternal, streamErr, "stream ended before the turn completed (session %s)", session.ID)
 	case snap.Status == turn.StatusActionRequired:
-		res.Status = "action_required"
+		res.Status = output.StatusActionRequired
 	case snap.ErrorStatus() == turn.StatusError:
-		res.Status = "error"
+		res.Status = output.StatusError
 		res.Error = snap.Error
 	default:
-		res.Status = "completed"
+		res.Status = output.StatusCompleted
+	}
+
+	if o.EventSink != nil {
+		doc := RunResultFrom(res)
+		if _, err := o.EventSink.End(doc); err != nil {
+			return nil, errs.Wrap(errs.KindInternal, err, "emit run.end")
+		}
 	}
 	return res, nil
+}
+
+// RunResultFrom converts a runner Result into the output document.
+func RunResultFrom(res *Result) output.RunResult {
+	return output.RunResult{
+		SchemaVersion: "valuz.run-result/v1",
+		RunID:         res.RunID,
+		SessionID:     res.SessionID,
+		ProjectID:     res.ProjectID,
+		MessageID:     res.MessageID,
+		AgentSlug:     res.AgentSlug,
+		Runtime:       res.Runtime,
+		Model:         res.Model,
+		Status:        res.Status,
+		ExitCode:      output.ExitCodeFor(res.Status),
+		StartedAt:     res.StartedAt.UTC().Format(time.RFC3339Nano),
+		FinishedAt:    res.Finished.UTC().Format(time.RFC3339Nano),
+		DurationMS:    res.Finished.Sub(res.StartedAt).Milliseconds(),
+		Usage: output.Usage{
+			InputTokens:      res.Usage.InputTokens,
+			OutputTokens:     res.Usage.OutputTokens,
+			CacheReadTokens:  res.Usage.CacheReadTokens,
+			CacheWriteTokens: res.Usage.CacheWriteTokens,
+		},
+		NumTurns:     res.NumTurns,
+		FinalMessage: res.FinalText,
+		Error:        res.Error,
+	}
 }
 
 func (r *Runner) readiness(ctx context.Context) error {
@@ -225,8 +270,9 @@ func (r *Runner) createSession(ctx context.Context, projectID string, o Options)
 	return &session, nil
 }
 
-// handleFrame drives the turn machine. Unmatched/stale frames are ignored.
-func (r *Runner) handleFrame(m *turn.Machine, f *backend.SSEFrame, runID, session, project string) error {
+// handleFrame drives the turn machine. Unmatched/stale frames are ignored;
+// live events are forwarded to the sink when one is configured.
+func (r *Runner) handleFrame(m *turn.Machine, f *backend.SSEFrame, runID, session, project string, sink *output.Sink) error {
 	if f.IsHeartbeat() {
 		return nil
 	}
@@ -235,30 +281,89 @@ func (r *Runner) handleFrame(m *turn.Machine, f *backend.SSEFrame, runID, sessio
 	// Anchor on the first message.user of this stream.
 	if et == event.EventUser && !m.Snapshot().Anchored {
 		m.Anchor(f.Payload["message_id"])
+	}
+	if !m.Anchored {
 		return nil
 	}
-	// The user frame is the anchor; everything else must match the turn.
-	if !m.Matches(f) {
+
+	snap := m.Snapshot()
+	emit := func(evType string, data map[string]any) error {
+		if sink == nil {
+			return nil
+		}
+		mid := f.Payload["message_id"]
+		ev := output.RunEvent{
+			SchemaVersion: "valuz.run-event/v1",
+			RunID:         runID,
+			SessionID:     session,
+			ProjectID:     project,
+			MessageID:     mid,
+			EventUID:      strOrNil(f.EventUID),
+			Source:        output.SourceLive,
+			SourceSeq:     int64OrNil(f.Seq),
+			Type:          evType,
+			Data:          data,
+		}
+		return sink.Event(ev)
+	}
+
+	// Stale frames (different turn) never change state or emit.
+	if snap.Anchored && !m.Matches(f) {
 		return nil
 	}
 
 	switch et {
 	case event.EventAssistantDelta, event.EventAssistantText:
 		d := r.Mapper.DecodeDelta(f.Payload)
+		r.finalText += d.Text
 		if r.Stdout != nil && d.Text != "" {
-			fmt.Fprint(r.Stdout, d.Text)
+			fmt.Fprint(r.Stdout, output.NormalizeNewlines(d.Text))
+		}
+		if err := emit(et, map[string]any{"text": d.Text}); err != nil {
+			return err
 		}
 	case event.EventRunFailed:
 		e := r.Mapper.DecodeError(f.Payload)
 		m.NoteError(e.Message)
+		if err := emit(et, map[string]any{"message": e.Message, "category": e.Category}); err != nil {
+			return err
+		}
 	case event.EventUsage:
 		u := r.Mapper.DecodeUsage(f.Payload)
 		m.NoteUsage(u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens)
+		if err := emit(et, map[string]any{
+			"input_tokens": u.InputTokens, "output_tokens": u.OutputTokens,
+			"cache_read_tokens": u.CacheReadTokens, "cache_write_tokens": u.CacheWriteTokens,
+		}); err != nil {
+			return err
+		}
 	case event.EventIdle:
 		idle := r.Mapper.DecodeIdle(f.Payload)
 		m.NoteIdle(idle.StopReason)
+		if err := emit(et, map[string]any{"stop_reason": idle.StopReason}); err != nil {
+			return err
+		}
 	case event.EventRequiresAction:
 		m.RequiresAction()
+		ra := r.Mapper.DecodeRequiresAction(f.Payload)
+		if err := emit(et, map[string]any{"pending_id": ra.PendingID}); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func strOrNil(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func int64OrNil(v int) *int64 {
+	if v == 0 {
+		return nil
+	}
+	vv := int64(v)
+	return &vv
 }
