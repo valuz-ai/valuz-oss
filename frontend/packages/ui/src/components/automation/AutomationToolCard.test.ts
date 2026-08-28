@@ -33,6 +33,16 @@ describe("parseAutomationToolOutput", () => {
     expect(parseAutomationToolOutput(wrapped)?.ok).toBe(true);
   });
 
+  it("recovers the payload from a legacy Python-repr envelope", () => {
+    // Older kernel output: ``[{'type': 'text', 'text': '{...}'}]`` — not
+    // valid JSON (single quotes), so the scan fallback must find the object.
+    const repr =
+      "[{'type': 'text', 'text': '{\"action\": \"create\", \"ok\": false, \"message\": \"agent_slug is required\"}'}]";
+    const result = parseAutomationToolOutput(repr);
+    expect(result?.ok).toBe(false);
+    expect(result?.message).toBe("agent_slug is required");
+  });
+
   it("returns null for prose output", () => {
     expect(parseAutomationToolOutput("the tool is still running")).toBeNull();
     expect(parseAutomationToolOutput(undefined)).toBeNull();
