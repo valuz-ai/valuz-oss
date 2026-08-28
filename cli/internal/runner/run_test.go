@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,9 @@ import (
 func fakeBackend(t *testing.T, fixture string) *httptest.Server {
 	return fakeBackendHang(t, fixture, false)
 }
+
+// interruptCount is set by fakeBackendHang to record interrupt calls.
+var interruptCount atomic.Int32
 
 func fakeBackendHang(t *testing.T, fixture string, hang bool) *httptest.Server {
 	t.Helper()
@@ -48,6 +52,10 @@ func fakeBackendHang(t *testing.T, fixture string, hang bool) *httptest.Server {
 	})
 	mux.HandleFunc("/v1/sessions/sess-1/messages", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, map[string]any{"id": "sess-1", "status": "running"})
+	})
+	mux.HandleFunc("/v1/sessions/sess-1/interrupt", func(w http.ResponseWriter, r *http.Request) {
+		interruptCount.Add(1)
+		writeJSON(t, w, map[string]any{"id": "sess-1", "status": "idle"})
 	})
 	mux.HandleFunc("/v1/sessions/sess-1/events/stream", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -169,6 +177,27 @@ func TestRunCwdResolvesExistingProject(t *testing.T) {
 	}
 	if res.ProjectID != "proj-1" {
 		t.Fatalf("project = %q, want proj-1", res.ProjectID)
+	}
+}
+
+func TestRunActionRequiredTriggersInterrupt(t *testing.T) {
+	srv := fakeBackend(t, "requires-action.jsonl")
+	defer srv.Close()
+	interruptCount.Store(0)
+
+	res, err := newRunner(srv).Run(context.Background(), Options{
+		ProjectID: "proj-1",
+		Prompt:    "deploy the service",
+		RunID:     "run-ar",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != "action_required" {
+		t.Fatalf("status = %q, want action_required", res.Status)
+	}
+	if interruptCount.Load() == 0 {
+		t.Fatal("action_required must best-effort interrupt the backend")
 	}
 }
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -149,6 +150,11 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	if err := root.Execute(); err != nil {
+		var ece *errs.ExitCodeError
+		if errors.As(err, &ece) {
+			fmt.Fprintln(stderr, ece.Message)
+			return ece.Code
+		}
 		debug := false
 		if o, rerr := Options(root); rerr == nil {
 			debug = o.Debug

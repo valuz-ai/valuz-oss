@@ -88,6 +88,16 @@ func Wrap(kind Kind, cause error, format string, args ...any) *Error {
 	return &Error{Kind: kind, Message: fmt.Sprintf(format, args...), Cause: cause}
 }
 
+// ExitCodeError carries an explicit exit code (Unix signal convention:
+// 128+signum for interrupted runs). It bypasses the kind table and is
+// rendered by the root boundary like any other error.
+type ExitCodeError struct {
+	Code    int
+	Message string
+}
+
+func (e *ExitCodeError) Error() string { return e.Message }
+
 // As extracts a *Error from err (nil if absent).
 func As(err error) *Error {
 	var e *Error

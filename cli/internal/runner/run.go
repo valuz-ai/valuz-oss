@@ -31,6 +31,11 @@ type Options struct {
 	RunID          string
 	// EventSink receives live RunEvents (jsonl protocol); nil = none.
 	EventSink *output.Sink
+	// Signal, when non-empty, records the OS signal that cancelled the
+	// run (e.g. "SIGINT" → exit 130, "SIGTERM" → exit 143).
+	Signal string
+	// ReconnectMaxAttempts caps SSE reconnects (0 = default 3).
+	ReconnectMaxAttempts int
 }
 
 // Result is the aggregated outcome of a run (consumed by the output layer).
@@ -47,6 +52,7 @@ type Result struct {
 	FinalText string
 	Error     string
 	NumTurns  int
+	Signal    string
 	StartedAt time.Time
 	Finished  time.Time
 }
@@ -92,6 +98,12 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 		defer cancel()
 	}
 
+	// Stream reconnect policy (Slice 4): bounded retries, idle watchdog.
+	maxReconnects := o.ReconnectMaxAttempts
+	if maxReconnects <= 0 {
+		maxReconnects = 3
+	}
+
 	// 1. readiness
 	if err := r.readiness(runCtx); err != nil {
 		return nil, err
@@ -118,10 +130,14 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	defer streamCancel()
 
 	machine := turn.NewMachine()
+	seen := map[string]bool{}
 	eventErr := make(chan error, 1)
+	r.Stream.ReconnectMaxAttempts = maxReconnects
+	r.Stream.ReconnectBaseDelay = time.Second
+	r.Stream.IdleDeadline = 30 * time.Second // 15s heartbeat × 2
 	go func() {
 		eventErr <- r.Stream.Stream(streamCtx, session.ID, 0, func(ctx context.Context, f *backend.SSEFrame) error {
-			return r.handleFrame(machine, f, o.RunID, session.ID, projectID, o.EventSink)
+			return r.handleFrame(machine, seen, f, o.RunID, session.ID, projectID, o.EventSink)
 		})
 	}()
 
@@ -169,15 +185,35 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	}
 
 	switch {
+	case o.Signal != "" && runCtx.Err() == context.Canceled:
+		res.Status = output.StatusInterrupted
+		res.Signal = o.Signal
 	case runCtx.Err() == context.DeadlineExceeded:
 		res.Status = output.StatusTimeout
 		streamCancel()
-	case streamErr != nil && !snap.Finished():
-		// Stream failed before terminal; surface as protocol/recovery
-		// error with the partial state attached.
-		return nil, errs.Wrap(errs.KindInternal, streamErr, "stream ended before the turn completed (session %s)", session.ID)
 	case snap.Status == turn.StatusActionRequired:
+		// Headless cannot answer an approval: interrupt best-effort and
+		// let the backend drain, then report action_required.
+		r.interruptBestEffort(runCtx, session.ID)
 		res.Status = output.StatusActionRequired
+	case streamErr != nil && !snap.Finished():
+		// Reconnect exhausted: reconcile against durable history before
+		// giving up (design.md §5.3 step 8).
+		if reconciled := r.reconcile(runCtx, machine, session.ID, projectID, o); reconciled {
+			snap = machine.Snapshot()
+			res.MessageID = snap.MessageID
+			res.Usage = snap.Usage
+			res.FinalText = r.finalText
+			switch {
+			case snap.ErrorStatus() == turn.StatusError:
+				res.Status = output.StatusError
+				res.Error = snap.Error
+			default:
+				res.Status = output.StatusCompleted
+			}
+			break
+		}
+		return nil, errs.Wrap(errs.KindInternal, streamErr, "stream ended before the turn completed (session %s)", session.ID)
 	case snap.ErrorStatus() == turn.StatusError:
 		res.Status = output.StatusError
 		res.Error = snap.Error
@@ -192,6 +228,56 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 		}
 	}
 	return res, nil
+}
+
+// interruptBestEffort asks the backend to stop the current turn; failures
+// are ignored (the run is ending anyway).
+func (r *Runner) interruptBestEffort(ctx context.Context, sessionID string) {
+	ictx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var detail backend.SessionDetail
+	_ = r.Control.Post(ictx, "/v1/sessions/"+sessionID+"/interrupt", nil, &detail)
+}
+
+// reconcile replays durable history after reconnects are exhausted and
+// looks for the target turn's terminal idle. Returns true when the run
+// can be completed from history.
+func (r *Runner) reconcile(ctx context.Context, m *turn.Machine, sessionID, projectID string, o Options) bool {
+	// The REST history shape differs from the flat SSE frame; decode
+	// into envelopes.
+	var history struct {
+		SessionID string `json:"session_id"`
+		Items     []struct {
+			Seq   int64             `json:"seq"`
+			Event struct {
+				EventType string            `json:"event_type"`
+				Payload   map[string]string `json:"payload"`
+			} `json:"event"`
+			Timestamp *int64  `json:"timestamp"`
+			EventUID  *string `json:"event_uid"`
+		} `json:"items"`
+	}
+	rc, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := r.Control.Get(rc, "/v1/sessions/"+sessionID+"/events", &history); err != nil {
+		return false
+	}
+
+	// Feed only frames belonging to the anchored turn; the machine
+	// ignores everything else.
+	for _, it := range history.Items {
+		f := &backend.SSEFrame{
+			Seq:       int(it.Seq),
+			EventType: &it.Event.EventType,
+			Payload:   it.Event.Payload,
+			Timestamp: it.Timestamp,
+			EventUID:  it.EventUID,
+		}
+		if err := r.handleFrame(m, nil, f, o.RunID, sessionID, projectID, nil); err != nil {
+			return false
+		}
+	}
+	return m.Snapshot().Finished()
 }
 
 // RunResultFrom converts a runner Result into the output document.
@@ -271,10 +357,17 @@ func (r *Runner) createSession(ctx context.Context, projectID string, o Options)
 }
 
 // handleFrame drives the turn machine. Unmatched/stale frames are ignored;
-// live events are forwarded to the sink when one is configured.
-func (r *Runner) handleFrame(m *turn.Machine, f *backend.SSEFrame, runID, session, project string, sink *output.Sink) error {
+// duplicate uids (reconnect replay) are dropped; live events are
+// forwarded to the sink when one is configured.
+func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.SSEFrame, runID, session, project string, sink *output.Sink) error {
 	if f.IsHeartbeat() {
 		return nil
+	}
+	if f.EventUID != nil && *f.EventUID != "" {
+		if seen[*f.EventUID] {
+			return nil // already processed on a previous connection
+		}
+		seen[*f.EventUID] = true
 	}
 	et := *f.EventType
 

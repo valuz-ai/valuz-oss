@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,6 +52,11 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
+			// SIGINT/SIGTERM cancel the run gracefully; the exit code
+			// follows the Unix signal convention (128+signum).
+			runCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
 			runID := newRunID()
 			sink, err := output.NewSink(outputFormat, cmd.OutOrStdout(), trajectory)
 			if err != nil {
@@ -62,7 +69,7 @@ func newRunCmd() *cobra.Command {
 				backend.NewStreamClient(opts.BackendURL, bearerToken(opts)),
 				cmd.OutOrStdout(),
 			)
-			res, err := r.Run(cmd.Context(), runner.Options{
+			res, err := r.Run(runCtx, runner.Options{
 				ProjectID:      projectID,
 				Cwd:            cwd,
 				AgentSlug:      agentSlug,
@@ -82,6 +89,16 @@ func newRunCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout())
 				fmt.Fprintf(cmd.OutOrStdout(), "status: %s (session %s, %d tokens in / %d out)\n",
 					res.Status, res.SessionID, res.Usage.InputTokens, res.Usage.OutputTokens)
+			}
+			if res.Status == output.StatusInterrupted {
+				code := 130 // SIGINT default
+				if res.Signal == "SIGTERM" {
+					code = 143
+				}
+				return &errs.ExitCodeError{Code: code, Message: "run interrupted by " + res.Signal}
+			}
+			if res.Status == output.StatusActionRequired {
+				return &errs.ExitCodeError{Code: 7, Message: "run parked on an approval; use --permission-mode full_access in headless contexts"}
 			}
 			return nil
 		},
