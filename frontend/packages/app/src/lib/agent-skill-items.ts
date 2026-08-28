@@ -9,16 +9,10 @@ export interface AgentSkillItem {
   description?: string;
 }
 
-/**
- * Resolve an agent's stored skill entries to composer `/`-picker items.
- *
- * Agents persist skills as either a slug (`"sector-overview"`) or an absolute
- * path (`"/Users/.../skills/weather-query-v2"`) — the directory basename is the
- * slug. Each entry is matched against the provided skill catalogs (first match
- * wins, so pass higher-priority catalogs first) to recover a display
- * name/description; an entry the catalogs don't know still resolves to its bare
- * slug so nothing silently disappears. Deduped by slug, order preserved.
- */
+function toItem(s: SkillView): AgentSkillItem {
+  return { id: s.id, name: s.name, slug: s.slug, description: s.description };
+}
+
 /**
  * The catalog entries an `all_available` agent can actually run.
  *
@@ -42,16 +36,21 @@ export function libraryEnabledSkillItems(
     const key = s.slug ?? s.id;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({
-      id: s.id,
-      name: s.name,
-      slug: s.slug,
-      description: s.description,
-    });
+    items.push(toItem(s));
   }
   return items;
 }
 
+/**
+ * Resolve an agent's stored skill entries to composer `/`-picker items.
+ *
+ * Agents persist skills as either a slug (`"sector-overview"`) or an absolute
+ * path (`"/Users/.../skills/weather-query-v2"`) — the directory basename is the
+ * slug. Each entry is matched against the provided skill catalogs (first match
+ * wins, so pass higher-priority catalogs first) to recover a display
+ * name/description; an entry the catalogs don't know still resolves to its bare
+ * slug so nothing silently disappears. Deduped by slug, order preserved.
+ */
 export function resolveAgentSkillItems(
   entries: readonly string[] | null | undefined,
   catalogs: readonly (readonly SkillView[])[],
@@ -72,16 +71,8 @@ export function resolveAgentSkillItems(
     if (!slug || seen.has(slug)) continue;
     seen.add(slug);
     const meta = bySlug.get(slug);
-    items.push(
-      meta
-        ? {
-            id: meta.id,
-            name: meta.name,
-            slug: meta.slug,
-            description: meta.description,
-          }
-        : { id: slug, name: slug, slug },
-    );
+    items.push(meta ? toItem(meta) : { id: slug, name: slug, slug });
   }
   return items;
 }
+

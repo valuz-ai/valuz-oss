@@ -422,9 +422,7 @@ class TestSameSlugCoexistence:
         official_dir = tmp_path / "official" / "shared"
         official_dir.mkdir(parents=True)
         (official_dir / ".bundled-version").write_text("v1", encoding="utf-8")
-        await svc._ds.create(
-            "u", self._seed_official_row(str(official_dir), library_enabled=True)
-        )
+        await svc._ds.create("u", self._seed_official_row(str(official_dir), library_enabled=True))
         # The user copy is turned OFF; a slug-keyed overlay would wrongly hide the
         # enabled official copy too. Path-keying isolates them.
         await svc._ds.create(
@@ -434,9 +432,7 @@ class TestSameSlugCoexistence:
 
         catalog = await svc.list_catalog("u", "ws-1")
 
-        official = next(
-            s for s in catalog.skills if s.slug == "shared" and s.scope == "official"
-        )
+        official = next(s for s in catalog.skills if s.slug == "shared" and s.scope == "official")
         user = next(s for s in catalog.skills if s.slug == "shared" and s.scope == "user")
         assert official.library_enabled is True
         assert user.library_enabled is False
@@ -805,9 +801,7 @@ class TestUpdateSkill:
         catalog = await service.list_catalog("u", "ws-1")
         skill_id = catalog.skills[0].id
 
-        result = await service.update_skill(
-            "u", skill_id, SkillUpdateRequest(name="updated-name")
-        )
+        result = await service.update_skill("u", skill_id, SkillUpdateRequest(name="updated-name"))
         assert result.name == "updated-name"
 
 
