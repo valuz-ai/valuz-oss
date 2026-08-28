@@ -59,6 +59,10 @@ interface AutomationProposalCardProps {
   errorMessage?: string;
   /** When the ``create`` tool rejected the proposal (ok === false). */
   validationError?: string | null;
+  /** Whether the server actually validated this proposal. False while the
+   *  tool call is still running or its result wasn't a valid proposal — the
+   *  card renders read-only (no Confirm) until the server says yes. */
+  submittable?: boolean;
   onConfirm: () => void;
   onDismiss: () => void;
 }
@@ -74,6 +78,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
   state,
   errorMessage,
   validationError,
+  submittable = true,
   onConfirm,
   onDismiss,
 }: AutomationProposalCardProps) {
@@ -97,7 +102,9 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
   const isBusy = state === "confirming" || state === "dismissing";
   const isTerminal = state === "confirmed" || state === "dismissed";
   const canConfirm =
-    (state === "pending" || state === "error") && name.trim().length > 0;
+    (state === "pending" || state === "error") &&
+    name.trim().length > 0 &&
+    submittable;
   const modeLabel =
     actionKind === "task"
       ? t("automation.actionKindTask")
@@ -225,15 +232,17 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
           >
             {t("common.cancel")}
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={!canConfirm || isBusy}
-            loading={state === "confirming"}
-            onClick={onConfirm}
-          >
-            {state === "error" ? t("common.retry") : t("automation.actionCreate")}
-          </Button>
+          {submittable ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canConfirm || isBusy}
+              loading={state === "confirming"}
+              onClick={onConfirm}
+            >
+              {state === "error" ? t("common.retry") : t("automation.actionCreate")}
+            </Button>
+          ) : null}
         </div>
       ) : null}
       </div>

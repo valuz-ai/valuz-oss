@@ -234,6 +234,37 @@ export const AutomationToolCard = memo(function AutomationToolCard({
 });
 
 /**
+ * Unwrap a kernel content-block envelope, when present.
+ *
+ * Runtime-dependent: the Valuz/DeepAgents (LangChain) runtime delivers the
+ * tool payload nested one level down (``[{"type": "text", "text": "{...}"}]``),
+ * which a bare ``JSON.parse`` returns as an array and the payload checks below
+ * reject — the caller then treats a real ``ok: false`` result as "no result",
+ * and the proposal card renders as confirmable from the unvalidated INPUT.
+ * A value that is not a content-block envelope comes back untouched.
+ */
+function unwrapContentBlocks(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  for (const block of value) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      try {
+        return unwrapContentBlocks(
+          JSON.parse((block as { text: string }).text),
+        );
+      } catch {
+        /* that block is prose, not a payload — keep looking */
+      }
+    }
+  }
+  return value;
+}
+
+/**
  * Parse the JSON tool output into ``AutomationToolResultPayload`` if
  * possible. Returns ``null`` on malformed input — caller falls back to
  * the generic tool renderer.
@@ -243,16 +274,13 @@ export function parseAutomationToolOutput(
 ): AutomationToolResultPayload | null {
   if (!raw) return null;
   try {
-    const obj = JSON.parse(raw);
-    if (
-      typeof obj !== "object" ||
-      obj === null ||
-      typeof obj.action !== "string" ||
-      typeof obj.ok !== "boolean"
-    ) {
+    const obj = unwrapContentBlocks(JSON.parse(raw));
+    if (typeof obj !== "object" || obj === null) return null;
+    const payload = obj as Partial<AutomationToolResultPayload>;
+    if (typeof payload.action !== "string" || typeof payload.ok !== "boolean") {
       return null;
     }
-    return obj as AutomationToolResultPayload;
+    return payload as AutomationToolResultPayload;
   } catch {
     return null;
   }

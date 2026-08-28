@@ -25,10 +25,25 @@ from valuz_agent.modules.automations.triggers import MIN_INTERVAL_SECONDS
 
 class CronTrigger(BaseModel):
     kind: Literal["cron"] = "cron"
-    cron_expr: str = Field(min_length=1)
+    cron_expr: str = Field(
+        min_length=1,
+        description=(
+            "Standard 5-field POSIX cron expression (minute hour day-of-month "
+            "month day-of-week), e.g. '0 9 * * *' for 09:00 daily. For a "
+            "natural-language schedule, translate it to cron yourself."
+        ),
+    )
     # ``None`` / empty string → inherit user default. Mirrors ADR-010
     # semantics, scoped down to cron triggers only.
-    timezone: str | None = None
+    timezone: str | None = Field(
+        default=None,
+        description=(
+            "IANA timezone name (e.g. 'Asia/Shanghai', 'America/New_York'). "
+            "REQUIRED for cron: take the user's timezone from the per-turn "
+            "'Current time' context line and pass it verbatim; never invent "
+            "one and never default to UTC on your own."
+        ),
+    )
 
 
 class IntervalTrigger(BaseModel):
@@ -36,7 +51,13 @@ class IntervalTrigger(BaseModel):
     # Floor at 30s (tick interval). The DB CheckConstraint enforces the
     # same; the Pydantic guard fails fast with a friendly 422 before the
     # row gets anywhere near the engine.
-    seconds: int = Field(ge=MIN_INTERVAL_SECONDS)
+    seconds: int = Field(
+        ge=MIN_INTERVAL_SECONDS,
+        description=(
+            "Interval in seconds between fires (minimum 30). Use for "
+            "'every N minutes/seconds' schedules, NOT for clock-time ones."
+        ),
+    )
 
 
 class ManualTrigger(BaseModel):
@@ -311,9 +332,25 @@ class AutomationToolPayload(BaseModel):
     action: str = Field(
         description="One of: create, get, list, update, pause, resume, run, remove.",
     )
-    automation_id: str | None = None
-    name: str | None = Field(default=None, max_length=50)
-    prompt_template: str | None = None
+    automation_id: str | None = Field(
+        default=None,
+        description=(
+            "Automation id — required for get/update/pause/resume/run/remove; "
+            "obtain one from a prior list."
+        ),
+    )
+    name: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Display name (required on create).",
+    )
+    prompt_template: str | None = Field(
+        default=None,
+        description=(
+            "The instruction the agent receives on every fire (required on "
+            "create unless playbook_definition_id is set)."
+        ),
+    )
     # ``run`` only: extra text appended to the automation's instruction for THIS
     # run (e.g. a discovered task id). Ignored by the other actions.
     input: str | None = Field(
@@ -324,20 +361,66 @@ class AutomationToolPayload(BaseModel):
             "saved automation."
         ),
     )
-    trigger: Trigger | None = None
-    agent_slug: str | None = None
+    trigger: Trigger | None = Field(
+        default=None,
+        description=(
+            "Discriminated trigger — REQUIRED on create. One of "
+            "{kind: 'cron', cron_expr, timezone} / {kind: 'interval', seconds} / "
+            "{kind: 'manual'}."
+        ),
+    )
+    agent_slug: str | None = Field(
+        default=None,
+        description=(
+            "CONTEXT-DEPENDENT — do not treat as universally required. Chat / "
+            "quick conversation (no project): OPTIONAL, omit and the automation "
+            "runs as the agent you are currently talking to. Project session: "
+            "REQUIRED and must be a project team member — call list_members "
+            "first to see candidates. Do NOT invent slugs."
+        ),
+    )
     # Execution mode on create. ``chat`` (default) runs the bound agent once;
     # ``task`` kicks off a project task with the bound agent as Lead — only
     # valid from a PROJECT session (the tool rejects ``task`` in a chat).
-    action_kind: str | None = None
+    action_kind: Literal["chat", "task"] | None = Field(
+        default=None,
+        description=(
+            "'chat' (default) runs the bound agent once per fire; 'task' kicks "
+            "off a full project task with the bound agent as the Lead — ONLY "
+            "valid in a PROJECT session; omit it / use 'chat' in a chat."
+        ),
+    )
     # create/update, both action kinds: run each fire in an isolated git
     # worktree of the project repo. ``chat`` isolates the single session;
     # ``task`` isolates the whole task (lead + every member). Requires the
     # project to be a git repository (silently dropped otherwise).
-    worktree: bool | None = None
-    playbook_definition_id: str | None = Field(default=None, max_length=36)
-    playbook_version: int | None = Field(default=None, ge=1)
-    scope: str | None = Field(
+    worktree: bool | None = Field(
+        default=None,
+        description=(
+            "Optional (create/update): true runs each fire in an isolated git "
+            "worktree of the project repo. Only meaningful for git-repo "
+            "projects (silently ignored for chat-only projects). Default false."
+        ),
+    )
+    playbook_definition_id: str | None = Field(
+        default=None,
+        max_length=36,
+        description=(
+            "Optional immutable Playbook pin (action_kind must be 'chat'). "
+            "When set, playbook_version may be omitted — the current version "
+            "is pinned at create time."
+        ),
+    )
+    playbook_version: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Exact immutable Playbook version to pin. Only meaningful together "
+            "with playbook_definition_id; omit to pin the Definition's current "
+            "version."
+        ),
+    )
+    scope: Literal["all", "this"] | None = Field(
         default=None,
         description=(
             "`this` = current project only; `all` = entire user library "

@@ -35,7 +35,12 @@ from valuz_agent.modules.agents.datastore import (
     ProjectMemberDatastore,
 )
 from valuz_agent.modules.agents.service import AgentService
-from valuz_agent.modules.automations.cron_utils import DEFAULT_LOCALE, CronInterpreter
+from valuz_agent.modules.agents.slug import derive_slug
+from valuz_agent.modules.automations.cron_utils import (
+    DEFAULT_LOCALE,
+    CronInterpreter,
+    UnknownTimeZoneError,
+)
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.automations.errors import (
     AgentNotFound,
@@ -54,6 +59,7 @@ from valuz_agent.modules.automations.errors import (
     AutomationTaskOnlyOnProject,
     IntervalTooShort,
     InvalidCronExpression,
+    InvalidTimeZone,
 )
 from valuz_agent.modules.automations.models import (
     AutomationRow,
@@ -236,7 +242,12 @@ class AutomationService:
         """
         if isinstance(trigger, CronTrigger):
             tz = self._effective_tz_for(trigger.timezone)
-            valid, _, _, err_msg = self._cron.validate(trigger.cron_expr, tz)
+            try:
+                valid, _, _, err_msg = self._cron.validate(trigger.cron_expr, tz)
+            except UnknownTimeZoneError:
+                # Non-IANA names (Windows display names, typos) are a
+                # validation failure, not a crash — 422, never a 500.
+                raise InvalidTimeZone() from None
             if not valid:
                 raise InvalidCronExpression(err_msg)
         elif isinstance(trigger, IntervalTrigger):
@@ -601,7 +612,15 @@ class AutomationService:
             # Derive a project-local slug. We hash a short prefix on so the
             # user can have N automations sharing the same source agent in
             # the same project without slug collisions.
-            instance_slug = f"{payload.agent_slug}-{uuid4().hex[:8]}"
+            #
+            # The prefix is DERIVED from the agent's display name
+            # (``derive_slug`` — ASCII-only, CJK dropped) rather than taken
+            # from the source slug verbatim: legacy library agents can carry
+            # non-ASCII slugs (created before the ASCII-slug rule landed),
+            # and ``f"{raw_slug}-{hex}"`` would keep the CJK and be rejected
+            # by ``deploy_agent``'s ``is_valid_slug`` — an uncaught 500 on
+            # every automation create for those agents.
+            instance_slug = f"{derive_slug(source.name)}-{uuid4().hex[:8]}"
             # ``dedupe=False``: each automation gets its own member handle even
             # when several reference the same source agent in this project.
             await self._agent_svc.deploy_agent(
@@ -933,7 +952,10 @@ class AutomationService:
             raise IntervalTooShort()
         if row.trigger_kind == "cron":
             tz = self._effective_tz_for(row.timezone)
-            valid, _, _, err_msg = self._cron.validate(row.cron_expr or "", tz)
+            try:
+                valid, _, _, err_msg = self._cron.validate(row.cron_expr or "", tz)
+            except UnknownTimeZoneError:
+                raise InvalidTimeZone() from None
             if not valid:
                 raise InvalidCronExpression(err_msg)
         if not row.name.strip():
@@ -1272,9 +1294,12 @@ class AutomationService:
 
     def validate_cron(self, expr: str, timezone: str | None = None) -> CronValidationResultResponse:
         tz = self._effective_tz_for(timezone)
-        valid, human_readable, next_runs, error_message = self._cron.validate(
-            expr, tz, locale=self._locale
-        )
+        try:
+            valid, human_readable, next_runs, error_message = self._cron.validate(
+                expr, tz, locale=self._locale
+            )
+        except UnknownTimeZoneError:
+            raise InvalidTimeZone() from None
         return CronValidationResultResponse(
             valid=valid,
             human_readable=human_readable,

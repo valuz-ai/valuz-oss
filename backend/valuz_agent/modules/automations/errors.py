@@ -68,6 +68,15 @@ class InvalidCronExpression(UnprocessableEntityError):
     message = "Invalid cron expression"
 
 
+class InvalidTimeZone(UnprocessableEntityError):
+    """The cron trigger's timezone isn't a valid IANA name (a Windows
+    display name like ``马来西亚半岛标准时间`` or a typo). Raised instead of
+    letting ``pytz.timezone`` crash the request into a 500."""
+
+    error_code = 422_719
+    message = "Invalid timezone"
+
+
 class IntervalTooShort(UnprocessableEntityError):
     """Interval triggers floor at 30s — the runner tick is 30s, anything
     smaller would alias against the tick and fire unpredictably."""

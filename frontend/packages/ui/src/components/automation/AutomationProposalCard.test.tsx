@@ -99,4 +99,42 @@ describe("AutomationProposalCard", () => {
     expect(card?.classList.contains("border-success/40")).toBe(true);
     expect(card?.classList.contains("bg-success/5")).toBe(true);
   });
+
+  it("offers no confirm button while the server has not validated the proposal", () => {
+    render(
+      <AutomationProposalCard
+        name="每日市场跟踪"
+        actionKind="chat"
+        state="pending"
+        submittable={false}
+        onConfirm={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "automation.actionCreate" }),
+    ).toBeNull();
+    // Dismiss stays available — the card is client-side only.
+    expect(
+      screen.getByRole("button", { name: "common.cancel" }),
+    ).toBeTruthy();
+  });
+
+  it("shows the confirm button once the server validated the proposal", () => {
+    render(
+      <AutomationProposalCard
+        name="每日市场跟踪"
+        actionKind="chat"
+        state="pending"
+        submittable={true}
+        onConfirm={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "automation.actionCreate" }),
+    ).toBeTruthy();
+  });
 });
