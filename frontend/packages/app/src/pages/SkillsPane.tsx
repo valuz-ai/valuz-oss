@@ -15,6 +15,7 @@ import {
   skillsApi,
   useResourceCategories,
   useResourceGuard,
+  useRegistryStore,
   useTranslation,
 } from "@valuz/core";
 import type {
@@ -28,6 +29,8 @@ import { SkillAddDialog } from "@valuz/app/components";
 import {
   ResourceActionSlot,
   ResourceCloudDetailSlot,
+  ResourceCopyMenuItemSlot,
+  ResourceDetailActionSlot,
 } from "../components/ResourceActionSlot";
 import { isCloudOnlyResource } from "./agent-list-state";
 
@@ -172,6 +175,9 @@ export function SkillsPane({
   onAddModeChange: (mode: SkillAddMode) => void;
 }) {
   const { t } = useTranslation();
+  const hasCopyMenuItems = useRegistryStore(
+    (state) => (state.slots["resource.skill.copy.menu-items"]?.length ?? 0) > 0,
+  );
   const navigate = useNavigate();
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -500,6 +506,20 @@ export function SkillsPane({
             }
             onDelete={canDeleteSkill ? handleDeleteOpen : undefined}
             onCopy={handleCopy}
+            copyMenuItems={
+              hasCopyMenuItems ? (
+                <ResourceCopyMenuItemSlot
+                  resourceType="skill"
+                  resource={currentSkill as unknown as Record<string, unknown>}
+                />
+              ) : undefined
+            }
+            headerActions={
+              <ResourceDetailActionSlot
+                resourceType="skill"
+                resource={currentSkill as unknown as Record<string, unknown>}
+              />
+            }
           />
         ) : (
           <div className="flex justify-center pt-24">

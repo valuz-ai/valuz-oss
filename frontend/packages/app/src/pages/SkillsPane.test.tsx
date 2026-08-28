@@ -6,6 +6,8 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useEffect } from "react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
@@ -38,6 +40,41 @@ const organizationSkill = {
   },
 } as unknown as SkillView;
 
+function TestCopyRegistrationGate(props: Record<string, unknown>) {
+  const resource = props.resource as Record<string, unknown> | undefined;
+  useEffect(() => {
+    const store = useRegistryStore.getState();
+    const unregisterUpload = store.registerSlot(
+      "resource.skill.copy.menu-items",
+      {
+        id: "test-upload-to-organization",
+        component: ({ resource: target }) => (
+          <div role="menuitem">
+            Upload {String((target as SkillView).name)} to organization
+          </div>
+        ),
+      },
+    );
+    const unregisterCopy = store.registerSlot(
+      "resource.skill.copy.menu-items",
+      {
+        id: "test-copy-to-organizations",
+        component: ({ resource: target }) => (
+          <div role="menuitem">
+            Copy {String((target as SkillView).name)} to other organizations
+          </div>
+        ),
+      },
+    );
+    return () => {
+      unregisterCopy();
+      unregisterUpload();
+    };
+  }, [resource]);
+
+  return null;
+}
+
 describe("SkillsPane extension slots", () => {
   beforeEach(() => {
     initI18n({ locale: "en-US", fallbackLocale: "en-US" });
@@ -56,6 +93,24 @@ describe("SkillsPane extension slots", () => {
       useRegistryStore
         .getState()
         .unregisterSlot("resource.skill.cloud-detail", "test-cloud-detail");
+      useRegistryStore
+        .getState()
+        .unregisterSlot(
+          "resource.skill.copy.menu-items",
+          "test-upload-to-organization",
+        );
+      useRegistryStore
+        .getState()
+        .unregisterSlot(
+          "resource.skill.copy.menu-items",
+          "test-copy-to-organizations",
+        );
+      useRegistryStore
+        .getState()
+        .unregisterSlot(
+          "resource.skill.detail.actions",
+          "test-copy-registration-gate",
+        );
       useCategoryRegistry.getState().remove("skill");
     });
     vi.restoreAllMocks();
@@ -81,6 +136,60 @@ describe("SkillsPane extension slots", () => {
 
     expect(
       await screen.findByRole("button", { name: "Download team-research" }),
+    ).toBeTruthy();
+  });
+
+  it("renders edition copy actions for a local skill", async () => {
+    const user = userEvent.setup();
+    const localSkill = {
+      ...organizationSkill,
+      id: "local-skill",
+      slug: "local-skill",
+      name: "Local Skill",
+      path: "/tmp/local-skill",
+      readonly: false,
+      deletable: true,
+      _sync: undefined,
+    } as unknown as SkillView;
+    vi.mocked(skillsApi.list).mockResolvedValue({
+      project_id: "chat-default",
+      skills: [localSkill],
+    });
+    act(() => {
+      useRegistryStore
+        .getState()
+        .registerSlot("resource.skill.detail.actions", {
+          id: "test-copy-registration-gate",
+          component: TestCopyRegistrationGate,
+        });
+    });
+
+    render(
+      <MemoryRouter>
+        <SkillsPane query="" addMode={null} onAddModeChange={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText("Local Skill");
+    await waitFor(() => {
+      expect(
+        useRegistryStore.getState().slots[
+          "resource.skill.copy.menu-items"
+        ],
+      ).toHaveLength(2);
+    });
+
+    await user.click(screen.getByRole("button", { name: "Copy as custom" }));
+
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Upload Local Skill to organization",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Copy Local Skill to other organizations",
+      }),
     ).toBeTruthy();
   });
 
