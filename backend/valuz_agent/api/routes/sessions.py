@@ -846,15 +846,31 @@ async def _bind_staged_attachments(
     staging area; after it, it belongs to a conversation and shows up in that
     session's attachment list.
 
-    Silent about ids it could not bind. They are the replay cases — a resent
-    turn, a stale composer — and the rows are already where they belong, so
-    refusing the message would fail a turn over bookkeeping the person cannot
-    see or fix. ``bind_attachments`` only touches unbound rows, so a replay
-    cannot move a file out of the conversation that already has it.
+    Still silent-as-in-does-not-fail about ids it could not bind: refusing the
+    message would fail a turn over bookkeeping the person cannot see or fix,
+    and ``bind_attachments`` only touches unbound rows, so a replay cannot
+    move a file out of the conversation that already has it.
+
+    It is NOT silent in the log any more. A turn that names ids none of which
+    bind looks, from the outside, exactly like a turn that named nothing — the
+    person sees a message with no file — but only the second case was logged.
+    Observed on qa: an upload whose parse had finished a minute earlier stayed
+    unbound while the turn that meant to carry it went out, and the absent
+    warning was the only thing we could say for certain, which was not enough
+    to name a cause. So account for every named id.
+
+    Replays are the expected miss and stay quiet: an id already bound to THIS
+    session is the resend case. What gets logged is an id this owner has no row
+    for, or one that belongs to a DIFFERENT session — the two shapes a client
+    naming the wrong thing can take. The owner's still-unbound set rides along,
+    because "the file is sitting right there under another id" is the answer we
+    could not get last time.
     """
     store = SessionDatastore(db)
     if attachment_ids:
-        await store.bind_attachments(user_id, attachment_ids, session_id)
+        bound = await store.bind_attachments(user_id, attachment_ids, session_id)
+        if len(bound) != len(attachment_ids):
+            await _log_unbindable_attachments(store, user_id, session_id, attachment_ids)
         return
 
     # No list. Almost always right — most turns are plain text — but it is also
@@ -875,6 +891,42 @@ async def _bind_staged_attachments(
             session_id,
             len(staged),
         )
+
+
+async def _log_unbindable_attachments(
+    store: SessionDatastore,
+    user_id: str,
+    session_id: str,
+    attachment_ids: list[str],
+) -> None:
+    """Explain a turn whose named attachments did not all bind.
+
+    Called only off the miss path, so the extra reads cost nothing on a normal
+    turn. Logs ids, never filenames: an id is opaque, a filename is the
+    person's content.
+    """
+    rows = {r.id: r for r in await store.get_attachments(user_id, attachment_ids)}
+    unknown = [a for a in attachment_ids if a not in rows]
+    elsewhere = [
+        a for a, r in rows.items() if r.session_id is not None and r.session_id != session_id
+    ]
+    if not unknown and not elsewhere:
+        # Every miss was an id already on this session — a resend. Expected.
+        return
+    staged = await store.list_unbound_attachments(user_id)
+    logger.warning(
+        "turn on session %s named %d attachment(s) but %d did not bind: "
+        "unknown-to-this-owner=%s bound-to-another-session=%s; this owner has "
+        "%d file(s) still staged and unbound (ids=%s) — a client naming stale "
+        "or foreign ids leaves the file the person attached sitting there",
+        session_id,
+        len(attachment_ids),
+        len(unknown) + len(elsewhere),
+        unknown,
+        elsewhere,
+        len(staged),
+        [r.id for r in staged[:10]],
+    )
 
 
 async def _enforce_staging_quota(db: AsyncSession, user_id: str) -> None:
@@ -1104,9 +1156,7 @@ def _is_runtime_native(path: str) -> bool:
     return Path(path).suffix.lower() in _RUNTIME_NATIVE_EXTS
 
 
-def _spawn_attachment_parse(
-    attachment_id: str, source: str, base_name: str, user_id: str
-) -> None:
+def _spawn_attachment_parse(attachment_id: str, source: str, base_name: str, user_id: str) -> None:
     """Parse ``source_path`` through the CONFIGURED parser and persist it.
 
     Fire-and-forget: the upload route has already returned the row as
