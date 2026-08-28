@@ -596,7 +596,8 @@
     "forked": "已 Fork 出新会话",
     "forkFailed": "Fork 失败,请重试",
     "forkConflict": "无法从此处 Fork(该消息缺少 Fork 锚点或会话正在运行)",
-    "forkedFrom": "Fork 来源"
+    "forkedFrom": "Fork 来源",
+    "attachmentsClearedOnSwitch": "已切换服务，原有附件已清除——附件只存在于上传时所选的服务上，请重新上传。"
   },
   "cron": {
     "actionColumn": "操作",

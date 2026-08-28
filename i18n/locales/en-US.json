@@ -596,7 +596,8 @@
     "forked": "Forked into a new session",
     "forkFailed": "Fork failed, please retry",
     "forkConflict": "Cannot fork here (no fork anchor on this message, or the session is running)",
-    "forkedFrom": "Forked from"
+    "forkedFrom": "Forked from",
+    "attachmentsClearedOnSwitch": "Service switched, attachments cleared — a staged file only exists on the service it was uploaded to. Please attach it again."
   },
   "cron": {
     "actionColumn": "Actions",
