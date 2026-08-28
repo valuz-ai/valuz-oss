@@ -13,6 +13,8 @@ instead.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -158,6 +160,70 @@ async def test_a_turn_with_no_attachments_binds_nothing(db) -> None:  # type: ig
         await _bind_staged_attachments(conn, OWNER, "sess-1", None)
 
     assert (await _row(staged)).session_id is None
+
+
+# ── accounting for named ids that did not bind ───────────────────────────
+#
+# The failure these pin is invisible from the outside: a turn that names ids
+# none of which bind produces the same empty message as one that named
+# nothing, and only the second was ever logged. Observed on qa, where an
+# upload that had finished parsing a minute earlier stayed unbound.
+
+
+@pytest.mark.asyncio
+async def test_an_id_this_owner_has_no_row_for_is_reported(db, caplog) -> None:  # type: ignore[no-untyped-def]
+    """The shape a stale or foreign client id takes. The owner's own staged
+    file is named in the log too — "it is sitting right there under another
+    id" is the thing we could not tell last time."""
+    staged = await _stage(OWNER, "the-file-the-person-attached.png")
+
+    with caplog.at_level(logging.WARNING, logger="valuz_agent.api.routes.sessions"):
+        async with async_unit_of_work() as conn:
+            await _bind_staged_attachments(conn, OWNER, "sess-1", ["not-a-real-id"])
+
+    assert "not-a-real-id" in caplog.text
+    assert staged in caplog.text
+    assert (await _row(staged)).session_id is None
+
+
+@pytest.mark.asyncio
+async def test_an_id_owned_by_another_conversation_is_reported(db, caplog) -> None:  # type: ignore[no-untyped-def]
+    a = await _stage(OWNER, "a.png")
+    async with async_unit_of_work() as conn:
+        await _bind_staged_attachments(conn, OWNER, "sess-1", [a])
+
+    with caplog.at_level(logging.WARNING, logger="valuz_agent.api.routes.sessions"):
+        async with async_unit_of_work() as conn:
+            await _bind_staged_attachments(conn, OWNER, "sess-2", [a])
+
+    assert "bound-to-another-session" in caplog.text
+    assert a in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_resend_of_this_sessions_own_ids_stays_quiet(db, caplog) -> None:  # type: ignore[no-untyped-def]
+    """The expected miss. Logging it would bury the real one in noise."""
+    a = await _stage(OWNER, "a.png")
+    async with async_unit_of_work() as conn:
+        await _bind_staged_attachments(conn, OWNER, "sess-1", [a])
+
+    with caplog.at_level(logging.WARNING, logger="valuz_agent.api.routes.sessions"):
+        async with async_unit_of_work() as conn:
+            await _bind_staged_attachments(conn, OWNER, "sess-1", [a])
+
+    assert caplog.text == ""
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_ids_all_bind_logs_nothing(db, caplog) -> None:  # type: ignore[no-untyped-def]
+    a = await _stage(OWNER, "a.png")
+
+    with caplog.at_level(logging.WARNING, logger="valuz_agent.api.routes.sessions"):
+        async with async_unit_of_work() as conn:
+            await _bind_staged_attachments(conn, OWNER, "sess-1", [a])
+
+    assert caplog.text == ""
+    assert (await _row(a)).session_id == "sess-1"
 
 
 # ── the staging quota ────────────────────────────────────────────────────
