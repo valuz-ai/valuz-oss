@@ -21,12 +21,15 @@ import (
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 )
 
-// Control-plane identity endpoints (mounted under the cloud prefix).
+// Control-plane identity endpoints (mounted under the cloud prefix; the
+// server exposes them at /v1/auth/*, see services/valuz-server
+// app/api/identity.py).
 const (
-	loginEndpoint   = "/identity/login"
-	refreshEndpoint = "/identity/refresh"
-	revokeEndpoint  = "/identity/revoke"
-	meEndpoint      = "/identity/me"
+	loginEndpoint   = "/v1/auth/login"
+	refreshEndpoint = "/v1/auth/refresh"
+	revokeEndpoint  = "/v1/auth/revoke"
+	apiKeyEndpoint  = "/v1/auth/token"
+	meEndpoint      = "/v1/auth/me"
 )
 
 // Principal is the token's identity summary.
@@ -131,25 +134,23 @@ func (s *Store) Clear() error {
 	return nil
 }
 
-// Client talks to the control-plane identity endpoints.
+// Client talks to the control-plane identity endpoints. The control
+// client's base URL already carries the /cloud prefix; endpoint paths are
+// appended once.
 type Client struct {
-	BaseURL string // cloud base URL including the /cloud prefix
-	HTTP    *backend.ControlClient
+	HTTP *backend.ControlClient
 }
 
 // NewClient builds an identity client against cloudBaseURL.
 func NewClient(cloudBaseURL string) *Client {
-	return &Client{
-		BaseURL: cloudBaseURL,
-		HTTP:    backend.NewControlClient(cloudBaseURL, ""),
-	}
+	return &Client{HTTP: backend.NewControlClient(cloudBaseURL, "")}
 }
 
 // Login exchanges email+password for a token pair.
 func (c *Client) Login(email, password, clientID, resource string) (*TokenPair, error) {
 	req := LoginRequest{Email: email, Password: password, ClientID: clientID, Resource: resource}
 	var pair tokenPairWire
-	if err := c.HTTP.Post(context.Background(), c.BaseURL+loginEndpoint, req, &pair); err != nil {
+	if err := c.HTTP.Post(context.Background(), loginEndpoint, req, &pair); err != nil {
 		return nil, err
 	}
 	return pair.toPair(), nil
@@ -158,7 +159,7 @@ func (c *Client) Login(email, password, clientID, resource string) (*TokenPair, 
 // LoginWithAPIKey exchanges a vzp_ personal key for a token pair.
 func (c *Client) LoginWithAPIKey(apiKey string) (*TokenPair, error) {
 	var pair tokenPairWire
-	if err := c.HTTP.Post(context.Background(), c.BaseURL+"/identity/token", ApiKeyRequest{APIKey: apiKey}, &pair); err != nil {
+	if err := c.HTTP.Post(context.Background(), apiKeyEndpoint, ApiKeyRequest{APIKey: apiKey}, &pair); err != nil {
 		return nil, err
 	}
 	return pair.toPair(), nil
@@ -168,7 +169,7 @@ func (c *Client) LoginWithAPIKey(apiKey string) (*TokenPair, error) {
 func (c *Client) Refresh(refreshToken string) (*TokenPair, error) {
 	req := map[string]string{"refresh_token": refreshToken}
 	var pair tokenPairWire
-	if err := c.HTTP.Post(context.Background(), c.BaseURL+refreshEndpoint, req, &pair); err != nil {
+	if err := c.HTTP.Post(context.Background(), refreshEndpoint, req, &pair); err != nil {
 		return nil, err
 	}
 	return pair.toPair(), nil
@@ -177,7 +178,7 @@ func (c *Client) Refresh(refreshToken string) (*TokenPair, error) {
 // Revoke invalidates the stored refresh token.
 func (c *Client) Revoke(refreshToken string) error {
 	req := map[string]string{"refresh_token": refreshToken}
-	return c.HTTP.Post(context.Background(), c.BaseURL+revokeEndpoint, req, nil)
+	return c.HTTP.Post(context.Background(), revokeEndpoint, req, nil)
 }
 
 // tokenPairWire mirrors the wire shape with a numeric expires_in.

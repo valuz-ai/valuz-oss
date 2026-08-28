@@ -55,11 +55,13 @@ func NewProfileStore(dir string) *ProfileStore {
 
 // Load reads a profile by name. A missing file yields a zero Profile with
 // the name set (never an error), so the default profile is always usable.
+// An empty name resolves to the implicit "default" profile, keeping
+// Load/Save symmetric (Save already maps "" to "default").
 func (s *ProfileStore) Load(name string) (*Profile, error) {
-	p := &Profile{Name: name}
 	if name == "" {
-		return p, nil
+		name = "default"
 	}
+	p := &Profile{Name: name}
 	path := s.path(name)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -78,9 +80,10 @@ func (s *ProfileStore) Load(name string) (*Profile, error) {
 // Save writes the profile atomically (temp + rename) with owner-only
 // permissions. Profile contents are non-sensitive today, but 0600 is cheap
 // insurance against accidentally staging a future credential field.
+// An empty name resolves to the implicit "default" profile.
 func (s *ProfileStore) Save(p *Profile) error {
 	if p.Name == "" {
-		return errors.New("profile name is required")
+		p.Name = "default"
 	}
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("create profile dir: %w", err)

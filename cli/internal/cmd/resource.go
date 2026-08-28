@@ -22,6 +22,7 @@ func newResourceCmd() *cobra.Command {
 		newResourceAgentShowCmd(),
 		newResourceSkillsCmd(),
 		newResourceConnectorsCmd(),
+		newAgentUseCmd(),
 	)
 	return cmd
 }

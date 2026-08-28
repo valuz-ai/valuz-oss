@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/config"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/output"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/runner"
@@ -77,9 +78,37 @@ func newRunCmd() *cobra.Command {
 			defer sink.Close()
 
 			human := outputFormat == "" || outputFormat == "human"
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			// Run-path defaults: flag > env > profile (model use / agent
+			// use / env-based runtime pinning). When an agent is bound
+			// (flag or profile), runtime/model/provider derive from the
+			// agent's brain (ADR-006) — profile model defaults only apply
+			// on the classic model-picker path.
+			profile, err := opts.ResolveProfile()
+			if err != nil {
+				return err
+			}
+			resolver := config.NewResolver(profile)
+			if agentSlug == "" {
+				agentSlug = resolver.String("RUN_AGENT_SLUG", "", "")
+			}
+			if agentSlug == "" {
+				if modelID == "" {
+					modelID = resolver.String("DEFAULT_MODEL", "", "")
+				}
+				if providerID == "" {
+					providerID = resolver.String("RUN_PROVIDER_ID", "", "")
+				}
+				if runtimeID == "" {
+					runtimeID = resolver.String("DEFAULT_RUNTIME", "", "")
+				}
+			}
 			r := runner.New(
-				backend.NewControlClient(opts.BackendURL, bearerToken(opts)),
-				backend.NewStreamClient(opts.BackendURL, bearerToken(opts)),
+				backend.NewControlClient(opts.BackendURL, token),
+				backend.NewStreamClient(opts.BackendURL, token),
 				humanWriter(cmd, human),
 			)
 			res, err := r.Run(runCtx, runner.Options{

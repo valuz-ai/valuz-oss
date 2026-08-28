@@ -111,6 +111,9 @@ func Root() *cobra.Command {
 		newActivityCmd(),
 		newResourceCmd(),
 		newAuthCmd(),
+		newEnvCmd(),
+		newModelCmd(),
+		newAgentCmd(),
 	)
 	return root
 }
