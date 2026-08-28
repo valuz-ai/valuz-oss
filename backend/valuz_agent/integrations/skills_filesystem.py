@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from valuz_agent.infra.config import settings
+from valuz_agent.infra.frontmatter import split_frontmatter
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest
 
@@ -125,23 +126,12 @@ def _extract_frontmatter(raw: str) -> tuple[dict[str, object], str]:
     frontmatter that doesn't parse as YAML at all, so malformed manifests
     still degrade softly instead of dropping their metadata.
     """
-    # Normalize line endings first: a CRLF manifest (skills authored on
-    # Windows, or repackaged by a tool that rewrites newlines) starts with
-    # ``---\r\n``, which failed the delimiter check below. The whole file then
-    # became the body and the summary fallback surfaced the literal ``---``
-    # delimiter as the skill's description — 30 installed skills showed "---"
-    # in the library before this. yaml.safe_load handles \n fine either way.
-    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
-
-    if not raw.startswith("---\n"):
-        return {}, raw
-
-    closing = raw.find("\n---\n", 4)
-    if closing < 0:
-        return {}, raw
-
-    meta_block = raw[4:closing]
-    body = raw[closing + 5 :]
+    # Where the block starts and ends is ``infra.frontmatter``'s job — the CRLF
+    # handling that used to live here is shared with every other reader and
+    # writer now, because each of them had its own copy and they disagreed.
+    meta_block, body = split_frontmatter(raw)
+    if meta_block is None:
+        return {}, body
 
     try:
         parsed_yaml = yaml.safe_load(meta_block)
@@ -260,9 +250,7 @@ def _discover_roots(ctx: RuntimeContext) -> list[tuple[str, Path, str]]:
         # VALUZ_USER_SKILLS_DIR is a custom write target. This keeps local OSS
         # and commercial discovery consistent: configured root + ~/.agents +
         # ~/.claude + ~/.codex.
-        _append_scan_root(
-            roots, seen, "user", Path.home() / ".agents" / "skills", "valuz"
-        )
+        _append_scan_root(roots, seen, "user", Path.home() / ".agents" / "skills", "valuz")
 
         # The leaf-and-parent shape check below maps each compatibility root to
         # the right source label, which drives the .claude / .codex top-level

@@ -1,14 +1,7 @@
 ---
-name: "browser"
-description: "---"
-tags: ["research"]
----
-
-# browser
-
----
 name: browser
 description: Drive a real, visible Chrome to navigate, read, click and type on web pages — for live sites, logged-in pages, and anything that needs a browser. Use when the task requires opening or interacting with a web page.
+tags: ["research"]
 ---
 
 # Browser

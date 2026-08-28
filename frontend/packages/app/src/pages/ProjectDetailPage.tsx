@@ -65,11 +65,7 @@ import { useProjectOutlet } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import { RUNTIME_DISPLAY_NAME, memoryApi, useTranslation } from "@valuz/core";
-import {
-  libraryEnabledSkillItems,
-  resolveAgentSkillItems,
-  type AgentSkillItem,
-} from "../lib/agent-skill-items";
+import { useAgentEffectiveSkills } from "../hooks/use-agent-effective-skills";
 import { toFileTree } from "../lib/file-tree";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
@@ -517,24 +513,18 @@ export const ProjectDetailPage = () => {
   // Active agent = the remembered pick for the current mode. Switching mode
   // swaps the agent to that mode's memory (Chat agent ↔ last Lead).
   const selectedAgentSlug = agentByMode[composerMode];
-  // The selected member agent's skills — the draft composer's ``/`` list.
-  // Projects can't attach skills ad-hoc, so ``/`` surfaces exactly that agent's
-  // skills (resolved to display names via the project skill catalog).
-  //
-  // An ``all_available`` agent (Valurion) is the exception: it binds nothing
-  // and receives the owner's live library at session-creation time, so its
-  // picker comes from the catalog rather than from an array that is empty by
-  // design. Same rule as the conversation composer (``useComposerConfig``).
-  const selectedAgentSkillItems = useMemo<AgentSkillItem[]>(() => {
-    if (!selectedAgentSlug) return [];
-    const agent = rawMembers.find(
-      (m) => m.member.agent_slug === selectedAgentSlug,
-    )?.agent;
-    if (agent?.resource_policy === "all_available") {
-      return libraryEnabledSkillItems(skillCatalog);
-    }
-    return resolveAgentSkillItems(agent?.skills, [skillCatalog]);
-  }, [selectedAgentSlug, rawMembers, skillCatalog]);
+  // The draft composer's ``/`` list: what a session for the selected member
+  // will ACTUALLY carry, asked of the backend that composes it rather than
+  // derived from the member's ``skills`` array (which is the bindings alone —
+  // no always-on baseline, and empty by design for an ``all_available`` agent).
+  const selectedAgentSkillItems = useAgentEffectiveSkills(
+    // Keyed by the LIBRARY slug; ``agent_slug`` is the project-local handle.
+    (selectedAgentSlug
+      ? rawMembers.find((m) => m.member.agent_slug === selectedAgentSlug)
+          ?.member.source_agent_slug
+      : null) ?? null,
+    skillCatalog,
+  );
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [connectors, setConnectors] = useState<ConnectorItem[]>([]);
