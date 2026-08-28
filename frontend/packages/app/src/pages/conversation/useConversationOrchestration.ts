@@ -607,9 +607,12 @@ export function useConversationOrchestration({
     // chat set to 云端服务 uploaded to the LOCAL backend, then named those ids
     // to the cloud one, which has no such rows and binds nothing (qa: the
     // file stayed staged and the message went out without it).
-    selectedProjectId
-      ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
-      : resolveExecTarget()?.baseUrl,
+    // A GETTER, not a value: the target can change while the composer is open
+    // and a render-time capture is the wrong backend the moment it does.
+    () =>
+      selectedProjectId
+        ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
+        : resolveExecTarget()?.baseUrl,
   );
   const {
     attachments: boundAttachments,

@@ -160,6 +160,52 @@ describe("useStagedAttachments", () => {
     expect(deleteAttachment).toHaveBeenCalledWith("srv1", { baseUrl: base });
   });
 
+  it("an upload after a switch goes to the NEW backend", async () => {
+    // The bug this pins, seen on qa: 本地服务 → attach → 云端服务 → attach.
+    // The chip read 云端服务 and the registry held the right cloud URL, but
+    // the POST still went to the local backend, because the base was captured
+    // at render. The turn then named an id the cloud backend had never seen
+    // and the file vanished from the message with nothing logged anywhere.
+    let base: string | undefined = "http://local.example";
+    uploadAttachment.mockResolvedValue(row());
+    const { result, rerender } = renderHook(() =>
+      useStagedAttachments(() => base),
+    );
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+    expect(uploadAttachment).toHaveBeenLastCalledWith(expect.any(File), {
+      baseUrl: "http://local.example",
+    });
+
+    base = "https://cloud.example/agent";
+    rerender();
+    await act(async () => {
+      await result.current.attachLocalFiles([file("second.png")]);
+    });
+    expect(uploadAttachment).toHaveBeenLastCalledWith(expect.any(File), {
+      baseUrl: "https://cloud.example/agent",
+    });
+  });
+
+  it("resolves the base per call, not per render", async () => {
+    // Same guarantee without a re-render: whatever the caller answers at the
+    // moment of the upload is where the file goes.
+    let base = "http://first.example";
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments(() => base));
+
+    base = "http://second.example";
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    expect(uploadAttachment).toHaveBeenLastCalledWith(expect.any(File), {
+      baseUrl: "http://second.example",
+    });
+  });
+
   it("discarding nothing touches no backend", async () => {
     const { result } = renderHook(() => useStagedAttachments());
     await act(async () => {

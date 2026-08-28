@@ -123,10 +123,35 @@ export function useStagedAttachments(
    * Where uploads and reads go. There is no session to route on, so the caller
    * names the backend — the same one its turn will run on. Omitted → the
    * module default.
+   *
+   * Prefer the FUNCTION form on any surface where the answer can change while
+   * the composer is open (an execution-target switch): it is called at the
+   * moment of each request, so an upload cannot land on a backend the person
+   * has already switched away from. The string form snapshots at render, which
+   * is only safe when the backend is fixed for the component's lifetime.
+   * Observed on qa with the string form: 云端服务 selected and the chip still
+   * reading 云端服务, yet the POST went to the local backend — the turn then
+   * named an id the cloud backend had never seen and the file was silently
+   * dropped from the message.
    */
-  baseUrl?: string,
+  baseUrl?: string | (() => string | undefined),
 ): UseStagedAttachmentsResult {
-  const opts = useMemo(() => (baseUrl ? { baseUrl } : undefined), [baseUrl]);
+  // Resolved per call. ``baseUrl`` is read through a ref so a caller passing an
+  // inline arrow does not invalidate every callback on every render.
+  const baseRef = useRef(baseUrl);
+  baseRef.current = baseUrl;
+  const optsNow = useCallback((): { baseUrl: string } | undefined => {
+    const b = baseRef.current;
+    const resolved = typeof b === "function" ? b() : b;
+    return resolved ? { baseUrl: resolved } : undefined;
+  }, []);
+  // Render-time value, used ONLY to key the polling effect so a switch
+  // restarts it against the new backend. Requests never read this.
+  const renderBase = typeof baseUrl === "function" ? baseUrl() : baseUrl;
+  const opts = useMemo(
+    () => (renderBase ? { baseUrl: renderBase } : undefined),
+    [renderBase],
+  );
   const [attachments, setState] = useState<SessionAttachmentItem[]>([]);
   // Claimed, sent, not yet confirmed bound. Plain state: unlike the staged set
   // nothing reads this mid-await — it exists to be rendered.
@@ -206,12 +231,12 @@ export function useStagedAttachments(
 
       for (const [file, row] of staged) {
         try {
-          const item = await sessionsApi.uploadAttachment(file, opts);
+          const item = await sessionsApi.uploadAttachment(file, optsNow());
           if (removedRef.current.delete(row.id)) {
             // Removed while in flight. The upload could not be cancelled, so
             // undo it — otherwise a file the person watched themselves remove
             // would still ship with the turn.
-            void sessionsApi.deleteAttachment(item.id, opts).catch(() => {
+            void sessionsApi.deleteAttachment(item.id, optsNow()).catch(() => {
               /* best-effort; at worst an unreferenced file */
             });
             continue;
@@ -226,13 +251,13 @@ export function useStagedAttachments(
         }
       }
     },
-    [opts, write],
+    [optsNow, write],
   );
 
   const attachKbDocs = useCallback(
     async (docIds: string[]) => {
       if (docIds.length === 0) return;
-      const { items } = await sessionsApi.addKbAttachments(docIds, opts);
+      const { items } = await sessionsApi.addKbAttachments(docIds, optsNow());
       // The endpoint answers with the rows it just created, so every one of
       // them is this composer's.
       for (const r of items) mineRef.current.add(r.id);
@@ -252,12 +277,12 @@ export function useStagedAttachments(
         return;
       }
       try {
-        await sessionsApi.deleteAttachment(attachmentId, opts);
+        await sessionsApi.deleteAttachment(attachmentId, optsNow());
       } catch {
         /* best-effort */
       }
     },
-    [opts, write],
+    [optsNow, write],
   );
 
   const claim = useCallback((): SessionAttachmentItem[] => {
@@ -289,13 +314,13 @@ export function useStagedAttachments(
           return;
         }
         try {
-          await sessionsApi.deleteAttachment(a.id, opts);
+          await sessionsApi.deleteAttachment(a.id, optsNow());
         } catch {
           /* best-effort: the staging cap reclaims anything left behind */
         }
       }),
     );
-  }, [opts, write]);
+  }, [optsNow, write]);
 
   const adopt = useCallback((rows: SessionAttachmentItem[]) => {
     if (rows.length === 0) return;

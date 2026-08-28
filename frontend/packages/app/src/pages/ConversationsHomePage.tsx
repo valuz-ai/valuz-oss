@@ -132,8 +132,11 @@ export const ConversationsHomePage = () => {
     restage: restageAttachments,
     discard: discardAttachments,
   } = useStagedAttachments(
-    // The backend this chat will run on — see ProjectDetailPage.
-    resolveExecTarget()?.baseUrl,
+    // The backend this chat will run on — see ProjectDetailPage. Passed as a
+    // GETTER, not a value: the person can switch 本地/云端 with the composer
+    // open, and a value captured at render is the wrong answer the moment
+    // they do. Resolved when the upload actually happens.
+    () => resolveExecTarget()?.baseUrl,
   );
 
   // Observed origin of the minted quick-chat session — drives the locked
