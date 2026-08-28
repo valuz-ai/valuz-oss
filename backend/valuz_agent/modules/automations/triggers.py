@@ -26,8 +26,12 @@ Cron / interval differ in *what* "next" means:
 
 from __future__ import annotations
 
-from valuz_agent.modules.automations.cron_utils import CronInterpreter
+import logging
+
+from valuz_agent.modules.automations.cron_utils import CronInterpreter, UnknownTimeZoneError
 from valuz_agent.modules.automations.models import AutomationRow
+
+logger = logging.getLogger(__name__)
 
 # Hard floor for interval triggers. The tick is 30s; anything below that races
 # the tick and fires unpredictably. Server-side validation also enforces this,
@@ -72,7 +76,22 @@ class TriggerEvaluator:
                 # CheckConstraint should make this unreachable; tolerate it as
                 # a no-op rather than crash the tick loop.
                 return None
-            return self._cron.next_run(row.cron_expr, self._effective_tz_for(row), after)
+            try:
+                return self._cron.next_run(row.cron_expr, self._effective_tz_for(row), after)
+            except UnknownTimeZoneError:
+                # A legacy row (or default) holding a non-IANA timezone —
+                # the same value that create/update now reject with a typed
+                # 422. The READ path must not crash the tick loop or the
+                # startup scan: park the row (None = not tick-driven) and
+                # log, instead of burning the whole due-batch or re-firing
+                # every tick. The runner surfaces the same outcome through
+                # the automation run's error row.
+                logger.warning(
+                    "automation %s has an unresolvable timezone %r; parking it",
+                    row.id,
+                    self._effective_tz_for(row),
+                )
+                return None
 
         if row.trigger_kind == "interval":
             seconds = row.interval_seconds or MIN_INTERVAL_SECONDS

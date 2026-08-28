@@ -33,6 +33,19 @@ describe("parseAutomationToolOutput", () => {
     expect(parseAutomationToolOutput(wrapped)?.ok).toBe(true);
   });
 
+  it("keeps scanning past a non-object block to the real payload", () => {
+    // A text block whose JSON is valid but not an object ("prose", 42) must
+    // not short-circuit the scan — the payload block follows it.
+    const payload = { action: "create", ok: false, message: "nope" };
+    const wrapped = JSON.stringify([
+      { type: "text", text: '"interim prose"' },
+      { type: "text", text: JSON.stringify(payload) },
+    ]);
+    const result = parseAutomationToolOutput(wrapped);
+    expect(result?.ok).toBe(false);
+    expect(result?.message).toBe("nope");
+  });
+
   it("recovers the payload from a legacy Python-repr envelope", () => {
     // Older kernel output: ``[{'type': 'text', 'text': '{...}'}]`` — not
     // valid JSON (single quotes), so the scan fallback must find the object.

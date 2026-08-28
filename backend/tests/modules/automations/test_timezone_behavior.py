@@ -213,7 +213,9 @@ class TestInvalidTimeZone:
 
 class TestWindowsTimezoneDetection:
     """``detect_system_timezone`` must never return a non-IANA Windows
-    display name — the name that later crashed cron validation with a 500."""
+    display name — the name that later crashed cron validation with a 500.
+    Detection is the browser's job (``Intl`` is always IANA); the backend
+    fallback either trusts a validated ``TZ`` env var or returns UTC."""
 
     def _fake_now(self, tzname_value: str | None):  # type: ignore[no-untyped-def]
         """A ``datetime.now()`` whose ``astimezone().tzname()`` returns the
@@ -232,33 +234,56 @@ class TestWindowsTimezoneDetection:
 
         return lambda: _FakeNow(2026, 8, 28, 12, 0)
 
-    def test_registry_english_name_maps_to_iana(self, monkeypatch) -> None:
+    def test_windows_valid_tz_env_is_trusted(self, monkeypatch) -> None:
         import sys as _sys
 
         from valuz_agent.modules.settings import preferences as p
 
-        monkeypatch.setattr(
-            p, "_windows_zone_via_registry", lambda: "Malay Peninsula Standard Time"
-        )
         monkeypatch.setattr(_sys, "platform", "win32")
-        assert p.detect_system_timezone() == "Asia/Kuala_Lumpur"
+        monkeypatch.setenv("TZ", "Asia/Shanghai")
+        assert p.detect_system_timezone() == "Asia/Shanghai"
 
-    def test_zh_cn_display_name_maps_to_iana(self, monkeypatch) -> None:
+    def test_windows_invalid_tz_env_falls_back_to_utc(self, monkeypatch) -> None:
         import sys as _sys
 
         from valuz_agent.modules.settings import preferences as p
 
-        monkeypatch.setattr(p, "_windows_zone_via_registry", lambda: None)
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setenv("TZ", "中国标准时间")
+        assert p.detect_system_timezone() == "UTC"
+
+    def test_windows_no_tz_env_is_utc_never_a_display_name(self, monkeypatch) -> None:
+        """No guessing server-side: a localized display name (what
+        ``tzname()`` returns on zh-CN Windows) must NEVER be returned —
+        the browser reports the IANA name on the real detection path."""
+        import sys as _sys
+
+        from valuz_agent.modules.settings import preferences as p
+
+        monkeypatch.delenv("TZ", raising=False)
         monkeypatch.setattr(_sys, "platform", "win32")
         monkeypatch.setattr(p, "datetime", MagicMock(now=self._fake_now("马来西亚半岛标准时间")))
-        assert p.detect_system_timezone() == "Asia/Kuala_Lumpur"
+        assert p.detect_system_timezone() == "UTC"
 
-    def test_unmapped_name_falls_back_to_utc_never_verbatim(self, monkeypatch) -> None:
-        import sys as _sys
 
+class TestTimezonePrefNormalisation:
+    async def test_invalid_stored_pref_is_treated_as_unset(self, monkeypatch) -> None:
         from valuz_agent.modules.settings import preferences as p
 
-        monkeypatch.setattr(p, "_windows_zone_via_registry", lambda: None)
-        monkeypatch.setattr(_sys, "platform", "win32")
-        monkeypatch.setattr(p, "datetime", MagicMock(now=self._fake_now("某个未知时区名称")))
-        assert p.detect_system_timezone() == "UTC"
+        async def _pref(db, key, user_id=None):  # type: ignore[no-untyped-def]
+            return "马来西亚半岛标准时间"
+
+        monkeypatch.setattr(p, "_read", _pref)
+        # Bad legacy value → unset → detected/UTC fallback, never the bad name.
+        assert await p.get_default_timezone(MagicMock()) == "UTC"
+        monkeypatch.setattr(p, "detect_system_timezone", lambda: "Asia/Shanghai")
+        assert await p.get_effective_default_timezone(MagicMock()) == "Asia/Shanghai"
+
+    async def test_valid_iana_pref_round_trips(self, monkeypatch) -> None:
+        from valuz_agent.modules.settings import preferences as p
+
+        async def _pref(db, key, user_id=None):  # type: ignore[no-untyped-def]
+            return "Asia/Kuala_Lumpur"
+
+        monkeypatch.setattr(p, "_read", _pref)
+        assert await p.get_default_timezone(MagicMock()) == "Asia/Kuala_Lumpur"

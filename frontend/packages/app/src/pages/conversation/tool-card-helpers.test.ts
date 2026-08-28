@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  automationProposalGate,
   hostDocumentFileName,
   normalizeAutomationTrigger,
   parseAutomationCreateInput,
@@ -154,5 +155,45 @@ describe("hostDocumentFileName", () => {
         slot: "",
       }),
     ).toBe("finance.company-research.US-NVDA.main.a2ui.jsonl");
+  });
+});
+
+describe("automationProposalGate — the confirm gate", () => {
+  const ok = { ok: true, proposal: { name: "x" } };
+  const rejected = { ok: false, message: "bad" };
+
+  it("only a server-validated proposal is submittable", () => {
+    expect(automationProposalGate(ok, undefined)).toEqual({
+      rejected: false,
+      submittable: true,
+    });
+  });
+
+  it("a rejected tool result is rejected and not submittable", () => {
+    expect(automationProposalGate(rejected, undefined)).toEqual({
+      rejected: true,
+      submittable: false,
+    });
+  });
+
+  it("a runtime error (unparseable/wrapped failure) is rejected", () => {
+    expect(automationProposalGate(null, "error")).toEqual({
+      rejected: true,
+      submittable: false,
+    });
+  });
+
+  it("no result yet (running / unparsed output) is not submittable but not rejected", () => {
+    expect(automationProposalGate(null, undefined)).toEqual({
+      rejected: false,
+      submittable: false,
+    });
+  });
+
+  it("ok:true without a proposal is not submittable", () => {
+    expect(automationProposalGate({ ok: true, proposal: null }, undefined)).toEqual({
+      rejected: false,
+      submittable: false,
+    });
   });
 });

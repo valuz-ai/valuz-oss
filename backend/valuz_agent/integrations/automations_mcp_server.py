@@ -254,6 +254,7 @@ async def _handle_create(
         AutomationTaskOnlyOnProject,
         IntervalTooShort,
         InvalidCronExpression,
+        InvalidTimeZone,
     )
     from valuz_agent.modules.automations.service import AutomationService
 
@@ -336,6 +337,7 @@ async def _handle_create(
         )
     except (
         InvalidCronExpression,
+        InvalidTimeZone,
         IntervalTooShort,
         AutomationProjectNotFound,
         AgentNotInProject,
@@ -434,6 +436,7 @@ async def _handle_update(
         AutomationPromptEmpty,
         IntervalTooShort,
         InvalidCronExpression,
+        InvalidTimeZone,
     )
     from valuz_agent.modules.automations.schemas import AutomationUpdatePayload
 
@@ -464,6 +467,7 @@ async def _handle_update(
         detail = await svc.update(payload.automation_id, update_payload, user_id=user_id)
     except (
         InvalidCronExpression,
+        InvalidTimeZone,
         IntervalTooShort,
         AutomationNameEmpty,
         AutomationPromptEmpty,
@@ -728,8 +732,7 @@ async def automation(
         str | None,
         Field(
             description=(
-                "Required for get/update/pause/resume/run/remove; get one "
-                "from a prior list."
+                "Required for get/update/pause/resume/run/remove; get one from a prior list."
             )
         ),
     ] = None,
@@ -789,14 +792,26 @@ async def automation(
             )
         ),
     ] = None,
-    playbook_definition_id: Annotated[str | None, Field(max_length=36, description=(
-        "Optional immutable Playbook pin (action_kind must be 'chat'). Omit "
-        "playbook_version to pin the Definition's current version at create."
-    ))] = None,  # noqa: E501
-    playbook_version: Annotated[int | None, Field(ge=1, description=(
-        "Exact immutable Playbook version to pin. Only meaningful with "
-        "playbook_definition_id; omit to pin the current version."
-    ))] = None,  # noqa: E501
+    playbook_definition_id: Annotated[
+        str | None,
+        Field(
+            max_length=36,
+            description=(
+                "Optional immutable Playbook pin (action_kind must be 'chat'). Omit "
+                "playbook_version to pin the Definition's current version at create."
+            ),
+        ),
+    ] = None,  # noqa: E501
+    playbook_version: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description=(
+                "Exact immutable Playbook version to pin. Only meaningful with "
+                "playbook_definition_id; omit to pin the current version."
+            ),
+        ),
+    ] = None,  # noqa: E501
     scope: Annotated[
         Literal["all", "this"] | None,
         Field(

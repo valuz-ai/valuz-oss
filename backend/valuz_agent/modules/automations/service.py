@@ -247,7 +247,7 @@ class AutomationService:
             except UnknownTimeZoneError:
                 # Non-IANA names (Windows display names, typos) are a
                 # validation failure, not a crash — 422, never a 500.
-                raise InvalidTimeZone() from None
+                raise InvalidTimeZone(f"Invalid timezone: {tz!r}") from None
             if not valid:
                 raise InvalidCronExpression(err_msg)
         elif isinstance(trigger, IntervalTrigger):
@@ -960,7 +960,7 @@ class AutomationService:
             try:
                 valid, _, _, err_msg = self._cron.validate(row.cron_expr or "", tz)
             except UnknownTimeZoneError:
-                raise InvalidTimeZone() from None
+                raise InvalidTimeZone(f"Invalid timezone: {tz!r}") from None
             if not valid:
                 raise InvalidCronExpression(err_msg)
         if not row.name.strip():
@@ -1304,7 +1304,7 @@ class AutomationService:
                 expr, tz, locale=self._locale
             )
         except UnknownTimeZoneError:
-            raise InvalidTimeZone() from None
+            raise InvalidTimeZone(f"Invalid timezone: {tz!r}") from None
         return CronValidationResultResponse(
             valid=valid,
             human_readable=human_readable,

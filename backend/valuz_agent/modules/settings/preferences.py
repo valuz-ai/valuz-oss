@@ -195,8 +195,15 @@ async def get_default_timezone(db: AsyncSession, user_id: str | None = None) -> 
     We deliberately don't attempt OS-level auto-detection here — the
     install/first-run wizard should call ``detect_system_timezone()`` and
     persist the value explicitly, so the runtime path stays a pure DB read.
+
+    A stored value that is not a valid IANA name (a legacy Windows display
+    name, a typo) is treated as unset — IANA is the only standard this
+    module accepts, and anything else would crash cron validation downstream.
     """
-    return await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id) or FALLBACK_TIMEZONE
+    return (
+        _normalise_timezone_pref(await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id))
+        or FALLBACK_TIMEZONE
+    )
 
 
 async def get_effective_default_timezone(db: AsyncSession, user_id: str | None = None) -> str:
@@ -210,8 +217,15 @@ async def get_effective_default_timezone(db: AsyncSession, user_id: str | None =
     MCP-created automation lands on the user's local clock by default. The tz
     is always *persisted* on the row (see ``AutomationService._apply_trigger``)
     so it stays visible/editable rather than an invisible UTC fallback.
+
+    Only IANA names ever flow out: the stored preference is validated (a
+    non-IANA legacy value is treated as unset) and ``detect_system_timezone``
+    never returns a non-IANA name.
     """
-    return await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id) or detect_system_timezone()
+    return (
+        _normalise_timezone_pref(await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id))
+        or detect_system_timezone()
+    )
 
 
 async def set_default_timezone(db: AsyncSession, value: str, user_id: str | None = None) -> None:
@@ -593,139 +607,41 @@ async def set_backup_next_run_at(
     await _write(db, KEY_BACKUP_NEXT_RUN_AT, str(value) if value else "", user_id=user_id)
 
 
-#: Windows tz name → IANA, keyed by the CANONICAL ENGLISH key name (the
-#: registry key name under ``HKLM\...\Time Zones``, e.g. "China Standard
-#: Time"). English-keyed so the mapping is language-independent: the
-#: registry's ``TimeZoneKeyName`` value is always the English name no matter
-#: the display language, and only that name ever needs a table entry. Curated
-#: to the zones that actually appear on single-zone user machines; anything
-#: unmapped falls back to UTC — a wrong zone that fires every scheduled run at
-#: the wrong wall-clock time is worse than a UTC default.
-_WINDOWS_TZ_NAME_TO_IANA: dict[str, str] = {
-    "UTC": "UTC",
-    "GMT Standard Time": "Europe/London",
-    "Greenwich Standard Time": "Atlantic/Reykjavik",
-    "Central Europe Standard Time": "Europe/Berlin",
-    "Central European Standard Time": "Europe/Warsaw",
-    "W. Europe Standard Time": "Europe/Berlin",
-    "Romance Standard Time": "Europe/Paris",
-    "Russia Standard Time": "Europe/Moscow",
-    "Turkey Standard Time": "Europe/Istanbul",
-    "South Africa Standard Time": "Africa/Johannesburg",
-    "China Standard Time": "Asia/Shanghai",
-    "Taipei Standard Time": "Asia/Taipei",
-    "Tokyo Standard Time": "Asia/Tokyo",
-    "Seoul Standard Time": "Asia/Seoul",
-    "Korea Standard Time": "Asia/Seoul",
-    "Singapore Standard Time": "Asia/Singapore",
-    "Malay Peninsula Standard Time": "Asia/Kuala_Lumpur",
-    "W. Indonesia Standard Time": "Asia/Jakarta",
-    "Central Indonesia Standard Time": "Asia/Makassar",
-    "Eastern Indonesia Standard Time": "Asia/Jayapura",
-    "Indochina Time": "Asia/Bangkok",
-    "India Standard Time": "Asia/Kolkata",
-    "Sri Lanka Standard Time": "Asia/Colombo",
-    "Nepal Standard Time": "Asia/Kathmandu",
-    "Pakistan Standard Time": "Asia/Karachi",
-    "Afghanistan Standard Time": "Asia/Kabul",
-    "Iran Standard Time": "Asia/Tehran",
-    "Arabian Standard Time": "Asia/Dubai",
-    "Israel Standard Time": "Asia/Jerusalem",
-    "Arabic Standard Time": "Asia/Baghdad",
-    "Kazakhstan Standard Time": "Asia/Almaty",
-    "Central Asia Standard Time": "Asia/Almaty",
-    "Hong Kong Standard Time": "Asia/Hong_Kong",
-    "Macau Standard Time": "Asia/Macau",
-    "AUS Eastern Standard Time": "Australia/Sydney",
-    "E. Australia Standard Time": "Australia/Sydney",
-    "AUS Central Standard Time": "Australia/Darwin",
-    "Central Australia Standard Time": "Australia/Darwin",
-    "New Zealand Standard Time": "Pacific/Auckland",
-    "Fiji Standard Time": "Pacific/Fiji",
-    "Hawaiian Standard Time": "Pacific/Honolulu",
-    "Alaskan Standard Time": "America/Anchorage",
-    "Pacific Standard Time": "America/Los_Angeles",
-    "US Pacific Standard Time": "America/Los_Angeles",
-    "Mountain Standard Time": "America/Denver",
-    "US Mountain Standard Time": "America/Phoenix",
-    "Central Standard Time": "America/Chicago",
-    "US Central Standard Time": "America/Chicago",
-    "Eastern Standard Time": "America/New_York",
-    "US Eastern Standard Time": "America/New_York",
-    "Atlantic Standard Time": "America/Halifax",
-    "Newfoundland Standard Time": "America/St_Johns",
-    "Argentina Standard Time": "America/Argentina/Buenos_Aires",
-    "SA Eastern Standard Time": "America/Sao_Paulo",
-    "E. South America Standard Time": "America/Sao_Paulo",
-    "Mexico Standard Time": "America/Mexico_City",
-    "Central America Standard Time": "America/Guatemala",
-    "Venezuela Standard Time": "America/Caracas",
-    "Colombia Standard Time": "America/Bogota",
-    "Pacific SA Standard Time": "America/Santiago",
-    "Peru Standard Time": "America/Lima",
-}
-
-#: Localized fallbacks for the names ``datetime.tzname()`` returns on
-#: non-English Windows (the registry key name is language-independent and is
-#: preferred; this only covers the common zh-CN display names when the
-#: registry path is unavailable). Keep in sync with the English table above.
-_WINDOWS_TZ_NAME_ZH_CN_TO_IANA: dict[str, str] = {
-    "中国标准时间": "Asia/Shanghai",
-    "台北标准时间": "Asia/Taipei",
-    "东京标准时间": "Asia/Tokyo",
-    "韩国标准时间": "Asia/Seoul",
-    "新加坡标准时间": "Asia/Singapore",
-    "马来西亚半岛标准时间": "Asia/Kuala_Lumpur",
-    "印度标准时间": "Asia/Kolkata",
-    "香港标准时间": "Asia/Hong_Kong",
-    "澳大利亚东部标准时间": "Australia/Sydney",
-    "新西兰标准时间": "Pacific/Auckland",
-    "太平洋标准时间": "America/Los_Angeles",
-    "山地标准时间": "America/Denver",
-    "中部标准时间": "America/Chicago",
-    "东部标准时间": "America/New_York",
-    "格林尼治标准时间": "Europe/London",
-    "中欧标准时间": "Europe/Berlin",
-    "俄罗斯标准时间": "Europe/Moscow",
-}
-
-
-def _windows_zone_via_registry() -> str | None:
-    """The current Windows timezone's ENGLISH key name, via the registry.
-
-    ``TimeZoneKeyName`` under ``SYSTEM\\CurrentControlSet\\Control\\
-    TimeZoneInformation`` always holds the canonical English key name (e.g.
-    "China Standard Time") regardless of the system display language — that is
-    what makes the :data:`_WINDOWS_TZ_NAME_TO_IANA` table language-independent.
-    ``None`` when the value is absent (older Windows) or unreadable.
+def _normalise_timezone_pref(value: str | None) -> str | None:
+    """A stored timezone preference that is not a valid IANA name is treated
+    as unset — the standard is IANA, and anything else (a legacy Windows
+    display name, a typo) would crash cron validation downstream. The
+    browser-side picker (``Intl``) is the source of truth for the user's
+    zone; this only keeps a bad DB value from leaking into scheduling.
     """
-    import winreg
+    if not value:
+        return None
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     try:
-        with winreg.OpenKey(  # type: ignore[attr-defined]
-            winreg.HKEY_LOCAL_MACHINE,  # type: ignore[attr-defined]
-            r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
-        ) as key:
-            value, _ = winreg.QueryValueEx(key, "TimeZoneKeyName")  # type: ignore[attr-defined]
-        return str(value).strip() or None
-    except OSError:
+        ZoneInfo(value)
+        return value
+    except ZoneInfoNotFoundError:
         return None
 
 
 def detect_system_timezone() -> str:
-    """Best-effort detection of the user's local timezone.
+    """Best-effort detection of the host's timezone — IANA only.
 
-    Tries, in order:
+    The browser (``Intl.DateTimeFormat().resolvedOptions().timeZone``) is the
+    authoritative, always-IANA detection path (desktop + webui); this function
+    is the no-browser fallback (agent/MCP runs, server-side defaults) and it
+    deliberately NEVER returns a non-IANA name:
 
-    - ``/etc/localtime`` symlink target on POSIX (resolves to e.g.
-      ``/usr/share/zoneinfo/Asia/Shanghai``).
-    - ``TZ`` env var.
-    - On Windows: the registry ``TimeZoneKeyName`` (language-independent
-      English key name) mapped to IANA, falling back to the localized
-      ``datetime.now().astimezone().tzname()`` display name (zh-CN map only).
-      An unmapped name falls back to UTC rather than being returned verbatim —
-      an un-parseable timezone string would crash every cron validation it
-      touches.
+    - POSIX: ``/etc/localtime`` symlink target (already IANA).
+    - ``TZ`` env var — validated against ``zoneinfo`` before use.
+    - Windows: only ``TZ`` env; otherwise UTC. ``datetime.tzname()`` on
+      Windows returns a LOCALIZED display name ("中国标准时间") that is not an
+      IANA identifier and not zoneinfo-parseable — returning it verbatim
+      would crash every cron validation it touches, and guessing its IANA
+      equivalent server-side duplicates what the browser already knows.
+      Honest UTC beats a wrong zone that fires every scheduled run at the
+      wrong wall-clock time.
 
     Returns ``"UTC"`` if nothing usable is found. The caller is expected
     to surface the detected value to the user for confirmation, not blindly
@@ -736,9 +652,8 @@ def detect_system_timezone() -> str:
     from pathlib import Path
 
     if sys.platform == "win32":
-        # /etc/localtime does not exist on Windows. Try TZ env var first,
-        # then the registry's English key name, then the localized display
-        # name, then UTC.
+        # /etc/localtime does not exist on Windows. Only a TZ env var that
+        # is a valid IANA name is trusted; anything else → UTC (see docstring).
         tz_env = os.environ.get("TZ", "").strip()
         if tz_env:
             try:
@@ -748,19 +663,6 @@ def detect_system_timezone() -> str:
                 return tz_env
             except Exception:
                 pass
-        registry_name = _windows_zone_via_registry()
-        if registry_name and registry_name in _WINDOWS_TZ_NAME_TO_IANA:
-            return _WINDOWS_TZ_NAME_TO_IANA[registry_name]
-        try:
-            name = datetime.now().astimezone().tzname()
-            if name:
-                return (
-                    _WINDOWS_TZ_NAME_TO_IANA.get(name)
-                    or _WINDOWS_TZ_NAME_ZH_CN_TO_IANA.get(name)
-                    or FALLBACK_TIMEZONE
-                )
-        except Exception:
-            pass
         return FALLBACK_TIMEZONE
 
     local = Path("/etc/localtime")

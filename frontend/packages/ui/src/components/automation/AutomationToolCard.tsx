@@ -253,9 +253,14 @@ function unwrapContentBlocks(value: unknown): unknown {
       typeof (block as { text?: unknown }).text === "string"
     ) {
       try {
-        return unwrapContentBlocks(
-          JSON.parse((block as { text: string }).text),
-        );
+        const parsed = JSON.parse((block as { text: string }).text);
+        // Only object-shaped JSON is (or contains) the payload envelope: a
+        // scalar block ("prose", 42) is not the payload — keep scanning the
+        // following blocks; a nested envelope (an array) recurses; a plain
+        // object is the payload.
+        if (parsed !== null && typeof parsed === "object") {
+          return unwrapContentBlocks(parsed);
+        }
       } catch {
         /* that block is prose, not a payload — keep looking */
       }

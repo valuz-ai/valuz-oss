@@ -371,6 +371,28 @@ export function automationTriggerSummary(
   return t(tk("automation.triggerManual"));
 }
 
+/**
+ * The confirm gate for an ``automation`` create proposal card.
+ *
+ * A proposal is submittable ONLY when the server validated it (``ok: true``
+ * with a proposal). Everything else is not: the tool rejected it (``ok:
+ * false`` — rejected, show the tool's message), the call failed at the
+ * runtime/API layer (``tool.status === "error"`` — rejected, show the
+ * failure), or the result hasn't landed / can't be parsed (still running or
+ * unknown shape — not rejected, but nothing to confirm either).
+ */
+export function automationProposalGate(
+  result: { ok: boolean; proposal?: unknown } | null,
+  toolStatus: string | undefined,
+): { rejected: boolean; submittable: boolean } {
+  if (toolStatus === "error") return { rejected: true, submittable: false };
+  if (result && !result.ok) return { rejected: true, submittable: false };
+  return {
+    rejected: false,
+    submittable: result?.ok === true && result.proposal != null,
+  };
+}
+
 const HOST_NAME_UNSAFE = /[^A-Za-z0-9._-]+/g;
 
 /**

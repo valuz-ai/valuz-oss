@@ -76,6 +76,19 @@ class TestCronTrigger:
         row = _row(trigger_kind="cron", cron_expr=None)
         assert ev.next_fire_at(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is None
 
+    def test_unresolvable_timezone_parks_row_not_crash(self) -> None:
+        """A legacy row (or default) holding a non-IANA timezone must park
+        the row (None = not tick-driven) instead of crashing the tick loop
+        or the startup scan — the same value create/update now reject with
+        a typed 422."""
+        ev = TriggerEvaluator(default_timezone="UTC")
+        row = _row(trigger_kind="cron", cron_expr="0 9 * * *", timezone="马来西亚半岛标准时间")
+        assert ev.next_fire_at(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is None
+        # Same for a non-IANA service DEFAULT with a NULL row timezone.
+        ev_bad_default = TriggerEvaluator(default_timezone="中国标准时间")
+        row2 = _row(trigger_kind="cron", cron_expr="0 9 * * *", timezone=None)
+        assert ev_bad_default.next_fire_at(row2, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is None
+
 
 class TestIntervalTrigger:
     def test_next_fire_at_adds_seconds(self) -> None:

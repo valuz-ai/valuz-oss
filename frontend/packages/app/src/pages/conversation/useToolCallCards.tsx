@@ -30,6 +30,7 @@ import { usePlatform } from "@valuz/app/platform";
 import { LiveTaskCard } from "../../components/LiveTaskCard";
 import type { computePlanAnchors } from "../conversation-plan-anchors";
 import {
+  automationProposalGate,
   automationTriggerSummary,
   hostDocumentFileName,
   isToolNamed,
@@ -383,17 +384,6 @@ export function useToolCallCards({
         const proposal = result?.proposal ?? null;
         const isCreate = result?.action === "create" || inputSpec != null;
         if (isCreate) {
-          // The create tool rejected the proposal (bad cron / task-in-chat),
-          // or the call failed at the runtime/API layer (proxy 500s, error
-          // payloads that don't parse) — render the failure, never a
-          // confirm button.
-          const validationError =
-            tool.status === "error"
-              ? tool.output ||
-                t("automation.proposalFailed" as Parameters<typeof t>[0])
-              : result && !result.ok
-                ? result.message
-                : null;
           // Only a SERVER-validated proposal is confirmable. ``result`` is
           // null while the tool is still running (output not delivered yet)
           // and when its output can't be parsed — in both cases there is
@@ -401,7 +391,14 @@ export function useToolCallCards({
           // (``parseAutomationToolOutput`` now unwraps the kernel's
           // content-block envelope, so a wrapped ok=false result is no
           // longer mistaken for "no result".)
-          const submittable = result?.ok === true && proposal != null;
+          const gate = automationProposalGate(result, tool.status);
+          const validationError = gate.rejected
+            ? tool.status === "error"
+              ? tool.output ||
+                t("automation.proposalFailed" as Parameters<typeof t>[0])
+              : result?.message ?? null
+            : null;
+          const submittable = gate.submittable;
           // Nothing to show yet (no parsed input, no proposal, no error) —
           // generic renderer until something lands.
           if (!inputSpec && !proposal && !validationError) return null;
