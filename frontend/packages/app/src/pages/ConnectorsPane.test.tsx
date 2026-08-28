@@ -72,9 +72,48 @@ describe("ConnectorsPane extension slots", () => {
       useRegistryStore
         .getState()
         .unregisterSlot("resource.connector.actions", "test-mcp-download");
+      useRegistryStore
+        .getState()
+        .unregisterSlot(
+          "resource.connector.detail.actions",
+          "test-organization-actions",
+        );
       useCategoryRegistry.getState().remove("connector");
     });
     vi.restoreAllMocks();
+  });
+
+  it("renders organization actions in a local connector detail", async () => {
+    const localConnector = {
+      ...organizationConnector,
+      id: "local-connector-1",
+      slug: "local-search",
+      display_name: "Local Search",
+      _sync: undefined,
+    } as unknown as ConnectorItem;
+    vi.mocked(connectorsApi.list).mockResolvedValue({
+      connectors: [localConnector],
+    });
+    act(() => {
+      useRegistryStore
+        .getState()
+        .registerSlot("resource.connector.detail.actions", {
+          id: "test-organization-actions",
+          component: ({ resource }) => (
+            <button type="button">
+              Share {String((resource as ConnectorItem).slug)}
+            </button>
+          ),
+        });
+    });
+
+    render(
+      <ConnectorsPane query="" addMode={null} onAddModeChange={vi.fn()} />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Share local-search" }),
+    ).toBeTruthy();
   });
 
   it("renders the overlay download action for an organization MCP", async () => {
