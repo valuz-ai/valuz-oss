@@ -445,6 +445,32 @@ class TestAgentKindByContext:
         payload = stub_service.calls[0][1]["payload"]
         assert payload.agent_slug == "research-director"
 
+    async def test_chat_without_bound_agent_defaults_to_system_agent(
+        self, patched_dispatch: Any, stub_service: StubService
+    ) -> None:
+        """A quick chat with NO bound agent (the user picked runtime+model
+        directly — no agent_slug in session metadata): the server defaults the
+        execution agent to the system agent (Valurion). The model never needs
+        to know which kind of chat it is in — omitting agent_slug just works."""
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "chat"
+        project_id["value"] = None
+        session_agent_slug["value"] = None
+
+        result = await mod.automation_invoke(
+            AutomationToolPayload(
+                action="create",
+                name="Daily digest",
+                prompt_template="x",
+                trigger=CronTrigger(cron_expr="0 9 * * *"),
+            )
+        )
+        decoded = json.loads(result)
+        assert decoded["ok"] is True
+        payload = stub_service.calls[0][1]["payload"]
+        assert payload.agent_kind == "library_agent"
+        assert payload.agent_slug == "valurion"
+
     async def test_project_create_still_requires_explicit_agent_slug(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:

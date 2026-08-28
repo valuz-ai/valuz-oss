@@ -1003,6 +1003,36 @@ class TestBuildCreatePayload:
         assert payload.agent_kind == "library_agent"
         assert payload.agent_slug == "default-assistant"
 
+    def test_chat_without_bound_agent_defaults_to_system_agent(self) -> None:
+        """A quick chat with runtime+model only (no bound agent in session
+        metadata) still creates — the server defaults the execution agent to
+        the system agent. The model never has to know which chat it is in."""
+        payload = AutomationService.build_create_payload(
+            name="Daily",
+            prompt_template="x",
+            trigger=CronTrigger(cron_expr="0 9 * * *"),
+            agent_slug=None,
+            action_kind="chat",
+            project_kind="chat",
+            project_id=None,
+            session_agent_slug=None,
+        )
+        assert payload.agent_kind == "library_agent"
+        assert payload.agent_slug == "valurion"
+
+    def test_chat_explicit_agent_slug_overrides_every_default(self) -> None:
+        payload = AutomationService.build_create_payload(
+            name="Daily",
+            prompt_template="x",
+            trigger=CronTrigger(cron_expr="0 9 * * *"),
+            agent_slug="research-director",
+            action_kind="chat",
+            project_kind="chat",
+            project_id=None,
+            session_agent_slug=None,
+        )
+        assert payload.agent_slug == "research-director"
+
     def test_project_derives_project_member_kind(self) -> None:
         payload = AutomationService.build_create_payload(
             name="Daily",

@@ -313,6 +313,8 @@ async def _handle_create(
     except AutomationPromptEmpty:
         return _err("create", "prompt_template is required for create.", code="MISSING_PROMPT")
     except AutomationAgentRequired:
+        # Only reachable in PROJECT sessions (chat omits agent_slug and the
+        # server resolves the bound agent or defaults to the system agent).
         return _err(
             "create",
             (
@@ -681,10 +683,11 @@ for the same automation, and do not assume it exists yet.
 
 agent_slug is CONTEXT-DEPENDENT, not universally required:
   • Chat / quick conversation (no project): OPTIONAL — omit it and the
-    automation runs as the agent you are CURRENTLY talking to. Do NOT call
-    list_members here — it lists *project members*, so it is empty in a
-    project-less chat, and an empty roster does NOT mean "no agent available".
-    Pass an explicit LIBRARY agent slug only to override.
+    server resolves the execution agent for you (the agent you are talking
+    to, or the system agent Valurion when the conversation has none bound).
+    Do NOT call list_members here — it lists *project members*, so it is
+    empty in a project-less chat, and an empty roster does NOT mean "no
+    agent available".
   • Project session: REQUIRED and must be a project team member — call
     list_members first to see candidates. Do NOT invent slugs.
 
@@ -754,9 +757,10 @@ async def automation(
         Field(
             description=(
                 "CONTEXT-DEPENDENT: chat (no project) → OPTIONAL, omit and the "
-                "automation runs as the agent you are currently talking to. "
-                "Project session → REQUIRED, must be a project team member "
-                "(call list_members first). Do NOT invent slugs."
+                "server resolves the execution agent (the one you are talking "
+                "to, or the system agent Valurion when none is bound). Project "
+                "session → REQUIRED, must be a project team member (call "
+                "list_members first). Do NOT invent slugs."
             )
         ),
     ] = None,

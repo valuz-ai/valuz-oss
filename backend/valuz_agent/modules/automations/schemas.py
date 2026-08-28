@@ -373,8 +373,9 @@ class AutomationToolPayload(BaseModel):
         default=None,
         description=(
             "CONTEXT-DEPENDENT — do not treat as universally required. Chat / "
-            "quick conversation (no project): OPTIONAL, omit and the automation "
-            "runs as the agent you are currently talking to. Project session: "
+            "quick conversation (no project): OPTIONAL, omit and the server "
+            "resolves the execution agent (the one you are talking to, or the "
+            "system agent Valurion when none is bound). Project session: "
             "REQUIRED and must be a project team member — call list_members "
             "first to see candidates. Do NOT invent slugs."
         ),

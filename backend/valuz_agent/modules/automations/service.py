@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.i18n import t
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.agents.builtin import VALURION_SLUG
 from valuz_agent.modules.agents.datastore import (
     AgentDatastore,
     ProjectMemberDatastore,
@@ -679,8 +680,10 @@ class AutomationService:
         ``automation`` MCP tool (which previews) and the confirm route (which
         persists), so the two never drift:
 
-        - ``agent_slug`` defaults to the session's bound agent in a chat (so the
-          user/LLM need not pick one); it's mandatory otherwise.
+        - ``agent_slug`` defaults to the session's bound agent in a chat —
+          or the system agent (Valurion) when the quick chat has none bound —
+          so the user/LLM need not pick one and need not know which case
+          they're in; it's mandatory in project sessions.
         - ``agent_kind`` is derived from ``project_kind`` — project sessions
           store ``project_member``, chats store ``library_agent``.
         - ``task`` mode is rejected outside a project session.
@@ -696,7 +699,16 @@ class AutomationService:
             raise AutomationPromptEmpty()
         effective_agent_slug = agent_slug
         if not effective_agent_slug and project_kind == "chat":
-            effective_agent_slug = session_agent_slug
+            # The model cannot reliably tell "quick chat bound to an agent"
+            # from "quick chat with runtime+model only" — so the server makes
+            # BOTH cases work with an omitted agent_slug: the session's bound
+            # agent when there is one, else the system agent (Valurion) as the
+            # automation's execution identity. The fired run resolves
+            # model/provider from that agent's config (ADR-021); the user's
+            # quick-chat model choice is a conversation setting, not the
+            # automation's execution identity. The proposal card shows the
+            # resolved agent name, so a wrong pick is visible and correctable.
+            effective_agent_slug = session_agent_slug or VALURION_SLUG
         if not effective_agent_slug:
             raise AutomationAgentRequired()
         action = action_kind or "chat"
