@@ -158,6 +158,20 @@ def model_rejects_images(settings: ModelSettings | None) -> bool:
     return modalities is not None and "image" not in modalities
 
 
+# Suffixes whose content reaches the model as a non-text block: raster images,
+# plus PDF. PDF belongs here because a LOCAL pdf has no route into a model that
+# takes no images — whether the reading tool sends it as a document block or as
+# page images, neither reaches an image-less model, and the file-id /
+# public-url document channels some providers offer (e.g. z.ai's ``file`` +
+# File Upload API) are ones no runtime here uses. Consulted ONLY when
+# ``model_rejects_images`` is true, so an image-capable model is unaffected.
+#
+# Lives in core because two consumers must agree on it: the claude runtime's
+# PreToolUse gate (which files to deny) and ``prompt_builder`` (which
+# attachment lines to mark as unreadable).
+IMAGE_READ_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".pdf")
+
+
 # -- MCP server config (tagged union) --
 
 
