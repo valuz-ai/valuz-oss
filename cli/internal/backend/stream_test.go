@@ -96,7 +96,7 @@ func TestStreamReconnectResumesFromHeartbeatCursor(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := c.Stream(ctx, "sess-1", 0, func(_ context.Context, f *SSEFrame) error {
+	err := c.Stream(ctx, "/v1/sessions/sess-1/events/stream", 0, func(_ context.Context, f *SSEFrame) error {
 		mu.Lock()
 		defer mu.Unlock()
 		if f.IsHeartbeat() {
@@ -134,7 +134,7 @@ func TestStreamNoReconnectOnAuthError(t *testing.T) {
 	var reconnects atomic.Int32
 	c.OnReconnect = func(_ int64, _ int) { reconnects.Add(1) }
 
-	err := c.Stream(context.Background(), "sess-1", 0, func(_ context.Context, _ *SSEFrame) error {
+	err := c.Stream(context.Background(), "/v1/sessions/sess-1/events/stream", 0, func(_ context.Context, _ *SSEFrame) error {
 		return nil
 	})
 	if err == nil {
@@ -162,7 +162,7 @@ func TestStreamIdleDeadline(t *testing.T) {
 	c.IdleDeadline = 80 * time.Millisecond
 	c.ReconnectMaxAttempts = 0
 
-	err := c.Stream(context.Background(), "sess-1", 0, func(_ context.Context, _ *SSEFrame) error {
+	err := c.Stream(context.Background(), "/v1/sessions/sess-1/events/stream", 0, func(_ context.Context, _ *SSEFrame) error {
 		return nil
 	})
 	if err == nil {

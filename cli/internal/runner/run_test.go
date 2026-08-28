@@ -214,8 +214,12 @@ func TestRunRequiresPromptOrUsageError(t *testing.T) {
 		t.Fatalf("want usage error, got %v", err)
 	}
 
-	_, err = newRunner(srv).Run(context.Background(), Options{Prompt: "hi", RunID: "run-6"})
-	if err == nil || !strings.Contains(err.Error(), "--project") {
-		t.Fatalf("want project/cwd error, got %v", err)
+	// No project/cwd is now the quick-chat shape: resolves to chat-default.
+	res, err := newRunner(srv).Run(context.Background(), Options{Prompt: "hi", RunID: "run-6"})
+	if err != nil {
+		t.Fatalf("quick chat should not error: %v", err)
+	}
+	if res.ProjectID != QuickChatProjectID {
+		t.Fatalf("quick chat project = %q, want %q", res.ProjectID, QuickChatProjectID)
 	}
 }

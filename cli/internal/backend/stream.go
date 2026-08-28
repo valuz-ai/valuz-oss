@@ -52,17 +52,18 @@ func NewStreamClient(baseURL, token string) *StreamClient {
 // stream (propagated from Stream).
 type FrameHandler func(ctx context.Context, f *SSEFrame) error
 
-// Stream opens the SSE stream and feeds decoded frames to handler until
-// ctx is done, the server closes, or handler returns an error. When
-// ReconnectMaxAttempts > 0 the connection is retried with the last
-// durable heartbeat cursor (dual seq spaces: heartbeat frames carry the
-// durable cursor; live frames carry kernel-local seq — see
-// SessionEventFrame in OpenAPI).
-func (s *StreamClient) Stream(ctx context.Context, sessionID string, afterSeq int64, handler FrameHandler) error {
+// Stream opens the SSE stream at path (callers pass the full API path,
+// e.g. /v1/sessions/{id}/events/stream or /v1/tasks/{id}/events/stream)
+// and feeds decoded frames to handler until ctx is done, the server
+// closes, or handler returns an error. When ReconnectMaxAttempts > 0 the
+// connection is retried with the last durable heartbeat cursor (dual seq
+// spaces: heartbeat frames carry the durable cursor; live frames carry
+// kernel-local seq — see SessionEventFrame in OpenAPI).
+func (s *StreamClient) Stream(ctx context.Context, path string, afterSeq int64, handler FrameHandler) error {
 	cursor := afterSeq
 	attempt := 0
 	for {
-		err := s.streamOnce(ctx, sessionID, cursor, handler, &cursor)
+		err := s.streamOnce(ctx, path, cursor, handler, &cursor)
 		if err == nil || ctx.Err() != nil {
 			return nil
 		}
@@ -111,10 +112,13 @@ var errHandler = errors.New("frame handler error")
 
 // streamOnce runs a single connection. cursor is updated in place with
 // the last durable heartbeat seq so a reconnect resumes from there.
-func (s *StreamClient) streamOnce(ctx context.Context, sessionID string, afterSeq int64, handler FrameHandler, cursor *int64) error {
-	path := fmt.Sprintf("/v1/sessions/%s/events/stream", sessionID)
+func (s *StreamClient) streamOnce(ctx context.Context, path string, afterSeq int64, handler FrameHandler, cursor *int64) error {
 	if afterSeq > 0 {
-		path += fmt.Sprintf("?after_seq=%d", afterSeq)
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		path += fmt.Sprintf("%safter_seq=%d", sep, afterSeq)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.BaseURL+path, nil)

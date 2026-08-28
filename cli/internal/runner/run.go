@@ -48,6 +48,10 @@ type Options struct {
 	// HumanOutput enables plain-text assistant deltas on stdout (only
 	// for --output human; machine protocols must never mix).
 	HumanOutput bool
+	// MCPSlugs enables MCP data sources for the session (reportify etc).
+	MCPSlugs []string
+	// SkillIDs attaches extra skills to the session after creation.
+	SkillIDs []string
 }
 
 // Result is the aggregated outcome of a run (consumed by the output layer).
@@ -90,11 +94,19 @@ func New(control *backend.ControlClient, stream *backend.StreamClient, stdout io
 	}
 }
 
+// QuickChatProjectID is the singleton chat project minted for quick
+// chats (projects/service.go ensure_chat_project; GET /v1/projects/
+// chat-default auto-seeds it).
+const QuickChatProjectID = "chat-default"
+
 // Run executes one turn and returns the aggregated result. Status
-// derivation follows design.md §5.4.
+// derivation follows design.md §5.4. The product execution shapes map to
+// Options as follows: quick chat = neither ProjectID nor Cwd set (uses
+// chat-default); project chat = ProjectID or Cwd set; task orchestration
+// lives in the separate task command group.
 func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	if o.ProjectID == "" && o.Cwd == "" {
-		return nil, errs.New(errs.KindUsage, "either --project or --cwd is required")
+		o.ProjectID = QuickChatProjectID // quick chat: auto chat project
 	}
 	if o.Prompt == "" {
 		return nil, errs.New(errs.KindUsage, "prompt is required")
@@ -144,7 +156,7 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	r.Stream.ReconnectBaseDelay = time.Second
 	r.Stream.IdleDeadline = defaultStreamIdle
 	go func() {
-		eventErr <- r.Stream.Stream(streamCtx, session.ID, 0, func(ctx context.Context, f *backend.SSEFrame) error {
+		eventErr <- r.Stream.Stream(streamCtx, "/v1/sessions/"+session.ID+"/events/stream", 0, func(ctx context.Context, f *backend.SSEFrame) error {
 			return r.handleFrame(machine, seen, f, o.RunID, session.ID, projectID, o.EventSink)
 		})
 	}()
@@ -347,7 +359,7 @@ func (r *Runner) createSession(ctx context.Context, projectID string, o Options)
 	if perm == "" {
 		perm = defaultPermissionMode
 	}
-	body := backend.SessionCreateRequest{ProjectID: projectID, PermissionMode: &perm}
+	body := backend.SessionCreateRequest{ProjectID: projectID, PermissionMode: &perm, MCPSlugs: o.MCPSlugs}
 	if o.ModelID != "" {
 		body.ModelID = &o.ModelID
 	}
@@ -370,7 +382,25 @@ func (r *Runner) createSession(ctx context.Context, projectID string, o Options)
 	if session.ID == "" {
 		return nil, errs.New(errs.KindInternal, "backend returned a session without id")
 	}
+	if len(o.SkillIDs) > 0 {
+		if err := r.attachSkills(ctx, session.ID, o.SkillIDs); err != nil {
+			return nil, err
+		}
+	}
 	return &session, nil
+}
+
+// attachSkills replaces the session's extra skill list (PUT
+// /v1/sessions/{id}/skills).
+func (r *Runner) attachSkills(ctx context.Context, sessionID string, skillIDs []string) error {
+	skCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var resp backend.SessionSkillsResponse
+	if err := r.Control.Put(skCtx, "/v1/sessions/"+sessionID+"/skills",
+		backend.SessionSkillsRequest{SkillIDs: skillIDs}, &resp); err != nil {
+		return err
+	}
+	return nil
 }
 
 // handleFrame drives the turn machine. Unmatched/stale frames are ignored;

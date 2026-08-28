@@ -95,6 +95,11 @@ func Root() *cobra.Command {
 		newTUICmd(),
 		newVersionCmd(),
 		newRunCmd(),
+		newSessionCmd(),
+		newTaskCmd(),
+		newProjectCmd(),
+		newActivityCmd(),
+		newResourceCmd(),
 	)
 	return root
 }

@@ -48,6 +48,11 @@ func (c *ControlClient) Post(ctx context.Context, path string, body, out any) er
 	return c.do(ctx, http.MethodPost, path, body, out)
 }
 
+// Put issues a PUT with an optional JSON body.
+func (c *ControlClient) Put(ctx context.Context, path string, body, out any) error {
+	return c.do(ctx, http.MethodPut, path, body, out)
+}
+
 // do is the single request path: it classifies transport errors, parses
 // the known backend error bodies ({error:{...}} and {detail:...}) and
 // wraps everything in a typed CLI error.

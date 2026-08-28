@@ -37,6 +37,8 @@ func newRunCmd() *cobra.Command {
 		timeout        time.Duration
 		outputFormat   string
 		trajectory     string
+		mcpSlugs       []string
+		skillIDs       []string
 	)
 
 	cmd := &cobra.Command{
@@ -93,6 +95,8 @@ func newRunCmd() *cobra.Command {
 				RunID:          runID,
 				EventSink:      sink,
 				HumanOutput:    human,
+				MCPSlugs:       mcpSlugs,
+				SkillIDs:       skillIDs,
 			})
 			if err != nil {
 				return err
@@ -134,6 +138,8 @@ func newRunCmd() *cobra.Command {
 	f.DurationVar(&timeout, "timeout", 0, "wall-clock limit (e.g. 5m); 0 = unlimited")
 	f.StringVarP(&outputFormat, flagOutput, "o", "", "output format: human|json|jsonl")
 	f.StringVar(&trajectory, "trajectory", "", "mirror the jsonl event stream to a file")
+	f.StringSliceVar(&mcpSlugs, "mcp", nil, "MCP data source slugs (repeatable)")
+	f.StringSliceVar(&skillIDs, "skill", nil, "extra skill ids to attach (repeatable)")
 	return cmd
 }
 
