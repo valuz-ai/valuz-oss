@@ -568,9 +568,14 @@ class SkillLibraryService:
 
         all_manifests: list = []
         ctx = RuntimeContext(user_id=user_id)
-        all_manifests.extend(self._source.list_skills(ctx))
+        # Every ``list_skills`` below walks a skill tree off disk — synchronous,
+        # and on a cloud owner's network-mounted root a stat costs tens of
+        # milliseconds, so a full scan runs for seconds. Called inline it stalls
+        # the whole process: the runtime-control work WS stops answering the
+        # control plane's keepalive ping and gets closed with 1011 mid-reconcile.
+        all_manifests.extend(await asyncio.to_thread(self._source.list_skills, ctx))
         for source in self._extra_sources:
-            all_manifests.extend(source.list_skills(ctx))
+            all_manifests.extend(await asyncio.to_thread(source.list_skills, ctx))
 
         for project in await self._projects.list_projects(user_id):
             if project.kind == "project" and project.root_path:
@@ -584,7 +589,9 @@ class SkillLibraryService:
                         root_path=project.root_path,
                     ),
                 )
-                all_manifests.extend(self._source.list_skills(project_ctx))
+                all_manifests.extend(
+                    await asyncio.to_thread(self._source.list_skills, project_ctx)
+                )
 
         # Dedup by ON-DISK PATH, not slug. Same-slug copies in different roots
         # (official-skills dir vs ~/.agents/skills) are distinct skills and both
