@@ -35,7 +35,7 @@ from valuz_agent.modules.agents.datastore import (
     ProjectMemberDatastore,
 )
 from valuz_agent.modules.agents.service import AgentService
-from valuz_agent.modules.agents.slug import derive_slug
+from valuz_agent.modules.agents.slug import derive_slug, is_valid_slug
 from valuz_agent.modules.automations.cron_utils import (
     DEFAULT_LOCALE,
     CronInterpreter,
@@ -613,14 +613,19 @@ class AutomationService:
             # user can have N automations sharing the same source agent in
             # the same project without slug collisions.
             #
-            # The prefix is DERIVED from the agent's display name
-            # (``derive_slug`` — ASCII-only, CJK dropped) rather than taken
-            # from the source slug verbatim: legacy library agents can carry
-            # non-ASCII slugs (created before the ASCII-slug rule landed),
-            # and ``f"{raw_slug}-{hex}"`` would keep the CJK and be rejected
-            # by ``deploy_agent``'s ``is_valid_slug`` — an uncaught 500 on
+            # The prefix normally IS the source slug verbatim (a valid ASCII
+            # slug is the historical behavior and stays untouched). Only a
+            # NON-ASCII source slug — a legacy library agent created before
+            # the ASCII-slug rule landed — is re-derived from the display
+            # name (``derive_slug``: ASCII-only, CJK dropped); keeping the
+            # CJK in ``f"{raw_slug}-{hex}"`` would be rejected by
+            # ``deploy_agent``'s ``is_valid_slug`` — an uncaught 500 on
             # every automation create for those agents.
-            instance_slug = f"{derive_slug(source.name)}-{uuid4().hex[:8]}"
+            if is_valid_slug(payload.agent_slug):
+                slug_prefix = payload.agent_slug
+            else:
+                slug_prefix = derive_slug(source.name)
+            instance_slug = f"{slug_prefix}-{uuid4().hex[:8]}"
             # ``dedupe=False``: each automation gets its own member handle even
             # when several reference the same source agent in this project.
             await self._agent_svc.deploy_agent(

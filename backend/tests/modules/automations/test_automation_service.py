@@ -532,6 +532,20 @@ class TestChatLibraryAgentCreate:
         assert instance_slug.startswith("agent-")
         assert detail.agent_slug == instance_slug
 
+    async def test_ascii_source_slug_keeps_verbatim_prefix(
+        self, service: AutomationService, agent_svc: FakeAgentService
+    ) -> None:
+        """A VALID ASCII source slug keeps the historical instance-slug shape
+        (``f"{slug}-{hex}"``) — the name-derived prefix only kicks in for the
+        legacy CJK case, so the blast radius stays at the broken rows."""
+        detail = await service.create(
+            _chat_lib_payload(agent_slug="qa-engineer"), user_id=TEST_USER_ID
+        )
+        _, source_slug, instance_slug = agent_svc.instantiations[0]
+        assert source_slug == "qa-engineer"
+        assert instance_slug.startswith("qa-engineer-")
+        assert instance_slug == detail.agent_slug
+
     async def test_should_bind_to_explicit_chat_project_when_set(
         self,
         service: AutomationService,
