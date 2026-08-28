@@ -46,6 +46,7 @@ import { useCitationDocumentPreview } from "../../components/CitationDocumentPre
 import { deriveTurnActive } from "../conversation-loading";
 import { createConversationBootstrapGuard } from "../conversation-bootstrap";
 import { getLastTempAgent } from "../../lib/last-temp-agent";
+import { resolveComposerUploadBase } from "./composer-upload-base";
 import { NEW_SESSION_ID } from "./session-events";
 import { useToolCallCards } from "./useToolCallCards";
 import { useSessionSubscription } from "./useSessionSubscription";
@@ -600,19 +601,16 @@ export function useConversationOrchestration({
     adopt: adoptAttachments,
     settle: settleAttachments,
   } = useStagedAttachments(
-    // The backend this conversation runs on. A draft has no session to route
-    // on, so it follows its project — and with no project, the execution
-    // target it will be created on. Falling through to the module default
-    // instead is what silently lost files: on a multi-target edition a quick
-    // chat set to 云端服务 uploaded to the LOCAL backend, then named those ids
-    // to the cloud one, which has no such rows and binds nothing (qa: the
-    // file stayed staged and the message went out without it).
+    // Where this conversation's files belong — see ``composer-upload-base``.
     // A GETTER, not a value: the target can change while the composer is open
     // and a render-time capture is the wrong backend the moment it does.
     () =>
-      selectedProjectId
-        ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
-        : resolveExecTarget()?.baseUrl,
+      resolveComposerUploadBase({
+        selectedSessionId,
+        selectedProjectId,
+        execTargetBaseUrl: resolveExecTarget()?.baseUrl,
+        resolveBase: resolveApiBase,
+      }),
   );
   const {
     attachments: boundAttachments,
