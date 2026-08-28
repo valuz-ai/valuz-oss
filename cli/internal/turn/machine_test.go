@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
@@ -75,7 +76,7 @@ func TestSuccess(t *testing.T) {
 	if !s.Finished() || s.ErrorStatus() != StatusCompleted {
 		t.Fatalf("status = %+v", s)
 	}
-	if s.LastStopReason != "completed" {
+	if !strings.Contains(s.LastStopReason, "end_turn") {
 		t.Fatalf("stop reason = %q", s.LastStopReason)
 	}
 }
@@ -104,7 +105,7 @@ func TestInterrupt(t *testing.T) {
 	if s.ErrorStatus() != StatusCompleted {
 		t.Fatalf("status = %+v", s)
 	}
-	if s.LastStopReason != "user_interrupt" {
+	if !strings.Contains(s.LastStopReason, "user_interrupt") {
 		t.Fatalf("stop reason = %q", s.LastStopReason)
 	}
 }

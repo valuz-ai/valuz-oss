@@ -68,20 +68,24 @@ func fakeBackendHang(t *testing.T, fixture string, hang bool) *httptest.Server {
 		}
 		defer f.Close()
 		sc := bufio.NewScanner(f)
+		sent := 0
 		for sc.Scan() {
 			line := sc.Text()
 			if line == "" {
 				continue
 			}
+			if hang && sent >= 2 {
+				// hang mode: only the opening frames, never a terminal
+				// event; keep the connection open so the client's
+				// timeout must terminate the run.
+				<-r.Context().Done()
+				return
+			}
 			fmt.Fprintf(w, "data: %s\n\n", line)
+			sent++
 			if flusher != nil {
 				flusher.Flush()
 			}
-		}
-		if hang {
-			// Keep the connection open so the client's timeout must
-			// terminate the run (never sends a terminal event).
-			<-r.Context().Done()
 		}
 	})
 	return httptest.NewServer(mux)
@@ -168,9 +172,9 @@ func TestRunCwdResolvesExistingProject(t *testing.T) {
 	defer srv.Close()
 
 	res, err := newRunner(srv).Run(context.Background(), Options{
-		Cwd:   "/workspace",
+		Cwd:    "/workspace",
 		Prompt: "hi",
-		RunID: "run-4",
+		RunID:  "run-4",
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)

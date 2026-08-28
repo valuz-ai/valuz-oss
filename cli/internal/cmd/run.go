@@ -16,6 +16,10 @@ import (
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/runner"
 )
 
+// maxPromptBytes caps --prompt-file / --prompt-stdin reads so a huge
+// input cannot OOM the CLI (design review hardening).
+const maxPromptBytes = 16 << 20 // 16 MiB
+
 // newRunCmd builds `valuz run`: one connect-only run, one new session,
 // one turn (design.md §4.2).
 func newRunCmd() *cobra.Command {
@@ -53,9 +57,27 @@ func newRunCmd() *cobra.Command {
 			}
 
 			// SIGINT/SIGTERM cancel the run gracefully; the exit code
-			// follows the Unix signal convention (128+signum).
+			// follows the Unix signal convention (128+signum). The signal
+			// name is propagated to the runner so the outcome is
+			// classified as interrupted rather than completed.
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(sigCh)
 			runCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			sigName := ""
+			go func() {
+				select {
+				case s := <-sigCh:
+					switch s {
+					case syscall.SIGTERM:
+						sigName = "SIGTERM"
+					default:
+						sigName = "SIGINT"
+					}
+				case <-runCtx.Done():
+				}
+			}()
 
 			runID := newRunID()
 			sink, err := output.NewSink(outputFormat, cmd.OutOrStdout(), trajectory)
@@ -64,10 +86,11 @@ func newRunCmd() *cobra.Command {
 			}
 			defer sink.Close()
 
+			human := outputFormat == "" || outputFormat == "human"
 			r := runner.New(
 				backend.NewControlClient(opts.BackendURL, bearerToken(opts)),
 				backend.NewStreamClient(opts.BackendURL, bearerToken(opts)),
-				cmd.OutOrStdout(),
+				humanWriter(cmd, human),
 			)
 			res, err := r.Run(runCtx, runner.Options{
 				ProjectID:      projectID,
@@ -81,26 +104,22 @@ func newRunCmd() *cobra.Command {
 				Timeout:        timeout,
 				RunID:          runID,
 				EventSink:      sink,
+				Signal:         sigName,
+				HumanOutput:    human,
 			})
 			if err != nil {
+				// Started-run failures still need their exactly-once
+				// run.end (design §6.2); the sink already received events
+				// from the runner's own terminal path, so a second End is
+				// a no-op guard violation only if we double-call.
 				return err
 			}
-			if outputFormat == "human" || outputFormat == "" {
+			if human {
 				fmt.Fprintln(cmd.OutOrStdout())
 				fmt.Fprintf(cmd.OutOrStdout(), "status: %s (session %s, %d tokens in / %d out)\n",
 					res.Status, res.SessionID, res.Usage.InputTokens, res.Usage.OutputTokens)
 			}
-			if res.Status == output.StatusInterrupted {
-				code := 130 // SIGINT default
-				if res.Signal == "SIGTERM" {
-					code = 143
-				}
-				return &errs.ExitCodeError{Code: code, Message: "run interrupted by " + res.Signal}
-			}
-			if res.Status == output.StatusActionRequired {
-				return &errs.ExitCodeError{Code: 7, Message: "run parked on an approval; use --permission-mode full_access in headless contexts"}
-			}
-			return nil
+			return runExitError(res)
 		},
 	}
 
@@ -119,6 +138,41 @@ func newRunCmd() *cobra.Command {
 	f.StringVarP(&outputFormat, flagOutput, "o", "", "output format: human|json|jsonl")
 	f.StringVar(&trajectory, "trajectory", "", "mirror the jsonl event stream to a file")
 	return cmd
+}
+
+// humanWriter returns a writer for human-mode deltas, or nil when the
+// selected protocol is machine-readable (stdout must never mix).
+func humanWriter(cmd *cobra.Command, human bool) io.Writer {
+	if !human {
+		return nil
+	}
+	return cmd.OutOrStdout()
+}
+
+// runExitError maps the run outcome to the process exit code. Interrupted
+// runs follow the signal convention; error/timeout/action_required use
+// their stable codes (design.md §6.3); completed returns nil.
+func runExitError(res *runner.Result) error {
+	switch res.Status {
+	case output.StatusCompleted:
+		return nil
+	case output.StatusInterrupted:
+		code := 130 // SIGINT default
+		if res.Signal == "SIGTERM" {
+			code = 143
+		}
+		return &errs.ExitCodeError{Code: code, Message: "run interrupted by " + res.Signal}
+	case output.StatusActionRequired:
+		return &errs.ExitCodeError{
+			Code:    7,
+			Message: "run parked on an approval; use --permission-mode full_access in headless contexts",
+		}
+	default:
+		return &errs.ExitCodeError{
+			Code:    output.ExitCodeFor(res.Status),
+			Message: fmt.Sprintf("run %s: %s", res.Status, res.Error),
+		}
+	}
 }
 
 // resolvePrompt enforces the three-way exclusivity (design.md §4.2 rule 7):
@@ -149,15 +203,21 @@ func resolvePrompt(prompt, file string, stdin bool, cmd *cobra.Command) (string,
 		if len(data) == 0 {
 			return "", errs.New(errs.KindUsage, "--prompt-file %s is empty", file)
 		}
+		if len(data) > maxPromptBytes {
+			return "", errs.New(errs.KindUsage, "--prompt-file exceeds %d MiB", maxPromptBytes>>20)
+		}
 		return string(data), nil
 	}
 	if stdin {
-		data, err := io.ReadAll(cmd.InOrStdin())
+		data, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxPromptBytes+1))
 		if err != nil {
 			return "", errs.Wrap(errs.KindUsage, err, "read --prompt-stdin")
 		}
 		if len(data) == 0 {
 			return "", errs.New(errs.KindUsage, "--prompt-stdin is empty")
+		}
+		if len(data) > maxPromptBytes {
+			return "", errs.New(errs.KindUsage, "--prompt-stdin exceeds %d MiB", maxPromptBytes>>20)
 		}
 		return string(data), nil
 	}

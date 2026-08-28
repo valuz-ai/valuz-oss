@@ -5,6 +5,7 @@
 package turn
 
 import (
+	"strings"
 	"sync"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
@@ -23,9 +24,14 @@ const (
 	StatusActionRequired Status = "action_required"
 )
 
-// Machine tracks the state of one turn execution.
+// Machine tracks the state of one turn execution. All mutable state is
+// guarded by mu; Matches/Stale read through Snapshot so concurrent readers
+// (runner + stream goroutine) never touch fields unlocked.
 type Machine struct {
 	mu sync.Mutex
+
+	// done is closed exactly once when the run reaches a terminal state.
+	done chan struct{}
 
 	// MessageID is the turn anchor, learned from the first message.user
 	// event after baseline. Empty until anchored.
@@ -49,6 +55,9 @@ type Machine struct {
 	// ObservedError tracks whether any run.failed was seen for the target
 	// turn, so the runner can still wait for usage/idle before finishing.
 	ObservedError bool
+
+	// FinalText accumulates the target turn's assistant text.
+	FinalText string
 }
 
 // Usage is the four-bucket token accounting (design.md §3.3).
@@ -61,8 +70,11 @@ type Usage struct {
 
 // NewMachine returns an unanchored machine.
 func NewMachine() *Machine {
-	return &Machine{Status: StatusRunning}
+	return &Machine{Status: StatusRunning, done: make(chan struct{})}
 }
+
+// Done returns a channel closed when the machine reaches a terminal state.
+func (m *Machine) Done() <-chan struct{} { return m.done }
 
 // Anchor sets the turn's message_id from the first message.user event.
 // Returns false when an anchor is already set (second user message in the
@@ -78,14 +90,15 @@ func (m *Machine) Anchor(id string) bool {
 	return true
 }
 
-// Matches reports whether a frame belongs to the target turn. Frames
-// before anchoring (with a different/no message_id) are buffered by the
+// Matches reports whether a frame belongs to the target turn (thread-safe;
+// reads through a snapshot). Frames before anchoring are buffered by the
 // runner; once anchored, only matching frames mutate state.
 func (m *Machine) Matches(frame *backend.SSEFrame) bool {
-	if !m.Anchored {
+	s := m.Snapshot()
+	if !s.Anchored {
 		return false
 	}
-	return frame.Payload["message_id"] == m.MessageID
+	return frame.Payload["message_id"] == s.MessageID
 }
 
 // NoteError records a run.failed for the target turn (does not finish).
@@ -103,8 +116,15 @@ func (m *Machine) NoteError(message string) {
 func (m *Machine) NoteIdle(stopReason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// action_required outranks a later idle (design §5.4): a parked
+	// approval that the backend resolved right before draining must not
+	// flip the outcome backwards.
+	if m.Status == StatusActionRequired {
+		return
+	}
 	m.LastStopReason = stopReason
 	m.Status = StatusCompleted
+	m.signalDoneLocked()
 }
 
 // NoteUsage accumulates the four-bucket usage for the target turn.
@@ -122,6 +142,22 @@ func (m *Machine) RequiresAction() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Status = StatusActionRequired
+	m.signalDoneLocked()
+}
+
+// AppendText accumulates assistant text (called from the stream goroutine).
+func (m *Machine) AppendText(text string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.FinalText += text
+}
+
+func (m *Machine) signalDoneLocked() {
+	select {
+	case <-m.done:
+	default:
+		close(m.done)
+	}
 }
 
 // Snapshot returns a copy of the current state for the runner.
@@ -136,6 +172,7 @@ func (m *Machine) Snapshot() Snapshot {
 		LastStopReason: m.LastStopReason,
 		Usage:          m.Usage,
 		ObservedError:  m.ObservedError,
+		FinalText:      m.FinalText,
 	}
 }
 
@@ -148,6 +185,7 @@ type Snapshot struct {
 	LastStopReason string
 	Usage          Usage
 	ObservedError  bool
+	FinalText      string
 }
 
 // Finished reports whether the run reached a terminal state.
@@ -156,24 +194,14 @@ func (s Snapshot) Finished() bool {
 }
 
 // ErrorStatus derives the final status: action_required wins over
-// error/complete; observed error or an execution_error stop reason yields
-// error, else completed.
+// error/complete; observed error or an execution_error stop category
+// yields error, else completed.
 func (s Snapshot) ErrorStatus() Status {
 	if s.Status == StatusActionRequired {
 		return StatusActionRequired
 	}
-	if s.ObservedError || s.LastStopReason == "execution_error" {
+	if s.ObservedError || strings.Contains(s.LastStopReason, "execution_error") {
 		return StatusError
 	}
 	return StatusCompleted
-}
-
-// Stale returns true when the frame belongs to a different turn entirely
-// (idle for an old message after the current one anchored).
-func (s Snapshot) Stale(frame *backend.SSEFrame) bool {
-	mid := frame.Payload["message_id"]
-	if mid == "" {
-		return false
-	}
-	return s.Anchored && mid != s.MessageID
 }

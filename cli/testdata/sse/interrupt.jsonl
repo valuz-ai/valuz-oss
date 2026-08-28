@@ -1,5 +1,5 @@
 {"seq": 3001, "event_type": "message.user", "payload": {"text": "Summarize the repo", "attachments": "[]", "message_id": "msg-0003"}, "timestamp": 1785600201000, "event_uid": "uid-0301"}
 {"seq": 3002, "event_type": "message.assistant.delta", "payload": {"text": "Scanning repository structure...", "message_id": "msg-0003"}, "timestamp": 1785600201500, "event_uid": "uid-0302"}
 {"seq": 3003, "event_type": "tool.call.started", "payload": {"id": "tool-010", "tool_use_id": "tool-010", "name": "list_files", "input": "{\"path\": \".\"}", "message_id": "msg-0003"}, "timestamp": 1785600201600, "event_uid": "uid-0303"}
-{"seq": 3004, "event_type": "session.idle", "payload": {"stop_reason": "user_interrupt", "message_id": "msg-0003"}, "timestamp": 1785600203000, "event_uid": "uid-0304"}
+{"seq": 3004, "event_type": "session.idle", "payload": {"stop_reason": "{\"type\":\"user_interrupt\"}", "message_id": "msg-0003"}, "timestamp": 1785600203000, "event_uid": "uid-0304"}
 {"seq": 3005, "event_type": "runtime.engine.usage", "payload": {"input_tokens": "1200", "output_tokens": "80", "cache_read_tokens": "0", "cache_write_tokens": "0", "model_usage": "{}", "message_id": "msg-0003"}, "timestamp": 1785600203100, "event_uid": "uid-0305"}

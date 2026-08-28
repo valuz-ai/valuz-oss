@@ -1,8 +1,8 @@
 {"seq": 5001, "event_type": "message.user", "payload": {"text": "Long running analysis", "attachments": "[]", "message_id": "msg-0005"}, "timestamp": 1785600401000, "event_uid": "uid-0501"}
 {"seq": 5002, "event_type": "message.assistant.delta", "payload": {"text": "Analyzing...", "message_id": "msg-0005"}, "timestamp": 1785600401500, "event_uid": "uid-0502"}
 {"seq": 5003, "event_type": "message.assistant.delta", "payload": {"text": "Still working, part 2", "message_id": "msg-0005"}, "timestamp": 1785600401600, "event_uid": "uid-0503"}
-{"seq": 9001, "event_type": null, "payload": {}, "timestamp": 1785600415000, "event_uid": null}
+{"seq": 9001}
 {"seq": 5004, "event_type": "message.assistant.delta", "payload": {"text": "Part 3 done", "message_id": "msg-0005"}, "timestamp": 1785600431000, "event_uid": "uid-0504"}
-{"seq": 9002, "event_type": null, "payload": {}, "timestamp": 1785600446000, "event_uid": null}
+{"seq": 9002}
 {"seq": 5005, "event_type": "runtime.engine.usage", "payload": {"input_tokens": "4400", "output_tokens": "210", "cache_read_tokens": "0", "cache_write_tokens": "0", "model_usage": "{}", "message_id": "msg-0005"}, "timestamp": 1785600461000, "event_uid": "uid-0505"}
 {"seq": 5006, "event_type": "session.idle", "payload": {"stop_reason": "completed", "message_id": "msg-0005"}, "timestamp": 1785600461200, "event_uid": "uid-0506"}

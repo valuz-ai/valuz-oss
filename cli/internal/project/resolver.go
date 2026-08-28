@@ -6,7 +6,6 @@ package project
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
@@ -19,13 +18,20 @@ type Resolver struct {
 }
 
 // Resolve returns the project id for dir, creating the project when the
-// backend has no row for the normalized root path.
+// backend has no row for the normalized root path. The path is
+// symlink-resolved (filepath.EvalSymlinks) to match the backend's own
+// normalization (service.py `_normalize_explicit_root` uses
+// Path.resolve()), so /tmp and /var on macOS match their /private
+// canonical forms and never double-create.
 func (r *Resolver) Resolve(ctx context.Context, dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", errs.Wrap(errs.KindUsage, err, "normalize cwd %q", dir)
 	}
 	abs = filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
 
 	var list backend.ProjectList
 	if err := r.Client.Get(ctx, "/v1/projects", &list); err != nil {
@@ -46,12 +52,4 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (string, error) {
 		return "", errors.New("backend returned a project without id")
 	}
 	return created.ID, nil
-}
-
-// ParseID is a small helper for flag validation (no-op pass-through).
-func ParseID(v string) (string, error) {
-	if v == "" {
-		return "", fmt.Errorf("empty id")
-	}
-	return v, nil
 }

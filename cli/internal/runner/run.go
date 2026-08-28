@@ -10,11 +10,20 @@ import (
 	"time"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
-	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/event"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/event"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/output"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/project"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/turn"
+)
+
+// Default values (overridable via Options).
+const (
+	defaultReconnectMax   = 3
+	defaultStreamIdle     = 30 * time.Second // backend heartbeats every 15s
+	postGraceAfterError   = 30 * time.Second // wait for a turn anchor after a lost POST
+	streamDrainGrace      = 2 * time.Second
+	defaultPermissionMode = "default"
 )
 
 // Options configures one run.
@@ -36,6 +45,9 @@ type Options struct {
 	Signal string
 	// ReconnectMaxAttempts caps SSE reconnects (0 = default 3).
 	ReconnectMaxAttempts int
+	// HumanOutput enables plain-text assistant deltas on stdout (only
+	// for --output human; machine protocols must never mix).
+	HumanOutput bool
 }
 
 // Result is the aggregated outcome of a run (consumed by the output layer).
@@ -62,11 +74,10 @@ type Runner struct {
 	Control *backend.ControlClient
 	Stream  *backend.StreamClient
 	Mapper  *event.Mapper
-	// Stdout receives human progress when non-nil.
+	// Stdout receives human progress when non-nil (human mode only).
 	Stdout io.Writer
-	// finalText accumulates the target turn's assistant text for the
-	// RunResult document.
-	finalText string
+	// human gates Stdout: machine protocols must never mix plain text.
+	human bool
 }
 
 // New builds a runner.
@@ -79,9 +90,8 @@ func New(control *backend.ControlClient, stream *backend.StreamClient, stdout io
 	}
 }
 
-// Run executes one turn and returns the aggregated result. The status
-// derivation follows design.md §5.4 (subset for Slice 2; timeout/signal/
-// action_required hooks land in Slice 4).
+// Run executes one turn and returns the aggregated result. Status
+// derivation follows design.md §5.4.
 func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	if o.ProjectID == "" && o.Cwd == "" {
 		return nil, errs.New(errs.KindUsage, "either --project or --cwd is required")
@@ -89,6 +99,7 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	if o.Prompt == "" {
 		return nil, errs.New(errs.KindUsage, "prompt is required")
 	}
+	r.human = o.HumanOutput
 
 	started := time.Now()
 	runCtx := ctx
@@ -96,12 +107,6 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	if o.Timeout > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, o.Timeout)
 		defer cancel()
-	}
-
-	// Stream reconnect policy (Slice 4): bounded retries, idle watchdog.
-	maxReconnects := o.ReconnectMaxAttempts
-	if maxReconnects <= 0 {
-		maxReconnects = 3
 	}
 
 	// 1. readiness
@@ -132,152 +137,159 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	machine := turn.NewMachine()
 	seen := map[string]bool{}
 	eventErr := make(chan error, 1)
-	r.Stream.ReconnectMaxAttempts = maxReconnects
+	r.Stream.ReconnectMaxAttempts = o.ReconnectMaxAttempts
+	if r.Stream.ReconnectMaxAttempts <= 0 {
+		r.Stream.ReconnectMaxAttempts = defaultReconnectMax
+	}
 	r.Stream.ReconnectBaseDelay = time.Second
-	r.Stream.IdleDeadline = 30 * time.Second // 15s heartbeat × 2
+	r.Stream.IdleDeadline = defaultStreamIdle
 	go func() {
 		eventErr <- r.Stream.Stream(streamCtx, session.ID, 0, func(ctx context.Context, f *backend.SSEFrame) error {
 			return r.handleFrame(machine, seen, f, o.RunID, session.ID, projectID, o.EventSink)
 		})
 	}()
 
-	// 5. POST message (never retried; see design.md §5.3)
+	// 5. POST message (never retried; design.md §5.3)
 	postCtx, postCancel := context.WithTimeout(runCtx, 30*time.Second)
-	defer postCancel()
+	var postErr error
 	var msgResp backend.SessionDetail
 	if err := r.Control.Post(postCtx, "/v1/sessions/"+session.ID+"/messages",
 		backend.SessionMessageRequest{Prompt: o.Prompt}, &msgResp); err != nil {
-		streamCancel()
-		<-eventErr
-		return nil, err
+		postErr = err
+		postCancel()
+		// Response lost is not an abort: the turn may already be running
+		// on the stream. Wait (bounded) for an anchor/terminal; only fail
+		// if the backend was genuinely unreachable or nothing arrives.
+		if !machine.Snapshot().Anchored {
+			select {
+			case <-machine.Done():
+			case <-time.After(postGraceAfterError):
+				streamCancel()
+				<-eventErr
+				return nil, postErr
+			case <-runCtx.Done():
+				streamCancel()
+				<-eventErr
+				return nil, postErr
+			}
+		}
+	} else {
+		postCancel()
 	}
 
-	// 6. wait for the turn machine to finish or ctx to end
+	// 6. wait for terminal: machine done (target idle / action required),
+	// stream failure, or run context end.
 	var streamErr error
 	select {
-	case streamErr = <-eventErr:
-		// stream closed by server or error before terminal — probe once
-	case <-runCtx.Done():
+	case <-machine.Done():
 		streamCancel()
-		// Give the stream a short grace to unwind; a hung server must not
-		// block the timeout path forever.
+		// Drain the stream goroutine so its writes finish before we read
+		// machine state (bounded by the drain grace).
 		select {
 		case streamErr = <-eventErr:
-		case <-time.After(2 * time.Second):
+		case <-time.After(streamDrainGrace):
+		}
+	case streamErr = <-eventErr:
+		// Stream ended (or failed) before the machine finished — if the
+		// run is actually terminal we proceed; otherwise reconcile.
+	case <-runCtx.Done():
+		streamCancel()
+		select {
+		case streamErr = <-eventErr:
+		case <-time.After(streamDrainGrace):
 		}
 	}
 
-	snap := machine.Snapshot()
+	// 7. classify the outcome (design §5.4 priority order).
+	return r.classify(runCtx, machine, session.ID, projectID, o, started, streamErr, streamCancel)
+}
+
+// classify derives the terminal status and assembles the Result, emitting
+// the run.end document on the sink in every started-run path.
+func (r *Runner) classify(runCtx context.Context, m *turn.Machine, sessionID, projectID string, o Options, started time.Time, streamErr error, streamCancel context.CancelFunc) (*Result, error) {
+	snap := m.Snapshot()
 	finished := time.Now()
 	res := &Result{
 		RunID:     o.RunID,
-		SessionID: session.ID,
+		SessionID: sessionID,
 		ProjectID: projectID,
 		MessageID: snap.MessageID,
 		AgentSlug: o.AgentSlug,
-		Runtime:   session.Runtime,
+		Runtime:   "",
 		Model:     o.ModelID,
 		Usage:     snap.Usage,
-		FinalText: r.finalText,
+		FinalText: snap.FinalText,
 		NumTurns:  1, // one run, one new session, one turn (Slice 2 scope)
+		Signal:    o.Signal,
 		StartedAt: started,
 		Finished:  finished,
 	}
 
 	switch {
-	case o.Signal != "" && runCtx.Err() == context.Canceled:
-		res.Status = output.StatusInterrupted
-		res.Signal = o.Signal
-	case runCtx.Err() == context.DeadlineExceeded:
-		res.Status = output.StatusTimeout
-		streamCancel()
-	case snap.Status == turn.StatusActionRequired:
+	case snap.Finished() && snap.Status == turn.StatusActionRequired:
 		// Headless cannot answer an approval: interrupt best-effort and
-		// let the backend drain, then report action_required.
-		r.interruptBestEffort(runCtx, session.ID)
+		// report action_required (design §4.2 rule 6 fail-fast).
+		r.interruptBestEffort(runCtx, sessionID)
 		res.Status = output.StatusActionRequired
-	case streamErr != nil && !snap.Finished():
-		// Reconnect exhausted: reconcile against durable history before
-		// giving up (design.md §5.3 step 8).
-		if reconciled := r.reconcile(runCtx, machine, session.ID, projectID, o); reconciled {
-			snap = machine.Snapshot()
+	case snap.Finished():
+		// Target turn reached a terminal idle.
+		if snap.ErrorStatus() == turn.StatusError {
+			res.Status = output.StatusError
+			res.Error = snap.Error
+		} else {
+			res.Status = output.StatusCompleted
+		}
+	case o.Signal != "" && runCtx.Err() == context.Canceled:
+		r.interruptBestEffort(runCtx, sessionID)
+		res.Status = output.StatusInterrupted
+	case runCtx.Err() == context.DeadlineExceeded:
+		r.interruptBestEffort(runCtx, sessionID)
+		res.Status = output.StatusTimeout
+	case streamErr != nil:
+		// Reconnect exhausted (or stream failed): reconcile against
+		// durable history before giving up (design.md §5.3 step 8).
+		if r.reconcile(runCtx, m, sessionID, projectID, o) {
+			snap = m.Snapshot()
 			res.MessageID = snap.MessageID
 			res.Usage = snap.Usage
-			res.FinalText = r.finalText
-			switch {
-			case snap.ErrorStatus() == turn.StatusError:
+			res.FinalText = snap.FinalText
+			if snap.ErrorStatus() == turn.StatusError {
 				res.Status = output.StatusError
 				res.Error = snap.Error
-			default:
+			} else {
 				res.Status = output.StatusCompleted
 			}
 			break
 		}
-		return nil, errs.Wrap(errs.KindInternal, streamErr, "stream ended before the turn completed (session %s)", session.ID)
-	case snap.ErrorStatus() == turn.StatusError:
-		res.Status = output.StatusError
-		res.Error = snap.Error
+		streamCancel()
+		// Emit a run.end with an internal error so the JSONL consumer
+		// still gets its exactly-once terminal line.
+		res.Status = output.StatusInternalError
+		res.Error = streamErr.Error()
+		r.emitEnd(o.EventSink, res)
+		return nil, errs.Wrap(errs.KindInternal, streamErr, "stream ended before the turn completed (session %s)", sessionID)
 	default:
-		res.Status = output.StatusCompleted
+		// Context ended without a signal/timeout and no stream error —
+		// treat as internal (should not happen).
+		res.Status = output.StatusInternalError
+		res.Error = "run ended without a terminal event"
 	}
 
-	if o.EventSink != nil {
-		doc := RunResultFrom(res)
-		if _, err := o.EventSink.End(doc); err != nil {
-			return nil, errs.Wrap(errs.KindInternal, err, "emit run.end")
-		}
-	}
+	r.emitEnd(o.EventSink, res)
 	return res, nil
 }
 
-// interruptBestEffort asks the backend to stop the current turn; failures
-// are ignored (the run is ending anyway).
-func (r *Runner) interruptBestEffort(ctx context.Context, sessionID string) {
-	ictx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	var detail backend.SessionDetail
-	_ = r.Control.Post(ictx, "/v1/sessions/"+sessionID+"/interrupt", nil, &detail)
-}
-
-// reconcile replays durable history after reconnects are exhausted and
-// looks for the target turn's terminal idle. Returns true when the run
-// can be completed from history.
-func (r *Runner) reconcile(ctx context.Context, m *turn.Machine, sessionID, projectID string, o Options) bool {
-	// The REST history shape differs from the flat SSE frame; decode
-	// into envelopes.
-	var history struct {
-		SessionID string `json:"session_id"`
-		Items     []struct {
-			Seq   int64             `json:"seq"`
-			Event struct {
-				EventType string            `json:"event_type"`
-				Payload   map[string]string `json:"payload"`
-			} `json:"event"`
-			Timestamp *int64  `json:"timestamp"`
-			EventUID  *string `json:"event_uid"`
-		} `json:"items"`
+// emitEnd writes the run.end document exactly once per started run.
+func (r *Runner) emitEnd(sink *output.Sink, res *Result) {
+	if sink == nil {
+		return
 	}
-	rc, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := r.Control.Get(rc, "/v1/sessions/"+sessionID+"/events", &history); err != nil {
-		return false
+	doc := RunResultFrom(res)
+	if _, err := sink.End(doc); err != nil {
+		// End is best-effort on the terminal path; the JSONL stream
+		// already carries the terminal event.
+		return
 	}
-
-	// Feed only frames belonging to the anchored turn; the machine
-	// ignores everything else.
-	for _, it := range history.Items {
-		f := &backend.SSEFrame{
-			Seq:       int(it.Seq),
-			EventType: &it.Event.EventType,
-			Payload:   it.Event.Payload,
-			Timestamp: it.Timestamp,
-			EventUID:  it.EventUID,
-		}
-		if err := r.handleFrame(m, nil, f, o.RunID, sessionID, projectID, nil); err != nil {
-			return false
-		}
-	}
-	return m.Snapshot().Finished()
 }
 
 // RunResultFrom converts a runner Result into the output document.
@@ -327,7 +339,11 @@ func (r *Runner) resolveProject(ctx context.Context, cwd string) (string, error)
 }
 
 func (r *Runner) createSession(ctx context.Context, projectID string, o Options) (*backend.SessionDetail, error) {
-	body := backend.SessionCreateRequest{ProjectID: projectID}
+	perm := o.PermissionMode
+	if perm == "" {
+		perm = defaultPermissionMode
+	}
+	body := backend.SessionCreateRequest{ProjectID: projectID, PermissionMode: &perm}
 	if o.ModelID != "" {
 		body.ModelID = &o.ModelID
 	}
@@ -339,9 +355,6 @@ func (r *Runner) createSession(ctx context.Context, projectID string, o Options)
 	}
 	if o.AgentSlug != "" {
 		body.AgentSlug = &o.AgentSlug
-	}
-	if o.PermissionMode != "" {
-		body.PermissionMode = &o.PermissionMode
 	}
 
 	createCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -375,7 +388,7 @@ func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.S
 	if et == event.EventUser && !m.Snapshot().Anchored {
 		m.Anchor(f.Payload["message_id"])
 	}
-	if !m.Anchored {
+	if !m.Snapshot().Anchored {
 		return nil
 	}
 
@@ -408,9 +421,11 @@ func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.S
 	switch et {
 	case event.EventAssistantDelta, event.EventAssistantText:
 		d := r.Mapper.DecodeDelta(f.Payload)
-		r.finalText += d.Text
-		if r.Stdout != nil && d.Text != "" {
-			fmt.Fprint(r.Stdout, output.NormalizeNewlines(d.Text))
+		m.AppendText(d.Text)
+		if r.human && r.Stdout != nil && d.Text != "" {
+			// Human mode only: the machine protocol streams must never
+			// mix plain text with JSONL/JSON (design §5.2).
+			fmt.Fprint(r.Stdout, output.NormalizeNewlines(errs.Redact(d.Text)))
 		}
 		if err := emit(et, map[string]any{"text": d.Text}); err != nil {
 			return err
@@ -444,6 +459,60 @@ func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.S
 		}
 	}
 	return nil
+}
+
+// interruptBestEffort asks the backend to stop the current turn; failures
+// are ignored (the run is ending anyway).
+func (r *Runner) interruptBestEffort(ctx context.Context, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	ictx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var detail backend.SessionDetail
+	_ = r.Control.Post(ictx, "/v1/sessions/"+sessionID+"/interrupt", nil, &detail)
+}
+
+// reconcile replays durable history after reconnects are exhausted and
+// looks for the target turn's terminal idle. Returns true when the run
+// can be completed from history.
+func (r *Runner) reconcile(ctx context.Context, m *turn.Machine, sessionID, projectID string, o Options) bool {
+	// The REST history shape differs from the flat SSE frame; decode
+	// into envelopes.
+	var history struct {
+		SessionID string `json:"session_id"`
+		Items     []struct {
+			Seq   int64 `json:"seq"`
+			Event struct {
+				EventType string            `json:"event_type"`
+				Payload   map[string]string `json:"payload"`
+			} `json:"event"`
+			Timestamp *int64  `json:"timestamp"`
+			EventUID  *string `json:"event_uid"`
+		} `json:"items"`
+	}
+	rc, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := r.Control.Get(rc, "/v1/sessions/"+sessionID+"/events", &history); err != nil {
+		return false
+	}
+
+	// Feed only frames belonging to the anchored turn; the machine
+	// ignores everything else.
+	seen := map[string]bool{}
+	for _, it := range history.Items {
+		f := &backend.SSEFrame{
+			Seq:       int(it.Seq),
+			EventType: &it.Event.EventType,
+			Payload:   it.Event.Payload,
+			Timestamp: it.Timestamp,
+			EventUID:  it.EventUID,
+		}
+		if err := r.handleFrame(m, seen, f, o.RunID, sessionID, projectID, nil); err != nil {
+			return false
+		}
+	}
+	return m.Snapshot().Finished()
 }
 
 func strOrNil(v *string) string {

@@ -94,6 +94,8 @@ func (s *Sink) End(res RunResult) (int, error) {
 	s.endWritten = true
 
 	if s.Format == "json" {
+		res.FinalMessage = s.policy.RedactField(res.FinalMessage)
+		res.Error = s.policy.RedactField(res.Error)
 		raw, err := res.Marshal()
 		if err != nil {
 			return ExitCodeFor(res.Status), fmt.Errorf("encode result: %w", err)

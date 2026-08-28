@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -119,9 +118,26 @@ func (c *ControlClient) classifyError(resp *http.Response, method, path string) 
 	}
 	var de DetailError
 	if json.Unmarshal(raw, &de) == nil {
-		if s, ok := de.Detail.(string); ok && s != "" {
-			return errs.Wrap(errorKindForStatus(resp.StatusCode), nil,
-				"backend %s %s: %s", method, path, errs.Redact(s))
+		switch d := de.Detail.(type) {
+		case string:
+			if d != "" {
+				return errs.Wrap(errorKindForStatus(resp.StatusCode), nil,
+					"backend %s %s: %s", method, path, errs.Redact(d))
+			}
+		case []any:
+			// FastAPI 422: {"detail": [{"loc": ..., "msg": ..., "type": ...}]}
+			msgs := make([]string, 0, len(d))
+			for _, item := range d {
+				if obj, ok := item.(map[string]any); ok {
+					if msg, ok := obj["msg"].(string); ok && msg != "" {
+						msgs = append(msgs, msg)
+					}
+				}
+			}
+			if len(msgs) > 0 {
+				return errs.Wrap(errorKindForStatus(resp.StatusCode), nil,
+					"backend %s %s: %s", method, path, errs.Redact(strings.Join(msgs, "; ")))
+			}
 		}
 	}
 	if body == "" {
@@ -139,9 +155,4 @@ func errorKindForStatus(status int) errs.Kind {
 	default:
 		return errs.KindInternal
 	}
-}
-
-// FormatHTTPStatus is a small helper for tests and diagnostics.
-func FormatHTTPStatus(status int) string {
-	return fmt.Sprintf("HTTP %d", status)
 }

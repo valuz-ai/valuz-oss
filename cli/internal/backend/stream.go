@@ -86,22 +86,28 @@ func (s *StreamClient) Stream(ctx context.Context, sessionID string, afterSeq in
 }
 
 // reconnectAllowed decides whether a failed connection is worth retrying:
-// only transport/idle failures, never 4xx (auth) or handler errors.
+// only transport/idle failures, never 4xx (auth), frame-too-long, or
+// handler errors (a handler failure is deterministic and would repeat).
 func (s *StreamClient) reconnectAllowed(attempt int, err error) bool {
 	if s.ReconnectMaxAttempts <= 0 || attempt >= s.ReconnectMaxAttempts {
 		return false
 	}
+	if errors.Is(err, errHandler) {
+		return false
+	}
 	var e *errs.Error
 	if errors.As(err, &e) {
-		if e.Kind == errs.KindAuth {
-			return false // 401/403: never retry (design.md §7)
-		}
-		if e.Kind == errs.KindUsage {
-			return false // 4xx: contract violation, not transient
+		switch e.Kind {
+		case errs.KindAuth, errs.KindUsage:
+			return false // auth / contract violations are not transient
 		}
 	}
 	return true
 }
+
+// errHandler marks errors originating from the frame handler; such errors
+// are deterministic and must never trigger reconnects.
+var errHandler = errors.New("frame handler error")
 
 // streamOnce runs a single connection. cursor is updated in place with
 // the last durable heartbeat seq so a reconnect resumes from there.
@@ -150,13 +156,17 @@ func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler Fram
 
 	// The scanner blocks on Read; run it in a goroutine and select on
 	// lines vs. the idle deadline so a silent connection is detectable.
+	// A per-connection cancel ctx guarantees the goroutine can always
+	// exit, even when the read blocks forever (no global timeout).
+	scanCtx, cancelScan := context.WithCancel(ctx)
+	defer cancelScan()
 	lines := make(chan string, 16)
 	go func() {
 		defer close(lines)
 		for scanner.Scan() {
 			select {
 			case lines <- scanner.Text():
-			case <-ctx.Done():
+			case <-scanCtx.Done():
 				return
 			}
 		}
@@ -196,7 +206,10 @@ func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler Fram
 		if f.IsHeartbeat() && cursor != nil && f.Seq > 0 {
 			*cursor = int64(f.Seq)
 		}
-		return handler(ctx, &f)
+		if err := handler(ctx, &f); err != nil {
+			return fmt.Errorf("%w: %v", errHandler, err)
+		}
+		return nil
 	}
 
 	for {
@@ -210,6 +223,10 @@ func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler Fram
 				if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
 					if ctx.Err() != nil {
 						return nil
+					}
+					if errors.Is(err, bufio.ErrTooLong) {
+						// Contract violation, not a transient fault.
+						return errs.New(errs.KindUsage, "SSE frame exceeds the %d MiB limit", 4)
 					}
 					return errs.Wrap(errs.KindInternal, err, "read SSE stream")
 				}
@@ -227,6 +244,9 @@ func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler Fram
 			case strings.HasPrefix(line, "data:"):
 				data := strings.TrimPrefix(line, "data:")
 				data = strings.TrimPrefix(data, " ")
+				if dataBuf.Len()+len(data) > 4<<20 {
+					return errs.New(errs.KindUsage, "SSE frame exceeds the 4 MiB limit")
+				}
 				if dataBuf.Len() > 0 {
 					dataBuf.WriteString("\n")
 				}

@@ -26,13 +26,13 @@ type ProjectList struct {
 
 // SessionCreateRequest mirrors POST /v1/sessions.
 type SessionCreateRequest struct {
-	ProjectID       string  `json:"project_id"`
-	Title           *string `json:"title,omitempty"`
-	ModelID         *string `json:"model_id,omitempty"`
-	ProviderID      *string `json:"provider_id,omitempty"`
-	RuntimeID       *string `json:"runtime_id,omitempty"`
-	PermissionMode  *string `json:"permission_mode,omitempty"`
-	AgentSlug       *string `json:"agent_slug,omitempty"`
+	ProjectID      string  `json:"project_id"`
+	Title          *string `json:"title,omitempty"`
+	ModelID        *string `json:"model_id,omitempty"`
+	ProviderID     *string `json:"provider_id,omitempty"`
+	RuntimeID      *string `json:"runtime_id,omitempty"`
+	PermissionMode *string `json:"permission_mode,omitempty"`
+	AgentSlug      *string `json:"agent_slug,omitempty"`
 }
 
 // SessionMessageRequest mirrors POST /v1/sessions/{id}/messages.
@@ -42,13 +42,13 @@ type SessionMessageRequest struct {
 
 // SessionDetail mirrors GET/POST /v1/sessions (subset used by the CLI).
 type SessionDetail struct {
-	ID            string  `json:"id"`
-	ProjectID     string  `json:"project_id"`
-	Status        string  `json:"status"`
-	Runtime       string  `json:"runtime_provider"`
-	PermissionMode string `json:"permission_mode"`
-	AgentSlug     *string `json:"agent_slug"`
-	ModelID       *string `json:"locked_model_id"`
+	ID             string  `json:"id"`
+	ProjectID      string  `json:"project_id"`
+	Status         string  `json:"status"`
+	Runtime        string  `json:"runtime_provider"`
+	PermissionMode string  `json:"permission_mode"`
+	AgentSlug      *string `json:"agent_slug"`
+	ModelID        *string `json:"locked_model_id"`
 }
 
 // ── Error shapes ────────────────────────────────────────────────────

@@ -44,7 +44,16 @@ func TestRedact(t *testing.T) {
 		{"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc", "no eyJ must survive"},
 		{"token=sk-abc123tokenvalue", "token=[REDACTED]"},
 		{"no secrets here", "no secrets here"},
+		{"the bearer certificates were redeemed", "the bearer certificates were redeemed"},
+		{"token=", "token="},
 		{"api_key: 1234567890abcdef", "api_key: [REDACTED]"},
+		// Review-verified bypasses: opaque tokens after Bearer, tabs,
+		// base64, bare JWT with a short tail.
+		{"Authorization: Bearer sk-9f8a7s6d5f4a3s2d1f", "Authorization: [REDACTED]"},
+		{"Authorization: Bearer\tTOPSECRETTOKEN123456", "Authorization: [REDACTED]"},
+		{"Authorization: Bearer MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", "Authorization: [REDACTED]"},
+		{"token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc", "token [REDACTED]"},
+		{"Bearer xyzzy-secret-token-0001", "[REDACTED]"},
 	}
 	for _, tc := range cases {
 		got := Redact(tc.in)

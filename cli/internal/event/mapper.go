@@ -9,31 +9,6 @@ import (
 	"strings"
 )
 
-// Source distinguishes live frames, history replay and CLI-synthesized
-// events in the JSONL output.
-type Source string
-
-const (
-	SourceLive    Source = "live"
-	SourceHistory Source = "history"
-	SourceCLI     Source = "cli"
-)
-
-// RunEvent is one line of the JSONL event stream (valuz.run-event/v1).
-type RunEvent struct {
-	SchemaVersion string         `json:"schema_version"`
-	RunID         string         `json:"run_id"`
-	SessionID     string         `json:"session_id"`
-	ProjectID     string         `json:"project_id"`
-	MessageID     string         `json:"message_id,omitempty"`
-	EventUID      string         `json:"event_uid,omitempty"`
-	Source        Source         `json:"source"`
-	SourceSeq     *int64         `json:"source_seq"`
-	Timestamp     string         `json:"timestamp,omitempty"`
-	Type          string         `json:"type"`
-	Data          map[string]any `json:"data"`
-}
-
 // Mapper converts frames into typed payloads. The run path consumes the
 // typed payloads; the JSONL renderer emits RunEvents.
 type Mapper struct{}
@@ -81,24 +56,28 @@ type RunError struct {
 	Category string
 }
 
-// Idle is the decoded session.idle payload.
+// Idle is the decoded session.idle payload. On the wire stop_reason is a
+// JSON-encoded dict string (e.g. {"type":"end_turn"} or
+// {"type":"error","category":"execution_error"}); the decoder extracts the
+// type and category so run-state logic compares stable values.
 type Idle struct {
 	StopReason string
+	// StopType is the decoded dict's "type" when parseable.
+	StopType string
+	// StopCategory is the decoded dict's "category" when parseable.
+	StopCategory string
 }
 
-// Usage is the decoded runtime.engine.usage payload.
-type Usage struct {
-	InputTokens     int64
-	OutputTokens    int64
-	CacheReadTokens int64
-	CacheWriteTokens int64
-}
-
-// RequiresAction is the decoded session.requires_action payload.
+// RequiresAction is the decoded session.requires_action payload
+// (keys per event_sse_adapter.py: pending_id/subject/runtime_provider/
+// available_decisions/payload/expires_at/session_rule_preview).
 type RequiresAction struct {
-	PendingID  string
-	ToolUseID  string
-	DecisionType string
+	PendingID          string
+	Subject            string
+	RuntimeProvider    string
+	AvailableDecisions string
+	Payload            string
+	ExpiresAt          string
 }
 
 // DecodeUser extracts the message text ("" when absent).
@@ -127,18 +106,32 @@ func (m *Mapper) DecodeError(p map[string]string) RunError {
 	return RunError{Message: p["message"], Category: p["category"]}
 }
 
-// DecodeIdle extracts the stop reason.
+// DecodeIdle extracts the stop reason, decoding the JSON-dict wire form.
 func (m *Mapper) DecodeIdle(p map[string]string) Idle {
-	return Idle{StopReason: p["stop_reason"]}
+	idle := Idle{StopReason: p["stop_reason"]}
+	var fields map[string]string
+	if JSONData(idle.StopReason, &fields) == nil {
+		idle.StopType = fields["type"]
+		idle.StopCategory = fields["category"]
+	}
+	return idle
+}
+
+// Usage is the decoded runtime.engine.usage payload.
+type Usage struct {
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 // DecodeUsage extracts the four-bucket token counts. Absent/invalid
 // numbers default to 0 (interrupted streams must not crash the parse).
 func (m *Mapper) DecodeUsage(p map[string]string) Usage {
 	return Usage{
-		InputTokens:     atoiSafe(p["input_tokens"]),
-		OutputTokens:    atoiSafe(p["output_tokens"]),
-		CacheReadTokens: atoiSafe(p["cache_read_tokens"]),
+		InputTokens:      atoiSafe(p["input_tokens"]),
+		OutputTokens:     atoiSafe(p["output_tokens"]),
+		CacheReadTokens:  atoiSafe(p["cache_read_tokens"]),
 		CacheWriteTokens: atoiSafe(p["cache_write_tokens"]),
 	}
 }
@@ -146,9 +139,12 @@ func (m *Mapper) DecodeUsage(p map[string]string) Usage {
 // DecodeRequiresAction extracts the pending approval fields.
 func (m *Mapper) DecodeRequiresAction(p map[string]string) RequiresAction {
 	return RequiresAction{
-		PendingID:    p["pending_id"],
-		ToolUseID:    p["tool_use_id"],
-		DecisionType: p["decision_type"],
+		PendingID:          p["pending_id"],
+		Subject:            p["subject"],
+		RuntimeProvider:    p["runtime_provider"],
+		AvailableDecisions: p["available_decisions"],
+		Payload:            p["payload"],
+		ExpiresAt:          p["expires_at"],
 	}
 }
 

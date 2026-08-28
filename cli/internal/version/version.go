@@ -32,14 +32,14 @@ type Capabilities struct {
 
 // Info is the full version JSON document.
 type Info struct {
-	Version        string       `json:"version"`
-	Commit         string       `json:"commit"`
-	BuildTime      string       `json:"build_time"`
-	Go             string       `json:"go"`
-	OS             string       `json:"os"`
-	Arch           string       `json:"arch"`
-	OutputSchemas  []string     `json:"output_schemas"`
-	Capabilities   Capabilities `json:"capabilities"`
+	Version       string       `json:"version"`
+	Commit        string       `json:"commit"`
+	BuildTime     string       `json:"build_time"`
+	Go            string       `json:"go"`
+	OS            string       `json:"os"`
+	Arch          string       `json:"arch"`
+	OutputSchemas []string     `json:"output_schemas"`
+	Capabilities  Capabilities `json:"capabilities"`
 }
 
 // Current assembles the Info for this build. headlessRun reflects whether

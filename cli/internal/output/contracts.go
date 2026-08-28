@@ -8,7 +8,6 @@ package output
 import (
 	"encoding/json"
 	"strings"
-	"time"
 
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 )
@@ -25,6 +24,7 @@ const (
 )
 
 // ExitCodeFor maps a status to its shell exit code (design.md §6.3).
+// Interrupted runs follow the Unix signal convention (128+2).
 func ExitCodeFor(status string) int {
 	switch status {
 	case StatusCompleted:
@@ -39,6 +39,8 @@ func ExitCodeFor(status string) int {
 		return 6
 	case StatusInternalError:
 		return 5
+	case StatusInterrupted:
+		return 130
 	default:
 		return 1
 	}
@@ -154,12 +156,6 @@ func (p RedactPolicy) RedactData(data map[string]any) map[string]any {
 		}
 	}
 	return out
-}
-
-// fmtTime renders RFC3339 with sub-second precision (both the result and
-// the event streams share this format).
-func fmtTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // NormalizeNewlines collapses \r\n and trims trailing whitespace of text

@@ -16,12 +16,12 @@ func TestResolverBackendURLPrecedence(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		flagVal   string
-		envVal    string
-		profile   *Profile
-		port      int
-		want      string
+		name    string
+		flagVal string
+		envVal  string
+		profile *Profile
+		port    int
+		want    string
 	}{
 		{"flag wins", "http://flag:1", "http://env:2", &Profile{BackendURL: "http://prof:3"}, 0, "http://flag:1"},
 		{"env wins over profile", "", "http://env:2", &Profile{BackendURL: "http://prof:3"}, 0, "http://env:2"},
