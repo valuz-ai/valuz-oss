@@ -37,7 +37,11 @@ async def test_effort_patch_preserves_max_input_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stored = ModelSettingsSchema(
-        temperature=0.5, max_tokens=1000, effort="low", max_input_tokens=200_000
+        temperature=0.5,
+        max_tokens=1000,
+        effort="low",
+        max_input_tokens=200_000,
+        input_modalities=["text"],
     )
     captured: dict[str, Any] = {}
 
@@ -45,9 +49,7 @@ async def test_effort_patch_preserves_max_input_tokens(
         captured["model_settings"] = body.model_settings
         return _FakeSession(body.model_settings)
 
-    monkeypatch.setattr(
-        sessions_service, "data_reader", lambda: _FakeReader(_FakeSession(stored))
-    )
+    monkeypatch.setattr(sessions_service, "data_reader", lambda: _FakeReader(_FakeSession(stored)))
     monkeypatch.setattr(sessions_service.kernel_client, "update_session", _fake_update)
     monkeypatch.setattr(sessions_service, "_session_to_detail", lambda s: s)
 
@@ -57,5 +59,8 @@ async def test_effort_patch_preserves_max_input_tokens(
     updated = captured["model_settings"]
     assert updated.effort == "high"
     assert updated.max_input_tokens == 200_000
+    # Capability declaration must survive too — wiping it mid-session would
+    # silently disarm the image gate (docs/design/model-capability).
+    assert updated.input_modalities == ["text"]
     assert updated.temperature == 0.5
     assert updated.max_tokens == 1000

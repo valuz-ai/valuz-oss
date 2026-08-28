@@ -166,12 +166,18 @@ class ModelSettingsSchema(BaseModel):
     window") — set by the host only for channel-declared models the
     SDKs can't know; runtimes derive their auto-compaction triggers
     from it. See ``ModelSettings`` for the per-runtime mapping.
+
+    ``input_modalities`` is the channel-declared input capability
+    (three-state, see ``ModelSettings.input_modalities``): ``None`` =
+    not declared; a declared list missing ``"image"`` makes runtimes
+    gate agent image reads.
     """
 
     temperature: float | None = None
     max_tokens: int | None = None
     effort: EffortLiteral | None = None
     max_input_tokens: int | None = None
+    input_modalities: list[str] | None = None
 
 
 RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]

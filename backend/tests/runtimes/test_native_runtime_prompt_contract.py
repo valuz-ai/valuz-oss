@@ -425,7 +425,11 @@ async def test_deepagents_production_graph_has_no_host_research_controller(
         workspace_root=str(tmp_path),
     )
     monkeypatch.setattr(runtime_module, "create_deep_agent", _create_deep_agent)
-    monkeypatch.setattr(runtime_module, "_build_local_shell_backend", lambda _root: object())
+    monkeypatch.setattr(
+        runtime_module,
+        "_build_local_shell_backend",
+        lambda _root, **_kwargs: object(),
+    )
     monkeypatch.setattr(runtime, "_build_model_client", lambda _session: object())
     monkeypatch.setattr(runtime, "_build_tools", lambda: [])
     monkeypatch.setattr(runtime, "_build_mcp_tools", _no_mcp)
@@ -473,7 +477,11 @@ async def test_deepagents_always_registers_source_metadata_when_citation_is_off(
         workspace_root=str(tmp_path),
     )
     monkeypatch.setattr(runtime_module, "create_deep_agent", _create_deep_agent)
-    monkeypatch.setattr(runtime_module, "_build_local_shell_backend", lambda _root: object())
+    monkeypatch.setattr(
+        runtime_module,
+        "_build_local_shell_backend",
+        lambda _root, **_kwargs: object(),
+    )
     monkeypatch.setattr(runtime, "_build_model_client", lambda _session: object())
     monkeypatch.setattr(runtime, "_build_tools", lambda: [])
     monkeypatch.setattr(runtime, "_build_mcp_tools", _no_mcp)
@@ -526,7 +534,11 @@ async def test_deepagents_subagents_receive_only_the_minimal_citation_protocol(
         workspace_root=str(tmp_path),
     )
     monkeypatch.setattr(runtime_module, "create_deep_agent", _create_deep_agent)
-    monkeypatch.setattr(runtime_module, "_build_local_shell_backend", lambda _root: object())
+    monkeypatch.setattr(
+        runtime_module,
+        "_build_local_shell_backend",
+        lambda _root, **_kwargs: object(),
+    )
     monkeypatch.setattr(runtime, "_build_model_client", lambda _session: object())
     monkeypatch.setattr(runtime, "_build_tools", lambda: [])
     monkeypatch.setattr(runtime, "_build_mcp_tools", _no_mcp)

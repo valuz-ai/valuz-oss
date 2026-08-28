@@ -87,6 +87,7 @@ from src.core.types import (
     StopReason,
     UserMessage,
     is_bare_completion,
+    model_rejects_images,
 )
 
 # Approval bridge — pure helpers live in ``approval_bridge.py``; we
@@ -2039,6 +2040,17 @@ def _build_config_overrides(
         )
         if provider is None:
             overrides.append('web_search="disabled"')
+
+    # Model-capability image gate (docs/design/model-capability): a model
+    # that explicitly declares no image input gets no ``view_image`` tool at
+    # all — the cheapest possible gate (the tool is simply not registered, so
+    # no image block can ever enter the request). Three-state: an undeclared
+    # model keeps the tool exactly as today.
+    if (
+        model_rejects_images(session.model_settings)
+        and "include_view_image_tool=false" not in overrides
+    ):
+        overrides.append("include_view_image_tool=false")
 
     # ``model_reasoning_summary``: subprocess-global default for
     # whether codex requests reasoning summaries from the model. The

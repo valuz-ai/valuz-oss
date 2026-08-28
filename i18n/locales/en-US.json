@@ -2489,6 +2489,9 @@
       "zoomInLabel": "Zoom in",
       "zoomOut": "Zoom out",
       "zoomOutLabel": "Zoom out"
+    },
+    "modelBadge": {
+      "image": "Image"
     }
   },
   "agent": {

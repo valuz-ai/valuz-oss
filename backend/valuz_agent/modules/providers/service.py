@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
@@ -720,6 +721,7 @@ def _resolve_models(row: ProviderRow) -> list[LLMModel]:
                     label=label or fallback_labels.get(mid),
                     selection_hint=selection_hint,
                     max_input_tokens=_coerce_max_input_tokens(item.get("max_input_tokens")),
+                    input_modalities=_coerce_input_modalities(item.get("input_modalities")),
                 )
             )
     return models
@@ -730,6 +732,20 @@ def _coerce_max_input_tokens(raw: object) -> int | None:
     if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
         return None
     return raw
+
+
+def _coerce_input_modalities(raw: object) -> tuple[str, ...] | None:
+    """Validate a stored ``input_modalities`` entry — non-empty string tuple
+    or None.
+
+    Three-state (docs/design/model-capability): anything but a non-empty list
+    of strings collapses to ``None`` ("not declared"), so a malformed stored
+    value can never gate a model.
+    """
+    if not isinstance(raw, list) or not raw:
+        return None
+    values = tuple(v for v in raw if isinstance(v, str) and v)
+    return values or None
 
 
 def declared_model_max_input_tokens(row: ProviderRow, model_id: str) -> int | None:
@@ -743,6 +759,20 @@ def declared_model_max_input_tokens(row: ProviderRow, model_id: str) -> int | No
     for m in _resolve_models(row):
         if m.id == model_id:
             return m.max_input_tokens
+    return None
+
+
+def declared_model_input_modalities(row: ProviderRow, model_id: str) -> tuple[str, ...] | None:
+    """The row's declared input modalities for ``model_id``, or ``None``.
+
+    Same shape as ``declared_model_max_input_tokens``: public lookup for
+    ``provider_resolver``; user rows declare through stored dict model
+    entries, contributed (ADR-011) channels declare through
+    ``LLMModel.input_modalities`` directly and don't come through here.
+    """
+    for m in _resolve_models(row):
+        if m.id == model_id:
+            return m.input_modalities
     return None
 
 
@@ -763,14 +793,11 @@ def _models_with_runtimes(row: ProviderRow, compatible: list[str]) -> list[LLMMo
 
     ch_runtimes = tuple(runtimes_for(compatible, provider_kind=row.provider_kind))
 
+    # ``replace`` (not a field-by-field constructor) so every other LLMModel
+    # field — max_input_tokens, input_modalities, whatever comes next — rides
+    # through without this site having to know about it.
     stamped = [
-        LLMModel(
-            id=m.id,
-            label=m.label,
-            selection_hint=m.selection_hint,
-            runtimes=(m.runtimes if m.runtimes is not None else ch_runtimes),
-            max_input_tokens=m.max_input_tokens,
-        )
+        (m if m.runtimes is not None else dataclasses.replace(m, runtimes=ch_runtimes))
         for m in _resolve_models(row)
     ]
     if not stamped and row.default_model:
@@ -791,16 +818,10 @@ def _stamp_contributed_runtimes(ch: LLMChannel) -> LLMChannel:
     ch_runtimes = tuple(runtimes_for(ch.compatible_protocols, provider_kind=ch.provider_kind))
     # ``ch`` is a fresh per-call object from the contributor; ``LLMChannel`` is a
     # mutable dataclass and ``LLMModel`` is frozen, so rebuild the model rows.
+    # ``replace`` keeps every other declared field (max_input_tokens,
+    # input_modalities, …) without enumerating them here.
     ch.models = [
-        m
-        if m.runtimes is not None
-        else LLMModel(
-            id=m.id,
-            label=m.label,
-            selection_hint=m.selection_hint,
-            runtimes=ch_runtimes,
-            max_input_tokens=m.max_input_tokens,
-        )
+        (m if m.runtimes is not None else dataclasses.replace(m, runtimes=ch_runtimes))
         for m in ch.models
     ]
     return ch

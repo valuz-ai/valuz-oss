@@ -2876,6 +2876,7 @@ I18nKey = Literal[
     "ui.fontSize.comfortable",
     "ui.fontSize.compact",
     "ui.fontSize.default",
+    "ui.modelBadge.image",
     "ui.providerAdd.connectFailed",
     "ui.providerAdd.connectSuccess",
     "ui.providerAdd.description",

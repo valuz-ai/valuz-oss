@@ -103,6 +103,8 @@ export interface ModelOption {
   label: string;
   /** Optional suffix rendered only while choosing a model. */
   selection_hint?: string | null;
+  /** Declared input modalities; absent/null = not declared (no badge). */
+  input_modalities?: string[] | null;
   /** Every runtime this model can run on, priority-ordered. */
   runtimes: RuntimeId[];
   /** Preferred runtime for a one-click pick (= ``runtimes[0]``). */
@@ -177,11 +179,14 @@ export const settingsApi = {
     /** One of the 5 EffortLevel values. Omit to leave unchanged. */
     default_effort?: EffortLevel;
   }): Promise<ModelDefaults> {
-    const result = await fetchJson<ModelDefaults>("/v1/settings/model-defaults", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await fetchJson<ModelDefaults>(
+      "/v1/settings/model-defaults",
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
     invalidateRequestCache({ tags: ["settings:model-defaults"] });
     return result;
   },
