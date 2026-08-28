@@ -57,27 +57,15 @@ func newRunCmd() *cobra.Command {
 			}
 
 			// SIGINT/SIGTERM cancel the run gracefully; the exit code
-			// follows the Unix signal convention (128+signum). The signal
-			// name is propagated to the runner so the outcome is
-			// classified as interrupted rather than completed.
+			// follows the Unix signal convention (128+signum). The runner
+			// classifies a cancelled context as interrupted; the concrete
+			// signal name is read back from the channel afterwards (a
+			// goroutine-assigned variable would race with the runner).
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 			defer signal.Stop(sigCh)
 			runCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			sigName := ""
-			go func() {
-				select {
-				case s := <-sigCh:
-					switch s {
-					case syscall.SIGTERM:
-						sigName = "SIGTERM"
-					default:
-						sigName = "SIGINT"
-					}
-				case <-runCtx.Done():
-				}
-			}()
 
 			runID := newRunID()
 			sink, err := output.NewSink(outputFormat, cmd.OutOrStdout(), trajectory)
@@ -104,15 +92,24 @@ func newRunCmd() *cobra.Command {
 				Timeout:        timeout,
 				RunID:          runID,
 				EventSink:      sink,
-				Signal:         sigName,
 				HumanOutput:    human,
 			})
 			if err != nil {
-				// Started-run failures still need their exactly-once
-				// run.end (design §6.2); the sink already received events
-				// from the runner's own terminal path, so a second End is
-				// a no-op guard violation only if we double-call.
 				return err
+			}
+			if res.Status == output.StatusInterrupted {
+				// Fill in the concrete signal name for the exit code.
+				select {
+				case s := <-sigCh:
+					switch s {
+					case syscall.SIGTERM:
+						res.Signal = "SIGTERM"
+					default:
+						res.Signal = "SIGINT"
+					}
+				default:
+					res.Signal = "SIGINT"
+				}
 			}
 			if human {
 				fmt.Fprintln(cmd.OutOrStdout())

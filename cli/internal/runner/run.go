@@ -239,7 +239,11 @@ func (r *Runner) classify(runCtx context.Context, m *turn.Machine, sessionID, pr
 		} else {
 			res.Status = output.StatusCompleted
 		}
-	case o.Signal != "" && runCtx.Err() == context.Canceled:
+	case runCtx.Err() == context.Canceled:
+		// Context cancelled by a signal (or parent ctx): classify as
+		// interrupted. The concrete signal name is filled in by the
+		// command layer from its signal channel (runner can't observe
+		// which signal fired).
 		r.interruptBestEffort(runCtx, sessionID)
 		res.Status = output.StatusInterrupted
 	case runCtx.Err() == context.DeadlineExceeded:
