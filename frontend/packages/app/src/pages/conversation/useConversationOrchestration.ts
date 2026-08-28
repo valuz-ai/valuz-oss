@@ -24,10 +24,7 @@ import {
   type MemberWithAgent,
   resolveApiBase,
 } from "@valuz/core";
-import {
-  fileWritesInTurns,
-  type TurnFileWrite,
-} from "@valuz/shared";
+import { fileWritesInTurns, type TurnFileWrite } from "@valuz/shared";
 import {
   type ApprovalCardSubject,
   type ApprovalResolvedDecision,
@@ -599,14 +596,20 @@ export function useConversationOrchestration({
     remove: removeStagedAttachment,
     claim: claimStagedAttachments,
     restage: restageAttachments,
+    discard: discardStagedAttachments,
     adopt: adoptAttachments,
     settle: settleAttachments,
   } = useStagedAttachments(
     // The backend this conversation runs on. A draft has no session to route
-    // on, so it follows its project.
+    // on, so it follows its project — and with no project, the execution
+    // target it will be created on. Falling through to the module default
+    // instead is what silently lost files: on a multi-target edition a quick
+    // chat set to 云端服务 uploaded to the LOCAL backend, then named those ids
+    // to the cloud one, which has no such rows and binds nothing (qa: the
+    // file stayed staged and the message went out without it).
     selectedProjectId
       ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
-      : undefined,
+      : resolveExecTarget()?.baseUrl,
   );
   const {
     attachments: boundAttachments,
@@ -824,8 +827,7 @@ export function useConversationOrchestration({
   const fileWriteWatchSessionRef = useRef<string | null>(null);
   const refreshOpenArtifacts = artifactFile.refreshOpen;
   useEffect(() => {
-    const keyOf = (write: TurnFileWrite) =>
-      `${write.toolCallId}:${write.path}`;
+    const keyOf = (write: TurnFileWrite) => `${write.toolCallId}:${write.path}`;
     const writes = fileWritesInTurns(turns);
     if (fileWriteWatchSessionRef.current !== selectedSessionId) {
       fileWriteWatchSessionRef.current = selectedSessionId;
@@ -1645,6 +1647,7 @@ export function useConversationOrchestration({
     historyCursorRef,
     claimStagedAttachments,
     restageAttachments,
+    discardStagedAttachments,
     adoptAttachments,
     attachmentsParsing,
     setPendingUserMessage,

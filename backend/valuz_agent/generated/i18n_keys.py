@@ -589,6 +589,7 @@ I18nKey = Literal[
     "conversation.attachmentParsingTitle",
     "conversation.attachmentRef",
     "conversation.attachmentUploadFailed",
+    "conversation.attachmentsClearedOnSwitch",
     "conversation.backToTask",
     "conversation.bgTask.running",
     "conversation.brainOverride",

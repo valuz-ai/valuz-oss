@@ -70,6 +70,24 @@ export interface UseStagedAttachmentsResult {
   /** Put claimed rows back — the send they were claimed for did not happen. */
   restage: (rows: SessionAttachmentItem[]) => void;
   /**
+   * Drop every staged file, deleting the rows this composer put up.
+   *
+   * For the one case where staging stops meaning anything: the backend the
+   * turn will run on changed. A staged row lives on the backend it was
+   * uploaded to and its id means nothing anywhere else, so a turn that names
+   * it on a different backend binds nothing — the message goes out without
+   * the person's file and neither side says a word. (Seen on qa: uploaded on
+   * 本地服务, sent on 云端服务.) Attachment ids are backend-local in exactly
+   * the way provider ids already are, and the composer already resets those
+   * on the same switch.
+   *
+   * Deletes rather than abandons, so the old backend is not left holding an
+   * orphan against the owner's staging cap. Call it BEFORE the base changes:
+   * it deletes through the base it was rendered with, which is the one that
+   * has the rows.
+   */
+  discard: () => Promise<void>;
+  /**
    * Take on files another page already sent, so this one can show them.
    *
    * The project composer posts and navigates without waiting, so the arriving
@@ -254,6 +272,31 @@ export function useStagedAttachments(
     return claimed;
   }, [write]);
 
+  const discard = useCallback(async () => {
+    // Read the ref, not the render value: a switch can land between a render
+    // and the upload that is still resolving, and the ref is the set that
+    // actually exists.
+    const dropped = ref.current;
+    if (dropped.length === 0) return;
+    write(() => []);
+    for (const a of dropped) mineRef.current.delete(a.id);
+    await Promise.all(
+      dropped.map(async (a) => {
+        if (isPlaceholder(a)) {
+          // Still uploading. Recorded so the arriving row undoes itself —
+          // the same contract ``remove`` relies on.
+          removedRef.current.add(a.id);
+          return;
+        }
+        try {
+          await sessionsApi.deleteAttachment(a.id, opts);
+        } catch {
+          /* best-effort: the staging cap reclaims anything left behind */
+        }
+      }),
+    );
+  }, [opts, write]);
+
   const adopt = useCallback((rows: SessionAttachmentItem[]) => {
     if (rows.length === 0) return;
     setInFlight((prev) => {
@@ -290,6 +333,7 @@ export function useStagedAttachments(
     remove,
     claim,
     restage,
+    discard,
     adopt,
     settle,
   };

@@ -1,6 +1,7 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowDown } from "lucide-react";
+import { toast } from "sonner";
 import {
   getDefaultExecutionTarget,
   sessionsApi,
@@ -69,6 +70,9 @@ type ComposerPaneProps = {
   sessionExecOrigin: ComposerConfig["sessionExecOrigin"];
   execTargetId: string | null;
   setExecTargetId: Dispatch<SetStateAction<string | null>>;
+  /** Staged files belong to the backend they were uploaded to — see the
+   *  switch handler below and ``useStagedAttachments.discard``. */
+  discardStagedAttachments: () => Promise<void>;
   setSelectedProviderId: Dispatch<SetStateAction<string | null>>;
   setSelectedModelId: Dispatch<SetStateAction<string | null>>;
   projects: ProjectListItem[];
@@ -96,9 +100,7 @@ type ComposerPaneProps = {
     SetStateAction<"low" | "medium" | "high" | "xhigh" | "max" | null>
   >;
   selectedSessionMode: "default" | "plan" | "goal";
-  setSelectedSessionMode: Dispatch<
-    SetStateAction<"default" | "plan" | "goal">
-  >;
+  setSelectedSessionMode: Dispatch<SetStateAction<"default" | "plan" | "goal">>;
   selectedAgentSkillItems: ComposerConfig["selectedAgentSkillItems"];
   composerMentionSkills: ComposerConfig["composerMentionSkills"];
   availableSkills: SkillView[];
@@ -163,6 +165,7 @@ export function ComposerPane({
   interruptRef,
   sessionAttachments,
   handleRemoveSessionAttachment,
+  discardStagedAttachments,
   composerAgents,
   sessionAgentSlug,
   selectedAgentSlug,
@@ -412,6 +415,19 @@ export function ComposerPane({
               lockedOriginId={sessionExecOrigin}
               targetId={execTargetId}
               onTargetChange={(tid) => {
+                // Attachment ids are backend-local in exactly the way the
+                // provider ids below are, and a staged file only exists on
+                // the backend it was uploaded to. Carrying the chips across
+                // a switch is what produced a silent loss: the turn named
+                // ids the new backend has never seen, bound nothing, and the
+                // message went out without the file. Drop them here — before
+                // the switch, so the delete reaches the backend that has
+                // them — and say so, since a chip vanishing on its own is
+                // not an explanation.
+                if (sessionAttachments.length > 0) {
+                  void discardStagedAttachments();
+                  toast.info(t("conversation.attachmentsClearedOnSwitch"));
+                }
                 setExecTargetId(tid);
                 // Provider ids are backend-local. Clear the old pick while
                 // the newly selected service's list is loading.

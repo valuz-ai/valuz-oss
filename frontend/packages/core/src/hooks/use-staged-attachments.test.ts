@@ -138,6 +138,36 @@ describe("useStagedAttachments", () => {
     expect(listStagedAttachments).toHaveBeenCalledWith({ baseUrl: base });
   });
 
+  it("discards staged files on the backend they were uploaded to", async () => {
+    // The switch case: a staged row only exists on the backend that took the
+    // upload, so when the turn's backend changes the composer drops them —
+    // deleting, not abandoning, and through the base it still holds. Carrying
+    // them across instead is what lost a file silently: the turn named ids the
+    // new backend had never seen, bound nothing, and said nothing.
+    const base = "https://cloud.example/agent";
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments(base));
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+    expect(result.current.attachments).toHaveLength(1);
+
+    await act(async () => {
+      await result.current.discard();
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+    expect(deleteAttachment).toHaveBeenCalledWith("srv1", { baseUrl: base });
+  });
+
+  it("discarding nothing touches no backend", async () => {
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.discard();
+    });
+    expect(deleteAttachment).not.toHaveBeenCalled();
+  });
+
   it("keeps polling until the parse settles", async () => {
     uploadAttachment.mockResolvedValue(row({ parse_status: "parsing" }));
     listStagedAttachments
