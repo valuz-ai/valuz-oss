@@ -93,6 +93,7 @@ func Root() *cobra.Command {
 		newDesktopCmd(),
 		newTUICmd(),
 		newVersionCmd(),
+		newRunCmd(),
 	)
 	return root
 }

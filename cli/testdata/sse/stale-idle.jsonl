@@ -1,6 +1,5 @@
-{"seq": 6001, "event_type": "message.user", "payload": {"text": "Question one", "attachments": "[]", "message_id": "msg-0006"}, "timestamp": 1785600501000, "event_uid": "uid-0601"}
-{"seq": 6002, "event_type": "message.assistant.delta", "payload": {"text": "Answer to the first question.", "message_id": "msg-0006"}, "timestamp": 1785600501500, "event_uid": "uid-0602"}
-{"seq": 6003, "event_type": "session.idle", "payload": {"stop_reason": "completed", "message_id": "msg-0006"}, "timestamp": 1785600501600, "event_uid": "uid-0603"}
-{"seq": 6004, "event_type": "message.user", "payload": {"text": "Question two", "attachments": "[]", "message_id": "msg-0007"}, "timestamp": 1785600601000, "event_uid": "uid-0604"}
-{"seq": 6005, "event_type": "message.assistant.delta", "payload": {"text": "Working on question two...", "message_id": "msg-0007"}, "timestamp": 1785600601500, "event_uid": "uid-0605"}
-{"seq": 6006, "event_type": "session.idle", "payload": {"stop_reason": "completed", "message_id": "msg-0007"}, "timestamp": 1785600602000, "event_uid": "uid-0606"}
+{"seq": 6001, "event_type": "message.user", "payload": {"text": "Question two", "attachments": "[]", "message_id": "msg-0007"}, "timestamp": 1785600601000, "event_uid": "uid-0601"}
+{"seq": 6002, "event_type": "message.assistant.delta", "payload": {"text": "Working on question two...", "message_id": "msg-0007"}, "timestamp": 1785600601500, "event_uid": "uid-0602"}
+{"seq": 6003, "event_type": "session.idle", "payload": {"stop_reason": "completed", "message_id": "msg-0006"}, "timestamp": 1785600601600, "event_uid": "uid-0603"}
+{"seq": 6004, "event_type": "runtime.engine.usage", "payload": {"input_tokens": "900", "output_tokens": "120", "cache_read_tokens": "0", "cache_write_tokens": "0", "model_usage": "{}", "message_id": "msg-0007"}, "timestamp": 1785600601700, "event_uid": "uid-0604"}
+{"seq": 6005, "event_type": "session.idle", "payload": {"stop_reason": "completed", "message_id": "msg-0007"}, "timestamp": 1785600602000, "event_uid": "uid-0605"}
