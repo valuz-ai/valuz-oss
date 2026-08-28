@@ -28,7 +28,10 @@ import {
   ConnectorConnectDialog,
   type ConnectorAddMode,
 } from "@valuz/app/components";
-import { ResourceActionSlot } from "../components/ResourceActionSlot";
+import {
+  ResourceActionSlot,
+  ResourceDetailActionSlot,
+} from "../components/ResourceActionSlot";
 import { isCloudOnlyResource } from "./agent-list-state";
 import { reauthorizePayload, shouldReauthorize } from "./connector-reconnect";
 
@@ -615,6 +618,14 @@ export function ConnectorsPane({
             toolsError={toolsError}
             busy={busyKey === `installed:${selectedInstalled.id}`}
             systemManaged={!canDeleteConnector(selectedInstalled)}
+            headerActions={
+              <ResourceDetailActionSlot
+                resourceType="connector"
+                resource={
+                  selectedInstalled as unknown as Record<string, unknown>
+                }
+              />
+            }
             onConnect={() => handleReconnect(selectedInstalled)}
             onDisconnect={() => {
               if (canDeleteConnector(selectedInstalled)) {
