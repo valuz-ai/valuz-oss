@@ -29,7 +29,11 @@ func newActivityCmd() *cobra.Command {
 			if projectID != "" {
 				path += "&project_id=" + projectID
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var resp backend.RunListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err

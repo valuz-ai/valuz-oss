@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/auth"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 )
 
@@ -62,4 +63,40 @@ func createSession(client *backend.ControlClient, cmd *cobra.Command, projectID 
 // frameJSON renders an SSE frame as a compact JSON document for --output jsonl.
 func frameJSON(f *backend.SSEFrame) ([]byte, error) {
 	return json.Marshal(f)
+}
+
+// resolveBearer returns the effective bearer credential for a command:
+// explicit injection (env/token-file) wins; otherwise the stored login is
+// loaded and refreshed when expired. Returns "" for the OSS local path.
+func resolveBearer(opts *RootOptions) (string, error) {
+	if opts != nil && opts.Token != "" {
+		return opts.Token, nil
+	}
+	store := auth.NewStore()
+	pair, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	if pair == nil || pair.AccessToken == "" {
+		return "", nil
+	}
+	if !pair.Expired() {
+		return pair.AccessToken, nil
+	}
+	if pair.RefreshToken == "" {
+		return "", nil
+	}
+	cloudURL := ""
+	if opts != nil {
+		cloudURL = opts.CloudURL
+	}
+	client := auth.NewClient(cloudURL)
+	renewed, err := client.Refresh(pair.RefreshToken)
+	if err != nil {
+		return "", err
+	}
+	if err := store.Save(renewed); err != nil {
+		return "", err
+	}
+	return renewed.AccessToken, nil
 }

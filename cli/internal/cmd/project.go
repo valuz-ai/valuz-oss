@@ -41,7 +41,11 @@ func newProjectMembersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			pid := ""
 			if len(args) == 1 {
 				pid = args[0]
@@ -95,7 +99,11 @@ func newProjectDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			pid, err := idOrResolve(client, cmd.Context(), projectID, cwd)
 			if err != nil {
 				return err
@@ -137,7 +145,11 @@ func newProjectListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var list backend.ProjectList
 			if err := client.Get(cmd.Context(), "/v1/projects", &list); err != nil {
 				return err
@@ -166,7 +178,11 @@ func newProjectShowCmd() *cobra.Command {
 			if len(args) == 1 {
 				id = args[0]
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 
 			// Resolve id from cwd when no positional id is given (same
 			// normalization the run path uses, so `--cwd` and
@@ -214,7 +230,11 @@ func newProjectCreateCmd() *cobra.Command {
 			if err != nil {
 				return errs.Wrap(errs.KindUsage, err, "resolve --cwd")
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var created backend.Project
 			body := backend.Project{Name: args[0], RootPath: abs}
 			if err := client.Post(cmd.Context(), "/v1/projects", body, &created); err != nil {

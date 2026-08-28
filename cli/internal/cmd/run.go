@@ -227,11 +227,13 @@ func resolvePrompt(prompt, file string, stdin bool, cmd *cobra.Command) (string,
 	return prompt, nil
 }
 
-// bearerToken is the Slice 2 placeholder: no raw --token flag exists yet;
-// the env/token-file path arrives in Slice 5. Keep the wire ready.
+// bearerToken returns the resolved bearer credential from the global
+// options (VALUZ_BACKEND_TOKEN env or --token-file).
 func bearerToken(opts *RootOptions) string {
-	_ = opts
-	return ""
+	if opts == nil {
+		return ""
+	}
+	return opts.Token
 }
 
 func newRunID() string {

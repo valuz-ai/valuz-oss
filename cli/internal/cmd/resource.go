@@ -40,7 +40,11 @@ func newResourceAgentsCmd() *cobra.Command {
 			if source != "" {
 				path += "?source=" + source
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var resp backend.AgentListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
@@ -66,7 +70,11 @@ func newResourceAgentShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var a backend.Agent
 			if err := client.Get(cmd.Context(), "/v1/agents/"+args[0], &a); err != nil {
 				return err
@@ -101,7 +109,11 @@ func newResourceSkillsCmd() *cobra.Command {
 			if category != "" {
 				path += "?category=" + category
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var resp backend.SkillListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
@@ -130,7 +142,11 @@ func newResourceConnectorsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var resp backend.ConnectorListResponse
 			if err := client.Get(cmd.Context(), "/v1/connectors", &resp); err != nil {
 				return err

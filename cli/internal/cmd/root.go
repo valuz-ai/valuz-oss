@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +26,8 @@ const (
 	flagBackendURL = "backend-url"
 	flagDebug      = "debug"
 	flagOutput     = "output"
+	flagTokenFile  = "token-file"
+	flagCloudURL   = "cloud-url"
 )
 
 // RootOptions carries the resolved product-shell options for a command.
@@ -39,6 +42,11 @@ type RootOptions struct {
 	Debug bool
 	// Output is the machine-output protocol ("" = human).
 	Output string
+	// Token is the bearer credential for commercial backends
+	// (VALUZ_BACKEND_TOKEN env or --token-file; never a raw flag).
+	Token string
+	// CloudURL is the control-plane base URL (login/refresh/identity).
+	CloudURL string
 }
 
 // ResolveProfile loads the named profile via the product shell's store.
@@ -81,6 +89,8 @@ func Root() *cobra.Command {
 	pf.String(flagProfile, "", "named profile (default: discovery/env only)")
 	pf.String(flagBackendURL, "", "backend base URL override (default: env > profile > discovery)")
 	pf.Bool(flagDebug, false, "verbose redacted error chains on stderr")
+	pf.String(flagTokenFile, "", "read the bearer token from a file (0600; env VALUZ_BACKEND_TOKEN also accepted)")
+	pf.String(flagCloudURL, "", "control-plane base URL (default: env VALUZ_CLOUD_URL or dev 127.0.0.1:8001/cloud)")
 	root.AddCommand(
 		newStartCmd(),
 		newStopCmd(),
@@ -100,6 +110,7 @@ func Root() *cobra.Command {
 		newProjectCmd(),
 		newActivityCmd(),
 		newResourceCmd(),
+		newAuthCmd(),
 	)
 	return root
 }
@@ -130,6 +141,16 @@ func resolveRootOptions(cmd *cobra.Command) (*RootOptions, error) {
 		return nil, fmt.Errorf("resolve %s: %w", flagDebug, err)
 	}
 	output, _ := cmd.Flags().GetString(flagOutput)
+	tokenFile, _ := cmd.Flags().GetString(flagTokenFile)
+
+	token, err := resolveToken(tokenFile)
+	if err != nil {
+		return nil, err
+	}
+	cloudURL := os.Getenv("VALUZ_CLOUD_URL")
+	if cloudURL == "" {
+		cloudURL = "http://127.0.0.1:8001/cloud"
+	}
 
 	resolver, err := (&RootOptions{ProfileName: profile}).NewResolver()
 	if err != nil {
@@ -144,7 +165,30 @@ func resolveRootOptions(cmd *cobra.Command) (*RootOptions, error) {
 		BackendURL:  resolvedURL,
 		Debug:       debug,
 		Output:      output,
+		Token:       token,
+		CloudURL:    cloudURL,
 	}, nil
+}
+
+// resolveToken reads the bearer credential: env VALUZ_BACKEND_TOKEN wins,
+// then --token-file (trimmed, must not be empty). The token is never
+// printed, logged or rendered (design §7).
+func resolveToken(tokenFile string) (string, error) {
+	if v := os.Getenv("VALUZ_BACKEND_TOKEN"); v != "" {
+		return strings.TrimSpace(v), nil
+	}
+	if tokenFile == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", errs.Wrap(errs.KindUsage, err, "read --token-file %s", tokenFile)
+	}
+	tok := strings.TrimSpace(string(data))
+	if tok == "" {
+		return "", errs.New(errs.KindUsage, "--token-file %s is empty", tokenFile)
+	}
+	return tok, nil
 }
 
 // Execute runs the root command and renders errors through the shell's

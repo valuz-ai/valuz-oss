@@ -52,7 +52,11 @@ func newSessionApproveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var resp struct {
 				SessionID string `json:"session_id"`
 				PendingID string `json:"pending_id"`
@@ -95,7 +99,11 @@ func newSessionCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			_ = quick // --quick is the default fallback; kept for explicitness
 
 			pid, err := idOrQuick(client, cmd.Context(), projectID, cwd)
@@ -144,7 +152,11 @@ func newSessionListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			path := "/v1/sessions"
 			if projectID != "" {
 				path += "?project_id=" + projectID
@@ -177,7 +189,11 @@ func newSessionShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var s backend.SessionDetail
 			if err := client.Get(cmd.Context(), "/v1/sessions/"+args[0], &s); err != nil {
 				return err
@@ -212,7 +228,11 @@ func newSessionInterruptCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var s backend.SessionDetail
 			if err := client.Post(cmd.Context(), "/v1/sessions/"+args[0]+"/interrupt", nil, &s); err != nil {
 				return err
@@ -236,8 +256,12 @@ func newSessionEventsCmd() *cobra.Command {
 				return err
 			}
 			sessionID := args[0]
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
-			streamClient := backend.NewStreamClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
+			streamClient := backend.NewStreamClient(opts.BackendURL, token)
 			streamClient.ReconnectMaxAttempts = 0
 
 			if stream {
@@ -302,7 +326,11 @@ func newSessionSendCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, bearerToken(opts))
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := backend.NewControlClient(opts.BackendURL, token)
 			var s backend.SessionDetail
 			if err := client.Post(cmd.Context(), "/v1/sessions/"+args[0]+"/messages",
 				backend.SessionMessageRequest{Prompt: prompt}, &s); err != nil {
