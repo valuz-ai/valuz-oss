@@ -231,8 +231,8 @@ describe("MarketplacePage", () => {
           label: "金融投资",
           count: 8,
           subcategories: [
-            { key: "brokerage", label: "券商接入" },
-            { key: "market-data", label: "市场与金融数据" },
+            { key: "brokerage", label: "券商接入", count: 7 },
+            { key: "market-data", label: "市场与金融数据", count: 1 },
           ],
         },
       ],
@@ -240,11 +240,15 @@ describe("MarketplacePage", () => {
     });
     renderPage("/marketplace?tab=connectors");
 
-    const brokerage = await screen.findByRole("button", { name: "券商接入" });
+    const brokerage = await screen.findByRole("button", { name: /券商接入/ });
     expect(screen.queryByRole("button", { name: /金融投资/ })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "市场与金融数据" }),
+      screen.getByRole("button", { name: /市场与金融数据/ }),
     ).toBeTruthy();
+    expect(brokerage.textContent).toContain("7");
+    expect(
+      screen.getByRole("button", { name: /市场与金融数据/ }).textContent,
+    ).toContain("1");
 
     fireEvent.click(brokerage);
 

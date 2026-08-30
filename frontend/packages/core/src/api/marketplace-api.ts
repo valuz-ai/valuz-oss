@@ -211,6 +211,7 @@ export interface MarketplaceItemList {
 export interface MarketplaceSubcategory {
   key: string;
   label: string;
+  count?: number | null;
 }
 
 export interface MarketplaceCategory {
