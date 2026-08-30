@@ -1046,6 +1046,7 @@ I18nKey = Literal[
     "marketplace.connectorRequiredFields",
     "marketplace.connectorRunMode",
     "marketplace.connectorVerified",
+    "marketplace.connectorViewDetails",
     "marketplace.connectorViewOfficialDetails",
     "marketplace.connectorViewOnModelScope",
     "marketplace.connectorViews",

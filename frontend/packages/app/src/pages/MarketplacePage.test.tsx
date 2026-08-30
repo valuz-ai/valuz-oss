@@ -223,7 +223,7 @@ describe("MarketplacePage", () => {
     );
   });
 
-  it("sends the selected Finance secondary category on connector queries", async () => {
+  it("replaces Finance primary categories with their secondary categories", async () => {
     vi.mocked(marketplaceApi.categories).mockResolvedValue({
       categories: [
         {
@@ -240,8 +240,13 @@ describe("MarketplacePage", () => {
     });
     renderPage("/marketplace?tab=connectors");
 
-    fireEvent.click(await screen.findByRole("button", { name: /金融投资/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "券商接入" }));
+    const brokerage = await screen.findByRole("button", { name: "券商接入" });
+    expect(screen.queryByRole("button", { name: /金融投资/ })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "市场与金融数据" }),
+    ).toBeTruthy();
+
+    fireEvent.click(brokerage);
 
     await waitFor(() => {
       expect(listSpy).toHaveBeenCalledWith(

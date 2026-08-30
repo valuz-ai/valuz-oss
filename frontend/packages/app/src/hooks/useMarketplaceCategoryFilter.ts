@@ -16,16 +16,6 @@ export function useMarketplaceCategoryFilter(kind: MarketplaceCategoryKind) {
       .then((response) => {
         if (cancelled) return;
         setCategories(response.categories);
-        const financeOnly =
-          response.categories.length === 1 &&
-          response.categories[0]?.key === "finance" &&
-          (response.categories[0].subcategories?.length ?? 0) > 0;
-        if (financeOnly) {
-          // Finance editions intentionally expose only the Finance primary
-          // category. Select it automatically so the useful second level is
-          // visible immediately instead of hiding behind a redundant click.
-          setCategory((current) => current ?? "finance");
-        }
       })
       .catch(() => {
         if (!cancelled) setCategories([]);
