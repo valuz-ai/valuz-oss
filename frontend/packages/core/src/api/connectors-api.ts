@@ -103,6 +103,7 @@ export interface CreateConnectorRequest {
   oauth_authorization_endpoint?: string | null;
   oauth_token_endpoint?: string | null;
   oauth_registration_endpoint?: string | null;
+  oauth_scopes?: string[];
   // Stdio
   command?: string | null;
   args?: string[];

@@ -104,6 +104,10 @@ export interface MarketplaceConnectorConfig {
   headers: Record<string, string>;
   params: Record<string, string>;
   auth_type: "none" | "bearer" | "oauth";
+  oauth_authorization_endpoint?: string | null;
+  oauth_token_endpoint?: string | null;
+  oauth_registration_endpoint?: string | null;
+  oauth_scopes?: string[];
   fields: MarketplaceConnectorConfigField[];
   supported: boolean;
   unsupported_reason?: string | null;

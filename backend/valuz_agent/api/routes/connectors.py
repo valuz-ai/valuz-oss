@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.api.deps import get_current_user_id
@@ -225,6 +225,7 @@ class CreateConnectorRequest(BaseModel):
     oauth_authorization_endpoint: str | None = None
     oauth_token_endpoint: str | None = None
     oauth_registration_endpoint: str | None = None
+    oauth_scopes: list[str] = Field(default_factory=list)
     # Stdio
     command: str | None = None
     args: list[str] = []
@@ -537,6 +538,7 @@ async def create_connector(
                 authorization_endpoint=static_auth,
                 token_endpoint=static_token,
                 registration_endpoint=static_reg,
+                scopes_supported=body.oauth_scopes,
             )
         else:
             discover = OAuthDiscoverHelper(server_url)
@@ -559,6 +561,7 @@ async def create_connector(
             grant_types=["authorization_code"],
             response_types=["code"],
             token_endpoint_auth_method="none",
+            scope=" ".join(oauth_meta.scopes_supported) or None,
         )
         helper = McpOauthHelper(
             server_url=server_url,
@@ -800,8 +803,6 @@ class OAuthCallbackResult(BaseModel):
     connector_id: str
     ok: bool
     error: str | None = None
-
-
 
 
 def _parse_accept_language(header: str | None) -> str:

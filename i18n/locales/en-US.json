@@ -3013,6 +3013,7 @@
     "connectorRunMode": "Run mode",
     "connectorConfiguration": "Connection configuration",
     "connectorViewOnModelScope": "View on ModelScope",
+    "connectorViewOfficialDetails": "View official details",
     "modalVersion": "Version",
     "modalSource": "Source",
     "modalUpdated": "Updated",

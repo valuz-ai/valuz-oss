@@ -18,7 +18,7 @@ import {
   type MarketplaceItem,
   type MarketplaceItemDetail,
 } from "@valuz/core";
-import { formatCount } from "./marketplace-ui";
+import { formatCount, MarketplaceSourcePill } from "./marketplace-ui";
 
 interface MarketplaceConnectorDialogProps {
   item: MarketplaceItem | null;
@@ -118,6 +118,12 @@ export function MarketplaceConnectorDialog({
       transport: config.transport,
       url: config.url ?? undefined,
       auth_type: config.auth_type,
+      oauth_authorization_endpoint:
+        config.oauth_authorization_endpoint ?? undefined,
+      oauth_token_endpoint: config.oauth_token_endpoint ?? undefined,
+      oauth_registration_endpoint:
+        config.oauth_registration_endpoint ?? undefined,
+      oauth_scopes: config.oauth_scopes,
       command: config.command ?? undefined,
       args: config.args,
       env: Object.keys(env).length > 0 ? env : undefined,
@@ -177,7 +183,7 @@ export function MarketplaceConnectorDialog({
         ) : detail && config ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-body">
-              <span>{t("marketplace.sourceModelScope")}</span>
+              <MarketplaceSourcePill source={detail.source} />
               {detail.stats.views != null ? (
                 <span>
                   {t("marketplace.connectorViews", {
@@ -250,7 +256,11 @@ export function MarketplaceConnectorDialog({
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-brand hover:underline"
               >
-                {t("marketplace.connectorViewOnModelScope")}
+                {detail.source === "modelscope"
+                  ? t("marketplace.connectorViewOnModelScope")
+                  : detail.source === "valuz_official"
+                    ? t("marketplace.connectorViewOfficialDetails")
+                    : t("common.viewDetails")}
                 <ExternalLink className="h-3 w-3" />
               </a>
             ) : null}
