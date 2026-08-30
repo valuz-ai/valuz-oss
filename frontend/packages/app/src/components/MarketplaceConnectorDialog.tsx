@@ -183,7 +183,10 @@ export function MarketplaceConnectorDialog({
         ) : detail && config ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-body">
-              <MarketplaceSourcePill source={detail.source} />
+              <MarketplaceSourcePill
+                source={detail.source}
+                itemType={detail.type}
+              />
               {detail.stats.views != null ? (
                 <span>
                   {t("marketplace.connectorViews", {
@@ -258,9 +261,7 @@ export function MarketplaceConnectorDialog({
               >
                 {detail.source === "modelscope"
                   ? t("marketplace.connectorViewOnModelScope")
-                  : detail.source === "valuz_official"
-                    ? t("marketplace.connectorViewOfficialDetails")
-                    : t("common.viewDetails")}
+                  : t("marketplace.connectorViewDetails")}
                 <ExternalLink className="h-3 w-3" />
               </a>
             ) : null}

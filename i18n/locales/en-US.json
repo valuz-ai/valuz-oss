@@ -3012,6 +3012,7 @@
     "connectorVerified": "Verified by ModelScope",
     "connectorRunMode": "Run mode",
     "connectorConfiguration": "Connection configuration",
+    "connectorViewDetails": "View details",
     "connectorViewOnModelScope": "View on ModelScope",
     "connectorViewOfficialDetails": "View official details",
     "modalVersion": "Version",

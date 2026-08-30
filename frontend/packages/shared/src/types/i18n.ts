@@ -1040,6 +1040,7 @@ export type KnownI18nKey =
   | "marketplace.connectorRequiredFields"
   | "marketplace.connectorRunMode"
   | "marketplace.connectorVerified"
+  | "marketplace.connectorViewDetails"
   | "marketplace.connectorViewOfficialDetails"
   | "marketplace.connectorViewOnModelScope"
   | "marketplace.connectorViews"

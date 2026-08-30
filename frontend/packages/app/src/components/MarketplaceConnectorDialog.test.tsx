@@ -69,13 +69,15 @@ describe("MarketplaceConnectorDialog provenance", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows an official source and official detail link for curated connectors", async () => {
+  it("shows the connector type and a generic detail link without official wording", async () => {
     vi.spyOn(marketplaceApi, "get").mockResolvedValue(connectorDetail());
 
     renderDialog();
 
-    expect(await screen.findByText("Valuz 官方")).toBeTruthy();
-    const link = screen.getByRole("link", { name: "查看官方详情" });
+    expect(await screen.findByText("连接器")).toBeTruthy();
+    expect(screen.queryByText("Valuz 官方")).toBeNull();
+    expect(screen.queryByText("官方")).toBeNull();
+    const link = screen.getByRole("link", { name: "查看详情" });
     expect(link.getAttribute("href")).toBe(
       "https://www.snowballsecurities.com/",
     );
@@ -83,7 +85,7 @@ describe("MarketplaceConnectorDialog provenance", () => {
     expect(screen.queryByText("在 ModelScope 查看详情")).toBeNull();
   });
 
-  it("keeps the ModelScope label for ModelScope connectors", async () => {
+  it("keeps the ModelScope detail-link wording for ModelScope connectors", async () => {
     vi.spyOn(marketplaceApi, "get").mockResolvedValue(
       connectorDetail({
         source: "modelscope",

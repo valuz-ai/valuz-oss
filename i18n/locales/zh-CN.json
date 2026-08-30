@@ -3012,6 +3012,7 @@
     "connectorVerified": "ModelScope 已验证",
     "connectorRunMode": "运行方式",
     "connectorConfiguration": "连接配置",
+    "connectorViewDetails": "查看详情",
     "connectorViewOnModelScope": "在 ModelScope 查看详情",
     "connectorViewOfficialDetails": "查看官方详情",
     "modalVersion": "版本",
