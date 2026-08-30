@@ -74,7 +74,7 @@ export function MarketplaceCategoryRail({
     return secondaries.map((secondary) => ({
       key: `${entry.key}:${secondary.key}`,
       label: secondary.label,
-      count: null,
+      count: secondary.count ?? null,
       category: entry.key,
       subcategory: secondary.key,
     }));

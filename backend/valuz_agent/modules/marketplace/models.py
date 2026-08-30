@@ -257,6 +257,7 @@ class MarketplaceItemList(BaseModel):
 class MarketplaceSubcategory(BaseModel):
     key: str
     label: str
+    count: int | None = None
 
 
 class MarketplaceCategory(BaseModel):
