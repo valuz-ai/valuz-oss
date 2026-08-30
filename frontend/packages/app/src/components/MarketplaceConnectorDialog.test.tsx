@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
-import { marketplaceApi } from "@valuz/core";
+import { connectorsApi, marketplaceApi } from "@valuz/core";
 import type { MarketplaceItem, MarketplaceItemDetail } from "@valuz/core";
 import { MarketplaceConnectorDialog } from "./MarketplaceConnectorDialog";
 
@@ -35,6 +35,11 @@ function connectorDetail(
       headers: {},
       params: {},
       auth_type: "oauth",
+      oauth_authorization_endpoint:
+        "https://api.ibkr.com/oauth2/authorize",
+      oauth_token_endpoint: "https://api.ibkr.com/oauth2/api/v1/token",
+      oauth_registration_endpoint: "https://api.ibkr.com/oauth2/register",
+      oauth_scopes: ["mcp.read", "mcp.write"],
       fields: [],
       supported: true,
     },
@@ -94,5 +99,32 @@ describe("MarketplaceConnectorDialog provenance", () => {
         .getByRole("link", { name: "在 ModelScope 查看详情" })
         .getAttribute("href"),
     ).toBe("https://modelscope.cn/mcp/servers/example");
+  });
+
+  it("passes curated OAuth metadata and scopes to connector creation", async () => {
+    vi.spyOn(marketplaceApi, "get").mockResolvedValue(connectorDetail());
+    const create = vi.spyOn(connectorsApi, "create").mockResolvedValue({
+      id: "connector-1",
+      slug: "snowball-securities",
+      needs_auth: false,
+      authorization_url: null,
+    });
+
+    renderDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "添加连接器" }),
+    );
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          oauth_authorization_endpoint:
+            "https://api.ibkr.com/oauth2/authorize",
+          oauth_token_endpoint: "https://api.ibkr.com/oauth2/api/v1/token",
+          oauth_registration_endpoint: "https://api.ibkr.com/oauth2/register",
+          oauth_scopes: ["mcp.read", "mcp.write"],
+        }),
+      ),
+    );
   });
 });

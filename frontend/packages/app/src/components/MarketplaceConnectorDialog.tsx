@@ -118,6 +118,12 @@ export function MarketplaceConnectorDialog({
       transport: config.transport,
       url: config.url ?? undefined,
       auth_type: config.auth_type,
+      oauth_authorization_endpoint:
+        config.oauth_authorization_endpoint ?? undefined,
+      oauth_token_endpoint: config.oauth_token_endpoint ?? undefined,
+      oauth_registration_endpoint:
+        config.oauth_registration_endpoint ?? undefined,
+      oauth_scopes: config.oauth_scopes,
       command: config.command ?? undefined,
       args: config.args,
       env: Object.keys(env).length > 0 ? env : undefined,
