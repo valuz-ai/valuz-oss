@@ -222,4 +222,35 @@ describe("MarketplacePage", () => {
       "true",
     );
   });
+
+  it("sends the selected Finance secondary category on connector queries", async () => {
+    vi.mocked(marketplaceApi.categories).mockResolvedValue({
+      categories: [
+        {
+          key: "finance",
+          label: "金融投资",
+          count: 8,
+          subcategories: [
+            { key: "brokerage", label: "券商接入" },
+            { key: "market-data", label: "市场与金融数据" },
+          ],
+        },
+      ],
+      degraded: false,
+    });
+    renderPage("/marketplace?tab=connectors");
+
+    fireEvent.click(await screen.findByRole("button", { name: /金融投资/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "券商接入" }));
+
+    await waitFor(() => {
+      expect(listSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "connector",
+          category: "finance",
+          subcategory: "brokerage",
+        }),
+      );
+    });
+  });
 });
