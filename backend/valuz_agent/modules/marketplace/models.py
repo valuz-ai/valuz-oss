@@ -106,6 +106,10 @@ class MarketplaceConnectorConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     params: dict[str, str] = Field(default_factory=dict)
     auth_type: Literal["none", "bearer", "oauth"] = "none"
+    oauth_authorization_endpoint: str | None = None
+    oauth_token_endpoint: str | None = None
+    oauth_registration_endpoint: str | None = None
+    oauth_scopes: list[str] = Field(default_factory=list)
     fields: list[MarketplaceConnectorConfigField] = Field(default_factory=list)
     supported: bool = True
     unsupported_reason: str | None = None

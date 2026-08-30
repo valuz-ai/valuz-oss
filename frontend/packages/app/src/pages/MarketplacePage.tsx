@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { SegmentedControl, cn } from "@valuz/ui";
 import type {
-  MarketplaceCategory,
   MarketplaceItem,
   MarketplacePluginComposition,
 } from "@valuz/core";
@@ -23,10 +22,11 @@ import { MarketplacePluginDialog } from "../components/plugins/MarketplacePlugin
 import {
   MarketplaceBadgePill,
   MarketplaceSourcePill,
-  formatCount,
   marketplaceIcon,
   tintFor,
 } from "../components/marketplace-ui";
+import { MarketplaceCategoryRail } from "../components/MarketplaceCategoryRail";
+import { useMarketplaceCategoryFilter } from "../hooks/useMarketplaceCategoryFilter";
 
 export type MarketTab = "agents" | "skills" | "plugins" | "connectors";
 
@@ -503,18 +503,16 @@ function AgentsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   const [subtab, setSubtab] = useState<AgentsSubtab>("single");
   const [teams, setTeams] = useState<MarketplaceItem[]>([]);
   const [templates, setTemplates] = useState<MarketplaceItem[]>([]);
-  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
-  const [category, setCategory] = useState<string | null>(null);
-  useEffect(() => {
-    marketplaceApi
-      .categories("agent")
-      .then((res) => setCategories(res.categories))
-      .catch(() => setCategories([]));
-  }, []);
+  const categoryFilter = useMarketplaceCategoryFilter("agent");
+  const { category, subcategory } = categoryFilter;
 
   useEffect(() => {
     let cancelled = false;
-    const params = { category: category ?? undefined, q: q || undefined };
+    const params = {
+      category: category ?? undefined,
+      subcategory: subcategory ?? undefined,
+      q: q || undefined,
+    };
     marketplaceApi
       .list({ type: "agent_team_template", ...params })
       .then((res) => {
@@ -534,34 +532,22 @@ function AgentsTab({ q, tr, onOpen, withInstalled }: TabProps) {
     return () => {
       cancelled = true;
     };
-  }, [q, category]);
+  }, [q, category, subcategory]);
 
   const teamItems = withInstalled(teams);
   const templateItems = withInstalled(templates);
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* category rail — same pattern as the Skills / Connectors tabs */}
-      <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
-          {tr("marketplace.categories")}
-        </div>
-        <RailItem
-          label={tr("marketplace.filterAll")}
-          count={null}
-          active={category === null}
-          onClick={() => setCategory(null)}
-        />
-        {categories.map((c) => (
-          <RailItem
-            key={c.key}
-            label={c.label}
-            count={c.count ?? null}
-            active={category === c.key}
-            onClick={() => setCategory(c.key)}
-          />
-        ))}
-      </div>
+      <MarketplaceCategoryRail
+        heading={tr("marketplace.categories")}
+        allLabel={tr("marketplace.filterAll")}
+        categories={categoryFilter.categories}
+        category={category}
+        subcategory={subcategory}
+        onCategoryChange={categoryFilter.selectCategory}
+        onSubcategoryChange={categoryFilter.selectSubcategory}
+      />
 
       {/* content — one list at a time, switched by the header sub-tabs
           (D7: 单智能体 first, 团队 second) instead of the old stacked
@@ -697,8 +683,10 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   // 技能 | 套件 (D2/D7): 套件 = ``type=plugin&composition=skills_only`` — the
   // same rows the Plugins tab shows under 技能套件, surfaced here as well.
   const [subtab, setSubtab] = useState<SkillsSubtab>("skills");
-  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
-  const [category, setCategory] = useState<string | null>(null);
+  const categoryFilter = useMarketplaceCategoryFilter(
+    subtab === "suites" ? "plugin" : "skill",
+  );
+  const { category, subcategory } = categoryFilter;
   const [items, setItems] = useState<MarketplaceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -706,28 +694,11 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   const [loading, setLoading] = useState(true);
   const requestSeq = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    marketplaceApi
-      .categories(subtab === "suites" ? "plugin" : "skill")
-      .then((res) => {
-        if (cancelled) return;
-        setCategories(res.categories);
-        if (res.degraded) setDegraded(true);
-      })
-      .catch(() => {
-        if (!cancelled) setCategories([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [subtab]);
-
   const switchSubtab = (next: SkillsSubtab) => {
     if (next === subtab) return;
     setSubtab(next);
     // Category keys differ between the skill and plugin catalogs.
-    setCategory(null);
+    categoryFilter.reset();
   };
 
   const load = useCallback(
@@ -740,6 +711,7 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
             ? { type: "plugin" as const, composition: "skills_only" as const }
             : { type: "skill" as const }),
           category: category ?? undefined,
+          subcategory: subcategory ?? undefined,
           q: q || undefined,
           page: nextPage,
           page_size: SKILL_PAGE_SIZE,
@@ -762,7 +734,7 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           if (seq === requestSeq.current) setLoading(false);
         });
     },
-    [category, q, subtab],
+    [category, q, subcategory, subtab],
   );
 
   useEffect(() => {
@@ -780,27 +752,15 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* category rail */}
-      <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
-          {tr("marketplace.categories")}
-        </div>
-        <RailItem
-          label={tr("marketplace.filterAll")}
-          count={null}
-          active={category === null}
-          onClick={() => setCategory(null)}
-        />
-        {categories.map((c) => (
-          <RailItem
-            key={c.key}
-            label={c.label}
-            count={c.count ?? null}
-            active={category === c.key}
-            onClick={() => setCategory(c.key)}
-          />
-        ))}
-      </div>
+      <MarketplaceCategoryRail
+        heading={tr("marketplace.categories")}
+        allLabel={tr("marketplace.filterAll")}
+        categories={categoryFilter.categories}
+        category={category}
+        subcategory={subcategory}
+        onCategoryChange={categoryFilter.selectCategory}
+        onSubcategoryChange={categoryFilter.selectSubcategory}
+      />
 
       {/* content */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-7 pt-4">
@@ -877,24 +837,14 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   // 全部 | 技能套件 | 含连接器 (D3/D7) — a derived-composition filter over the
   // one ``plugin`` item type; 全部 is the default.
   const [filter, setFilter] = useState<PluginFilter>("all");
-  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
-  const [category, setCategory] = useState<string | null>(null);
+  const categoryFilter = useMarketplaceCategoryFilter("plugin");
+  const { category, subcategory } = categoryFilter;
   const [items, setItems] = useState<MarketplaceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
   const requestSeq = useRef(0);
-
-  useEffect(() => {
-    marketplaceApi
-      .categories("plugin")
-      .then((res) => {
-        setCategories(res.categories);
-        if (res.degraded) setDegraded(true);
-      })
-      .catch(() => setCategories([]));
-  }, []);
 
   const load = useCallback(
     (nextPage: number, append: boolean) => {
@@ -905,6 +855,7 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           type: "plugin",
           composition: filter === "all" ? undefined : filter,
           category: category ?? undefined,
+          subcategory: subcategory ?? undefined,
           q: q || undefined,
           page: nextPage,
           page_size: PLUGIN_PAGE_SIZE,
@@ -927,7 +878,7 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           if (seq === requestSeq.current) setLoading(false);
         });
     },
-    [category, filter, q],
+    [category, filter, q, subcategory],
   );
 
   useEffect(() => {
@@ -952,27 +903,15 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* category rail */}
-      <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
-          {tr("marketplace.categories")}
-        </div>
-        <RailItem
-          label={tr("marketplace.filterAll")}
-          count={null}
-          active={category === null}
-          onClick={() => setCategory(null)}
-        />
-        {categories.map((c) => (
-          <RailItem
-            key={c.key}
-            label={c.label}
-            count={c.count ?? null}
-            active={category === c.key}
-            onClick={() => setCategory(c.key)}
-          />
-        ))}
-      </div>
+      <MarketplaceCategoryRail
+        heading={tr("marketplace.categories")}
+        allLabel={tr("marketplace.filterAll")}
+        categories={categoryFilter.categories}
+        category={category}
+        subcategory={subcategory}
+        onCategoryChange={categoryFilter.selectCategory}
+        onSubcategoryChange={categoryFilter.selectSubcategory}
+      />
 
       {/* content */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-7 pt-4">
@@ -1094,21 +1033,14 @@ function PluginMarketCard({
 /* ── Connectors tab ──────────────────────────────────────────── */
 
 function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
-  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
-  const [category, setCategory] = useState<string | null>(null);
+  const categoryFilter = useMarketplaceCategoryFilter("connector");
+  const { category, subcategory } = categoryFilter;
   const [items, setItems] = useState<MarketplaceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
   const requestSeq = useRef(0);
-
-  useEffect(() => {
-    marketplaceApi
-      .categories("connector")
-      .then((res) => setCategories(res.categories))
-      .catch(() => setCategories([]));
-  }, []);
 
   const load = useCallback(
     (nextPage: number, append: boolean) => {
@@ -1120,6 +1052,7 @@ function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           // origins (crawled + manually curated), not just ModelScope.
           type: "connector",
           category: category ?? undefined,
+          subcategory: subcategory ?? undefined,
           q: q || undefined,
           page: nextPage,
           page_size: CONNECTOR_PAGE_SIZE,
@@ -1143,7 +1076,7 @@ function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           if (seq === requestSeq.current) setLoading(false);
         });
     },
-    [category, q],
+    [category, q, subcategory],
   );
 
   useEffect(() => {
@@ -1160,26 +1093,15 @@ function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   });
   return (
     <div className="flex min-h-0 flex-1">
-      <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
-          {tr("marketplace.categories")}
-        </div>
-        <RailItem
-          label={tr("marketplace.filterAll")}
-          count={null}
-          active={category === null}
-          onClick={() => setCategory(null)}
-        />
-        {categories.map((entry) => (
-          <RailItem
-            key={entry.key}
-            label={entry.label}
-            count={entry.count ?? null}
-            active={category === entry.key}
-            onClick={() => setCategory(entry.key)}
-          />
-        ))}
-      </div>
+      <MarketplaceCategoryRail
+        heading={tr("marketplace.categories")}
+        allLabel={tr("marketplace.filterAll")}
+        categories={categoryFilter.categories}
+        category={category}
+        subcategory={subcategory}
+        onCategoryChange={categoryFilter.selectCategory}
+        onSubcategoryChange={categoryFilter.selectSubcategory}
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-7 pt-4">
         {degraded && <DegradedNotice tr={tr} />}
@@ -1273,38 +1195,6 @@ function ConnectorMarketCard({
             : tr("marketplace.add")}
         </span>
       </div>
-    </button>
-  );
-}
-
-function RailItem({
-  label,
-  count,
-  active,
-  onClick,
-}: {
-  label: string;
-  count: number | null;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left",
-        active
-          ? "bg-brand-light font-semibold text-brand-700"
-          : "text-ink-heading hover:bg-surface-soft",
-      )}
-    >
-      <span className="truncate text-[12.5px]">{label}</span>
-      {count != null && (
-        <span className="ml-2 flex-none text-2xs tabular-nums text-ink-muted">
-          {formatCount(count)}
-        </span>
-      )}
     </button>
   );
 }

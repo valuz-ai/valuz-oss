@@ -52,6 +52,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_OAUTH_USER_AGENT = "Valuz/1.0"
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -67,6 +69,7 @@ class OauthMetadata(BaseModel):
     authorization_endpoint: str
     token_endpoint: str
     registration_endpoint: str | None = None
+    scopes_supported: list[str] = Field(default_factory=list)
     response_types_supported: list[str] = Field(default_factory=lambda: ["code"])
     bearer_methods_supported: list[str] = Field(default_factory=lambda: ["header"])
     grant_types_supported: list[str] = ["authorization_code", "refresh_token"]
@@ -99,6 +102,14 @@ def _base_url(server_url: str) -> str:
 
 
 async def _send(client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
+    # Most calls construct an explicit ``httpx.Request`` and pass it to
+    # ``client.send``. Unlike ``client.get/post``, that path does not merge the
+    # client's default headers, so apply the OAuth client identity here. Some
+    # broker gateways (notably IBKR's Akamai edge) reject the bare httpx
+    # fingerprint while accepting the same standards-compliant request with a
+    # client User-Agent.
+    request.headers.setdefault("User-Agent", _OAUTH_USER_AGENT)
+    request.headers.setdefault("Accept", "application/json")
     return await client.send(request)
 
 
@@ -112,7 +123,11 @@ class OAuthDiscoverHelper:
 
     def __init__(self, server_url: str) -> None:
         self._server_url = server_url
-        self._client = httpx.AsyncClient(timeout=30)
+        self._client = httpx.AsyncClient(
+            timeout=30,
+            http2=True,
+            headers={"User-Agent": _OAUTH_USER_AGENT, "Accept": "application/json"},
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -130,6 +145,7 @@ class OAuthDiscoverHelper:
         values: dict = {
             "authorization_endpoint": str(origin_meta.authorization_endpoint),
             "token_endpoint": str(origin_meta.token_endpoint),
+            "scopes_supported": origin_meta.scopes_supported or [],
             "response_types_supported": origin_meta.response_types_supported,
             "grant_types_supported": origin_meta.grant_types_supported,
             "token_endpoint_auth_methods_supported": (
@@ -143,6 +159,12 @@ class OAuthDiscoverHelper:
                 values["resource"] = str(protected_resource.resource)
             if protected_resource.bearer_methods_supported:
                 values["bearer_methods_supported"] = protected_resource.bearer_methods_supported
+            # The protected resource owns the scopes the MCP endpoint accepts.
+            # Prefer them over the authorization server's broader account/OIDC
+            # scope list (for example IBKR also advertises ``openid`` and
+            # ``profile`` at its authorization server).
+            if protected_resource.scopes_supported:
+                values["scopes_supported"] = protected_resource.scopes_supported
 
         return OauthMetadata.model_validate(values)
 
@@ -290,19 +312,28 @@ class OAuthDiscoverHelper:
         self, auth_server_url: str | None = None
     ) -> McpOAuthMetadata | None:
         for url in self._get_discovery_urls(auth_server_url):
-            req = httpx.Request("GET", url, headers={MCP_PROTOCOL_VERSION: LATEST_PROTOCOL_VERSION})
-            try:
-                resp = await _send(self._client, req)
-            except httpx.HTTPError:
-                continue
-            if resp.status_code == 200:
+            # Some broker gateways intermittently reject a metadata GET with
+            # 403/429 while accepting the same request moments later. Retry
+            # only this idempotent discovery request; registration and token
+            # POSTs remain single-shot.
+            for attempt in range(3):
+                req = httpx.Request(
+                    "GET", url, headers={MCP_PROTOCOL_VERSION: LATEST_PROTOCOL_VERSION}
+                )
                 try:
-                    content = await resp.aread()
-                    return McpOAuthMetadata.model_validate_json(content)
-                except (ValidationError, Exception):
-                    continue
-            elif resp.status_code >= 500:
-                break
+                    resp = await _send(self._client, req)
+                except httpx.HTTPError:
+                    break
+                if resp.status_code == 200:
+                    try:
+                        content = await resp.aread()
+                        return McpOAuthMetadata.model_validate_json(content)
+                    except (ValidationError, Exception):
+                        break
+                if resp.status_code not in {403, 429, 500, 502, 503, 504}:
+                    break
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
         return None
 
 
@@ -334,7 +365,11 @@ class McpOauthHelper:
         self.registration_endpoint = registration_endpoint
         self.client_id = client_id
         self.client_secret = client_secret
-        self._client = httpx.AsyncClient(timeout=30)
+        self._client = httpx.AsyncClient(
+            timeout=30,
+            http2=True,
+            headers={"User-Agent": _OAUTH_USER_AGENT, "Accept": "application/json"},
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -349,16 +384,28 @@ class McpOauthHelper:
         body = self.client_metadata.model_dump(by_alias=True, mode="json", exclude_none=True)
         body["redirect_uris"] = redirect_uris
 
-        req = httpx.Request(
-            "POST",
-            reg_url,
-            json=body,
-            headers={"Content-Type": "application/json"},
-        )
-        resp = await _send(self._client, req)
-        if resp.status_code not in (200, 201):
+        resp: httpx.Response | None = None
+        for attempt in range(3):
+            req = httpx.Request(
+                "POST",
+                reg_url,
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = await _send(self._client, req)
+            if resp.status_code in (200, 201):
+                break
             await resp.aread()
-            raise ValueError(f"Client registration failed: {resp.status_code} {resp.text}")
+            # A broker gateway can transiently reject DCR before the request
+            # reaches the authorization server. Retrying an explicit 403/429
+            # is safe: neither status represents a created registration. Do
+            # not retry ambiguous 5xx/transport failures, which could create a
+            # second client after the first response was lost.
+            if resp.status_code not in {403, 429} or attempt == 2:
+                raise ValueError(f"Client registration failed: {resp.status_code} {resp.text}")
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+        assert resp is not None
 
         content = await resp.aread()
         try:
