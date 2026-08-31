@@ -8,7 +8,6 @@ import {
 import {
   marketplaceApi,
   useTranslation,
-  type MarketplaceCategory,
   type MarketplaceItem,
   type MarketplaceItemDetail,
   type MarketplaceItemType,
@@ -23,17 +22,22 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  FilterPillGroup,
   Input,
   Skeleton,
 } from "@valuz/ui";
 
-import { MarketplaceCategoryRail } from "./MarketplaceCategoryRail";
 import {
   MarketplaceSourcePill,
   marketplaceIcon,
   tintFor,
 } from "./marketplace-ui";
-import { resolveTemplateText, templateResources } from "../lib/template-library";
+import {
+  RECOMMENDED_TEMPLATE_LIMIT,
+  recommendedTemplates,
+  resolveTemplateText,
+  templateResources,
+} from "../lib/template-library";
 
 export type TemplateLibraryKind = "playbook" | "automation";
 
@@ -151,10 +155,7 @@ export function TemplateLibrary({
   onUse,
 }: TemplateLibraryProps) {
   const { t, locale } = useTranslation();
-  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
   const [scenarios, setScenarios] = useState<MarketplaceSubcategory[]>([]);
-  const [category, setCategory] = useState<string | null>(null);
-  const [subcategory, setSubcategory] = useState<string | null>(null);
   const [scenario, setScenario] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MarketplaceItem[]>([]);
@@ -170,12 +171,10 @@ export function TemplateLibrary({
       .categories(kind)
       .then((result) => {
         if (cancelled) return;
-        setCategories(result.categories);
         setScenarios(result.scenario_tags ?? []);
       })
       .catch(() => {
         if (!cancelled) {
-          setCategories([]);
           setScenarios([]);
         }
       });
@@ -191,12 +190,12 @@ export function TemplateLibrary({
     marketplaceApi
       .list({
         type: itemType(kind),
-        category: variant === "full" ? category ?? undefined : undefined,
-        subcategory: variant === "full" ? subcategory ?? undefined : undefined,
         scenario: variant === "full" ? scenario ?? undefined : undefined,
         q: variant === "full" && query.trim() ? query.trim() : undefined,
         page: 1,
-        page_size: variant === "recommended" ? 6 : PAGE_SIZE,
+        // Recommended mode ranks across the full first-release catalog before
+        // projecting its eight empty-state cards.
+        page_size: PAGE_SIZE,
       })
       .then((result) => {
         if (requestId.current === id) setItems(result.items);
@@ -210,22 +209,23 @@ export function TemplateLibrary({
       .finally(() => {
         if (requestId.current === id) setLoading(false);
       });
-  }, [category, kind, query, scenario, subcategory, variant]);
+  }, [kind, query, scenario, variant]);
 
   const scenarioLabels = useMemo(
     () => new Map(scenarios.map((entry) => [entry.key, entry.label])),
     [scenarios],
   );
-  const displayItems = useMemo(
-    () =>
-      items.map((item) => ({
-        ...item,
-        scenario_tags: (item.scenario_tags ?? []).map(
-          (tag) => scenarioLabels.get(tag) ?? tag,
-        ),
-      })),
-    [items, scenarioLabels],
-  );
+  const displayItems = useMemo(() => {
+    const localized = items.map((item) => ({
+      ...item,
+      scenario_tags: (item.scenario_tags ?? []).map(
+        (tag) => scenarioLabels.get(tag) ?? tag,
+      ),
+    }));
+    return variant === "recommended"
+      ? recommendedTemplates(localized, kind)
+      : localized;
+  }, [items, kind, scenarioLabels, variant]);
 
   const openDetail = useCallback((item: MarketplaceItem) => {
     setDetailLoading(true);
@@ -271,35 +271,28 @@ export function TemplateLibrary({
             />
           </div>
           {scenarios.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              <Button
-                size="sm"
-                variant={scenario === null ? "default" : "ghost"}
-                onClick={() => setScenario(null)}
-              >
-                {t("templateLibrary.allScenarios")}
-              </Button>
-              {scenarios.map((entry) => (
-                <Button
-                  key={entry.key}
-                  size="sm"
-                  variant={scenario === entry.key ? "default" : "ghost"}
-                  onClick={() => setScenario(entry.key)}
-                >
-                  {entry.label}
-                  {entry.count != null ? (
-                    <span className="text-2xs text-ink-meta">{entry.count}</span>
-                  ) : null}
-                </Button>
-              ))}
-            </div>
+            <FilterPillGroup
+              aria-label={t("templateLibrary.allScenarios")}
+              value={scenario}
+              onValueChange={setScenario}
+              options={[
+                { value: null, label: t("templateLibrary.allScenarios") },
+                ...scenarios.map((entry) => ({
+                  value: entry.key,
+                  label: entry.label,
+                  count: entry.count ?? undefined,
+                })),
+              ]}
+            />
           ) : null}
         </div>
       )}
 
       {loading ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
-          {Array.from({ length: variant === "recommended" ? 3 : 6 }).map((_, index) => (
+          {Array.from({
+            length: variant === "recommended" ? RECOMMENDED_TEMPLATE_LIMIT : 6,
+          }).map((_, index) => (
             <Skeleton key={index} className="h-[172px] rounded-xl" />
           ))}
         </div>
@@ -323,25 +316,7 @@ export function TemplateLibrary({
 
   return (
     <>
-      {variant === "full" ? (
-        <div className="flex min-h-0 flex-1">
-          <MarketplaceCategoryRail
-            heading={t("templateLibrary.categories")}
-            allLabel={t("templateLibrary.allCategories")}
-            categories={categories}
-            category={category}
-            subcategory={subcategory}
-            onCategoryChange={(value) => {
-              setCategory(value);
-              setSubcategory(null);
-            }}
-            onSubcategoryChange={setSubcategory}
-          />
-          {content}
-        </div>
-      ) : (
-        content
-      )}
+      {content}
 
       <Dialog
         open={selected !== null || detailLoading}

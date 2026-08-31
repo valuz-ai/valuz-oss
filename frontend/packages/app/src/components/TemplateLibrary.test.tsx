@@ -32,7 +32,54 @@ const item: MarketplaceItem = {
 };
 
 describe("TemplateLibrary", () => {
-  it("filters by Finance secondary category and controlled scenario", async () => {
+  it("shows eight cards in the empty-state recommendation variant", async () => {
+    vi.spyOn(marketplaceApi, "categories").mockResolvedValue({
+      categories: [],
+      scenario_tags: [],
+      degraded: false,
+    });
+    const recommendedItems = Array.from({ length: 10 }, (_, index) => ({
+      ...item,
+      id: `${item.id}-${index}`,
+      source_ref: `${item.source_ref}-${index}`,
+      title: `推荐模板 ${index + 1}`,
+      subcategories: [
+        [
+          "accounting-reporting",
+          "valuation-modeling",
+          "quant-trading",
+          "equity-research",
+          "wealth-management",
+          "portfolio-risk",
+          "market-data",
+          "brokerage",
+          "macro-strategy",
+          "general-finance",
+        ][index],
+      ],
+    }));
+    const list = vi.spyOn(marketplaceApi, "list").mockResolvedValue({
+      items: recommendedItems,
+      total: recommendedItems.length,
+      page: 1,
+      page_size: 60,
+      degraded: false,
+    });
+
+    render(
+      <TemplateLibrary kind="playbook" variant="recommended" onUse={vi.fn()} />,
+    );
+
+    await screen.findByText("推荐模板 10");
+    expect(screen.getAllByRole("button")).toHaveLength(8);
+    expect(screen.queryByText("推荐模板 1")).toBeNull();
+    expect(screen.queryByText("推荐模板 5")).toBeNull();
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, page_size: 60 }),
+    );
+  });
+
+  it("keeps search and scenario filters without category navigation", async () => {
     vi.spyOn(marketplaceApi, "categories").mockResolvedValue({
       categories: [
         {
@@ -55,20 +102,33 @@ describe("TemplateLibrary", () => {
 
     render(<TemplateLibrary kind="playbook" onUse={vi.fn()} />);
     expect(await screen.findByText("券商账户与订单巡检执行手册")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /券商接入 2/ })).toBeTruthy();
+    expect(screen.queryByText("分类浏览")).toBeNull();
+    expect(screen.queryByRole("button", { name: /券商接入 2/ })).toBeNull();
+    expect(screen.getByPlaceholderText("搜索模板")).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: /券商接入 2/ }));
-    await waitFor(() =>
-      expect(list).toHaveBeenLastCalledWith(
-        expect.objectContaining({ category: "finance", subcategory: "brokerage" }),
-      ),
-    );
+    const allScenarios = screen.getByRole("button", { name: "全部场景" });
+    const monitoring = screen.getByRole("button", { name: /监控预警 1/ });
+    expect(allScenarios.getAttribute("aria-pressed")).toBe("true");
+    expect(allScenarios.className).toContain("rounded-full");
 
-    await userEvent.click(screen.getByRole("button", { name: /监控预警 1/ }));
+    await userEvent.click(monitoring);
+    expect(allScenarios.getAttribute("aria-pressed")).toBe("false");
+    expect(monitoring.getAttribute("aria-pressed")).toBe("true");
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith(
         expect.objectContaining({ scenario: "monitoring-alerting" }),
       ),
+    );
+
+    await userEvent.type(screen.getByPlaceholderText("搜索模板"), "订单");
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ q: "订单" })),
+    );
+    expect(list).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: expect.anything() }),
+    );
+    expect(list).not.toHaveBeenCalledWith(
+      expect.objectContaining({ subcategory: expect.anything() }),
     );
   });
 

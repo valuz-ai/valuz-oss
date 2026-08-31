@@ -227,39 +227,43 @@ export const PlaybookPage = () => {
     () => (
       <PageHeader
         title={t("playbook.title")}
+        navigation={
+          <SegmentedControl
+            value={view}
+            onValueChange={setView}
+            className="h-8 w-fit"
+            options={[
+              {
+                value: "mine",
+                label: t("templateLibrary.myPlaybooks"),
+                icon: BookOpenText,
+              },
+              {
+                value: "templates",
+                label: t("templateLibrary.templates"),
+                icon: LayoutTemplate,
+              },
+            ]}
+          />
+        }
         action={
           <div className="flex shrink-0 items-center gap-2">
-            <SegmentedControl
-              value={view}
-              onValueChange={setView}
-              className="h-8 w-fit"
-              options={[
-                {
-                  value: "mine",
-                  label: t("templateLibrary.myPlaybooks"),
-                  icon: BookOpenText,
-                },
-                {
-                  value: "templates",
-                  label: t("templateLibrary.templates"),
-                  icon: LayoutTemplate,
-                },
-              ]}
-            />
-            <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
-              <span className="font-medium text-ink-heading">
-                {t(
-                  totalCount === 1
-                    ? "playbook.headerCount"
-                    : "playbook.headerCountPlural",
-                  { count: totalCount },
-                )}
-              </span>
-              <span className="text-ink-meta">·</span>
-              <span className="text-ink-meta">
-                {t("playbook.headerActive", { count: activeCount })}
-              </span>
-            </div>
+            {view === "mine" && totalCount > 0 ? (
+              <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
+                <span className="font-medium text-ink-heading">
+                  {t(
+                    totalCount === 1
+                      ? "playbook.headerCount"
+                      : "playbook.headerCountPlural",
+                    { count: totalCount },
+                  )}
+                </span>
+                <span className="text-ink-meta">·</span>
+                <span className="text-ink-meta">
+                  {t("playbook.headerActive", { count: activeCount })}
+                </span>
+              </div>
+            ) : null}
             <Button
               variant="default"
               size="sm"

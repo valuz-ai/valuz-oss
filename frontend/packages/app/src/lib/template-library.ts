@@ -1,9 +1,35 @@
 import type {
   ActionKind,
+  MarketplaceItem,
   MarketplaceItemDetail,
   PlaybookStatus,
   Trigger,
 } from "@valuz/core";
+
+export const RECOMMENDED_TEMPLATE_LIMIT = 8;
+
+const FINANCE_RECOMMENDATION_ORDER = {
+  playbook: [
+    "general-finance",
+    "macro-strategy",
+    "brokerage",
+    "market-data",
+    "portfolio-risk",
+    "equity-research",
+    "quant-trading",
+    "valuation-modeling",
+  ],
+  automation: [
+    "brokerage",
+    "market-data",
+    "portfolio-risk",
+    "general-finance",
+    "macro-strategy",
+    "equity-research",
+    "quant-trading",
+    "valuation-modeling",
+  ],
+} as const;
 
 export interface PlaybookTemplatePrefill {
   name: string;
@@ -107,4 +133,34 @@ export function automationTemplatePrefill(
 export function templateResources(detail: MarketplaceItemDetail): unknown[] {
   const resources = record(detail.install_manifest).resources;
   return Array.isArray(resources) ? resources : [];
+}
+
+/**
+ * Keep empty-state recommendations compact while curating the Finance edition
+ * around its highest-frequency jobs. Full template-library views never use
+ * this projection and continue to show the complete catalog.
+ */
+export function recommendedTemplates(
+  items: MarketplaceItem[],
+  kind: "playbook" | "automation",
+  limit = RECOMMENDED_TEMPLATE_LIMIT,
+): MarketplaceItem[] {
+  const boundedLimit = Math.max(0, limit);
+  const isFinanceCatalog =
+    items.length > 0 && items.every((item) => item.category === "finance");
+  if (!isFinanceCatalog) return items.slice(0, boundedLimit);
+
+  const order: readonly string[] = FINANCE_RECOMMENDATION_ORDER[kind];
+  const rank = (item: MarketplaceItem): number => {
+    const ranks = item.subcategories
+      .map((subcategory) => order.indexOf(subcategory))
+      .filter((value) => value >= 0);
+    return ranks.length > 0 ? Math.min(...ranks) : order.length;
+  };
+
+  return items
+    .map((item, index) => ({ item, index, rank: rank(item) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .slice(0, boundedLimit)
+    .map(({ item }) => item);
 }

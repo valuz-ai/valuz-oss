@@ -5,6 +5,7 @@ import type { MarketplaceItemDetail } from "@valuz/core";
 import {
   automationTemplatePrefill,
   playbookTemplatePrefill,
+  recommendedTemplates,
   resolveTemplateText,
 } from "./template-library";
 
@@ -83,5 +84,71 @@ describe("template library manifest adapters", () => {
       action_kind: "task",
       worktree: true,
     });
+  });
+});
+
+describe("empty-state template recommendations", () => {
+  const financeItem = (subcategory: string): MarketplaceItemDetail =>
+    detail({
+      id: `valuz_official:playbook_template:${subcategory}`,
+      source_ref: subcategory,
+      title: subcategory,
+      category: "finance",
+      subcategories: [subcategory],
+    });
+
+  const shuffledFinanceCatalog = [
+    "accounting-reporting",
+    "valuation-modeling",
+    "quant-trading",
+    "equity-research",
+    "wealth-management",
+    "portfolio-risk",
+    "market-data",
+    "brokerage",
+    "macro-strategy",
+    "general-finance",
+  ].map(financeItem);
+
+  it("keeps eight Playbooks and prioritizes briefings, monitoring, then investment research", () => {
+    expect(
+      recommendedTemplates(shuffledFinanceCatalog, "playbook").map(
+        (item) => item.source_ref,
+      ),
+    ).toEqual([
+      "general-finance",
+      "macro-strategy",
+      "brokerage",
+      "market-data",
+      "portfolio-risk",
+      "equity-research",
+      "quant-trading",
+      "valuation-modeling",
+    ]);
+  });
+
+  it("keeps eight Automations and prioritizes monitoring, briefings, then investment research", () => {
+    expect(
+      recommendedTemplates(shuffledFinanceCatalog, "automation").map(
+        (item) => item.source_ref,
+      ),
+    ).toEqual([
+      "brokerage",
+      "market-data",
+      "portfolio-risk",
+      "general-finance",
+      "macro-strategy",
+      "equity-research",
+      "quant-trading",
+      "valuation-modeling",
+    ]);
+  });
+
+  it("preserves API order for a mixed catalog while still limiting it to eight", () => {
+    const mixed = shuffledFinanceCatalog.map((item, index) => ({
+      ...item,
+      category: index === 0 ? "office" : item.category,
+    }));
+    expect(recommendedTemplates(mixed, "playbook")).toEqual(mixed.slice(0, 8));
   });
 });
