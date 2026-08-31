@@ -2473,6 +2473,7 @@ I18nKey = Literal[
     "skill.previewFailed",
     "skill.project",
     "skill.protectedBadge",
+    "skill.protectedFilesHidden",
     "skill.protectedHint",
     "skill.render",
     "skill.renderCopy",
