@@ -8,7 +8,6 @@ import {
 import {
   marketplaceApi,
   useTranslation,
-  type MarketplaceCategory,
   type MarketplaceItem,
   type MarketplaceItemDetail,
   type MarketplaceItemType,
@@ -27,7 +26,6 @@ import {
   Skeleton,
 } from "@valuz/ui";
 
-import { MarketplaceCategoryRail } from "./MarketplaceCategoryRail";
 import {
   MarketplaceSourcePill,
   marketplaceIcon,
@@ -151,10 +149,7 @@ export function TemplateLibrary({
   onUse,
 }: TemplateLibraryProps) {
   const { t, locale } = useTranslation();
-  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
   const [scenarios, setScenarios] = useState<MarketplaceSubcategory[]>([]);
-  const [category, setCategory] = useState<string | null>(null);
-  const [subcategory, setSubcategory] = useState<string | null>(null);
   const [scenario, setScenario] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MarketplaceItem[]>([]);
@@ -170,12 +165,10 @@ export function TemplateLibrary({
       .categories(kind)
       .then((result) => {
         if (cancelled) return;
-        setCategories(result.categories);
         setScenarios(result.scenario_tags ?? []);
       })
       .catch(() => {
         if (!cancelled) {
-          setCategories([]);
           setScenarios([]);
         }
       });
@@ -191,8 +184,6 @@ export function TemplateLibrary({
     marketplaceApi
       .list({
         type: itemType(kind),
-        category: variant === "full" ? category ?? undefined : undefined,
-        subcategory: variant === "full" ? subcategory ?? undefined : undefined,
         scenario: variant === "full" ? scenario ?? undefined : undefined,
         q: variant === "full" && query.trim() ? query.trim() : undefined,
         page: 1,
@@ -210,7 +201,7 @@ export function TemplateLibrary({
       .finally(() => {
         if (requestId.current === id) setLoading(false);
       });
-  }, [category, kind, query, scenario, subcategory, variant]);
+  }, [kind, query, scenario, variant]);
 
   const scenarioLabels = useMemo(
     () => new Map(scenarios.map((entry) => [entry.key, entry.label])),
@@ -323,25 +314,7 @@ export function TemplateLibrary({
 
   return (
     <>
-      {variant === "full" ? (
-        <div className="flex min-h-0 flex-1">
-          <MarketplaceCategoryRail
-            heading={t("templateLibrary.categories")}
-            allLabel={t("templateLibrary.allCategories")}
-            categories={categories}
-            category={category}
-            subcategory={subcategory}
-            onCategoryChange={(value) => {
-              setCategory(value);
-              setSubcategory(null);
-            }}
-            onSubcategoryChange={setSubcategory}
-          />
-          {content}
-        </div>
-      ) : (
-        content
-      )}
+      {content}
 
       <Dialog
         open={selected !== null || detailLoading}
