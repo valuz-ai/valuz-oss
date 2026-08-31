@@ -2134,7 +2134,9 @@
     "uploadHintDetail": "The archive must contain SKILL.md",
     "user": "User",
     "waitingAIWrite": "Waiting for AI to write",
-    "waitingForAI": "Waiting for AI to write files..."
+    "waitingForAI": "Waiting for AI to write files...",
+    "protectedBadge": "Protected",
+    "protectedHint": "Provided and maintained by Valuz. Agents can use this skill; its contents are not available to view or export."
   },
   "startup": {
     "error": "Startup encountered an issue",
@@ -3012,6 +3014,7 @@
     "connectorVerified": "Verified by ModelScope",
     "connectorRunMode": "Run mode",
     "connectorConfiguration": "Connection configuration",
+    "connectorViewDetails": "View details",
     "connectorViewOnModelScope": "View on ModelScope",
     "connectorViewOfficialDetails": "View official details",
     "modalVersion": "Version",

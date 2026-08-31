@@ -174,9 +174,7 @@ class ProjectPackService:
         for a in await self._automations.list_automations_in_project(
             project_row.id, user_id=user_id
         ):
-            detail = await self._automations.get_automation_detail(
-                a.automation_id, user_id=user_id
-            )
+            detail = await self._automations.get_automation_detail(a.automation_id, user_id=user_id)
             trigger = detail.trigger
             cron_expr: str | None = None
             timezone: str | None = None
@@ -560,8 +558,15 @@ class ProjectPackService:
         embedded = [s.slug for s in manifest.skills if s.source == "embedded"]
         if not embedded:
             return out
-        paths = await resolve_skill_slugs_to_paths(embedded, None, user_id=user_id)
-        for slug, path_str in zip(embedded, paths, strict=False):
+        # One slug at a time. The resolver DROPS entries it will not hand over
+        # (unresolvable, ineligible, or protected), so a single batch call
+        # returns a shorter list and the positional ``zip`` this used to do
+        # silently paired slugs with the wrong directories from the first drop
+        # onwards. ``_build_skills_index`` already resolves per-slug for the
+        # same reason.
+        for slug in embedded:
+            paths = await resolve_skill_slugs_to_paths([slug], None, user_id=user_id)
+            path_str = paths[0] if paths else ""
             if not path_str:
                 continue
             p = Path(path_str)

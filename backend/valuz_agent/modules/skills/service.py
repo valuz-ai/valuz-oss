@@ -32,7 +32,9 @@ from valuz_agent.integrations.skills_filesystem import (
 from valuz_agent.modules.projects.service import (
     ProjectService,
 )
+from valuz_agent.modules.skills.contracts import SkillResolvePurpose
 from valuz_agent.modules.skills.datastore import SkillDatastore
+from valuz_agent.modules.skills.errors import SkillProtected
 from valuz_agent.modules.skills.models import (
     SessionSkillImportConfirmRequest,
     SkillCopyRequest,
@@ -150,6 +152,7 @@ def _official_skill_view_from_index_row(
         deletable=bool(getattr(row, "deletable", False)),
         is_locked=not unlocked,
         lock_reason=None if unlocked else "Connect Reportify to unlock official skills",
+        protected=bool(getattr(row, "protected", False)),
         project_root=getattr(row, "project_root", None),
         origin_label="Built-in" if is_bundled else "Official",
         content_hash=getattr(row, "content_hash", None),
@@ -186,12 +189,29 @@ def _skill_view_from_index_row(row: Any, *, enabled: bool) -> SkillView:
         readonly=bool(getattr(row, "readonly", False)),
         deletable=bool(getattr(row, "deletable", True)),
         is_locked=bool(getattr(row, "is_locked", False)),
+        protected=bool(getattr(row, "protected", False)),
         project_root=getattr(row, "project_root", None),
         content_hash=getattr(row, "content_hash", None),
         manifest_hash=getattr(row, "manifest_hash", None),
         folder_created_at=getattr(row, "folder_created_at", None),
         creation_origin=_creation_origin_from_index_row(row),
     )
+
+
+def redact_protected(view: SkillView) -> SkillView:
+    """Strip a protected package's location from a view about to be serialized.
+
+    The catalog deliberately still carries protected packages — the user has to
+    know the capability exists — but the response must not say where it lives.
+    Applied at the serialization boundary rather than inside the resolver
+    because host-side bookkeeping (the library switch, import provenance) keys
+    on the real ``path``.
+
+    A no-op for everything else, so callers can apply it unconditionally.
+    """
+    if not view.protected:
+        return view
+    return view.model_copy(update={"path": "", "project_root": None})
 
 
 async def _upsert_skill_row(user_id: str, ds: SkillDatastore, manifest) -> None:  # type: ignore[no-untyped-def]
@@ -229,6 +249,7 @@ async def _upsert_skill_row(user_id: str, ds: SkillDatastore, manifest) -> None:
                 readonly=manifest.readonly,
                 deletable=manifest.deletable,
                 is_locked=manifest.is_locked,
+                protected=bool(getattr(manifest, "protected", False)),
                 content_hash=manifest.content_hash,
                 manifest_hash=manifest.manifest_hash,
                 folder_created_at=manifest.folder_created_at,
@@ -255,6 +276,10 @@ async def _upsert_skill_row(user_id: str, ds: SkillDatastore, manifest) -> None:
         existing.readonly = manifest.readonly
         existing.deletable = manifest.deletable
         existing.is_locked = manifest.is_locked
+        # Follows the marker both ways: a package that stops being protected
+        # (the host removed the marker) must stop being gated, or the row
+        # outlives the policy that created it.
+        existing.protected = bool(getattr(manifest, "protected", False))
         # Birthtime is immutable; overwriting it every pass is safe (also
         # backfills legacy rows). creation_origin is host bookkeeping owned by
         # the DB — never clobber a real value; only heal a NULL legacy row.
@@ -382,8 +407,21 @@ class SkillLibraryService:
         self._remote_registry = remote_registry
 
     async def list_catalog(
-        self, user_id: str, project_id: str, *, org_id: str | None = None
+        self,
+        user_id: str,
+        project_id: str,
+        *,
+        org_id: str | None = None,
+        redact: bool = True,
     ) -> SkillsCatalog:
+        """The skill catalog for one project.
+
+        ``redact=True`` (the default) blanks a protected package's location on
+        the way out — the catalog still lists it, because the user has to know
+        the capability exists, but the response must not say where it lives.
+        Host-internal callers that need the real path pass ``redact=False``;
+        the default is the safe one so a new consumer cannot leak by omission.
+        """
         project = await self._projects.get_project(user_id, project_id)
         # Serve the catalog from ``valuz_skill_index`` instead of re-scanning every
         # SKILL.md on the (hot) read path. The index already carries the metadata the
@@ -553,6 +591,8 @@ class SkillLibraryService:
                 if s.path in disabled_paths:
                     s.library_enabled = False
 
+        if redact:
+            skills = [redact_protected(s) for s in skills]
         return SkillsCatalog(project_id=project_id, skills=skills)
 
     async def startup_scan(self, user_id: str) -> int:
@@ -589,9 +629,7 @@ class SkillLibraryService:
                         root_path=project.root_path,
                     ),
                 )
-                all_manifests.extend(
-                    await asyncio.to_thread(self._source.list_skills, project_ctx)
-                )
+                all_manifests.extend(await asyncio.to_thread(self._source.list_skills, project_ctx))
 
         # Dedup by ON-DISK PATH, not slug. Same-slug copies in different roots
         # (official-skills dir vs ~/.agents/skills) are distinct skills and both
@@ -1178,9 +1216,11 @@ class SkillLibraryService:
         skill_id: str,
         project_id: str | None = None,
     ) -> SkillDetail:
-        skill = await self._resolve_skill(user_id, skill_id=skill_id, project_id=project_id)
+        skill = await self._resolve_skill(
+            user_id, skill_id=skill_id, project_id=project_id, purpose="metadata"
+        )
         skill_dir = Path(skill.path)
-        manifest_path = _detect_manifest(skill_dir)
+        manifest_path = None if skill.protected else _detect_manifest(skill_dir)
         instructions_md: str | None = None
         manifest_filename: str | None = None
         metadata: dict = {}
@@ -1190,8 +1230,14 @@ class SkillLibraryService:
             instructions_md = body.strip() or None
             metadata = {k: v for k, v in meta.items()}
 
+        # A protected package reports no files: the count is a disclosure too
+        # (it is exactly what tells you whether the skill is one markdown file
+        # or a toolkit), and walking the tree for a number we refuse to explain
+        # is pure cost.
         file_count = (
-            sum(1 for _ in skill_dir.rglob("*") if _.is_file()) if skill_dir.exists() else 0
+            0
+            if skill.protected
+            else (sum(1 for _ in skill_dir.rglob("*") if _.is_file()) if skill_dir.exists() else 0)
         )
 
         # Overlay the global library switch for every skill, including bundled
@@ -1200,15 +1246,19 @@ class SkillLibraryService:
         # disabled same-slug copy in another scope doesn't flip this one.
         disabled_paths = await self._ds.list_library_disabled_paths(user_id)
         skill.library_enabled = skill.path not in disabled_paths
+        origin = await self._load_origin(user_id, skill.path)
 
+        # Redaction happens here, AFTER the two lookups above have used the real
+        # path: the library switch and import provenance are host bookkeeping
+        # keyed on it, and a protected skill must still be togglable.
         return SkillDetail(
-            **skill.model_dump(),
+            **redact_protected(skill).model_dump(),
             instructions_markdown=instructions_md,
             file_count=file_count,
-            root_path=str(skill_dir),
+            root_path=None if skill.protected else str(skill_dir),
             manifest_filename=manifest_filename,
             metadata=metadata,
-            origin=await self._load_origin(user_id, skill.path),
+            origin=None if skill.protected else origin,
         )
 
     async def set_library_enabled(self, user_id: str, skill_id: str, enabled: bool) -> SkillDetail:
@@ -1221,7 +1271,9 @@ class SkillLibraryService:
         """
         from valuz_agent.modules.skills.errors import SkillNotFound
 
-        skill = await self._resolve_skill(user_id, skill_id=skill_id)
+        # ``metadata``: turning a protected skill off is a user right (the
+        # capability is theirs to disable), and no package content leaves here.
+        skill = await self._resolve_skill(user_id, skill_id=skill_id, purpose="metadata")
         # Flip the switch on the exact row the user is looking at (its path), so
         # a toggle never leaks onto a same-slug copy in another scope.
         row = await self._ds.get_by_source_path(user_id, skill.path)
@@ -1937,13 +1989,48 @@ class SkillLibraryService:
             return False
 
     async def _resolve_skill(
-        self, user_id: str, skill_id: str, project_id: str | None = None
+        self,
+        user_id: str,
+        skill_id: str,
+        project_id: str | None = None,
+        *,
+        purpose: SkillResolvePurpose = "disclose",
     ) -> SkillView:
+        """Find one skill in the catalog, gated by what the caller will do with it.
+
+        ``purpose`` exists because a resolved ``SkillView`` carries ``path``,
+        and a path is all anyone needs to read, copy or archive the package.
+        Every caller that hands package bytes to a user therefore has to pass
+        through here, which makes this the one place the protection can be
+        enforced instead of N places that each have to remember.
+
+        - ``runtime``  — the session builder. Protection is about disclosure,
+          not about whether the agent may use the skill.
+        - ``metadata`` — the caller will not hand the package to anyone; it
+          needs the row (and possibly its path, to key host-side bookkeeping
+          like the library switch). Redaction of the RESPONSE is the caller's
+          job — see ``_redact_protected``.
+        - ``disclose`` — anything that would surface the package itself. Raises
+          ``SkillProtected``.
+
+        The two permissive values are explicit opt-ins a reviewer can audit;
+        what matters is that neither is the default.
+
+        **The default is the strict one on purpose.** A new call site that
+        forgets this argument gets a loud 403 on protected packages — a
+        missing feature, which a test catches — rather than a silent leak,
+        which no test catches. That asymmetry is the whole point: this gate
+        replaced a per-endpoint checklist that had already missed four
+        exits (file read, copy, pack export, reveal-in-file-manager).
+        """
         project_id = project_id or "chat-default"
-        catalog = await self.list_catalog(user_id, project_id)
+        catalog = await self.list_catalog(user_id, project_id, redact=False)
         for skill in catalog.skills:
-            if skill.id == skill_id:
-                return skill
+            if skill.id != skill_id:
+                continue
+            if skill.protected and purpose == "disclose":
+                raise SkillProtected()
+            return skill
         raise KeyError(skill_id)
 
     async def _resolve_created_skill(

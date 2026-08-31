@@ -412,6 +412,7 @@ class PluginService:
         it at install). Falls back to re-serializing from the stored manifest +
         the library copies of the member skills if the root went missing."""
         row = await self._require(user_id, plugin_id)
+        await self._refuse_protected_export(user_id, row)
         root = Path(row.root_path)
         if root.is_dir() and (root / "plugin.json").is_file():
             data = await asyncio.to_thread(zip_plugin_root, root)
@@ -554,8 +555,10 @@ class PluginService:
     ) -> PluginInstallResult:
         name = staged.manifest.name
         existing = await self._ds.get_by_name(user_id, name)
-        if existing is not None and not builtin and not self._same_source(
-            existing, acquired.source_ref
+        if (
+            existing is not None
+            and not builtin
+            and not self._same_source(existing, acquired.source_ref)
         ):
             raise PluginConflict(
                 f"Plugin '{name}' is already installed from another source "
@@ -1229,6 +1232,31 @@ class PluginService:
         if row is None:
             raise PluginNotFound(f"Plugin not found: {plugin_id}")
         return row
+
+    async def _refuse_protected_export(self, user_id: str, row: PluginRow) -> None:
+        """Block ``export`` when any member skill is protected.
+
+        Export zips ``PLUGIN_ROOT`` wholesale, which is the plugin package as
+        it arrived — member skill directories included. That is a second, full
+        copy of content the skill endpoints refuse to serve, reachable in one
+        request, so the plugin surface has to enforce the same rule.
+
+        Derived from the members rather than stored on the plugin row: a
+        plugin is exactly as protected as the strictest thing inside it, and
+        deriving it means a member that becomes protected later cannot leave a
+        stale ``False`` on the parent.
+        """
+        from valuz_agent.modules.skills.datastore import SkillDatastore
+        from valuz_agent.modules.skills.errors import SkillProtected
+
+        components = await self._ds.list_components(user_id, row.id)
+        member_slugs = {c.slug for c in components if c.kind == "skill"}
+        if not member_slugs:
+            return
+        skills = SkillDatastore(self._ds.session)
+        for skill_row in await skills.list_skills(user_id):
+            if skill_row.slug in member_slugs and getattr(skill_row, "protected", False):
+                raise SkillProtected()
 
     async def _library(self, user_id: str) -> _Library:
         return _Library(

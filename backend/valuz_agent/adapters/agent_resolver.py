@@ -1070,7 +1070,12 @@ async def build_member_session(
     own_skill_paths = (
         all_available_manifest.skill_paths
         if all_available_manifest is not None
-        else await resolve_skill_slugs_to_paths(agent.skills, run_dir, user_id=user_id)
+        # ``runtime``: this list becomes ``Session.skills``, which the kernel
+        # materializes into the session cwd. A protected package is withheld
+        # from disclosure, not from execution.
+        else await resolve_skill_slugs_to_paths(
+            agent.skills, run_dir, user_id=user_id, purpose="runtime"
+        )
     )
     baseline_skill_names = [os.path.basename(p) for p in baseline_skill_paths]
     extra_skill_paths = tuple(

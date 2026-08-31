@@ -219,11 +219,24 @@ def env():  # type: ignore[no-untyped-def]
 @pytest.mark.asyncio
 async def test_list_categories_passes_through_index_payload(env):  # type: ignore[no-untyped-def]
     env.index.categories_payload = {
-        "categories": [{"key": "data-analysis", "label": "Data analysis", "count": 3}],
+        "categories": [
+            {
+                "key": "finance",
+                "label": "Finance",
+                "count": 3,
+                "subcategories": [
+                    {"key": "brokerage", "label": "Brokerage", "count": 2}
+                ],
+            }
+        ],
         "degraded": False,
     }
     out = await env.svc.list_categories(USER, "skill")
-    assert [(c.key, c.count) for c in out.categories] == [("data-analysis", 3)]
+    assert [(c.key, c.count) for c in out.categories] == [("finance", 3)]
+    assert [
+        (subcategory.key, subcategory.count)
+        for subcategory in out.categories[0].subcategories
+    ] == [("brokerage", 2)]
     assert (env.index.categories_calls[0]["kind"]) == "skill"
 
 
