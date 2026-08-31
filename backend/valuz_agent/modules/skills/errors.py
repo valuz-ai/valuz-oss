@@ -47,6 +47,11 @@ class SourceReadonly(ForbiddenError):
     message = "Cannot modify a read-only skill source"
 
 
+class SkillProtected(ForbiddenError):
+    error_code = 403_503
+    message = "This skill's contents are not available"
+
+
 class PreviewExpired(GoneError):
     error_code = 410_501
     message = "Import preview has expired"

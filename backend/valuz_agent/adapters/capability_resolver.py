@@ -43,6 +43,7 @@ from valuz_agent.modules.skills.contracts import (
     ProjectRef,
     RuntimeContext,
     SkillManifest,
+    SkillResolvePurpose,
 )
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.ports.runtime_resource import (
@@ -589,6 +590,8 @@ async def resolve_skill_slugs_to_paths(
     skill_entries: object,
     project_root: str | None,
     user_id: str | None = None,
+    *,
+    purpose: SkillResolvePurpose = "disclose",
 ) -> list[str]:
     """Map an agent's ``skills`` entries (slugs and/or absolute paths) to
     absolute skill-directory paths — the single chokepoint for this.
@@ -601,6 +604,19 @@ async def resolve_skill_slugs_to_paths(
     (``agent_resolver.build_member_session``) and the chat/project path
     (``sessions.service.create_session``). Unresolvable entries are dropped
     with a warning rather than passed through.
+
+    ``purpose`` gates PROTECTED packages, which are usable by a runtime but
+    never handed to the user:
+
+    - ``runtime`` — session construction. Resolves them like any other skill.
+    - ``disclose`` (default) — a caller that will put the directory's CONTENT
+      somewhere the user can reach it (a pack archive, an export). Protected
+      entries are OMITTED, exactly like an unresolvable one, so the pack
+      builders fall through to referencing the slug instead of embedding the
+      directory. No new branch for callers to get wrong.
+
+    The default is the strict one so a new caller that never thought about
+    protected packages cannot embed one by omission.
     """
     import os
 
@@ -620,10 +636,32 @@ async def resolve_skill_slugs_to_paths(
     # ``sessions.service.create_session`` chat/project path) are async and
     # ``await`` this.
     by_slug: dict[str, str] = {}
+    # Protected packages, indexed both ways because an entry can arrive as a
+    # slug or as an absolute path.
+    protected_slugs: set[str] = set()
+    protected_paths: set[str] = set()
     async with async_unit_of_work(commit=False) as db:
         for row in await SkillDatastore(db).list_skills(user_id):
             if row.slug and row.source_path:
                 by_slug.setdefault(row.slug, row.source_path)
+            if getattr(row, "protected", False):
+                if row.slug:
+                    protected_slugs.add(row.slug)
+                if row.source_path:
+                    protected_paths.add(str(Path(row.source_path).resolve(strict=False)))
+
+    def _blocked(slug: str, path: str | None) -> bool:
+        """Whether this entry must not be handed to a disclosing caller."""
+        if purpose == "runtime":
+            return False
+        if slug in protected_slugs:
+            return True
+        if path is None:
+            return False
+        try:
+            return str(Path(path).resolve(strict=False)) in protected_paths
+        except OSError:
+            return False
 
     resolved: list[str] = []
     managed_root = fs_registry.user_skill_root(user_id)
@@ -685,7 +723,11 @@ async def resolve_skill_slugs_to_paths(
     for entry in entries:
         s = entry if isinstance(entry, str) else getattr(entry, "name", str(entry))
         if os.path.isabs(s):  # already an absolute path
-            if os.path.isdir(s) and _eligible(s, Path(s).name):
+            if _blocked(Path(s).name, s):
+                logger.debug(
+                    "resolve_skill_slugs: protected package withheld from %s: %s", purpose, s
+                )
+            elif os.path.isdir(s) and _eligible(s, Path(s).name):
                 try:
                     resolved.append(str(Path(s).resolve(strict=True)))
                 except OSError:
@@ -699,7 +741,9 @@ async def resolve_skill_slugs_to_paths(
             logger.warning("resolve_skill_slugs: unsafe skill reference, skipping: %s", s)
             continue
         absolute = _resolve_to_absolute(by_slug.get(s), project_root)
-        if absolute and os.path.isdir(absolute) and _eligible(absolute, s):
+        if _blocked(s, absolute):
+            logger.debug("resolve_skill_slugs: protected package withheld from %s: %s", purpose, s)
+        elif absolute and os.path.isdir(absolute) and _eligible(absolute, s):
             resolved.append(absolute)
         else:
             logger.warning("resolve_skill_slugs: unresolved skill slug, skipping: %s", s)

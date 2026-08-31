@@ -9,7 +9,10 @@ from valuz_agent.integrations.skills_filesystem import (
     _detect_manifest,
     _read_manifest_cached,
 )
-from valuz_agent.integrations.skills_official_bootstrap import is_bundled_skill
+from valuz_agent.integrations.skills_official_bootstrap import (
+    is_bundled_skill,
+    is_protected_skill,
+)
 from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest
 
 
@@ -117,6 +120,7 @@ class OfficialSkillSource:
                     content_hash=content_hash,
                     manifest_hash=manifest_hash,
                     version=version,
+                    protected=is_protected_skill(skill_dir),
                 )
             )
         return manifests

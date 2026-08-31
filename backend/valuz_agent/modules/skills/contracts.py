@@ -14,6 +14,8 @@ catch-all.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -84,6 +86,24 @@ class SkillManifest(BaseModel):
     # ``valuz_skill_index`` 表，不写进 SKILL.md，因此不属于「文件系统
     # 视图」的 manifest。见 ``SkillLibraryService.list_catalog`` 的叠加。
     folder_created_at: int | None = None
+    # A protected package: usable by the runtime, never disclosed to the user.
+    # Sourced from the ``.protected`` marker a host writes into the package
+    # directory (see ``skills_official_bootstrap.is_protected_skill``) — never
+    # from SKILL.md, which is content we hand to the model and must not double
+    # as a policy channel. Always ``False`` for a package nobody marked, so an
+    # install that has never seen one behaves exactly as before.
+    protected: bool = False
 
 
-__all__ = ["ProjectRef", "RuntimeContext", "SkillManifest"]
+# What a caller is about to do with a resolved skill path. The gate on
+# protected packages keys off this; ``disclose`` is the default everywhere so
+# that forgetting it fails loudly instead of leaking.
+SkillResolvePurpose = Literal["runtime", "metadata", "disclose"]
+
+
+__all__ = [
+    "ProjectRef",
+    "RuntimeContext",
+    "SkillManifest",
+    "SkillResolvePurpose",
+]
