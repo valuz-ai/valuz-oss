@@ -132,6 +132,8 @@ const SELF_PUBLISHED_LABEL_KEYS: Record<MarketplaceItemType, string> = {
   plugin: "marketplace.modalTypePlugin",
   agent_template: "marketplace.modalTypeAgent",
   agent_team_template: "marketplace.modalTypeTeam",
+  playbook_template: "templateLibrary.playbookTemplate",
+  automation_template: "templateLibrary.automationTemplate",
 };
 
 // One neutral look for every source — per-source colors made the cards read

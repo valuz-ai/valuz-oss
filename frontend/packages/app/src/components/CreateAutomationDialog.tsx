@@ -59,6 +59,7 @@ import {
   ExecutionLocationPicker,
   OriginBadge,
 } from "./ExecutionLocationPicker";
+import type { AutomationTemplatePrefill } from "../lib/template-library";
 
 /** Minimum interval seconds — matches backend `MIN_INTERVAL_SECONDS` */
 const MIN_INTERVAL_SECONDS = 30;
@@ -190,6 +191,9 @@ export interface CreateAutomationDialogProps {
    * for create flows.
    */
   initial?: AutomationEditInitial;
+  /** Create-mode defaults loaded from a market template. The form stays
+   * reviewable and nothing is created until the user submits it. */
+  prefill?: AutomationTemplatePrefill | null;
   /** Dialog title — defaults to i18n `automation.createTitle` (or
    *  `automation.editTitle` in edit mode). */
   title?: string;
@@ -212,6 +216,7 @@ export const CreateAutomationDialog = ({
   fixedTargetName,
   fixedProjectId,
   initial,
+  prefill,
   title: titleProp,
   description: descriptionProp,
 }: CreateAutomationDialogProps) => {
@@ -369,38 +374,43 @@ export const CreateAutomationDialog = ({
     if (wasOpenRef.current) return; // already initialised for this open cycle
     wasOpenRef.current = true;
     setPromptFullscreen(false);
-    if (initial) {
-      setName(initial.name);
-      setPrompt(initial.prompt_template);
-      setAgentSlug(initial.agent_slug);
+    const seed = initial ?? prefill;
+    if (seed) {
+      setName(seed.name);
+      setPrompt(seed.prompt_template);
+      setAgentSlug(seed.agent_slug);
       // Edit mode: seed from the existing row. If the row stored ``task``
       // but the project no longer permits it (e.g. moved to chat by an
       // admin), coerce back to ``chat`` so the dialog renders a valid
       // state — the user can still change it without an inconsistent
       // initial render.
       setActionKind(
-        initial.action_kind === "task" && !allowTaskMode
+        seed.action_kind === "task" && !(initial ? allowTaskMode : taskModeAllowed)
           ? "chat"
-          : initial.action_kind,
+          : seed.action_kind,
       );
-      setPlaybookDefinitionId(initial.playbook_definition_id ?? "");
-      setWorktree(Boolean(initial.worktree));
-      if (initial.trigger.kind === "cron") {
+      setPlaybookDefinitionId(
+        "playbook_definition_id" in seed
+          ? (seed.playbook_definition_id ?? "")
+          : "",
+      );
+      setWorktree(Boolean(seed.worktree));
+      if (seed.trigger.kind === "cron") {
         setTriggerKind("cron");
-        setCron(initial.trigger.cron_expr || "0 9 * * *");
-        setTimezone(initial.trigger.timezone || browserTimezone());
+        setCron(seed.trigger.cron_expr || "0 9 * * *");
+        setTimezone(seed.trigger.timezone || browserTimezone());
         // Reset interval fields to the default so a subsequent tab
         // switch lands on a sensible value instead of stale 5m.
         setIntervalValue(5);
         setIntervalUnit("minutes");
-      } else if (initial.trigger.kind === "interval") {
+      } else if (seed.trigger.kind === "interval") {
         setTriggerKind("interval");
         setCron("0 9 * * *");
         // Pick the largest unit that divides the stored seconds evenly
         // so 3600s shows as "1 hour" rather than "3600 seconds" —
         // round-trip fidelity for the common multiples; falls back to
         // raw seconds for anything else (e.g. 90s → "90 seconds").
-        const s = initial.trigger.seconds;
+        const s = seed.trigger.seconds;
         if (s % 86400 === 0) {
           setIntervalValue(s / 86400);
           setIntervalUnit("days");
@@ -436,7 +446,15 @@ export const CreateAutomationDialog = ({
     setActionKind("chat");
     setPlaybookDefinitionId("");
     setWorktree(false);
-  }, [open, initial, defaultAgentSlug, agents, allowTaskMode]);
+  }, [
+    open,
+    initial,
+    prefill,
+    defaultAgentSlug,
+    agents,
+    allowTaskMode,
+    taskModeAllowed,
+  ]);
 
   // Definitions are listed from the same backend that will own the
   // Automation. Their owner Project does not constrain where they execute:

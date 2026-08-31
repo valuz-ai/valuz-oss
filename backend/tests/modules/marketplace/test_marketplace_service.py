@@ -229,6 +229,9 @@ async def test_list_categories_passes_through_index_payload(env):  # type: ignor
                 ],
             }
         ],
+        "scenario_tags": [
+            {"key": "report-delivery", "label": "Report Delivery", "count": 2}
+        ],
         "degraded": False,
     }
     out = await env.svc.list_categories(USER, "skill")
@@ -237,6 +240,9 @@ async def test_list_categories_passes_through_index_payload(env):  # type: ignor
         (subcategory.key, subcategory.count)
         for subcategory in out.categories[0].subcategories
     ] == [("brokerage", 2)]
+    assert [(tag.key, tag.count) for tag in out.scenario_tags] == [
+        ("report-delivery", 2)
+    ]
     assert (env.index.categories_calls[0]["kind"]) == "skill"
 
 
@@ -252,6 +258,35 @@ async def test_list_items_degrades_on_index_outage(env):  # type: ignore[no-unty
     env.index.unavailable = True
     out = await env.svc.list_items(USER, type_="skill")
     assert out.degraded and out.items == [] and out.total == 0
+
+
+@pytest.mark.asyncio
+async def test_list_template_items_passes_scenario_and_stays_reusable(env):  # type: ignore[no-untyped-def]
+    env.index.items_payload = {
+        "items": [
+            _item(
+                "market:playbook:weekly-report",
+                type_="playbook_template",
+                source_ref="weekly-report",
+                install_target="playbook_builder",
+                category="office",
+                scenario_tags=["briefing-summary", "report-delivery"],
+            )
+        ],
+        "total": 1,
+        "page": 1,
+        "page_size": 30,
+        "degraded": False,
+    }
+    out = await env.svc.list_items(
+        USER,
+        type_="playbook_template",
+        scenario="report-delivery",
+    )
+    assert out.items[0].type == "playbook_template"
+    assert out.items[0].scenario_tags == ["briefing-summary", "report-delivery"]
+    assert out.items[0].installed is False
+    assert env.index.list_calls[0]["scenario"] == "report-delivery"
 
 
 @pytest.mark.asyncio

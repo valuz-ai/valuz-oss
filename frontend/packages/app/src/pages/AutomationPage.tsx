@@ -11,8 +11,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Clock3, Plus } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Clock3, LayoutTemplate, Plus } from "lucide-react";
 import { toast } from "sonner";
 import {
   Button,
@@ -20,6 +20,7 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
+  SegmentedControl,
 } from "@valuz/ui";
 import {
   agentsApi,
@@ -42,15 +43,19 @@ import { useProjectOutlet } from "@valuz/app/layout";
 import {
   AutomationDefinitionTable,
   CreateAutomationDialog,
+  TemplateLibrary,
   type AutomationAgentChoice,
+  type AutomationTemplatePrefill,
 } from "@valuz/app/components";
+import { automationTemplatePrefill } from "../lib/template-library";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
 
 export const AutomationPage = () => {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { setHeader, setHeaderClassName, setContentInnerClassName } =
     useProjectOutlet();
 
@@ -72,6 +77,8 @@ export const AutomationPage = () => {
   const [chatAgents, setChatAgents] = useState<Agent[]>([]);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [templatePrefill, setTemplatePrefill] =
+    useState<AutomationTemplatePrefill | null>(null);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AutomationItem | null>(null);
   // Per-group collapse state — mirrors the legacy ScheduledPage so users
@@ -145,12 +152,39 @@ export const AutomationPage = () => {
     0,
   );
   const hasAutomations = totalCount > 0;
+  const view = searchParams.get("view") === "templates" ? "templates" : "mine";
+
+  const setView = useCallback(
+    (next: "mine" | "templates") => {
+      const params = new URLSearchParams(searchParams);
+      if (next === "templates") params.set("view", "templates");
+      else params.delete("view");
+      setSearchParams(params);
+    },
+    [searchParams, setSearchParams],
+  );
 
   const openCreate = useCallback(() => {
+    setTemplatePrefill(null);
     setSelectedTargetId(targets[0]?.id ?? null);
     setSelectedExecLocation(null);
     setCreateOpen(true);
   }, [targets]);
+
+  const useTemplate = useCallback(
+    (detail: Parameters<typeof automationTemplatePrefill>[0]) => {
+      const prefill = automationTemplatePrefill(detail, locale);
+      const preferredTarget =
+        prefill.action_kind === "task"
+          ? targets.find((target) => target.kind === "project")
+          : targets[0];
+      setSelectedTargetId(preferredTarget?.id ?? null);
+      setSelectedExecLocation(null);
+      setTemplatePrefill(prefill);
+      setCreateOpen(true);
+    },
+    [locale, targets],
+  );
 
   // ── Header ──────────────────────────────────────────────────────
 
@@ -160,6 +194,23 @@ export const AutomationPage = () => {
         title={t(k("automation.title"))}
         action={
           <div className="flex shrink-0 items-center gap-2">
+            <SegmentedControl
+              value={view}
+              onValueChange={setView}
+              className="h-8 w-fit"
+              options={[
+                {
+                  value: "mine",
+                  label: t(k("templateLibrary.myAutomations")),
+                  icon: Clock3,
+                },
+                {
+                  value: "templates",
+                  label: t(k("templateLibrary.templates")),
+                  icon: LayoutTemplate,
+                },
+              ]}
+            />
             <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
               <span className="font-medium text-ink-heading">
                 {t(
@@ -191,7 +242,7 @@ export const AutomationPage = () => {
         }
       />
     ),
-    [totalCount, enabledCount, hasAutomations, openCreate, t],
+    [totalCount, enabledCount, hasAutomations, openCreate, setView, t, view],
   );
 
   useEffect(() => {
@@ -373,20 +424,30 @@ export const AutomationPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1000px] flex-col pb-5 pt-3">
-        {!hasAutomations ? (
-          <div className="flex flex-1 justify-center pt-[160px]">
-            <EmptyState
-              variant="plain"
-              title={t(k("automation.emptyTitle"))}
-              description={t(k("automation.emptyDesc"))}
-              icon={<Clock3 className="h-5 w-5" />}
-              action={
-                <Button variant="default" size="sm" onClick={openCreate}>
-                  <Plus className="h-3 w-3" />
-                  {t(k("automation.emptyAction"))}
-                </Button>
-              }
+      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+        {view === "templates" ? (
+          <TemplateLibrary kind="automation" onUse={useTemplate} />
+        ) : !hasAutomations ? (
+          <div className="space-y-10 px-5 pt-10">
+            <div className="flex justify-center">
+              <EmptyState
+                variant="plain"
+                title={t(k("automation.emptyTitle"))}
+                description={t(k("automation.emptyDesc"))}
+                icon={<Clock3 className="h-5 w-5" />}
+                action={
+                  <Button variant="default" size="sm" onClick={openCreate}>
+                    <Plus className="h-3 w-3" />
+                    {t(k("automation.emptyAction"))}
+                  </Button>
+                }
+              />
+            </div>
+            <TemplateLibrary
+              kind="automation"
+              variant="recommended"
+              onBrowseAll={() => setView("templates")}
+              onUse={useTemplate}
             />
           </div>
         ) : (
@@ -432,6 +493,7 @@ export const AutomationPage = () => {
         open={createOpen}
         onOpenChange={(open) => setCreateOpen(open)}
         onSubmit={handleDialogSubmit}
+        prefill={templatePrefill}
         agents={agentChoices}
         targets={targets}
         selectedTargetId={selectedTargetId}

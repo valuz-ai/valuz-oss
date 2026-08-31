@@ -79,9 +79,10 @@ async def test_list_items_sends_filters_and_pagination() -> None:
 
     client = _client(handler)
     payload = await client.list_items(
-        type_="skill",
+        type_="playbook_template",
         category="data-analysis",
         subcategory="data-insight",
+        scenario="report-delivery",
         source="skillhub",
         q="pdf",
         page=2,
@@ -89,12 +90,13 @@ async def test_list_items_sends_filters_and_pagination() -> None:
         locale="en-US",
     )
     assert seen["params"] == {
-        "type": "skill",
+        "type": "playbook_template",
         "page": "2",
         "page_size": "10",
         "locale": "en-US",
         "category": "data-analysis",
         "subcategory": "data-insight",
+        "scenario": "report-delivery",
         "source": "skillhub",
         "q": "pdf",
         "channel": "oss",
