@@ -20,6 +20,8 @@ from valuz_agent.infra.fs_registry import fs_registry
 logger = logging.getLogger(__name__)
 
 BUNDLED_VERSION_FILE = ".bundled-version"
+# Marks a package as protected — see ``is_protected_skill``.
+PROTECTED_MARKER_FILE = ".protected"
 
 
 def _resources_root() -> Path:
@@ -189,6 +191,22 @@ def sync_bundled_official_skills(user_id: str) -> list[str]:
 def is_bundled_skill(skill_dir: Path) -> bool:
     """True if the skill directory carries our bundled-version marker."""
     return (skill_dir / BUNDLED_VERSION_FILE).is_file()
+
+
+def is_protected_skill(skill_dir: Path) -> bool:
+    """True if the package is marked "usable, never disclosed".
+
+    A marker FILE rather than a SKILL.md key, for two reasons. The manifest is
+    content we hand to the model and expose in the catalog, so it must not
+    double as a policy channel. And the marker has to survive the package being
+    re-materialized by a host that never parses the manifest — it travels with
+    the directory, like ``.bundled-version`` does.
+
+    Empty file; only its presence is read. Nothing in OSS writes one — a host
+    that curates protected packages does, and an install that has never seen
+    one behaves exactly as before.
+    """
+    return (skill_dir / PROTECTED_MARKER_FILE).is_file()
 
 
 def _template_skills_root() -> Path:

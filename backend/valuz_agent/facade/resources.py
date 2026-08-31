@@ -202,7 +202,13 @@ class ResourceLibrary:
                 # Resolve slug → skill id via catalog
                 cat = await svc.list_catalog(user_id, "chat-default")
                 matched = next((s for s in cat.skills if s.slug == key), None)
-                if matched is None:
+                # A protected package is not the user's to sync out: this
+                # snapshot is what uploads a local skill's files to their cloud
+                # account. Same answer as "no such skill" — the caller already
+                # treats ``None`` as "nothing to publish", so the sync skips it
+                # instead of failing on the ``SkillProtected`` the file reads
+                # below would otherwise raise.
+                if matched is None or matched.protected:
                     return None
                 detail = await svc.get_skill_detail(user_id, matched.id)
                 file_nodes = await svc.list_skill_files(user_id, matched.id)

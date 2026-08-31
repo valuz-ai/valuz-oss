@@ -72,6 +72,15 @@ class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     library_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # "Usable by the runtime, never disclosed to the user." Mirrors the
+    # ``.protected`` marker in the package directory (the scan is what copies it
+    # here) so a catalog read does not have to stat every package. Distinct from
+    # ``readonly`` — that says "you may not WRITE it"; this says "you may not
+    # READ it out". Nothing in OSS sets it; a host that curates protected
+    # packages writes the marker.
+    protected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
 
 class ProjectSkillConfigRow(Base, UserMixin):
@@ -121,6 +130,11 @@ class SkillView(BaseModel):
     deletable: bool = True
     is_locked: bool = False
     lock_reason: str | None = None
+    # Protected: the catalog still shows name + description (the user has to
+    # know the capability exists), but nothing that would hand over the package
+    # — body, file tree, path, copy, export. See ``SkillLibraryService``'s
+    # ``purpose`` gate; the UI reads this to drop those affordances.
+    protected: bool = False
     project_root: str | None = None
     origin_label: str | None = None
     argument_hint: str | None = None

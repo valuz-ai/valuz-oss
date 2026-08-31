@@ -968,10 +968,13 @@ class SessionService:
             own_skill_keys = {
                 (s.name if hasattr(s, "name") else str(s)) for s in (agent.skills or ())
             }
+            # ``runtime``: this list becomes ``Session.skills``. A protected
+            # package is withheld from disclosure, not from execution.
             own_skill_paths = await resolve_skill_slugs_to_paths(
                 agent.skills,
                 session_cwd,
                 user_id=user_id,
+                purpose="runtime",
             )
             session_skills = tuple(own_skill_paths) + tuple(
                 p
