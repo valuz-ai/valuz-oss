@@ -5,6 +5,7 @@ import {
   Eye,
   FolderOpen,
   Loader2,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import {
@@ -73,6 +74,10 @@ export interface SkillDetailPanelProps {
      *   codex    → .codex (source=codex, ~/.codex/skills/)
      */
     category?: "builtin" | "official" | "agents" | "claude" | "codex";
+    /** Usable by the agent, but its contents are never shown. The panel keeps
+     *  the name and description — the user has to know what the capability is
+     *  — and replaces everything that would reveal the package. */
+    protected?: boolean;
   };
   /**
    * Real file tree from `/v1/skills/{id}/files`. Empty array means "no
@@ -523,8 +528,16 @@ export const SkillDetailPanel = ({
             {iconStyle.letter}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-base font-medium text-ink-heading">
-              {skill.name}
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-base font-medium text-ink-heading">
+                {skill.name}
+              </span>
+              {skill.protected ? (
+                <span className="inline-flex shrink-0 items-center gap-0.5 rounded-sm border border-surface-border px-1 py-0 text-micro leading-4 text-ink-meta">
+                  <ShieldCheck className="h-2.5 w-2.5" />
+                  {t("skill.protectedBadge")}
+                </span>
+              ) : null}
             </div>
             <div className="text-xs text-ink-body">
               {subtitleParts.join(" · ")}
@@ -633,6 +646,17 @@ export const SkillDetailPanel = ({
               <Loader2 className="h-3 w-3 animate-spin" />
               {t("common.loading")}
             </div>
+          ) : skill.protected ? (
+            // Not "no files" — there ARE files, we are declining to list them.
+            // Saying "无文件" here reads as a broken load and sends people
+            // looking for a bug.
+            <div className="flex flex-col gap-1.5 py-2 text-xs leading-5 text-ink-meta">
+              <span className="inline-flex items-center gap-1 text-ink-body">
+                <ShieldCheck className="h-3 w-3 shrink-0" />
+                {t("skill.protectedBadge")}
+              </span>
+              <span>{t("skill.protectedFilesHidden")}</span>
+            </div>
           ) : sortedFiles.length === 0 ? (
             <div className="py-2 text-xs text-ink-meta">
               {t("skill.noFiles")}
@@ -719,7 +743,24 @@ export const SkillDetailPanel = ({
               ) : null}
             </div>
           </div>
-          {!selectedPath ? (
+          {skill.protected ? (
+            // The description above is the whole story for a protected skill;
+            // this pane explains why there is nothing to click rather than
+            // inviting the user to click something that does not exist.
+            <div className="flex flex-1 items-center justify-center overflow-auto p-6">
+              <div className="max-w-sm text-center">
+                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-lg bg-surface-soft text-ink-meta">
+                  <ShieldCheck className="h-4 w-4" />
+                </div>
+                <div className="mt-2 text-xs font-medium text-ink-heading">
+                  {t("skill.protectedBadge")}
+                </div>
+                <p className="mt-1 text-2xs leading-4 text-ink-meta">
+                  {t("skill.protectedHint")}
+                </p>
+              </div>
+            </div>
+          ) : !selectedPath ? (
             <div className="flex-1 overflow-auto pl-4 pr-0 pb-3">
               <pre className="mr-4 whitespace-pre-wrap break-all rounded-md border border-surface-border bg-surface p-3 font-mono text-xs italic leading-relaxed text-ink-meta">
                 {t("skill.selectFileToPreview")}

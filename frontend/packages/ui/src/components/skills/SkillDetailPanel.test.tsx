@@ -9,6 +9,8 @@ vi.mock("../conversation/MarkdownContent", () => ({
   ),
 }));
 
+import { t } from "@valuz/shared/i18n";
+
 import { SkillDetailPanel, type SkillDetailPanelFile } from "./SkillDetailPanel";
 
 const skill = (name: string) => ({
@@ -125,5 +127,29 @@ description: second description
         "second-skill",
       );
     });
+  });
+
+  it("says the files are withheld, not missing, for a protected skill", () => {
+    // "无文件" would read as a broken load and send people hunting for a bug.
+    // There ARE files; the panel is declining to list them.
+    render(
+      <SkillDetailPanel
+        skill={{ ...skill("Guarded"), protected: true }}
+        files={[]}
+      />,
+    );
+
+    expect(screen.queryByText(t("skill.noFiles"))).toBeNull();
+    expect(screen.queryByText(t("skill.selectFileToPreview"))).toBeNull();
+    expect(screen.getAllByText(t("skill.protectedBadge")).length).toBeGreaterThan(0);
+    expect(screen.getByText(t("skill.protectedFilesHidden"))).toBeTruthy();
+  });
+
+  it("still shows an unprotected skill its file tree and preview prompt", () => {
+    render(<SkillDetailPanel skill={skill("Open")} files={[]} />);
+
+    expect(screen.getByText(t("skill.noFiles"))).toBeTruthy();
+    expect(screen.getByText(t("skill.selectFileToPreview"))).toBeTruthy();
+    expect(screen.queryByText(t("skill.protectedFilesHidden"))).toBeNull();
   });
 });

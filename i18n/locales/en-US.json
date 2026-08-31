@@ -2136,7 +2136,8 @@
     "waitingAIWrite": "Waiting for AI to write",
     "waitingForAI": "Waiting for AI to write files...",
     "protectedBadge": "Protected",
-    "protectedHint": "Provided and maintained by Valuz. Agents can use this skill; its contents are not available to view or export."
+    "protectedHint": "Provided and maintained by Valuz. Agents can use this skill; its contents are not available to view or export.",
+    "protectedFilesHidden": "This skill's files are not available to browse or download."
   },
   "startup": {
     "error": "Startup encountered an issue",
