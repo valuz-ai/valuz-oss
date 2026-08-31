@@ -1,0 +1,187 @@
+// Package errors implements the product CLI's single error boundary.
+//
+// Command handlers return typed *Error values; the root command is the only
+// place that renders them (human or debug) and maps them to exit codes.
+// Errors are redacted before rendering — tokens, authorization values and
+// secret-like fields never reach stderr, JSON output or debug traces.
+package errors
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// Kind is the stable classification of a CLI error. It drives the exit
+// code (see ExitCode) and the human-facing message.
+type Kind string
+
+const (
+	// KindUsage: invalid arguments / configuration. Exit 1.
+	KindUsage Kind = "usage"
+	// KindTimeout: wall-clock timeout hit. Exit 2.
+	KindTimeout Kind = "timeout"
+	// KindAgent: agent execution failed (run.failed, backend cancelled). Exit 3.
+	KindAgent Kind = "agent"
+	// KindUnreachable: backend unreachable before the run. Exit 4.
+	KindUnreachable Kind = "unreachable"
+	// KindInternal: protocol, network-recovery or CLI internal failure. Exit 5.
+	KindInternal Kind = "internal"
+	// KindAuth: authentication / authorization failure. Exit 6.
+	KindAuth Kind = "auth"
+	// KindActionRequired: the turn parked on an approval with no human in
+	// the loop. Exit 7.
+	KindActionRequired Kind = "action_required"
+)
+
+// ExitCode maps a kind to its stable exit code (see design.md §6.3).
+func (k Kind) ExitCode() int {
+	switch k {
+	case KindUsage:
+		return 1
+	case KindTimeout:
+		return 2
+	case KindAgent:
+		return 3
+	case KindUnreachable:
+		return 4
+	case KindInternal:
+		return 5
+	case KindAuth:
+		return 6
+	case KindActionRequired:
+		return 7
+	default:
+		return 5
+	}
+}
+
+// Error is the typed CLI error. Wrap it via New/Wrap; test with As.
+type Error struct {
+	Kind    Kind
+	Message string
+	// Cause chain (shown under --debug only, redacted).
+	Cause error
+}
+
+func (e *Error) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return string(e.Kind)
+}
+
+// Unwrap exposes the cause for errors.As/Is.
+func (e *Error) Unwrap() error { return e.Cause }
+
+// New builds a typed error without a cause.
+func New(kind Kind, format string, args ...any) *Error {
+	return &Error{Kind: kind, Message: fmt.Sprintf(format, args...)}
+}
+
+// Wrap builds a typed error with a cause (redacted on render).
+func Wrap(kind Kind, cause error, format string, args ...any) *Error {
+	return &Error{Kind: kind, Message: fmt.Sprintf(format, args...), Cause: cause}
+}
+
+// ExitCodeError carries an explicit exit code (Unix signal convention:
+// 128+signum for interrupted runs). It bypasses the kind table and is
+// rendered by the root boundary like any other error.
+type ExitCodeError struct {
+	Code    int
+	Message string
+}
+
+func (e *ExitCodeError) Error() string { return e.Message }
+
+// As extracts a *Error from err (nil if absent).
+func As(err error) *Error {
+	var e *Error
+	if errors.As(err, &e) {
+		return e
+	}
+	return nil
+}
+
+// KindOf returns the error kind, defaulting to KindInternal for untagged
+// errors so a raw error never surfaces with a misleading success code.
+func KindOf(err error) Kind {
+	if e := As(err); e != nil {
+		return e.Kind
+	}
+	return KindInternal
+}
+
+// Redact scrubs secret-like substrings from a message. Used by both the
+// human renderer and the debug trace; the JSON output protocol redacts at
+// the event level (see the output package) with the same policy.
+func Redact(s string) string {
+	return redactValue(s)
+}
+
+func redactValue(s string) string {
+	// 1. "key=value" / "key: value" forms, swallowing an optional
+	//    "Bearer " prefix right after the separator so the opaque token
+	//    is masked together with the scheme keyword:
+	//      Authorization: Bearer sk-9f...   ->  Authorization: [REDACTED]
+	//      token = abc123                   ->  token = [REDACTED]
+	// 2. "Bearer <token>" space form (when not after a separator).
+	// 3. bare JWT-ish tokens (three dot-separated segments; segments
+	//    must not contain dots so a long first segment cannot swallow
+	//    the whole token), plus base64 padding.
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b((?:bearer|token|api[_-]?key|authorization|secret|password|credential)\s*[:=]\s*)(?:bearer\s+)?[A-Za-z0-9._\-\/+]{6,}={0,2}`),
+		// Case-sensitive: the canonical HTTP header form is "Bearer".
+		// A lowercase "the bearer sovereign..." sentence must not be
+		// collateral damage.
+		regexp.MustCompile(`\bBearer\s+[A-Za-z0-9._\-\/+]{6,}={0,2}\b`),
+		regexp.MustCompile(`\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{3,}(?:={0,2})?\b`),
+	}
+	out := s
+	for _, re := range patterns {
+		out = re.ReplaceAllString(out, "${1}[REDACTED]")
+	}
+	return out
+}
+
+// Renderer formats errors for the terminal. Debug mode appends the (redacted)
+// cause chain; normal mode prints the actionable message only.
+type Renderer struct {
+	Debug bool
+}
+
+// Render produces the stderr text for err. It is redaction-safe by
+// construction: secret-like substrings are masked in both modes.
+func (r *Renderer) Render(err error) string {
+	e := As(err)
+	if e == nil {
+		e = &Error{Kind: KindInternal, Message: err.Error()}
+	}
+	msg := e.Message
+	if msg == "" && e.Cause != nil {
+		msg = e.Cause.Error()
+	}
+	msg = Redact(msg)
+	if !r.Debug || e.Cause == nil {
+		return msg
+	}
+	var chain strings.Builder
+	chain.WriteString(msg)
+	chain.WriteString("\n")
+	chain.WriteString("caused by: ")
+	chain.WriteString(Redact(causeChain(e.Cause)))
+	return chain.String()
+}
+
+func causeChain(err error) string {
+	var parts []string
+	for err != nil {
+		parts = append(parts, err.Error())
+		err = errors.Unwrap(err)
+	}
+	return strings.Join(parts, " -> ")
+}
