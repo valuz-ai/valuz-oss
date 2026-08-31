@@ -108,7 +108,7 @@ export * from "./components/settings/UsageReportDialog";
 export * from "./components/connectors/ConnectorIcon";
 export * from "./components/connectors/ConnectorListItem";
 export * from "./components/connectors/ConnectorDetailPanel";
-export * from "./components/skills/FilterPillBar";
+export * from "./components/common/FilterPillGroup";
 export * from "./components/skills/SkillCard";
 export * from "./components/skills/SkillCreateChat";
 export * from "./components/skills/SkillDetailPanel";

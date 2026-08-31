@@ -59,7 +59,14 @@ describe("TemplateLibrary", () => {
     expect(screen.queryByRole("button", { name: /券商接入 2/ })).toBeNull();
     expect(screen.getByPlaceholderText("搜索模板")).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: /监控预警 1/ }));
+    const allScenarios = screen.getByRole("button", { name: "全部场景" });
+    const monitoring = screen.getByRole("button", { name: /监控预警 1/ });
+    expect(allScenarios.getAttribute("aria-pressed")).toBe("true");
+    expect(allScenarios.className).toContain("rounded-full");
+
+    await userEvent.click(monitoring);
+    expect(allScenarios.getAttribute("aria-pressed")).toBe("false");
+    expect(monitoring.getAttribute("aria-pressed")).toBe("true");
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith(
         expect.objectContaining({ scenario: "monitoring-alerting" }),

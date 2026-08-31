@@ -22,6 +22,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  FilterPillGroup,
   Input,
   Skeleton,
 } from "@valuz/ui";
@@ -262,28 +263,19 @@ export function TemplateLibrary({
             />
           </div>
           {scenarios.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              <Button
-                size="sm"
-                variant={scenario === null ? "default" : "ghost"}
-                onClick={() => setScenario(null)}
-              >
-                {t("templateLibrary.allScenarios")}
-              </Button>
-              {scenarios.map((entry) => (
-                <Button
-                  key={entry.key}
-                  size="sm"
-                  variant={scenario === entry.key ? "default" : "ghost"}
-                  onClick={() => setScenario(entry.key)}
-                >
-                  {entry.label}
-                  {entry.count != null ? (
-                    <span className="text-2xs text-ink-meta">{entry.count}</span>
-                  ) : null}
-                </Button>
-              ))}
-            </div>
+            <FilterPillGroup
+              aria-label={t("templateLibrary.allScenarios")}
+              value={scenario}
+              onValueChange={setScenario}
+              options={[
+                { value: null, label: t("templateLibrary.allScenarios") },
+                ...scenarios.map((entry) => ({
+                  value: entry.key,
+                  label: entry.label,
+                  count: entry.count ?? undefined,
+                })),
+              ]}
+            />
           ) : null}
         </div>
       )}
