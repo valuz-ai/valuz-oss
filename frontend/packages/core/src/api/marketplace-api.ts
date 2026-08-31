@@ -16,7 +16,9 @@ export type MarketplaceItemType =
   | "agent_template"
   | "agent_team_template"
   | "connector"
-  | "plugin";
+  | "plugin"
+  | "playbook_template"
+  | "automation_template";
 /** Sources this build knows a label for. */
 export type MarketplaceKnownSource =
   | "skillhub"
@@ -45,7 +47,9 @@ export type MarketplaceInstallTarget =
   | "agent_library"
   | "agent_library_project"
   | "connector_library"
-  | "plugin_library";
+  | "plugin_library"
+  | "playbook_builder"
+  | "automation_builder";
 /** Derived (never authored) plugin composition — ``skills_only`` = 技能套件,
  * ``with_connectors`` = plugin shipping an ``mcp.json``. */
 export type MarketplacePluginComposition = "skills_only" | "with_connectors";
@@ -162,6 +166,7 @@ export interface MarketplaceItem {
   category?: string | null;
   category_label?: string | null;
   subcategories: string[];
+  scenario_tags?: string[];
   badges: MarketplaceBadge[];
   stats: MarketplaceStats;
   version?: string | null;
@@ -223,6 +228,7 @@ export interface MarketplaceCategory {
 
 export interface MarketplaceCategoryList {
   categories: MarketplaceCategory[];
+  scenario_tags?: MarketplaceSubcategory[];
   degraded: boolean;
 }
 
@@ -238,6 +244,7 @@ export interface MarketplaceListParams {
   type: MarketplaceItemType;
   category?: string;
   subcategory?: string;
+  scenario?: string;
   source?: MarketplaceSource;
   /** ``type=plugin`` only: restrict to one derived composition. */
   composition?: MarketplacePluginComposition;
@@ -268,7 +275,13 @@ export function marketplacePluginMembers(
 
 export const marketplaceApi = {
   categories(
-    kind: "skill" | "agent" | "connector" | "plugin",
+    kind:
+      | "skill"
+      | "agent"
+      | "connector"
+      | "plugin"
+      | "playbook"
+      | "automation",
   ): Promise<MarketplaceCategoryList> {
     return fetchJson(`/v1/marketplace/categories?kind=${kind}`);
   },
@@ -278,6 +291,7 @@ export const marketplaceApi = {
     search.set("type", params.type);
     if (params.category) search.set("category", params.category);
     if (params.subcategory) search.set("subcategory", params.subcategory);
+    if (params.scenario) search.set("scenario", params.scenario);
     if (params.source) search.set("source", params.source);
     if (params.composition) search.set("composition", params.composition);
     if (params.q) search.set("q", params.q);

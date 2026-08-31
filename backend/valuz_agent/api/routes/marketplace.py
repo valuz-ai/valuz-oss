@@ -93,7 +93,9 @@ async def _get_marketplace_service(
 
 @router.get("/v1/marketplace/categories", response_model=MarketplaceCategoryList)
 async def list_marketplace_categories(
-    kind: Literal["skill", "agent", "connector", "plugin"] = Query(...),
+    kind: Literal["skill", "agent", "connector", "plugin", "playbook", "automation"] = Query(
+        ...
+    ),
     user_id: str = Depends(get_current_user_id),
     svc: MarketplaceService = Depends(_get_marketplace_service),
 ) -> MarketplaceCategoryList:
@@ -104,11 +106,18 @@ async def list_marketplace_categories(
 
 @router.get("/v1/marketplace/items", response_model=MarketplaceItemList)
 async def list_marketplace_items(
-    type: Literal["skill", "agent_template", "agent_team_template", "connector", "plugin"] = Query(
-        ...
-    ),
+    type: Literal[
+        "skill",
+        "agent_template",
+        "agent_team_template",
+        "connector",
+        "plugin",
+        "playbook_template",
+        "automation_template",
+    ] = Query(...),
     category: str | None = Query(default=None),
     subcategory: str | None = Query(default=None),
+    scenario: str | None = Query(default=None),
     # Open string (see ``models.MarketplaceSource``): the index decides which
     # sources exist; an unknown filter simply matches nothing upstream.
     source: str | None = Query(default=None, max_length=64),
@@ -127,6 +136,7 @@ async def list_marketplace_items(
         type_=type,
         category=category,
         subcategory=subcategory,
+        scenario=scenario,
         source=source,
         q=q,
         page=page,

@@ -11,7 +11,13 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 logger = logging.getLogger(__name__)
 
 MarketplaceItemType = Literal[
-    "skill", "agent_template", "agent_team_template", "connector", "plugin"
+    "skill",
+    "agent_template",
+    "agent_team_template",
+    "connector",
+    "plugin",
+    "playbook_template",
+    "automation_template",
 ]
 # ``source`` is an OPEN string on the wire. Where an item comes from is data
 # the market index grows over time (a new upstream store, a new ingest) and
@@ -47,6 +53,8 @@ MarketplaceInstallTarget = Literal[
     "agent_library_project",
     "connector_library",
     "plugin_library",
+    "playbook_builder",
+    "automation_builder",
 ]
 ConnectorRequirementKind = Literal["required", "optional", "api_key", "cost"]
 MarketplaceConnectorFieldTarget = Literal["env", "header", "param"]
@@ -168,6 +176,7 @@ class MarketplaceItem(BaseModel):
     category: str | None = None
     category_label: str | None = None
     subcategories: list[str] = Field(default_factory=list)
+    scenario_tags: list[str] = Field(default_factory=list)
     badges: list[MarketplaceBadge] = Field(default_factory=list)
     stats: MarketplaceStats = Field(default_factory=MarketplaceStats)
     version: str | None = None
@@ -269,6 +278,7 @@ class MarketplaceCategory(BaseModel):
 
 class MarketplaceCategoryList(BaseModel):
     categories: list[MarketplaceCategory]
+    scenario_tags: list[MarketplaceSubcategory] = Field(default_factory=list)
     degraded: bool = False
 
 

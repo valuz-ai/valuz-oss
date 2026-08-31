@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BookOpenText,
+  LayoutTemplate,
   Plus,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,16 +33,20 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
+  SegmentedControl,
 } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import {
   CreatePlaybookDialog,
   PlaybookDefinitionTable,
+  TemplateLibrary,
   type PlaybookAgentChoice,
+  type PlaybookTemplatePrefill,
 } from "@valuz/app/components";
+import { playbookTemplatePrefill } from "../lib/template-library";
 
 export const PlaybookPage = () => {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { setHeader, setHeaderClassName, setContentInnerClassName } =
@@ -55,6 +60,8 @@ export const PlaybookPage = () => {
   >({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<PlaybookDetail | null>(null);
+  const [templatePrefill, setTemplatePrefill] =
+    useState<PlaybookTemplatePrefill | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PlaybookDefinition | null>(
     null,
   );
@@ -65,6 +72,19 @@ export const PlaybookPage = () => {
     new Set(),
   );
   const selectedDefinitionId = searchParams.get("definition");
+  const view = searchParams.get("view") === "templates" ? "templates" : "mine";
+
+  const setView = useCallback(
+    (next: "mine" | "templates") => {
+      const params = new URLSearchParams(searchParams);
+      if (next === "templates") params.set("view", "templates");
+      else params.delete("view");
+      params.delete("run");
+      params.delete("definition");
+      setSearchParams(params);
+    },
+    [searchParams, setSearchParams],
+  );
 
   useEffect(() => {
     const runId = searchParams.get("run");
@@ -190,8 +210,18 @@ export const PlaybookPage = () => {
 
   const openCreate = useCallback(() => {
     setEditing(null);
+    setTemplatePrefill(null);
     setDialogOpen(true);
   }, []);
+
+  const useTemplate = useCallback(
+    (detail: Parameters<typeof playbookTemplatePrefill>[0]) => {
+      setEditing(null);
+      setTemplatePrefill(playbookTemplatePrefill(detail, locale));
+      setDialogOpen(true);
+    },
+    [locale],
+  );
 
   const header = useMemo(
     () => (
@@ -199,6 +229,23 @@ export const PlaybookPage = () => {
         title={t("playbook.title")}
         action={
           <div className="flex shrink-0 items-center gap-2">
+            <SegmentedControl
+              value={view}
+              onValueChange={setView}
+              className="h-8 w-fit"
+              options={[
+                {
+                  value: "mine",
+                  label: t("templateLibrary.myPlaybooks"),
+                  icon: BookOpenText,
+                },
+                {
+                  value: "templates",
+                  label: t("templateLibrary.templates"),
+                  icon: LayoutTemplate,
+                },
+              ]}
+            />
             <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
               <span className="font-medium text-ink-heading">
                 {t(
@@ -228,7 +275,7 @@ export const PlaybookPage = () => {
         }
       />
     ),
-    [activeCount, hasPlaybooks, openCreate, t, totalCount],
+    [activeCount, hasPlaybooks, openCreate, setView, t, totalCount, view],
   );
 
   useEffect(() => {
@@ -248,6 +295,7 @@ export const PlaybookPage = () => {
         playbooksApi.get(definition.id),
         playbooksApi.listVersions(definition.id),
       ]);
+      setTemplatePrefill(null);
       setEditing({ ...detail, versions });
       setDialogOpen(true);
     } catch (error) {
@@ -393,20 +441,30 @@ export const PlaybookPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1000px] flex-col pb-5 pt-3">
-        {definitions.length === 0 ? (
-          <div className="flex flex-1 justify-center pt-[160px]">
-            <EmptyState
-              variant="plain"
-              icon={<BookOpenText className="h-5 w-5" />}
-              title={t("playbook.emptyTitle")}
-              description={t("playbook.emptyDescription")}
-              action={
-                <Button size="sm" onClick={openCreate}>
-                  <Plus className="h-3 w-3" />
-                  {t("playbook.createAction")}
-                </Button>
-              }
+      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+        {view === "templates" ? (
+          <TemplateLibrary kind="playbook" onUse={useTemplate} />
+        ) : definitions.length === 0 ? (
+          <div className="space-y-10 px-5 pt-10">
+            <div className="flex justify-center">
+              <EmptyState
+                variant="plain"
+                icon={<BookOpenText className="h-5 w-5" />}
+                title={t("playbook.emptyTitle")}
+                description={t("playbook.emptyDescription")}
+                action={
+                  <Button size="sm" onClick={openCreate}>
+                    <Plus className="h-3 w-3" />
+                    {t("playbook.createAction")}
+                  </Button>
+                }
+              />
+            </div>
+            <TemplateLibrary
+              kind="playbook"
+              variant="recommended"
+              onBrowseAll={() => setView("templates")}
+              onUse={useTemplate}
             />
           </div>
         ) : (
@@ -426,7 +484,10 @@ export const PlaybookPage = () => {
                   )}
                   collapsed={collapsedGroupIds.has(group.id)}
                   onToggleCollapse={() => toggleGroupCollapsed(group.id)}
-                  onOpen={(definition) => void openEdit(definition)}
+                  onOpen={(definition) =>
+                    navigate(`/playbooks/${definition.id}?from=/playbooks`)
+                  }
+                  onEdit={(definition) => void openEdit(definition)}
                   onRun={(definition) => void run(definition)}
                   onStatusChange={(definition, status) =>
                     void changeStatus(definition, status)
@@ -443,6 +504,7 @@ export const PlaybookPage = () => {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         initial={editing}
+        prefill={templatePrefill}
         targets={targets}
         agents={agents.map((agent) => ({ slug: agent.slug, name: agent.name }))}
         agentsByProject={projectAgents}

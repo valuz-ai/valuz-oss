@@ -289,6 +289,7 @@ class MarketIndexClient:
         type_: str,
         category: str | None = None,
         subcategory: str | None = None,
+        scenario: str | None = None,
         source: str | None = None,
         q: str | None = None,
         page: int = 1,
@@ -309,6 +310,8 @@ class MarketIndexClient:
             params["category"] = category
         if subcategory is not None:
             params["subcategory"] = subcategory
+        if scenario is not None:
+            params["scenario"] = scenario
         if source is not None:
             params["source"] = source
         if q:

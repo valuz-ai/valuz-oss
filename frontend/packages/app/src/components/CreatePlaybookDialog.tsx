@@ -25,6 +25,7 @@ import {
   Textarea,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
+import type { PlaybookTemplatePrefill } from "../lib/template-library";
 
 export interface PlaybookAgentChoice {
   slug: string;
@@ -44,6 +45,9 @@ export interface CreatePlaybookDialogProps {
   }) => Promise<void>;
   onDelete?: (definition: PlaybookDefinition) => Promise<void>;
   initial?: PlaybookDetail | null;
+  /** Create-mode defaults loaded from a market template. This never switches
+   * the dialog into edit mode and does not persist anything until submit. */
+  prefill?: PlaybookTemplatePrefill | null;
   targets: AutomationProjectTarget[];
   /** Library agents for Chat plus project-member projections keyed by
    * ``project_id``. This mirrors Automation's target-linked agent picker. */
@@ -65,6 +69,7 @@ export const CreatePlaybookDialog = ({
   onSubmit,
   onDelete,
   initial,
+  prefill,
   targets,
   agents,
   agentsByProject = {},
@@ -86,9 +91,9 @@ export const CreatePlaybookDialog = ({
 
   useEffect(() => {
     if (!open) return;
-    setName(initial?.definition.name ?? "");
-    setContent(initial?.current_version.content ?? "");
-    setStatus(initial?.definition.status ?? "draft");
+    setName(initial?.definition.name ?? prefill?.name ?? "");
+    setContent(initial?.current_version.content ?? prefill?.content ?? "");
+    setStatus(initial?.definition.status ?? prefill?.status ?? "draft");
     setSelectedVersion(initial?.definition.current_version ?? 1);
     setProjectId(
       fixedProjectId ?? initial?.definition.project_id ?? "chat-default",
@@ -97,11 +102,11 @@ export const CreatePlaybookDialog = ({
     setAgentSlug(
       typeof executor?.agent_slug === "string"
         ? executor.agent_slug
-        : "",
+        : (prefill?.default_agent_slug ?? ""),
     );
     setExpanded(false);
     setDeleteOpen(false);
-  }, [fixedProjectId, initial, open]);
+  }, [fixedProjectId, initial, open, prefill]);
 
   const availableAgents = fixedProjectId
     ? agents

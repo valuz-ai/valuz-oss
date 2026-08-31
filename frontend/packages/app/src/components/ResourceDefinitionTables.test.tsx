@@ -66,11 +66,14 @@ describe("canonical resource definition tables", () => {
 
   it("uses the global Playbook columns, status, and action menu", async () => {
     const onRun = vi.fn();
+    const onOpen = vi.fn();
+    const onEdit = vi.fn();
     render(
       <PlaybookDefinitionTable
         definitions={[playbook]}
         runningId={null}
-        onOpen={vi.fn()}
+        onOpen={onOpen}
+        onEdit={onEdit}
         onRun={onRun}
         onStatusChange={vi.fn()}
         onDelete={vi.fn()}
@@ -82,8 +85,15 @@ describe("canonical resource definition tables", () => {
     expect(screen.getByText("状态")).toBeTruthy();
     expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 
+    await userEvent.click(screen.getAllByRole("button", { name: "季度复盘" })[0]!);
+    expect(onOpen).toHaveBeenCalledWith(playbook);
+
     await userEvent.click(screen.getAllByRole("button", { name: "操作" })[0]!);
     await userEvent.click(screen.getByRole("menuitem", { name: "运行" }));
     expect(onRun).toHaveBeenCalledWith(playbook);
+
+    await userEvent.click(screen.getAllByRole("button", { name: "操作" })[0]!);
+    await userEvent.click(screen.getByRole("menuitem", { name: "编辑" }));
+    expect(onEdit).toHaveBeenCalledWith(playbook);
   });
 });

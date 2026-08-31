@@ -9,6 +9,11 @@ export {
   useCitationDocumentPreview,
 } from "./CitationDocumentPreviewProvider";
 export { MarketplaceImportDialog } from "./MarketplaceImportDialog";
+export {
+  TemplateLibrary,
+  type TemplateLibraryKind,
+  type TemplateLibraryProps,
+} from "./TemplateLibrary";
 export { ConnectorAddDialog } from "./ConnectorAddDialog";
 export type { ConnectorAddMode } from "./ConnectorAddDialog";
 export { ConnectorConnectDialog } from "./ConnectorConnectDialog";
@@ -16,6 +21,7 @@ export {
   CreateAutomationDialog,
   type AutomationAgentChoice,
 } from "./CreateAutomationDialog";
+export type { AutomationTemplatePrefill } from "../lib/template-library";
 export {
   AutomationDefinitionTable,
   type AutomationDefinitionTableProps,
@@ -24,6 +30,7 @@ export {
   CreatePlaybookDialog,
   type PlaybookAgentChoice,
 } from "./CreatePlaybookDialog";
+export type { PlaybookTemplatePrefill } from "../lib/template-library";
 export {
   PlaybookDefinitionTable,
   type PlaybookDefinitionTableProps,

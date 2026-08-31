@@ -3850,7 +3850,7 @@ paths:
         - in: query
           name: kind
           required: true
-          schema: {type: string, enum: [skill, agent, connector, plugin]}
+          schema: {type: string, enum: [skill, agent, connector, plugin, playbook, automation]}
       responses:
         "200":
           description: Categories listed
@@ -3876,7 +3876,7 @@ paths:
         - in: query
           name: type
           required: true
-          schema: {type: string, enum: [skill, agent_template, agent_team_template, connector, plugin]}
+          schema: {type: string, enum: [skill, agent_template, agent_team_template, connector, plugin, playbook_template, automation_template]}
         - in: query
           name: category
           required: false
@@ -3884,6 +3884,11 @@ paths:
         - in: query
           name: subcategory
           required: false
+          schema: {type: string}
+        - in: query
+          name: scenario
+          required: false
+          description: "Template items only — one controlled cross-category usage scenario."
           schema: {type: string}
         - in: query
           name: source
@@ -5649,7 +5654,7 @@ components:
         id: {type: string}
         type:
           type: string
-          enum: [skill, agent_template, agent_team_template, connector, plugin]
+          enum: [skill, agent_template, agent_team_template, connector, plugin, playbook_template, automation_template]
         source:
           type: string
           description: "Open string, NOT an enum: where the item comes from is data the index grows over time (known today: skillhub, valuz_official, modelscope, redskill, plugin — `plugin` marks members extracted from a plugin package). Clients MUST render unknown sources with a generic label; a closed enum here once broke every old client the moment a new source shipped."
@@ -5662,6 +5667,10 @@ components:
         category_label: {type: string, nullable: true}
         subcategories:
           type: array
+          items: {type: string}
+        scenario_tags:
+          type: array
+          description: "Playbook and Automation templates only — controlled usage scenarios."
           items: {type: string}
         badges:
           type: array
@@ -5690,7 +5699,7 @@ components:
               - $ref: "#/components/schemas/MarketplacePluginMember"
         install_target:
           type: string
-          enum: [skill_library, agent_library, agent_library_project, connector_library, plugin_library]
+          enum: [skill_library, agent_library, agent_library_project, connector_library, plugin_library, playbook_builder, automation_builder]
         installed: {type: boolean}
         locked: {type: boolean, default: false, description: "Present but not installable (e.g. official skill requires Reportify)."}
     MarketplaceItemDetail:
@@ -5756,7 +5765,9 @@ components:
                 agent_team_template -> a pack manifest object (skill deps
                 rewritten to {slug, source: "url", download_url});
                 plugin -> {download_url, sha256?, size_bytes?} of the Agent
-                Plugins layout zip. Only the market index sets this field.
+                Plugins layout zip; playbook_template / automation_template ->
+                creation-form prefill values. Only the market index sets this
+                field. Template use never calls the install endpoint.
     MarketplaceItemList:
       type: object
       required: [items, total, page, page_size, degraded]
@@ -5783,6 +5794,7 @@ components:
             properties:
               key: {type: string}
               label: {type: string}
+              count: {type: integer, nullable: true}
     MarketplaceCategoryList:
       type: object
       required: [categories, degraded]
@@ -5790,6 +5802,16 @@ components:
         categories:
           type: array
           items: {$ref: "#/components/schemas/MarketplaceCategory"}
+        scenario_tags:
+          type: array
+          description: "Present controlled scenario filters for template libraries."
+          items:
+            type: object
+            required: [key, label]
+            properties:
+              key: {type: string}
+              label: {type: string}
+              count: {type: integer, nullable: true}
         degraded: {type: boolean}
     MarketplaceInstallResult:
       type: object

@@ -32,6 +32,7 @@ export interface PlaybookDefinitionTableProps {
   definitions: PlaybookDefinition[];
   runningId: string | null;
   onOpen: (definition: PlaybookDefinition) => void;
+  onEdit: (definition: PlaybookDefinition) => void;
   onRun: (definition: PlaybookDefinition) => void;
   onStatusChange: (
     definition: PlaybookDefinition,
@@ -50,6 +51,7 @@ export function PlaybookDefinitionTable({
   definitions,
   runningId,
   onOpen,
+  onEdit,
   onRun,
   onStatusChange,
   onDelete,
@@ -128,7 +130,7 @@ export function PlaybookDefinitionTable({
                         ? t("playbook.running")
                         : t("playbook.runAction")}
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => onOpen(definition)}>
+                    <DropdownMenuItem onSelect={() => onEdit(definition)}>
                       <Pencil />
                       {t("common.edit")}
                     </DropdownMenuItem>
