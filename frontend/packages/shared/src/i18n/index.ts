@@ -80,22 +80,31 @@ export function registerLocaleNamespace(
   data: Record<string, unknown>,
 ): void {
   const flat = flatten(data, namespace);
+  if (Object.keys(flat).length === 0) return;
   let perNs = pluginLocaleMap.get(namespace);
   if (perNs === undefined) {
     perNs = {};
     pluginLocaleMap.set(namespace, perNs);
   }
-  perNs[locale] = { ...(perNs[locale] ?? {}), ...flat };
+  const current = perNs[locale] ?? {};
+  const changed = Object.entries(flat).some(
+    ([key, value]) => current[key] !== value,
+  );
+  if (!changed) return;
+  perNs[locale] = { ...current, ...flat };
   // Live re-merge: if the just-registered locale is the active one
   // (or the fallback), fold into state.translations / state.fallback
   // so already-mounted t() callers see new strings on next render.
+  let activeSnapshotChanged = false;
   if (state.locale === locale) {
     Object.assign(state.translations, flat);
+    activeSnapshotChanged = true;
   }
   if (state.fallbackLocale === locale) {
     Object.assign(state.fallbackTranslations, flat);
+    activeSnapshotChanged = true;
   }
-  notify();
+  if (activeSnapshotChanged) notify();
 }
 
 // Self-initialize from the persisted locale on module load. Without
