@@ -32,7 +32,12 @@ import {
   marketplaceIcon,
   tintFor,
 } from "./marketplace-ui";
-import { resolveTemplateText, templateResources } from "../lib/template-library";
+import {
+  RECOMMENDED_TEMPLATE_LIMIT,
+  recommendedTemplates,
+  resolveTemplateText,
+  templateResources,
+} from "../lib/template-library";
 
 export type TemplateLibraryKind = "playbook" | "automation";
 
@@ -188,7 +193,9 @@ export function TemplateLibrary({
         scenario: variant === "full" ? scenario ?? undefined : undefined,
         q: variant === "full" && query.trim() ? query.trim() : undefined,
         page: 1,
-        page_size: variant === "recommended" ? 6 : PAGE_SIZE,
+        // Recommended mode ranks across the full first-release catalog before
+        // projecting its eight empty-state cards.
+        page_size: PAGE_SIZE,
       })
       .then((result) => {
         if (requestId.current === id) setItems(result.items);
@@ -208,16 +215,17 @@ export function TemplateLibrary({
     () => new Map(scenarios.map((entry) => [entry.key, entry.label])),
     [scenarios],
   );
-  const displayItems = useMemo(
-    () =>
-      items.map((item) => ({
-        ...item,
-        scenario_tags: (item.scenario_tags ?? []).map(
-          (tag) => scenarioLabels.get(tag) ?? tag,
-        ),
-      })),
-    [items, scenarioLabels],
-  );
+  const displayItems = useMemo(() => {
+    const localized = items.map((item) => ({
+      ...item,
+      scenario_tags: (item.scenario_tags ?? []).map(
+        (tag) => scenarioLabels.get(tag) ?? tag,
+      ),
+    }));
+    return variant === "recommended"
+      ? recommendedTemplates(localized, kind)
+      : localized;
+  }, [items, kind, scenarioLabels, variant]);
 
   const openDetail = useCallback((item: MarketplaceItem) => {
     setDetailLoading(true);
@@ -282,7 +290,9 @@ export function TemplateLibrary({
 
       {loading ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
-          {Array.from({ length: variant === "recommended" ? 3 : 6 }).map((_, index) => (
+          {Array.from({
+            length: variant === "recommended" ? RECOMMENDED_TEMPLATE_LIMIT : 6,
+          }).map((_, index) => (
             <Skeleton key={index} className="h-[172px] rounded-xl" />
           ))}
         </div>

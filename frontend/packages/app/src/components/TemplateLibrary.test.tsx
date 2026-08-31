@@ -32,6 +32,53 @@ const item: MarketplaceItem = {
 };
 
 describe("TemplateLibrary", () => {
+  it("shows eight cards in the empty-state recommendation variant", async () => {
+    vi.spyOn(marketplaceApi, "categories").mockResolvedValue({
+      categories: [],
+      scenario_tags: [],
+      degraded: false,
+    });
+    const recommendedItems = Array.from({ length: 10 }, (_, index) => ({
+      ...item,
+      id: `${item.id}-${index}`,
+      source_ref: `${item.source_ref}-${index}`,
+      title: `推荐模板 ${index + 1}`,
+      subcategories: [
+        [
+          "accounting-reporting",
+          "valuation-modeling",
+          "quant-trading",
+          "equity-research",
+          "wealth-management",
+          "portfolio-risk",
+          "market-data",
+          "brokerage",
+          "macro-strategy",
+          "general-finance",
+        ][index],
+      ],
+    }));
+    const list = vi.spyOn(marketplaceApi, "list").mockResolvedValue({
+      items: recommendedItems,
+      total: recommendedItems.length,
+      page: 1,
+      page_size: 60,
+      degraded: false,
+    });
+
+    render(
+      <TemplateLibrary kind="playbook" variant="recommended" onUse={vi.fn()} />,
+    );
+
+    await screen.findByText("推荐模板 10");
+    expect(screen.getAllByRole("button")).toHaveLength(8);
+    expect(screen.queryByText("推荐模板 1")).toBeNull();
+    expect(screen.queryByText("推荐模板 5")).toBeNull();
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, page_size: 60 }),
+    );
+  });
+
   it("keeps search and scenario filters without category navigation", async () => {
     vi.spyOn(marketplaceApi, "categories").mockResolvedValue({
       categories: [
