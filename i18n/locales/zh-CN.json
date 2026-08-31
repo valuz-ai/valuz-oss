@@ -2134,7 +2134,9 @@
     "uploadHintDetail": "压缩包内需包含 SKILL.md",
     "user": "User",
     "waitingAIWrite": "等待 AI 写入文件",
-    "waitingForAI": "等待 AI 把文件写入暂存目录…"
+    "waitingForAI": "等待 AI 把文件写入暂存目录…",
+    "protectedBadge": "受保护",
+    "protectedHint": "该技能由 Valuz 提供并维护，智能体可正常调用，但不提供内容查看与导出。"
   },
   "startup": {
     "error": "启动遇到问题",

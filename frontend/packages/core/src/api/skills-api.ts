@@ -47,6 +47,12 @@ export interface SkillView {
   deletable: boolean;
   is_locked?: boolean;
   lock_reason?: string | null;
+  /** Usable by every runtime, never disclosed. The catalog still lists the
+   *  skill — the user has to know the capability exists — but `path` and
+   *  `project_root` come back blank and every endpoint that would hand over
+   *  the package (file tree, file read, copy, export) answers 403. A client
+   *  renders the name and description and drops those affordances. */
+  protected?: boolean;
   project_root?: string | null;
   origin_label?: string | null;
   argument_hint?: string | null;
