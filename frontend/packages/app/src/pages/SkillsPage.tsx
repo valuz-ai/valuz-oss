@@ -91,6 +91,7 @@ function toCardSkill(s: SkillView) {
     source: (s.scope === "official" ? "official" : "custom") as
       "official" | "custom",
     locked: s.is_locked ?? false,
+    protected: s.protected ?? false,
     version: s.version != null ? `v${s.version}` : "–",
     versionNumber: s.version ?? null,
     originLabel: s.origin_label ?? undefined,

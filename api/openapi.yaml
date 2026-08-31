@@ -6913,6 +6913,16 @@ components:
         lock_reason:
           type: string
           nullable: true
+        protected:
+          type: boolean
+          default: false
+          description: |
+            The package is usable by every runtime but is never disclosed: the
+            file tree, file contents, copy, pack embedding and plugin export
+            all refuse it, and `path` / `project_root` come back blank. The
+            catalog still lists it — the user has to know the capability
+            exists — so a client should render the name and description and
+            drop every affordance that would reveal or take the package.
         project_root:
           type: string
           nullable: true

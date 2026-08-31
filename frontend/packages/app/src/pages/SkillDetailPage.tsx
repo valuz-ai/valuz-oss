@@ -9,6 +9,7 @@ import {
   X,
   Bot,
   ExternalLink,
+  ShieldCheck,
 } from "lucide-react";
 import {
   Badge,
@@ -83,14 +84,21 @@ export const SkillDetailPage = () => {
   const loadSkill = useCallback(async () => {
     setLoading(true);
     try {
-      const [detail, fileList] = await Promise.all([
-        skillsApi.get(decodedId),
-        skillsApi.listFiles(decodedId),
-      ]);
+      // Detail first, files second — NOT in parallel. A protected skill's
+      // file listing answers 403, and a Promise.all would reject on it and
+      // leave the page with no skill at all. The one thing this page must
+      // still show for a protected skill is its name and description.
+      const detail = await skillsApi.get(decodedId);
       setSkill(detail);
       setEditName(detail.name);
       setEditDesc(detail.description);
       setEditTags(detail.tags?.join(", ") ?? "");
+      if (detail.protected) {
+        setFiles([]);
+        setSelectedFile(null);
+        return;
+      }
+      const fileList = await skillsApi.listFiles(decodedId);
       setFiles(fileList as unknown as TreeNode[]);
       const firstFile = findFirstFile(fileList as unknown as TreeNode[]);
       if (firstFile) {
@@ -216,6 +224,36 @@ export const SkillDetailPage = () => {
     );
   }
 
+  // A protected skill has no browsable contents, so the whole editor layout —
+  // file tree, viewer, save — has nothing to operate on. Show what the user is
+  // entitled to know (that they have this capability, and what it does) rather
+  // than an empty three-pane editor that reads as a loading failure.
+  if (skill?.protected) {
+    return (
+      <div className="flex h-full items-center justify-center p-8">
+        <div className="max-w-md text-center">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-surface-muted text-ink-meta">
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+          <div className="mt-3 text-sm font-medium text-ink-heading">
+            {skill.name}
+          </div>
+          {skill.description && (
+            <p className="mt-1.5 text-2xs leading-4 text-ink-body">
+              {skill.description}
+            </p>
+          )}
+          <Badge variant="metaOutline" className="mt-3 text-micro">
+            {t("skill.protectedBadge" as Parameters<typeof t>[0])}
+          </Badge>
+          <p className="mt-3 text-2xs leading-4 text-ink-meta">
+            {t("skill.protectedHint" as Parameters<typeof t>[0])}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full">
       {/* Left sidebar: metadata + file tree */}
@@ -325,8 +363,7 @@ export const SkillDetailPage = () => {
                   <ExternalLink className="h-3 w-3 shrink-0" />
                   <span className="truncate">
                     {t("skill.importedFrom" as Parameters<typeof t>[0], {
-                      source:
-                        skill.origin.type === "github" ? "GitHub" : "URL",
+                      source: skill.origin.type === "github" ? "GitHub" : "URL",
                     })}
                     {skill.origin.path ? ` · ${skill.origin.path}` : ""}
                   </span>

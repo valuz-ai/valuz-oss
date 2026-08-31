@@ -2466,6 +2466,8 @@ export type KnownI18nKey =
   | "skill.pleaseRetry"
   | "skill.previewFailed"
   | "skill.project"
+  | "skill.protectedBadge"
+  | "skill.protectedHint"
   | "skill.render"
   | "skill.renderCopy"
   | "skill.renderPreview"
