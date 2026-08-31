@@ -195,8 +195,15 @@ async def get_default_timezone(db: AsyncSession, user_id: str | None = None) -> 
     We deliberately don't attempt OS-level auto-detection here — the
     install/first-run wizard should call ``detect_system_timezone()`` and
     persist the value explicitly, so the runtime path stays a pure DB read.
+
+    A stored value that is not a valid IANA name (a legacy Windows display
+    name, a typo) is treated as unset — IANA is the only standard this
+    module accepts, and anything else would crash cron validation downstream.
     """
-    return await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id) or FALLBACK_TIMEZONE
+    return (
+        _normalise_timezone_pref(await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id))
+        or FALLBACK_TIMEZONE
+    )
 
 
 async def get_effective_default_timezone(db: AsyncSession, user_id: str | None = None) -> str:
@@ -210,8 +217,15 @@ async def get_effective_default_timezone(db: AsyncSession, user_id: str | None =
     MCP-created automation lands on the user's local clock by default. The tz
     is always *persisted* on the row (see ``AutomationService._apply_trigger``)
     so it stays visible/editable rather than an invisible UTC fallback.
+
+    Only IANA names ever flow out: the stored preference is validated (a
+    non-IANA legacy value is treated as unset) and ``detect_system_timezone``
+    never returns a non-IANA name.
     """
-    return await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id) or detect_system_timezone()
+    return (
+        _normalise_timezone_pref(await _read(db, KEY_DEFAULT_TIMEZONE, user_id=user_id))
+        or detect_system_timezone()
+    )
 
 
 async def set_default_timezone(db: AsyncSession, value: str, user_id: str | None = None) -> None:
@@ -593,16 +607,41 @@ async def set_backup_next_run_at(
     await _write(db, KEY_BACKUP_NEXT_RUN_AT, str(value) if value else "", user_id=user_id)
 
 
+def _normalise_timezone_pref(value: str | None) -> str | None:
+    """A stored timezone preference that is not a valid IANA name is treated
+    as unset — the standard is IANA, and anything else (a legacy Windows
+    display name, a typo) would crash cron validation downstream. The
+    browser-side picker (``Intl``) is the source of truth for the user's
+    zone; this only keeps a bad DB value from leaking into scheduling.
+    """
+    if not value:
+        return None
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(value)
+        return value
+    except ZoneInfoNotFoundError:
+        return None
+
+
 def detect_system_timezone() -> str:
-    """Best-effort detection of the user's local timezone.
+    """Best-effort detection of the host's timezone — IANA only.
 
-    Tries, in order:
+    The browser (``Intl.DateTimeFormat().resolvedOptions().timeZone``) is the
+    authoritative, always-IANA detection path (desktop + webui); this function
+    is the no-browser fallback (agent/MCP runs, server-side defaults) and it
+    deliberately NEVER returns a non-IANA name:
 
-    - ``/etc/localtime`` symlink target on POSIX (resolves to e.g.
-      ``/usr/share/zoneinfo/Asia/Shanghai``).
-    - ``TZ`` env var.
-    - ``datetime.now().astimezone().tzname()`` as a last resort
-      (not always IANA, but at least non-empty).
+    - POSIX: ``/etc/localtime`` symlink target (already IANA).
+    - ``TZ`` env var — validated against ``zoneinfo`` before use.
+    - Windows: only ``TZ`` env; otherwise UTC. ``datetime.tzname()`` on
+      Windows returns a LOCALIZED display name ("中国标准时间") that is not an
+      IANA identifier and not zoneinfo-parseable — returning it verbatim
+      would crash every cron validation it touches, and guessing its IANA
+      equivalent server-side duplicates what the browser already knows.
+      Honest UTC beats a wrong zone that fires every scheduled run at the
+      wrong wall-clock time.
 
     Returns ``"UTC"`` if nothing usable is found. The caller is expected
     to surface the detected value to the user for confirmation, not blindly
@@ -613,8 +652,8 @@ def detect_system_timezone() -> str:
     from pathlib import Path
 
     if sys.platform == "win32":
-        # /etc/localtime does not exist on Windows. Try TZ env var first,
-        # then fall back to datetime-based detection.
+        # /etc/localtime does not exist on Windows. Only a TZ env var that
+        # is a valid IANA name is trusted; anything else → UTC (see docstring).
         tz_env = os.environ.get("TZ", "").strip()
         if tz_env:
             try:
@@ -624,12 +663,6 @@ def detect_system_timezone() -> str:
                 return tz_env
             except Exception:
                 pass
-        try:
-            name = datetime.now().astimezone().tzname()
-            if name:
-                return name
-        except Exception:
-            pass
         return FALLBACK_TIMEZONE
 
     local = Path("/etc/localtime")

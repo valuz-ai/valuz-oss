@@ -59,9 +59,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from valuz_agent.integrations._mcp_asgi import (
     build_internal_mcp_asgi,
@@ -72,9 +73,6 @@ from valuz_agent.integrations._mcp_asgi import (
 from valuz_agent.modules.automations.schemas import (
     AutomationToolPayload,
     AutomationToolResult,
-    CronTrigger,
-    IntervalTrigger,
-    ManualTrigger,
     Trigger,
 )
 
@@ -256,6 +254,7 @@ async def _handle_create(
         AutomationTaskOnlyOnProject,
         IntervalTooShort,
         InvalidCronExpression,
+        InvalidTimeZone,
     )
     from valuz_agent.modules.automations.service import AutomationService
 
@@ -314,6 +313,8 @@ async def _handle_create(
     except AutomationPromptEmpty:
         return _err("create", "prompt_template is required for create.", code="MISSING_PROMPT")
     except AutomationAgentRequired:
+        # Only reachable in PROJECT sessions (chat omits agent_slug and the
+        # server resolves the bound agent or defaults to the system agent).
         return _err(
             "create",
             (
@@ -338,6 +339,7 @@ async def _handle_create(
         )
     except (
         InvalidCronExpression,
+        InvalidTimeZone,
         IntervalTooShort,
         AutomationProjectNotFound,
         AgentNotInProject,
@@ -436,6 +438,7 @@ async def _handle_update(
         AutomationPromptEmpty,
         IntervalTooShort,
         InvalidCronExpression,
+        InvalidTimeZone,
     )
     from valuz_agent.modules.automations.schemas import AutomationUpdatePayload
 
@@ -457,7 +460,7 @@ async def _handle_update(
         prompt_template=payload.prompt_template,
         trigger=_trigger_from_payload(payload.trigger),
         agent_slug=payload.agent_slug,
-        action_kind=payload.action_kind,  # type: ignore[arg-type]
+        action_kind=payload.action_kind,
         worktree=payload.worktree,
         playbook_definition_id=payload.playbook_definition_id,
         playbook_version=payload.playbook_version,
@@ -466,6 +469,7 @@ async def _handle_update(
         detail = await svc.update(payload.automation_id, update_payload, user_id=user_id)
     except (
         InvalidCronExpression,
+        InvalidTimeZone,
         IntervalTooShort,
         AutomationNameEmpty,
         AutomationPromptEmpty,
@@ -654,75 +658,61 @@ _mcp = FastMCP(
 )
 
 
-_AUTOMATION_DESCRIPTION = """Manage the user's automations (recurring or
-interval-driven agent runs).
+_AUTOMATION_DESCRIPTION = """Create, list, modify or run the user's recurring agent
+automations (daily/weekly schedules, interval jobs, manual templates).
 
-Use this tool ONLY when the user explicitly asks to create, list, pause,
-resume, run, modify, or remove an automation / scheduled task / recurring
-job — phrases like "every day at 9am", "every 5 minutes", "remind me
-weekly", "automation", "schedule". Do not call it for one-off reminders
-or to manage non-recurring follow-ups.
+Use ONLY when the user explicitly asks for a recurring/scheduled task —
+"every day at 9am", "every 5 minutes", "remind me weekly", "automation", "schedule".
+Not for one-off reminders or non-recurring follow-ups.
 
-Actions
-=======
-- create: PROPOSES a new automation — it does NOT save. The user is shown a
-  confirmation card and nothing is written until they approve (same "tool
-  proposes, user disposes" model as propose_agent). So call create ONCE, state
-  the resolved schedule in plain prose, then STOP — do not call create again
-  for the same automation, and do not assume it exists yet.
-  Requires name, prompt_template, trigger. agent_slug is CONTEXT-DEPENDENT —
-  do NOT treat it as universally required:
-    • Chat / quick conversation (no project): agent_slug is OPTIONAL. Omit it
-      and the automation runs as the agent you are CURRENTLY talking to. Do
-      NOT call list_members here — it lists *project members*, so it is empty
-      in a project-less chat, and an empty roster does NOT mean "no agent
-      available". Pass an explicit LIBRARY agent slug only to override.
-    • Project session: agent_slug is REQUIRED and must be a project team
-      member — call list_members first to see candidates. Do NOT invent slugs.
-  action_kind — "chat" (default) runs the bound agent once per fire; "task"
-    kicks off a full project task with the bound agent as the Lead. "task" is
-    ONLY valid in a PROJECT session (it needs the project's task context); in a
-    chat it is rejected — omit it / use "chat" there.
-  worktree — OPTIONAL (both "chat" and "task"): true runs each fire in an
-    isolated git worktree of the project repo. For "chat" the single session
-    runs in its own worktree; for "task" the lead and every member share ONE
-    worktree branch. The main workspace stays untouched, and a worktree left
-    with no changes is removed automatically when the run / task finishes. Only
-    meaningful when the project is a git repository (silently ignored for
-    chat-only projects). Default false (the fire works in the project directory).
-  playbook_definition_id / playbook_version — OPTIONAL immutable Playbook pin.
-    When a Definition is provided without a version, create resolves its current
-    version once and stores that exact version. Pinned Playbooks currently use
-    action_kind="chat"; task mode is rejected until task lifecycle completion can
-    close the corresponding PlaybookRun truthfully.
-  trigger — discriminated object. Use interval for "every N minutes/seconds"
-    schedules, cron for clock-time schedules:
-    {"kind": "cron", "cron_expr": "0 9 * * *", "timezone": "Asia/Shanghai"}
-    {"kind": "interval", "seconds": 300}  — every 300s (min 30); NOT a cron
-    {"kind": "manual"}  — never tick-fires; only run via run action
-  Cron format: standard 5-field POSIX (minute hour dom month dow). If the
-  user gave a natural-language schedule, translate it yourself, confirm
-  in plain prose, then call with cron_expr filled.
-  TIMEZONE — a cron schedule is meaningless without one, so ALWAYS set the
-  cron trigger's "timezone" to a concrete IANA name. Use the USER'S timezone,
-  given to you in the per-turn context (the "Current time" line) — the user
-  almost always means their LOCAL time; NEVER default to UTC. If you omit it
-  the server falls back to the user's configured/detected timezone, but pass
-  it explicitly and state the resolved zone back to the user to confirm.
-- list: returns existing automations. In a chat session, lists across all
-  projects by default (set scope="this" to narrow to the current chat).
-  In a project session, always scoped to the current project.
-- get: returns the full detail of ONE automation by automation_id (read-only;
-  prompt_template, trigger, agent, next run, status). Use it to inspect a
-  single automation before update / pause / resume.
-- update / pause / resume / run / remove: require automation_id (get one
-  from a prior list). For ``run`` you may also pass ``input`` — extra text
-  appended to the automation's instruction for THAT single run (e.g. a task id
-  you just discovered). It does NOT modify the saved automation.
+TRIGGER (required on create) — discriminated object, pick exactly one:
+  {"kind": "cron", "cron_expr": "0 9 * * *", "timezone": "Asia/Shanghai"}
+  {"kind": "interval", "seconds": 300}     (every 300s; min 30; NOT a cron)
+  {"kind": "manual"}                        (never auto-fires; run via the run action)
+TIMEZONE: a cron schedule is meaningless without one — ALWAYS pass the
+USER'S timezone from the per-turn "Current time" context line, verbatim.
+NEVER default to UTC or invent a zone. Cron format: standard 5-field POSIX
+(minute hour day-of-month month day-of-week); translate natural language
+schedules to cron yourself and state the resolved schedule in prose.
 
-Execution identity follows the bound agent — there is NO model_id or
-provider_id input. The agent's configured model / provider / runtime is
-what each fire uses."""
+CREATE FLOW — ``create`` PROPOSES, it does NOT save. The user is shown a
+confirmation card and nothing is written until they approve (same "tool
+proposes, user disposes" model as propose_agent). So call create ONCE, state
+the resolved schedule in plain prose, then STOP — do not call create again
+for the same automation, and do not assume it exists yet.
+
+agent_slug is CONTEXT-DEPENDENT, not universally required:
+  • Chat / quick conversation (no project): OPTIONAL — omit it and the
+    server resolves the execution agent for you (the agent you are talking
+    to, or the system agent Valurion when the conversation has none bound).
+    Do NOT call list_members here — it lists *project members*, so it is
+    empty in a project-less chat, and an empty roster does NOT mean "no
+    agent available".
+  • Project session: REQUIRED and must be a project team member — call
+    list_members first to see candidates. Do NOT invent slugs.
+
+action_kind — "chat" (default) runs the bound agent once per fire; "task"
+kicks off a full project task with the bound agent as the Lead. "task" is
+ONLY valid in a PROJECT session (it needs the project's task context); in a
+chat it is rejected — omit it / use "chat" there.
+
+worktree — OPTIONAL (both "chat" and "task"): true runs each fire in an
+isolated git worktree of the project repo ("chat" = the single session in its
+own worktree; "task" = lead + every member share ONE worktree branch). Only
+meaningful when the project is a git repository (silently ignored for
+chat-only projects). Default false.
+
+playbook_definition_id / playbook_version — OPTIONAL immutable Playbook pin
+(action_kind must be "chat"). A Definition without a version pins its current
+version at create.
+
+Other actions: list returns existing automations (chat: all projects by
+default, scope="this" to narrow; project: always the current project). get
+returns ONE automation's full detail by automation_id. update / pause / resume
+/ run / remove require automation_id from a prior list. For run you may pass
+input — extra text for THAT single run; it does NOT modify the saved
+automation. Execution identity follows the bound agent — there is NO model_id
+or provider_id input."""
 
 
 async def automation_invoke(payload: AutomationToolPayload) -> str:
@@ -740,39 +730,121 @@ async def automation_invoke(payload: AutomationToolPayload) -> str:
 
 @_mcp.tool(description=_AUTOMATION_DESCRIPTION)
 async def automation(
-    action: str,
-    automation_id: str | None = None,
-    name: str | None = None,
-    prompt_template: str | None = None,
-    agent_slug: str | None = None,
-    trigger: dict[str, Any] | None = None,
-    action_kind: str | None = None,
-    worktree: bool | None = None,
-    playbook_definition_id: str | None = None,
-    playbook_version: int | None = None,
-    scope: str | None = None,
-    input: str | None = None,  # noqa: A002 — MCP wire arg name; intentional
+    action: Literal["create", "get", "list", "update", "pause", "resume", "run", "remove"],
+    automation_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Required for get/update/pause/resume/run/remove; get one from a prior list."
+            )
+        ),
+    ] = None,
+    name: Annotated[
+        str | None,
+        Field(max_length=50, description="Display name (required on create)."),
+    ] = None,
+    prompt_template: Annotated[
+        str | None,
+        Field(
+            description=(
+                "The instruction the agent receives on every fire (required "
+                "on create unless playbook_definition_id is set)."
+            )
+        ),
+    ] = None,
+    agent_slug: Annotated[
+        str | None,
+        Field(
+            description=(
+                "CONTEXT-DEPENDENT: chat (no project) → OPTIONAL, omit and the "
+                "server resolves the execution agent (the one you are talking "
+                "to, or the system agent Valurion when none is bound). Project "
+                "session → REQUIRED, must be a project team member (call "
+                "list_members first). Do NOT invent slugs."
+            )
+        ),
+    ] = None,
+    trigger: Annotated[
+        Trigger | None,
+        Field(
+            description=(
+                "Discriminated trigger — REQUIRED on create. Pick exactly one "
+                "of: {kind: 'cron', cron_expr, timezone} / {kind: 'interval', "
+                "seconds} / {kind: 'manual'}."
+            )
+        ),
+    ] = None,
+    action_kind: Annotated[
+        Literal["chat", "task"] | None,
+        Field(
+            description=(
+                "'chat' (default) runs the bound agent once per fire; 'task' "
+                "kicks off a full project task with the bound agent as the "
+                "Lead — ONLY valid in a PROJECT session; omit it / use 'chat' "
+                "in a chat."
+            )
+        ),
+    ] = None,
+    worktree: Annotated[
+        bool | None,
+        Field(
+            description=(
+                "Optional (create/update): true runs each fire in an isolated "
+                "git worktree of the project repo. Only meaningful for "
+                "git-repo projects (silently ignored for chat-only projects). "
+                "Default false."
+            )
+        ),
+    ] = None,
+    playbook_definition_id: Annotated[
+        str | None,
+        Field(
+            max_length=36,
+            description=(
+                "Optional immutable Playbook pin (action_kind must be 'chat'). Omit "
+                "playbook_version to pin the Definition's current version at create."
+            ),
+        ),
+    ] = None,  # noqa: E501
+    playbook_version: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description=(
+                "Exact immutable Playbook version to pin. Only meaningful with "
+                "playbook_definition_id; omit to pin the current version."
+            ),
+        ),
+    ] = None,  # noqa: E501
+    scope: Annotated[
+        Literal["all", "this"] | None,
+        Field(
+            description=(
+                "'this' = current project only; 'all' = entire user library "
+                "(only honoured in chat sessions). Omit for the natural "
+                "default: chat sees all automations, project sessions only "
+                "the current one."
+            )
+        ),
+    ] = None,
+    input: Annotated[
+        str | None,
+        Field(
+            description=(
+                "run only: extra text appended to the automation's "
+                "instruction for THIS single run (e.g. a task id you just "
+                "discovered). Does NOT modify the saved automation."
+            )
+        ),
+    ] = None,  # noqa: A002 — MCP wire arg name; intentional
 ) -> str:
     """Unified entrypoint — see ``_AUTOMATION_DESCRIPTION`` for usage.
 
-    ``trigger`` is accepted as a plain dict and coerced into the
-    discriminated union — the MCP wire format doesn't carry the Pydantic
-    metadata that drives FastMCP's auto-schema-generation, so we adapt
-    here rather than letting the SDK infer a type it can't render.
+    The parameter list is the tool's input schema: every field carries an
+    explicit type (``Literal`` enums for action/action_kind/scope, the
+    discriminated ``Trigger`` union for trigger) plus per-field
+    descriptions, so the model sees the contract instead of guessing it.
     """
-    coerced_trigger: Trigger | None = None
-    if trigger is not None:
-        kind = trigger.get("kind")
-        if kind == "cron":
-            coerced_trigger = CronTrigger(
-                cron_expr=trigger.get("cron_expr", ""),
-                timezone=trigger.get("timezone"),
-            )
-        elif kind == "interval":
-            coerced_trigger = IntervalTrigger(seconds=int(trigger.get("seconds", 0)))
-        elif kind == "manual":
-            coerced_trigger = ManualTrigger()
-
     return await automation_invoke(
         AutomationToolPayload(
             action=action,
@@ -780,7 +852,7 @@ async def automation(
             name=name,
             prompt_template=prompt_template,
             agent_slug=agent_slug,
-            trigger=coerced_trigger,
+            trigger=trigger,
             action_kind=action_kind,
             worktree=worktree,
             playbook_definition_id=playbook_definition_id,

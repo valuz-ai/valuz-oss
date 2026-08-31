@@ -255,9 +255,12 @@ class FakeAgentDatastore:
         self.slugs = slugs if slugs is not None else {"qa-engineer"}
 
     async def get_agent(self, user_id: str, slug: str) -> object | None:
-        # Return any non-None to signal "present". Service only checks
-        # the truthiness on this path.
-        return object() if slug in self.slugs else None
+        # The library_agent create path now derives the instance slug from
+        # the source agent's display NAME (``derive_slug``), so the fake
+        # carries a name like a real AgentRow.
+        if slug not in self.slugs:
+            return None
+        return SimpleNamespace(name="QA Engineer")
 
 
 class FakeAgentService:
@@ -496,6 +499,52 @@ class TestChatLibraryAgentCreate:
     ) -> None:
         with pytest.raises(AgentNotFound):
             await service.create(_chat_lib_payload(agent_slug="ghost-agent"), user_id=TEST_USER_ID)
+
+    async def test_should_derive_ascii_instance_slug_for_cjk_source_slug(
+        self, service: AutomationService, agent_svc: FakeAgentService
+    ) -> None:
+        """A legacy library agent whose SLUG is non-ASCII (created before the
+        ASCII-slug rule landed) must not fail: the derived instance slug is
+        ASCII from the display NAME (``derive_slug``), never the raw CJK slug
+        (``"主力助手-f904da2d"`` would be rejected by ``deploy_agent``'s
+        ``is_valid_slug`` → an uncaught 500 on every create)."""
+
+        class _CjkAgent:
+            name = "主力助手"
+
+        original_get = service._agents.get_agent  # noqa: SLF001
+
+        async def _get_agent(user_id: str, slug: str):  # type: ignore[no-untyped-def]
+            if slug == "主力助手":
+                return _CjkAgent()
+            return await original_get(user_id, slug)
+
+        service._agents.get_agent = _get_agent  # type: ignore[assignment]  # noqa: SLF001
+        detail = await service.create(
+            _chat_lib_payload(agent_slug="主力助手"), user_id=TEST_USER_ID
+        )
+        ws_id, source_slug, instance_slug = agent_svc.instantiations[0]
+        assert source_slug == "主力助手"
+        assert ws_id == detail.project_id
+        # ASCII by construction, derived from the display name (CJK dropped →
+        # the ``agent-<digest>`` fallback), plus the uniqueness hash.
+        assert instance_slug.isascii()
+        assert instance_slug.startswith("agent-")
+        assert detail.agent_slug == instance_slug
+
+    async def test_ascii_source_slug_keeps_verbatim_prefix(
+        self, service: AutomationService, agent_svc: FakeAgentService
+    ) -> None:
+        """A VALID ASCII source slug keeps the historical instance-slug shape
+        (``f"{slug}-{hex}"``) — the name-derived prefix only kicks in for the
+        legacy CJK case, so the blast radius stays at the broken rows."""
+        detail = await service.create(
+            _chat_lib_payload(agent_slug="qa-engineer"), user_id=TEST_USER_ID
+        )
+        _, source_slug, instance_slug = agent_svc.instantiations[0]
+        assert source_slug == "qa-engineer"
+        assert instance_slug.startswith("qa-engineer-")
+        assert instance_slug == detail.agent_slug
 
     async def test_should_bind_to_explicit_chat_project_when_set(
         self,
@@ -953,6 +1002,36 @@ class TestBuildCreatePayload:
         )
         assert payload.agent_kind == "library_agent"
         assert payload.agent_slug == "default-assistant"
+
+    def test_chat_without_bound_agent_defaults_to_system_agent(self) -> None:
+        """A quick chat with runtime+model only (no bound agent in session
+        metadata) still creates — the server defaults the execution agent to
+        the system agent. The model never has to know which chat it is in."""
+        payload = AutomationService.build_create_payload(
+            name="Daily",
+            prompt_template="x",
+            trigger=CronTrigger(cron_expr="0 9 * * *"),
+            agent_slug=None,
+            action_kind="chat",
+            project_kind="chat",
+            project_id=None,
+            session_agent_slug=None,
+        )
+        assert payload.agent_kind == "library_agent"
+        assert payload.agent_slug == "valurion"
+
+    def test_chat_explicit_agent_slug_overrides_every_default(self) -> None:
+        payload = AutomationService.build_create_payload(
+            name="Daily",
+            prompt_template="x",
+            trigger=CronTrigger(cron_expr="0 9 * * *"),
+            agent_slug="research-director",
+            action_kind="chat",
+            project_kind="chat",
+            project_id=None,
+            session_agent_slug=None,
+        )
+        assert payload.agent_slug == "research-director"
 
     def test_project_derives_project_member_kind(self) -> None:
         payload = AutomationService.build_create_payload(

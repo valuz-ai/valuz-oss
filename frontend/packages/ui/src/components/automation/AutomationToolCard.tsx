@@ -234,6 +234,94 @@ export const AutomationToolCard = memo(function AutomationToolCard({
 });
 
 /**
+ * Unwrap a kernel content-block envelope, when present.
+ *
+ * Runtime-dependent: the Valuz/DeepAgents (LangChain) runtime delivers the
+ * tool payload nested one level down (``[{"type": "text", "text": "{...}"}]``),
+ * which a bare ``JSON.parse`` returns as an array and the payload checks below
+ * reject — the caller then treats a real ``ok: false`` result as "no result",
+ * and the proposal card renders as confirmable from the unvalidated INPUT.
+ * A value that is not a content-block envelope comes back untouched.
+ */
+function unwrapContentBlocks(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  for (const block of value) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      try {
+        const parsed = JSON.parse((block as { text: string }).text);
+        // Only object-shaped JSON is (or contains) the payload envelope: a
+        // scalar block ("prose", 42) is not the payload — keep scanning the
+        // following blocks; a nested envelope (an array) recurses; a plain
+        // object is the payload.
+        if (parsed !== null && typeof parsed === "object") {
+          return unwrapContentBlocks(parsed);
+        }
+      } catch {
+        /* that block is prose, not a payload — keep looking */
+      }
+    }
+  }
+  return value;
+}
+
+/**
+ * Best-effort scan for the first JSON object in a string.
+ *
+ * Covers the legacy Python-repr envelope (``[{'type': 'text', 'text':
+ * '{...}'}]`` — NOT valid JSON, so the parse above fails and this scanner
+ * finds the inner object by walking braces). Mirrors the app-side
+ * ``extractToolOutputJson`` fallback so every runtime and every historical
+ * output form resolves to the same payload.
+ */
+function scanFirstJsonObject(output: string): unknown | null {
+  // ``{"`` rather than ``{``: the Python-repr envelope's OWN dict starts
+  // with ``{'`` (single quote) — starting at any ``{`` would land on the
+  // outer dict and fail the parse. The inner payload always opens with
+  // ``{"``.
+  const start = output.indexOf('{"');
+  if (start < 0) return null;
+  let depth = 0;
+  let end = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < output.length; i++) {
+    const ch = output[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+  }
+  if (end < 0) return null;
+  try {
+    return JSON.parse(output.slice(start, end));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse the JSON tool output into ``AutomationToolResultPayload`` if
  * possible. Returns ``null`` on malformed input — caller falls back to
  * the generic tool renderer.
@@ -242,18 +330,16 @@ export function parseAutomationToolOutput(
   raw: string | undefined | null,
 ): AutomationToolResultPayload | null {
   if (!raw) return null;
+  let obj: unknown = null;
   try {
-    const obj = JSON.parse(raw);
-    if (
-      typeof obj !== "object" ||
-      obj === null ||
-      typeof obj.action !== "string" ||
-      typeof obj.ok !== "boolean"
-    ) {
-      return null;
-    }
-    return obj as AutomationToolResultPayload;
+    obj = unwrapContentBlocks(JSON.parse(raw));
   } catch {
+    obj = scanFirstJsonObject(raw);
+  }
+  if (typeof obj !== "object" || obj === null) return null;
+  const payload = obj as Partial<AutomationToolResultPayload>;
+  if (typeof payload.action !== "string" || typeof payload.ok !== "boolean") {
     return null;
   }
+  return payload as AutomationToolResultPayload;
 }

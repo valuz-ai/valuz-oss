@@ -15,7 +15,7 @@ croniter's internal currency.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
 import pytz
 from cron_descriptor import Options, get_description
@@ -25,7 +25,25 @@ from croniter import croniter
 ValidateResult = tuple[bool, str | None, list[int], str | None]
 
 
+class UnknownTimeZoneError(Exception):
+    """A timezone string cannot be resolved to a pytz zone.
+
+    Raised instead of letting ``pytz.UnknownTimeZoneError`` escape as an
+    unhandled 500. Callers (``AutomationService``) map it to a typed
+    ``InvalidTimeZone`` validation error. Typical culprits: Windows
+    display names ("马来西亚半岛标准时间"), localized abbreviations, typos.
+    """
+
+
 DEFAULT_LOCALE = "zh_CN"
+
+
+def _resolve_tz(name: str) -> tzinfo:
+    """``pytz.timezone`` with a typed failure for un-resolvable names."""
+    try:
+        return pytz.timezone(name)
+    except pytz.UnknownTimeZoneError as exc:
+        raise UnknownTimeZoneError(name) from exc
 
 
 def _to_ms(dt: datetime) -> int:
@@ -50,7 +68,7 @@ class CronInterpreter:
         raises deep inside the dep, so we coerce to UTC as a safety net —
         callers SHOULD resolve to a concrete IANA name before reaching us.
         """
-        tz = pytz.timezone(tz_name or "UTC")
+        tz = _resolve_tz(tz_name or "UTC")
         after_dt = datetime.fromtimestamp(after / 1000, tz=UTC)
         local_after = after_dt.astimezone(tz)
         cron = croniter(expr, local_after)
@@ -68,7 +86,7 @@ class CronInterpreter:
         return result
 
     def _next_n_runs(self, expr: str, tz_name: str, n: int) -> list[int]:
-        tz = pytz.timezone(tz_name)
+        tz = _resolve_tz(tz_name)
         now = datetime.now(tz)
         cron = croniter(expr, now)
         runs: list[int] = []

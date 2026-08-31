@@ -30,12 +30,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.i18n import t
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.agents.builtin import VALURION_SLUG
 from valuz_agent.modules.agents.datastore import (
     AgentDatastore,
     ProjectMemberDatastore,
 )
 from valuz_agent.modules.agents.service import AgentService
-from valuz_agent.modules.automations.cron_utils import DEFAULT_LOCALE, CronInterpreter
+from valuz_agent.modules.agents.slug import derive_slug, is_valid_slug
+from valuz_agent.modules.automations.cron_utils import (
+    DEFAULT_LOCALE,
+    CronInterpreter,
+    UnknownTimeZoneError,
+)
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.automations.errors import (
     AgentNotFound,
@@ -54,6 +60,7 @@ from valuz_agent.modules.automations.errors import (
     AutomationTaskOnlyOnProject,
     IntervalTooShort,
     InvalidCronExpression,
+    InvalidTimeZone,
 )
 from valuz_agent.modules.automations.models import (
     AutomationRow,
@@ -236,7 +243,12 @@ class AutomationService:
         """
         if isinstance(trigger, CronTrigger):
             tz = self._effective_tz_for(trigger.timezone)
-            valid, _, _, err_msg = self._cron.validate(trigger.cron_expr, tz)
+            try:
+                valid, _, _, err_msg = self._cron.validate(trigger.cron_expr, tz)
+            except UnknownTimeZoneError:
+                # Non-IANA names (Windows display names, typos) are a
+                # validation failure, not a crash — 422, never a 500.
+                raise InvalidTimeZone(f"Invalid timezone: {tz!r}") from None
             if not valid:
                 raise InvalidCronExpression(err_msg)
         elif isinstance(trigger, IntervalTrigger):
@@ -601,7 +613,20 @@ class AutomationService:
             # Derive a project-local slug. We hash a short prefix on so the
             # user can have N automations sharing the same source agent in
             # the same project without slug collisions.
-            instance_slug = f"{payload.agent_slug}-{uuid4().hex[:8]}"
+            #
+            # The prefix normally IS the source slug verbatim (a valid ASCII
+            # slug is the historical behavior and stays untouched). Only a
+            # NON-ASCII source slug — a legacy library agent created before
+            # the ASCII-slug rule landed — is re-derived from the display
+            # name (``derive_slug``: ASCII-only, CJK dropped); keeping the
+            # CJK in ``f"{raw_slug}-{hex}"`` would be rejected by
+            # ``deploy_agent``'s ``is_valid_slug`` — an uncaught 500 on
+            # every automation create for those agents.
+            if is_valid_slug(payload.agent_slug):
+                slug_prefix = payload.agent_slug
+            else:
+                slug_prefix = derive_slug(source.name)
+            instance_slug = f"{slug_prefix}-{uuid4().hex[:8]}"
             # ``dedupe=False``: each automation gets its own member handle even
             # when several reference the same source agent in this project.
             await self._agent_svc.deploy_agent(
@@ -655,8 +680,10 @@ class AutomationService:
         ``automation`` MCP tool (which previews) and the confirm route (which
         persists), so the two never drift:
 
-        - ``agent_slug`` defaults to the session's bound agent in a chat (so the
-          user/LLM need not pick one); it's mandatory otherwise.
+        - ``agent_slug`` defaults to the session's bound agent in a chat —
+          or the system agent (Valurion) when the quick chat has none bound —
+          so the user/LLM need not pick one and need not know which case
+          they're in; it's mandatory in project sessions.
         - ``agent_kind`` is derived from ``project_kind`` — project sessions
           store ``project_member``, chats store ``library_agent``.
         - ``task`` mode is rejected outside a project session.
@@ -672,7 +699,16 @@ class AutomationService:
             raise AutomationPromptEmpty()
         effective_agent_slug = agent_slug
         if not effective_agent_slug and project_kind == "chat":
-            effective_agent_slug = session_agent_slug
+            # The model cannot reliably tell "quick chat bound to an agent"
+            # from "quick chat with runtime+model only" — so the server makes
+            # BOTH cases work with an omitted agent_slug: the session's bound
+            # agent when there is one, else the system agent (Valurion) as the
+            # automation's execution identity. The fired run resolves
+            # model/provider from that agent's config (ADR-021); the user's
+            # quick-chat model choice is a conversation setting, not the
+            # automation's execution identity. The proposal card shows the
+            # resolved agent name, so a wrong pick is visible and correctable.
+            effective_agent_slug = session_agent_slug or VALURION_SLUG
         if not effective_agent_slug:
             raise AutomationAgentRequired()
         action = action_kind or "chat"
@@ -933,7 +969,10 @@ class AutomationService:
             raise IntervalTooShort()
         if row.trigger_kind == "cron":
             tz = self._effective_tz_for(row.timezone)
-            valid, _, _, err_msg = self._cron.validate(row.cron_expr or "", tz)
+            try:
+                valid, _, _, err_msg = self._cron.validate(row.cron_expr or "", tz)
+            except UnknownTimeZoneError:
+                raise InvalidTimeZone(f"Invalid timezone: {tz!r}") from None
             if not valid:
                 raise InvalidCronExpression(err_msg)
         if not row.name.strip():
@@ -1272,9 +1311,12 @@ class AutomationService:
 
     def validate_cron(self, expr: str, timezone: str | None = None) -> CronValidationResultResponse:
         tz = self._effective_tz_for(timezone)
-        valid, human_readable, next_runs, error_message = self._cron.validate(
-            expr, tz, locale=self._locale
-        )
+        try:
+            valid, human_readable, next_runs, error_message = self._cron.validate(
+                expr, tz, locale=self._locale
+            )
+        except UnknownTimeZoneError:
+            raise InvalidTimeZone(f"Invalid timezone: {tz!r}") from None
         return CronValidationResultResponse(
             valid=valid,
             human_readable=human_readable,

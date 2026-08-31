@@ -445,6 +445,32 @@ class TestAgentKindByContext:
         payload = stub_service.calls[0][1]["payload"]
         assert payload.agent_slug == "research-director"
 
+    async def test_chat_without_bound_agent_defaults_to_system_agent(
+        self, patched_dispatch: Any, stub_service: StubService
+    ) -> None:
+        """A quick chat with NO bound agent (the user picked runtime+model
+        directly — no agent_slug in session metadata): the server defaults the
+        execution agent to the system agent (Valurion). The model never needs
+        to know which kind of chat it is in — omitting agent_slug just works."""
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "chat"
+        project_id["value"] = None
+        session_agent_slug["value"] = None
+
+        result = await mod.automation_invoke(
+            AutomationToolPayload(
+                action="create",
+                name="Daily digest",
+                prompt_template="x",
+                trigger=CronTrigger(cron_expr="0 9 * * *"),
+            )
+        )
+        decoded = json.loads(result)
+        assert decoded["ok"] is True
+        payload = stub_service.calls[0][1]["payload"]
+        assert payload.agent_kind == "library_agent"
+        assert payload.agent_slug == "valurion"
+
     async def test_project_create_still_requires_explicit_agent_slug(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
@@ -691,10 +717,10 @@ class TestScopeAndCrossProject:
 
 
 class TestDecoratedToolTriggerCoercion:
-    """The FastMCP-decorated ``automation`` function takes ``trigger`` as a
-    plain dict (the wire format) and constructs the discriminated union
-    locally. Cover that mapping so the wire schema stays in sync with the
-    typed payload."""
+    """The FastMCP-decorated ``automation`` function takes ``trigger`` as the
+    typed discriminated union; pydantic coerces the wire dict at both the
+    FastMCP boundary and the ``AutomationToolPayload`` constructor. Cover the
+    mapping so the wire schema stays in sync with the typed payload."""
 
     async def test_should_coerce_cron_dict(
         self, patched_dispatch: Any, stub_service: StubService
@@ -735,6 +761,82 @@ class TestDecoratedToolTriggerCoercion:
         )
         payload = stub_service.calls[0][1]["payload"]
         assert payload.trigger.kind == "manual"
+
+
+class TestToolSchemaExposure:
+    """The inputSchema the model receives must carry the parameter CONTRACT —
+    enums and the discriminated trigger union — not an opaque
+    ``additionalProperties`` blob the model has to guess at (the root cause of
+    repeated failed ``create`` calls: wrong trigger shape, missing agent_slug
+    rules, invented scopes)."""
+
+    async def _automation_schema(self) -> dict[str, Any]:
+        from valuz_agent.integrations.automations_mcp_server import _mcp
+
+        tools = await _mcp.list_tools()
+        tool = next(t for t in tools if t.name == "automation")
+        return tool.inputSchema or {}
+
+    def _resolve(self, schema: dict[str, Any], value: Any) -> Any:  # type: ignore[no-untyped-def]
+        """Resolve a JSON-schema ``$ref`` into its ``$defs`` definition."""
+        if isinstance(value, dict) and "$ref" in value:
+            name = value["$ref"].split("/")[-1]
+            return schema.get("$defs", {}).get(name)
+        return value
+
+    async def test_action_and_scope_and_action_kind_are_enums(self) -> None:
+        schema = await self._automation_schema()
+        props = schema.get("properties", {})
+        assert props["action"]["enum"] == [
+            "create", "get", "list", "update", "pause", "resume", "run", "remove",
+        ]
+        # Optional enums arrive as anyOf → the first non-null branch.
+        scope_enum = next(
+            v["enum"] for v in props["scope"]["anyOf"] if "enum" in v
+        )
+        assert scope_enum == ["all", "this"]
+        kind_enum = next(
+            v["enum"] for v in props["action_kind"]["anyOf"] if "enum" in v
+        )
+        assert kind_enum == ["chat", "task"]
+
+    async def test_trigger_exposes_discriminated_union_with_kind_enum(self) -> None:
+        schema = await self._automation_schema()
+        trigger = schema.get("properties", {})["trigger"]
+        # The union is oneOf (discriminator: kind) with $refs into $defs.
+        union = next(
+            v
+            for v in trigger.get("anyOf") or [trigger]
+            if isinstance(v, dict) and ("oneOf" in v or "anyOf" in v)
+        )
+        variants = [self._resolve(schema, v) for v in union["oneOf"]]
+        assert len(variants) == 3
+        kinds = set()
+        for v in variants:
+            if not isinstance(v, dict) or "properties" not in v:
+                continue
+            kind = v["properties"]["kind"].get("const") or v["properties"]["kind"].get("enum")
+            kinds.add(tuple(kind) if isinstance(kind, list) else (kind,))
+        assert kinds == {("cron",), ("interval",), ("manual",)}
+        # The cron branch documents its fields (cron_expr + timezone).
+        cron = next(v for v in variants if v["properties"]["kind"].get("const") == "cron")
+        assert "cron_expr" in cron["properties"]
+        assert "timezone" in cron["properties"]
+
+    async def test_parameter_rules_carry_descriptions(self) -> None:
+        schema = await self._automation_schema()
+        props = schema.get("properties", {})
+        for field in (
+            "agent_slug",
+            "action_kind",
+            "worktree",
+            "playbook_definition_id",
+            "playbook_version",
+            "scope",
+        ):
+            assert props[field].get("description"), (
+                f"{field} has no description in the schema"
+            )
 
 
 # ── Session-context resolution ─────────────────────────────────────
