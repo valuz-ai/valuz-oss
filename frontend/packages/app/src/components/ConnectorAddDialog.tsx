@@ -43,12 +43,20 @@ interface ConnectorAddDialogProps {
 /** ``command`` + ``args`` back into the single command line the form edits.
  *  Safe to round-trip: the resolver ``shlex.split``s a ``command`` that
  *  contains a space and prepends the result to ``args``, so "npx" + ["-y",p]
- *  and "npx -y p" + [] resolve to the same child process. */
-const toCmdline = (command: string | null, args: string[]): string =>
-  [command ?? "", ...args]
+ *  and "npx -y p" + [] resolve to the same child process.
+ *
+ *  With no args, a ``command`` containing spaces IS that full command line
+ *  (the dialog itself stores it that way), so it round-trips verbatim.
+ *  Quoting it wholesale would show ``"npx -y pkg"`` — and saving that makes
+ *  shlex read one giant executable name, breaking the connector. Only a
+ *  spaced part alongside real args is a single token needing quotes. */
+const toCmdline = (command: string | null, args: string[]): string => {
+  if (args.length === 0) return command ?? "";
+  return [command ?? "", ...args]
     .filter((part) => part !== "")
     .map((part) => (/\s/.test(part) ? JSON.stringify(part) : part))
     .join(" ");
+};
 
 interface KvRow {
   key: string;
@@ -119,6 +127,16 @@ export function ConnectorAddDialog({
           ...emptyStdio,
           display_name: initial.display_name,
           cmdline: toCmdline(initial.command, initial.args),
+          // Seed the variables the connector already runs on. A secret comes
+          // back without its value (server-side redaction by name), so its row
+          // shows the name with an empty box: the user can see WHAT is set and
+          // retype only what they mean to change.
+          // ``?? []`` guards a backend that predates the env field — its
+          // response has no ``env`` at all and the seed must not throw.
+          env: (initial.env ?? []).map((e) => ({
+            key: e.key,
+            value: e.value ?? "",
+          })),
         }
       : emptyStdio,
   );

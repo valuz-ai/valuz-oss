@@ -195,6 +195,9 @@ class ConnectorItem(BaseModel):
     working_dir: str | None
     headers: list[HeaderParam]
     params: list[HeaderParam]
+    # stdio environment, same redaction contract as headers/params: an entry
+    # whose name reads secret comes back without its value.
+    env: list[HeaderParam]
     enabled: bool
     status: str
     tool_count: int | None
@@ -1235,6 +1238,7 @@ def _view_to_item(view: ConnectorView, locale: str = "zh-CN") -> ConnectorItem:
         working_dir=view.working_dir,
         headers=_creds_to_params(view.headers),
         params=_creds_to_params(view.params),
+        env=_creds_to_params(view.env),
         enabled=view.enabled,
         status=view.status,
         tool_count=view.tool_count,

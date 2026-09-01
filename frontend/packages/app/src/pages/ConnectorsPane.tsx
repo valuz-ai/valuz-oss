@@ -20,6 +20,7 @@ import {
   type CatalogEntry,
   type ConnectorItem,
   type CreateConnectorRequest,
+  type UpdateConnectorRequest,
 } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
 import type { ResourceCategory } from "@valuz/shared";
@@ -108,6 +109,12 @@ const entryKey = (e: ConnectorListEntry): string =>
 
 const canDeleteConnector = (c: ConnectorItem) => c.connector_type !== "builtin";
 
+/** Only a connector the user configured themselves. A built-in is
+ *  system-managed, and for a ``recommended`` one the catalog entry owns
+ *  command/args/identity — PATCHing those returns 422, so offering the form
+ *  would be offering a button that fails. Mirrors ``ConnectorsPage``. */
+const canEditConnector = (c: ConnectorItem) => c.connector_type === "custom";
+
 function buildConnectorCategories(
   t: ReturnType<typeof useTranslation>["t"],
 ): ResourceCategory<ConnectorListEntry>[] {
@@ -165,6 +172,7 @@ export function ConnectorsPane({
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConnectorItem | null>(null);
+  const [editTarget, setEditTarget] = useState<ConnectorItem | null>(null);
   const [connectEntry, setConnectEntry] = useState<CatalogConnector | null>(
     null,
   );
@@ -316,6 +324,19 @@ export function ConnectorsPane({
       pollRef.current = setTimeout(() => void poll(), intervalMs);
     },
     [loadAll],
+  );
+
+  const runUpdate = useCallback(
+    async (id: string, payload: UpdateConnectorRequest) => {
+      await connectorsApi.update(id, payload);
+      // Command line, env and headers may all have changed, so the tools we
+      // probed for the old configuration no longer describe it.
+      invalidateConnectorTools(id);
+      await loadAll();
+      toast.success(_t("connector.updated"));
+      pollStatus(id);
+    },
+    [loadAll, pollStatus],
   );
 
   const runConnect = useCallback(
@@ -626,6 +647,11 @@ export function ConnectorsPane({
                 }
               />
             }
+            onEdit={
+              canEditConnector(selectedInstalled)
+                ? () => setEditTarget(selectedInstalled)
+                : undefined
+            }
             onConnect={() => handleReconnect(selectedInstalled)}
             onDisconnect={() => {
               if (canDeleteConnector(selectedInstalled)) {
@@ -651,6 +677,22 @@ export function ConnectorsPane({
           </div>
         )}
       </div>
+
+      {editTarget && (
+        // Keyed by id: the dialog seeds its form in useState initializers, so
+        // a reused instance would show the previously edited connector.
+        <ConnectorAddDialog
+          key={`edit:${editTarget.id}`}
+          open
+          mode={editTarget.transport === "stdio" ? "stdio" : "http"}
+          onOpenChange={(open) => {
+            if (!open) setEditTarget(null);
+          }}
+          onSubmit={runConnect}
+          initial={editTarget}
+          onUpdate={(payload) => runUpdate(editTarget.id, payload)}
+        />
+      )}
 
       <ConnectorAddDialog
         open={addMode !== null}

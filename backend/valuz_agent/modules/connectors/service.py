@@ -85,6 +85,11 @@ class ConnectorView:
     working_dir: str | None
     headers: list[CredView]
     params: list[CredView]
+    # stdio environment. Same CredView contract as headers/params: a secret
+    # comes back without its value. Without this the edit form could not show
+    # what a connector already runs on, so fixing one variable meant deleting
+    # the connector and retyping all of them.
+    env: list[CredView]
     enabled: bool
     status: str
     tool_count: int | None
@@ -115,6 +120,44 @@ def _parse_cred_entries(raw: str | None) -> dict[str, dict[str, Any]]:
         elif isinstance(v, str):  # legacy plaintext shape
             out[str(k)] = {"value": v, "secret": False}
     return out
+
+
+def _parse_env(raw: str | None) -> dict[str, str]:
+    """Parse ``env_json`` → ``{name: value}``; anything unreadable reads empty."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items() if isinstance(v, (str, int, float))}
+
+
+_SECRET_ENV_HINTS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "apikey",
+    "api_key",
+    "credential",
+    "private_key",
+    "access_key",
+)
+
+
+def _env_is_secret(name: str) -> bool:
+    """Whether an env var's VALUE must stay server-side.
+
+    Unlike headers/params, stdio env is stored as a plain key→value map with
+    no per-entry secret flag, so the name is all we have. Erring toward hiding
+    is the safe direction: a hidden non-secret is a small annoyance, a leaked
+    token is not.
+    """
+    lowered = name.lower()
+    return any(hint in lowered for hint in _SECRET_ENV_HINTS)
 
 
 def _is_secret_entry(
@@ -661,6 +704,16 @@ def _row_to_view(row: ConnectorRow) -> ConnectorView:
         for k, e in p_entries.items()
     ]
 
+    env_map = _parse_env(row.env_json)
+    env_views = [
+        CredView(
+            key=k,
+            secret=_env_is_secret(k),
+            value=None if _env_is_secret(k) else v,
+        )
+        for k, v in sorted(env_map.items())
+    ]
+
     return ConnectorView(
         id=row.id,
         slug=row.slug,
@@ -681,6 +734,7 @@ def _row_to_view(row: ConnectorRow) -> ConnectorView:
         working_dir=row.working_dir,
         headers=headers,
         params=params,
+        env=env_views,
         enabled=row.enabled,
         status=_effective_status(row),
         tool_count=row.tool_count,
