@@ -27,7 +27,7 @@ func newResourceCmd() *cobra.Command {
 }
 
 func newResourceAgentsCmd() *cobra.Command {
-	var source string
+	var source, output string
 	cmd := &cobra.Command{
 		Use:   "agents",
 		Short: "List agents (execution identities: skills/connectors/instructions)",
@@ -49,6 +49,9 @@ func newResourceAgentsCmd() *cobra.Command {
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
 			}
+			if printJSONOutput(cmd.OutOrStdout(), output, resp.Agents) {
+				return nil
+			}
 			for _, a := range resp.Agents {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-28s  %-10s  %-14s  %-18s  %s\n",
 					a.Slug, a.Runtime, a.Model, truncate(a.Name, 18), truncate(a.Description, 40))
@@ -57,6 +60,7 @@ func newResourceAgentsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&source, "source", "", "official|custom")
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 

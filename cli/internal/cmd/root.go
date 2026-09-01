@@ -191,7 +191,25 @@ func resolveToken(tokenFile string) (string, error) {
 	if tok == "" {
 		return "", errs.New(errs.KindUsage, "--token-file %s is empty", tokenFile)
 	}
+	if err := checkTokenFilePerm(tokenFile); err != nil {
+		return "", err
+	}
 	return tok, nil
+}
+
+// checkTokenFilePerm enforces the owner-only (0600-ish) semantics the
+// token-file flag advertises: a world/group-readable token file is a
+// credential leak, so the CLI fails closed instead of silently using it.
+func checkTokenFilePerm(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return errs.Wrap(errs.KindUsage, err, "stat --token-file %s", path)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return errs.New(errs.KindUsage,
+			"--token-file %s is %s (world/group-readable); chmod 600 it first", path, perm)
+	}
+	return nil
 }
 
 // Execute runs the root command and renders errors through the shell's

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -23,12 +24,64 @@ func newTaskCmd() *cobra.Command {
 		newTaskListCmd(),
 		newTaskShowCmd(),
 		newTaskEventsCmd(),
+		newTaskWaitCmd(),
 		newTaskInterveneCmd(),
 		newTaskCommitCmd(),
 		newTaskAbandonCmd(),
 		newTaskInjectCmd(),
 		newTaskPlanCmd(),
 	)
+	return cmd
+}
+
+// newTaskWaitCmd blocks until a task reaches a terminal state
+// (completed/abandoned) — the eval-harness "kickoff → wait → read result"
+// loop (squad receive --wait semantics, server-side single consumer).
+func newTaskWaitCmd() *cobra.Command {
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "wait <id>",
+		Short: "Wait until a task reaches a terminal state (completed/abandoned)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts, err := Options(cmd)
+			if err != nil {
+				return err
+			}
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := newControlClient(opts, token)
+
+			ctx := cmd.Context()
+			var cancel context.CancelFunc
+			if timeout > 0 {
+				ctx, cancel = context.WithTimeout(ctx, timeout)
+				defer cancel()
+			}
+
+			poll := 500 * time.Millisecond
+			for {
+				var detail backend.TaskDetail
+				if err := client.Get(ctx, "/v1/tasks/"+args[0], &detail); err != nil {
+					return err
+				}
+				st := detail.Task.Status
+				if st == "completed" || st == "abandoned" {
+					fmt.Fprintf(cmd.OutOrStdout(), "task %s -> %s\n", detail.Task.ID, st)
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return errs.New(errs.KindTimeout, "task %s still %s after wait (last: %s)",
+						args[0], st, detail.Task.Status)
+				case <-time.After(poll):
+				}
+			}
+		},
+	}
+	cmd.Flags().DurationVar(&timeout, "timeout", 0, "max wait duration (0 = no limit)")
 	return cmd
 }
 
@@ -89,6 +142,7 @@ func newTaskKickoffCmd() *cobra.Command {
 
 func newTaskListCmd() *cobra.Command {
 	var limit int
+	var output string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks",
@@ -106,6 +160,9 @@ func newTaskListCmd() *cobra.Command {
 			if err := client.Get(cmd.Context(), "/v1/tasks?limit="+fmt.Sprint(limit), &list); err != nil {
 				return err
 			}
+			if printJSONOutput(cmd.OutOrStdout(), output, list.Tasks) {
+				return nil
+			}
 			for _, t := range list.Tasks {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-36s  %-10s  %-18s  %s\n", t.ID, t.Status, t.LeadAgentSlug, truncate(t.Title, 40))
 			}
@@ -113,11 +170,13 @@ func newTaskListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "max tasks (1-200)")
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 
 func newTaskShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "show <id>",
 		Short: "Show a task with its runs and events",
 		Args:  cobra.ExactArgs(1),
@@ -135,6 +194,9 @@ func newTaskShowCmd() *cobra.Command {
 			if err := client.Get(cmd.Context(), "/v1/tasks/"+args[0], &detail); err != nil {
 				return err
 			}
+			if printJSONOutput(cmd.OutOrStdout(), output, detail) {
+				return nil
+			}
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "id:         %s\n", detail.Task.ID)
 			fmt.Fprintf(w, "title:      %s\n", detail.Task.Title)
@@ -150,6 +212,8 @@ func newTaskShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
+	return cmd
 }
 
 func newTaskEventsCmd() *cobra.Command {

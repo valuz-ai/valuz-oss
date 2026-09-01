@@ -2,11 +2,15 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/auth"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
+	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 )
 
 // sessionCreateOpts carries the functional create-session options shared
@@ -68,7 +72,38 @@ func frameJSON(f *backend.SSEFrame) ([]byte, error) {
 // resolveBearer returns the effective bearer credential for a command:
 // explicit injection (env/token-file) wins; otherwise the stored login is
 // loaded and refreshed when expired. Returns "" for the OSS local path.
+//
+// The refresh path holds a file lock so two concurrent commands cannot
+// refresh the same pair at once (last-writer-wins on a rotated refresh
+// token would strand the loser). After acquiring the lock the store is
+// re-read: the winner's fresh pair is used when present.
+// isManaged reports whether the CLI runs in a managed execution context
+// (e.g. a scheduled job or automation). Managed contexts must use
+// execution-scoped credentials and must never fall back to a human login.
+func isManaged() bool {
+	return os.Getenv("VALUZ_MANAGED") == "1"
+}
+
+// rejectIfManaged blocks human-local commands (auth login/logout, env
+// switching) under a managed context — design.md §7 fail-closed.
+func rejectIfManaged(cmdName string) error {
+	if isManaged() {
+		return errs.New(errs.KindAuth,
+			"%s is disabled in managed contexts (execution-scoped credentials only)", cmdName)
+	}
+	return nil
+}
+
 func resolveBearer(opts *RootOptions) (string, error) {
+	if isManaged() {
+		// Managed: only an injected scoped token is acceptable; human
+		// login state must not be used.
+		if opts == nil || opts.Token == "" {
+			return "", errs.New(errs.KindAuth,
+				"managed context requires an injected token (VALUZ_BACKEND_TOKEN or --token-file)")
+		}
+		return opts.Token, nil
+	}
 	if opts != nil && opts.Token != "" {
 		return opts.Token, nil
 	}
@@ -86,6 +121,25 @@ func resolveBearer(opts *RootOptions) (string, error) {
 	if pair.RefreshToken == "" {
 		return "", nil
 	}
+
+	unlock, err := lockAuthRefresh()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
+	// Re-read under the lock: another process may have refreshed already.
+	pair, err = store.Load()
+	if err != nil {
+		return "", err
+	}
+	if pair == nil || pair.AccessToken == "" {
+		return "", nil
+	}
+	if !pair.Expired() {
+		return pair.AccessToken, nil
+	}
+
 	cloudURL := ""
 	if opts != nil {
 		cloudURL = opts.CloudURL
@@ -99,4 +153,26 @@ func resolveBearer(opts *RootOptions) (string, error) {
 		return "", err
 	}
 	return renewed.AccessToken, nil
+}
+
+// lockAuthRefresh creates the auth lock file atomically (O_EXCL), waiting
+// up to ~3s for a concurrent refresher to finish.
+func lockAuthRefresh() (func(), error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return func() {}, nil
+	}
+	lockPath := filepath.Join(home, ".valuz-oss", "auth.json.lock")
+	for i := 0; i < 30; i++ {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close()
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !os.IsExist(err) {
+			return func() {}, nil // lock dir unavailable: proceed unlocked
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return func() {}, nil // timeout: proceed unlocked (refresh is idempotent-ish)
 }

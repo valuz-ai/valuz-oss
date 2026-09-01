@@ -143,7 +143,7 @@ func newSessionCreateCmd() *cobra.Command {
 }
 
 func newSessionListCmd() *cobra.Command {
-	var projectID string
+	var projectID, output string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List sessions (optionally filtered by project)",
@@ -165,6 +165,9 @@ func newSessionListCmd() *cobra.Command {
 			if err := client.Get(cmd.Context(), path, &list); err != nil {
 				return err
 			}
+			if printJSONOutput(cmd.OutOrStdout(), output, list.Sessions) {
+				return nil
+			}
 			for _, s := range list.Sessions {
 				agent := ""
 				if s.AgentSlug != nil {
@@ -176,6 +179,7 @@ func newSessionListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&projectID, "project", "", "filter by project id")
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 

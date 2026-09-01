@@ -111,6 +111,9 @@ func newEnvUseCmd() *cobra.Command {
 		Short: "Switch the active execution environment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectIfManaged("env use"); err != nil {
+				return err
+			}
 			name := args[0]
 			if _, ok := envBackendURLs[name]; !ok {
 				return errs.New(errs.KindUsage, "unknown environment %q (want local|cloud)", name)
@@ -144,6 +147,9 @@ func newEnvSetCmd() *cobra.Command {
 		Short: "Pin a custom backend base URL for an environment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectIfManaged("env use"); err != nil {
+				return err
+			}
 			name := args[0]
 			if _, ok := envBackendURLs[name]; !ok {
 				return errs.New(errs.KindUsage, "unknown environment %q (want local|cloud)", name)

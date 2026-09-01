@@ -137,7 +137,8 @@ func newProjectDeployCmd() *cobra.Command {
 }
 
 func newProjectListCmd() *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List projects",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -154,13 +155,17 @@ func newProjectListCmd() *cobra.Command {
 			if err := client.Get(cmd.Context(), "/v1/projects", &list); err != nil {
 				return err
 			}
-			w := cmd.OutOrStdout()
+			if printJSONOutput(cmd.OutOrStdout(), output, list.Projects) {
+				return nil
+			}
 			for _, p := range list.Projects {
-				fmt.Fprintf(w, "%-36s  %-16s  %s\n", p.ID, p.Name, p.RootPath)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-36s  %-16s  %s\n", p.ID, p.Name, p.RootPath)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
+	return cmd
 }
 
 func newProjectShowCmd() *cobra.Command {
