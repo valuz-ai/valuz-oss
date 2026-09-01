@@ -47,7 +47,12 @@ describe("ConnectorDetailPanel", () => {
 
   it("has nothing to click when no disconnect is offered", () => {
     render(
-      <ConnectorDetailPanel name="Read Only" connected tools={[]} systemManaged />,
+      <ConnectorDetailPanel
+        name="Read Only"
+        connected
+        tools={[]}
+        systemManaged
+      />,
     );
 
     const button = screen.getByRole("button", { name: /disconnect|断开/i });
@@ -65,5 +70,62 @@ describe("ConnectorDetailPanel", () => {
 
     expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+  });
+
+  it("opens the edit form when the connector's configuration is the user's own", () => {
+    let edited = false;
+    render(
+      <ConnectorDetailPanel
+        name="My Local Server"
+        connected
+        tools={[]}
+        onEdit={() => {
+          edited = true;
+        }}
+      />,
+    );
+
+    screen.getByRole("button", { name: /^(edit|编辑)$/i }).click();
+    expect(edited).toBe(true);
+  });
+
+  it("offers no edit action when the caller passes no onEdit", () => {
+    render(
+      <ConnectorDetailPanel
+        name="Valuz · Search"
+        connected
+        tools={[]}
+        systemManaged
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /^(edit|编辑)$/i })).toBeNull();
+  });
+
+  // Placement is the requirement, not decoration: Edit sits between the
+  // overlay's header actions and Disconnect, so the destructive action stays
+  // last in the row.
+  it("places edit after the overlay actions and before disconnect", () => {
+    render(
+      <ConnectorDetailPanel
+        name="My Local Server"
+        connected
+        tools={[]}
+        headerActions={<button type="button">Copy</button>}
+        onEdit={() => {}}
+        onDisconnect={() => {}}
+      />,
+    );
+
+    const labels = screen
+      .getAllByRole("button")
+      .map((b) => (b.textContent ?? "").trim());
+    const copy = labels.findIndex((l) => l === "Copy");
+    const edit = labels.findIndex((l) => /^(edit|编辑)$/i.test(l));
+    const disconnect = labels.findIndex((l) => /disconnect|断开/i.test(l));
+
+    expect(copy).toBeGreaterThanOrEqual(0);
+    expect(copy).toBeLessThan(edit);
+    expect(edit).toBeLessThan(disconnect);
   });
 });

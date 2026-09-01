@@ -17,7 +17,9 @@ import {
 import {
   connectorsApi,
   useTranslation,
+  type ConnectorItem,
   type CreateConnectorRequest,
+  type UpdateConnectorRequest,
 } from "@valuz/core";
 
 export type ConnectorAddMode = "http" | "stdio";
@@ -29,7 +31,24 @@ interface ConnectorAddDialogProps {
   /** Page-owned create + poll. Receives the built payload; resolves once
    *  the create call returns (the page handles OAuth window + polling). */
   onSubmit: (payload: CreateConnectorRequest) => Promise<void>;
+  /** Present → edit an existing connector instead of creating one. The form
+   *  seeds from this, so the page must give the dialog a ``key`` tied to the
+   *  connector id: the seeding happens in ``useState`` initializers and a
+   *  reused instance would keep the previous target's values. */
+  initial?: ConnectorItem | null;
+  /** Required when ``initial`` is set. Receives only the changed fields. */
+  onUpdate?: (payload: UpdateConnectorRequest) => Promise<void>;
 }
+
+/** ``command`` + ``args`` back into the single command line the form edits.
+ *  Safe to round-trip: the resolver ``shlex.split``s a ``command`` that
+ *  contains a space and prepends the result to ``args``, so "npx" + ["-y",p]
+ *  and "npx -y p" + [] resolve to the same child process. */
+const toCmdline = (command: string | null, args: string[]): string =>
+  [command ?? "", ...args]
+    .filter((part) => part !== "")
+    .map((part) => (/\s/.test(part) ? JSON.stringify(part) : part))
+    .join(" ");
 
 interface KvRow {
   key: string;
@@ -63,10 +82,46 @@ export function ConnectorAddDialog({
   mode,
   onOpenChange,
   onSubmit,
+  initial,
+  onUpdate,
 }: ConnectorAddDialogProps) {
   const { t } = useTranslation();
-  const [http, setHttp] = useState(emptyHttp);
-  const [stdio, setStdio] = useState(emptyStdio);
+  const editing = Boolean(initial);
+  // Secret header/param values are never returned by the API ("Secret → no
+  // value"), and ``env`` is not on ConnectorItem at all — so an edit form can
+  // only ever seed what the server is willing to show. Blank therefore has to
+  // mean "leave as is", which is why both submit paths omit an untouched
+  // field rather than sending an empty one.
+  const [http, setHttp] = useState(() =>
+    initial
+      ? {
+          ...emptyHttp,
+          display_name: initial.display_name,
+          url: initial.url ?? "",
+          transport:
+            initial.transport === "sse" ? ("sse" as const) : ("http" as const),
+          auth_type: (initial.auth_type === "bearer" ||
+          initial.auth_type === "oauth"
+            ? initial.auth_type
+            : "none") as "none" | "bearer" | "oauth",
+          headers: initial.headers
+            .filter((h) => !h.secret)
+            .map((h) => ({ key: h.key, value: h.value ?? "", secret: false })),
+          params: initial.params
+            .filter((p) => !p.secret)
+            .map((p) => ({ key: p.key, value: p.value ?? "", secret: false })),
+        }
+      : emptyHttp,
+  );
+  const [stdio, setStdio] = useState(() =>
+    initial
+      ? {
+          ...emptyStdio,
+          display_name: initial.display_name,
+          cmdline: toCmdline(initial.command, initial.args),
+        }
+      : emptyStdio,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const lastDiscoveredUrl = useRef<string | null>(null);
@@ -195,11 +250,30 @@ export function ConnectorAddDialog({
     };
     setSubmitting(true);
     try {
-      await onSubmit(payload);
+      if (editing && onUpdate) {
+        // Only the fields this form owns. ``credentials`` and the oauth
+        // endpoints stay out: re-sending them on an edit would re-run the
+        // authorization dance for a connector that is already authorized.
+        await onUpdate({
+          display_name: payload.display_name,
+          url: payload.url,
+          auth_type: payload.auth_type,
+          headers: headers.length > 0 ? headers : undefined,
+          params: params.length > 0 ? params : undefined,
+        });
+      } else {
+        await onSubmit(payload);
+      }
       close();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : t("settings.connectors.addFailed"),
+        err instanceof Error
+          ? err.message
+          : t(
+              editing
+                ? "connector.updateFailed"
+                : "settings.connectors.addFailed",
+            ),
       );
     } finally {
       setSubmitting(false);
@@ -224,11 +298,30 @@ export function ConnectorAddDialog({
     };
     setSubmitting(true);
     try {
-      await onSubmit(payload);
+      if (editing && onUpdate) {
+        // ``env`` is omitted when the user left the editor empty. The API
+        // never returns the current env, so the form cannot show it — and a
+        // wholesale `{}` would erase every variable the connector runs on.
+        // Blank means "leave as is"; filling any row replaces the whole set.
+        await onUpdate({
+          display_name: payload.display_name,
+          command: payload.command,
+          args: [],
+          ...(Object.keys(envDict).length > 0 ? { env: envDict } : {}),
+        });
+      } else {
+        await onSubmit(payload);
+      }
       close();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : t("settings.connectors.addFailed"),
+        err instanceof Error
+          ? err.message
+          : t(
+              editing
+                ? "connector.updateFailed"
+                : "settings.connectors.addFailed",
+            ),
       );
     } finally {
       setSubmitting(false);
@@ -246,9 +339,13 @@ export function ConnectorAddDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>
-            {mode === "http"
-              ? t("settings.connectors.addHttpConnector")
-              : t("settings.connectors.addStdioConnector")}
+            {editing
+              ? mode === "http"
+                ? t("connector.editHttp")
+                : t("connector.editStdio")
+              : mode === "http"
+                ? t("settings.connectors.addHttpConnector")
+                : t("settings.connectors.addStdioConnector")}
           </DialogTitle>
           <DialogDescription>{t("settings.connectors.desc")}</DialogDescription>
         </DialogHeader>
@@ -438,12 +535,19 @@ export function ConnectorAddDialog({
                 }
               />
             </div>
-            <EnvEditor
-              label={t("settings.connectors.envVars")}
-              addLabel={t("settings.connectors.addEnvVar")}
-              rows={stdio.env}
-              onChange={(rows) => setStdio((f) => ({ ...f, env: rows }))}
-            />
+            <div>
+              <EnvEditor
+                label={t("settings.connectors.envVars")}
+                addLabel={t("settings.connectors.addEnvVar")}
+                rows={stdio.env}
+                onChange={(rows) => setStdio((f) => ({ ...f, env: rows }))}
+              />
+              {editing ? (
+                <p className="mt-1.5 text-xs text-ink-meta">
+                  {t("connector.envKeepHint")}
+                </p>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -461,7 +565,7 @@ export function ConnectorAddDialog({
             {submitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : null}
-            {t("common.add")}
+            {editing ? t("common.save") : t("common.add")}
           </Button>
         </div>
       </DialogContent>

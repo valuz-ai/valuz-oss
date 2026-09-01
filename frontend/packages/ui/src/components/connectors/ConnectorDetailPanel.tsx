@@ -31,6 +31,11 @@ export interface ConnectorDetailPanelProps {
   systemManaged?: boolean;
   onConnect?: () => void;
   onDisconnect?: () => void;
+  /** Open the edit dialog. Omitted for connectors whose configuration the
+   *  user does not own — built-ins are system-managed, and a recommended
+   *  connector's command/args/identity belong to its catalog entry (the
+   *  backend rejects those fields with 422). Absent → no Edit button. */
+  onEdit?: () => void;
   /** Edition/overlay-provided actions rendered in the detail header. */
   headerActions?: ReactNode;
 }
@@ -47,6 +52,7 @@ export const ConnectorDetailPanel = ({
   systemManaged,
   onConnect,
   onDisconnect,
+  onEdit,
   headerActions,
 }: ConnectorDetailPanelProps) => {
   const { t } = useI18n();
@@ -115,14 +121,23 @@ export const ConnectorDetailPanel = ({
             </div>
           </div>
           {headerActions}
+          {onEdit ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              disabled={busy}
+              onClick={onEdit}
+            >
+              {t("connector.edit")}
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
             className="shrink-0"
             disabled={busy || !onDisconnect}
-            title={
-              systemManaged ? t("connector.systemManaged") : undefined
-            }
+            title={systemManaged ? t("connector.systemManaged") : undefined}
             onClick={onDisconnect}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
