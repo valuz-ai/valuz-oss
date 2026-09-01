@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -23,12 +24,64 @@ func newTaskCmd() *cobra.Command {
 		newTaskListCmd(),
 		newTaskShowCmd(),
 		newTaskEventsCmd(),
+		newTaskWaitCmd(),
 		newTaskInterveneCmd(),
 		newTaskCommitCmd(),
 		newTaskAbandonCmd(),
 		newTaskInjectCmd(),
 		newTaskPlanCmd(),
 	)
+	return cmd
+}
+
+// newTaskWaitCmd blocks until a task reaches a terminal state
+// (completed/abandoned) — the eval-harness "kickoff → wait → read result"
+// loop (squad receive --wait semantics, server-side single consumer).
+func newTaskWaitCmd() *cobra.Command {
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "wait <id>",
+		Short: "Wait until a task reaches a terminal state (completed/abandoned)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts, err := Options(cmd)
+			if err != nil {
+				return err
+			}
+			token, err := resolveBearer(opts)
+			if err != nil {
+				return err
+			}
+			client := newControlClient(opts, token)
+
+			ctx := cmd.Context()
+			var cancel context.CancelFunc
+			if timeout > 0 {
+				ctx, cancel = context.WithTimeout(ctx, timeout)
+				defer cancel()
+			}
+
+			poll := 500 * time.Millisecond
+			for {
+				var detail backend.TaskDetail
+				if err := client.Get(ctx, "/v1/tasks/"+args[0], &detail); err != nil {
+					return err
+				}
+				st := detail.Task.Status
+				if st == "completed" || st == "abandoned" {
+					fmt.Fprintf(cmd.OutOrStdout(), "task %s -> %s\n", detail.Task.ID, st)
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return errs.New(errs.KindTimeout, "task %s still %s after wait (last: %s)",
+						args[0], st, detail.Task.Status)
+				case <-time.After(poll):
+				}
+			}
+		},
+	}
+	cmd.Flags().DurationVar(&timeout, "timeout", 0, "max wait duration (0 = no limit)")
 	return cmd
 }
 
@@ -57,7 +110,7 @@ func newTaskKickoffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			pid, err := idOrResolve(client, cmd.Context(), projectID, cwd)
 			if err != nil {
 				return err
@@ -89,6 +142,7 @@ func newTaskKickoffCmd() *cobra.Command {
 
 func newTaskListCmd() *cobra.Command {
 	var limit int
+	var output string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks",
@@ -101,10 +155,13 @@ func newTaskListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var list backend.TaskListResponse
 			if err := client.Get(cmd.Context(), "/v1/tasks?limit="+fmt.Sprint(limit), &list); err != nil {
 				return err
+			}
+			if printJSONOutput(cmd.OutOrStdout(), output, list.Tasks) {
+				return nil
 			}
 			for _, t := range list.Tasks {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-36s  %-10s  %-18s  %s\n", t.ID, t.Status, t.LeadAgentSlug, truncate(t.Title, 40))
@@ -113,11 +170,13 @@ func newTaskListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "max tasks (1-200)")
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 
 func newTaskShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "show <id>",
 		Short: "Show a task with its runs and events",
 		Args:  cobra.ExactArgs(1),
@@ -130,10 +189,13 @@ func newTaskShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var detail backend.TaskDetail
 			if err := client.Get(cmd.Context(), "/v1/tasks/"+args[0], &detail); err != nil {
 				return err
+			}
+			if printJSONOutput(cmd.OutOrStdout(), output, detail) {
+				return nil
 			}
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "id:         %s\n", detail.Task.ID)
@@ -150,6 +212,8 @@ func newTaskShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
+	return cmd
 }
 
 func newTaskEventsCmd() *cobra.Command {
@@ -167,7 +231,7 @@ func newTaskEventsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			if stream {
 				return streamTaskEvents(cmd, opts, args[0])
 			}
@@ -194,8 +258,8 @@ func streamTaskEvents(cmd *cobra.Command, opts *RootOptions, taskID string) erro
 	if err != nil {
 		return err
 	}
-	client := backend.NewControlClient(opts.BackendURL, token)
-	streamClient := backend.NewStreamClient(opts.BackendURL, token)
+	client := newControlClient(opts, token)
+	streamClient := newStreamClient(opts, token)
 	streamClient.ReconnectMaxAttempts = 0
 
 	var afterSeq int64
@@ -245,7 +309,7 @@ func newTaskInterveneCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var task backend.Task
 			body := backend.TaskInterveneRequest{Action: action}
 			switch action {
@@ -282,7 +346,7 @@ func newTaskCommitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				TaskID        string `json:"task_id"`
 				LeadSessionID string `json:"lead_session_id"`
@@ -312,7 +376,7 @@ func newTaskAbandonCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				TaskID string `json:"task_id"`
 				Status string `json:"status"`
@@ -344,7 +408,7 @@ func newTaskInjectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				Delivered bool `json:"delivered"`
 			}
@@ -374,7 +438,7 @@ func newTaskPlanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var plan backend.TaskPlan
 			if err := client.Get(cmd.Context(), "/v1/tasks/"+args[0]+"/plan", &plan); err != nil {
 				return err

@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/config"
 )
 
@@ -29,6 +28,7 @@ func newModelListCmd() *cobra.Command {
 	var (
 		runtime  string
 		provider string
+		output   string
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -42,7 +42,7 @@ func newModelListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				Providers []struct {
 					ID     string `json:"id"`
@@ -56,6 +56,29 @@ func newModelListCmd() *cobra.Command {
 			}
 			if err := client.Get(cmd.Context(), "/v1/providers", &resp); err != nil {
 				return err
+			}
+			if output == "json" {
+				type modelRow struct {
+					ID       string   `json:"id"`
+					Label    string   `json:"label"`
+					Provider string   `json:"provider"`
+					Runtimes []string `json:"runtimes"`
+				}
+				var rows []modelRow
+				for _, p := range resp.Providers {
+					for _, m := range p.Models {
+						if runtime != "" && !contains(m.Runtimes, runtime) {
+							continue
+						}
+						if provider != "" && p.ID != provider {
+							continue
+						}
+						rows = append(rows, modelRow{ID: m.ID, Label: m.Label, Provider: p.ID, Runtimes: m.Runtimes})
+					}
+				}
+				if printJSONOutput(cmd.OutOrStdout(), output, rows) {
+					return nil
+				}
 			}
 			for _, p := range resp.Providers {
 				for _, m := range p.Models {
@@ -74,6 +97,7 @@ func newModelListCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&runtime, "runtime", "", "filter by runtime (claude_agent|codex|deepagents|deepseek_harness)")
 	f.StringVar(&provider, "provider", "", "filter by provider id")
+	f.StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 

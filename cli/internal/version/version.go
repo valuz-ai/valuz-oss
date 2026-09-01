@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 )
 
 // Build-time injected values (via -ldflags in main.go).
@@ -71,4 +72,17 @@ func (i Info) String() string {
 		return i.Version
 	}
 	return fmt.Sprintf("%s (%s)", i.Version, i.Commit)
+}
+
+// Headers renders the client-identity headers (C10 negotiation contract).
+// Every HTTP call carries them so the backend can detect version drift and
+// gate on capability/schema presence instead of parsing help text. Header
+// names are provisional until the OSS contract (C10) pins them.
+func (i Info) Headers() map[string]string {
+	return map[string]string{
+		"X-Valuz-Client-Version":      i.Version,
+		"X-Valuz-Client-Commit":       i.Commit,
+		"X-Valuz-Client-Schemas":      strings.Join(i.OutputSchemas, ","),
+		"X-Valuz-Client-Capabilities": strings.Join([]string{"headless_run"}, ","),
+	}
 }

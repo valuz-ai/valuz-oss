@@ -22,13 +22,12 @@ func newResourceCmd() *cobra.Command {
 		newResourceAgentShowCmd(),
 		newResourceSkillsCmd(),
 		newResourceConnectorsCmd(),
-		newAgentUseCmd(),
 	)
 	return cmd
 }
 
 func newResourceAgentsCmd() *cobra.Command {
-	var source string
+	var source, output string
 	cmd := &cobra.Command{
 		Use:   "agents",
 		Short: "List agents (execution identities: skills/connectors/instructions)",
@@ -45,10 +44,13 @@ func newResourceAgentsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.AgentListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
+			}
+			if printJSONOutput(cmd.OutOrStdout(), output, resp.Agents) {
+				return nil
 			}
 			for _, a := range resp.Agents {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-28s  %-10s  %-14s  %-18s  %s\n",
@@ -58,6 +60,7 @@ func newResourceAgentsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&source, "source", "", "official|custom")
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 
@@ -75,7 +78,7 @@ func newResourceAgentShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var a backend.Agent
 			if err := client.Get(cmd.Context(), "/v1/agents/"+args[0], &a); err != nil {
 				return err
@@ -114,7 +117,7 @@ func newResourceSkillsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.SkillListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
@@ -147,7 +150,7 @@ func newResourceConnectorsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.ConnectorListResponse
 			if err := client.Get(cmd.Context(), "/v1/connectors", &resp); err != nil {
 				return err

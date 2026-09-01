@@ -49,6 +49,16 @@ func (r *Resolver) BackendURL(flagVal string) (string, error) {
 	if r.Profile != nil && r.Profile.BackendURL != "" {
 		return strings.TrimRight(r.Profile.BackendURL, "/"), nil
 	}
+	// Execution environment pinned by `valuz env use/set`: the profile
+	// stores ENV=<name> and BACKEND_URL_<name>=<url>. This closes the
+	// write/read loop of the env command.
+	if r.Profile != nil {
+		if envName := r.Profile.Default("ENV"); envName != "" {
+			if envURL := r.Profile.Default("BACKEND_URL_" + envName); envURL != "" {
+				return strings.TrimRight(envURL, "/"), nil
+			}
+		}
+	}
 	if r.Discovery != nil {
 		if paths, err := r.Discovery(); err == nil && paths.BackendPort > 0 {
 			return fmt.Sprintf("http://127.0.0.1:%d", paths.BackendPort), nil

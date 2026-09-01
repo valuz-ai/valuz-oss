@@ -128,3 +128,39 @@ func TestExecuteReturnsExitCode(t *testing.T) {
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
+
+func TestTokenFilePermissionEnforced(t *testing.T) {
+	dir := t.TempDir()
+	loose := dir + "/loose.txt"
+	if err := os.WriteFile(loose, []byte("tok"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := checkTokenFilePerm(loose); err == nil {
+		t.Fatal("world-readable token file must be rejected")
+	}
+	tight := dir + "/tight.txt"
+	if err := os.WriteFile(tight, []byte("tok"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := checkTokenFilePerm(tight); err != nil {
+		t.Fatalf("0600 token file should pass: %v", err)
+	}
+}
+
+func TestManagedFailClosed(t *testing.T) {
+	old := os.Getenv("VALUZ_MANAGED")
+	os.Setenv("VALUZ_MANAGED", "1")
+	defer os.Setenv("VALUZ_MANAGED", old)
+
+	if err := rejectIfManaged("auth login"); err == nil {
+		t.Fatal("auth login must be rejected in managed context")
+	}
+	// resolveBearer without an injected token fails closed.
+	if _, err := resolveBearer(&RootOptions{Token: ""}); err == nil {
+		t.Fatal("resolveBearer must fail closed without an injected token")
+	}
+	// Explicit injected token passes.
+	if tok, err := resolveBearer(&RootOptions{Token: "scoped-tok"}); err != nil || tok != "scoped-tok" {
+		t.Fatalf("injected token should pass: %v %q", err, tok)
+	}
+}

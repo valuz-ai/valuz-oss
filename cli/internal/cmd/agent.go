@@ -5,17 +5,14 @@ import (
 )
 
 // newAgentCmd builds the top-level `valuz agent ...` command — agent
-// discovery and selection. Browse lives here (list/show) as well as the
-// run-path default pinning (use); the resource library keeps its own
-// grouped views.
+// selection for the run path. Browsing lives in `valuz resource`
+// (agents / agent <slug>), keeping one ownership per command surface.
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent",
-		Short: "Manage agents (execution identities)",
+		Short: "Select the default agent for run (browse: valuz resource)",
 	}
 	cmd.AddCommand(
-		newResourceAgentsCmd(),
-		newResourceAgentShowCmd(),
 		newAgentUseCmd(),
 	)
 	return cmd

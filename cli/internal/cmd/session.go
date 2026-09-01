@@ -56,7 +56,7 @@ func newSessionApproveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				SessionID string `json:"session_id"`
 				PendingID string `json:"pending_id"`
@@ -103,7 +103,7 @@ func newSessionCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			_ = quick // --quick is the default fallback; kept for explicitness
 
 			pid, err := idOrQuick(client, cmd.Context(), projectID, cwd)
@@ -143,7 +143,7 @@ func newSessionCreateCmd() *cobra.Command {
 }
 
 func newSessionListCmd() *cobra.Command {
-	var projectID string
+	var projectID, output string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List sessions (optionally filtered by project)",
@@ -156,7 +156,7 @@ func newSessionListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			path := "/v1/sessions"
 			if projectID != "" {
 				path += "?project_id=" + projectID
@@ -164,6 +164,9 @@ func newSessionListCmd() *cobra.Command {
 			var list backend.SessionListResponse
 			if err := client.Get(cmd.Context(), path, &list); err != nil {
 				return err
+			}
+			if printJSONOutput(cmd.OutOrStdout(), output, list.Sessions) {
+				return nil
 			}
 			for _, s := range list.Sessions {
 				agent := ""
@@ -176,6 +179,7 @@ func newSessionListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&projectID, "project", "", "filter by project id")
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
 
@@ -193,7 +197,7 @@ func newSessionShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var s backend.SessionDetail
 			if err := client.Get(cmd.Context(), "/v1/sessions/"+args[0], &s); err != nil {
 				return err
@@ -232,7 +236,7 @@ func newSessionInterruptCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var s backend.SessionDetail
 			if err := client.Post(cmd.Context(), "/v1/sessions/"+args[0]+"/interrupt", nil, &s); err != nil {
 				return err
@@ -260,8 +264,8 @@ func newSessionEventsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
-			streamClient := backend.NewStreamClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
+			streamClient := newStreamClient(opts, token)
 			streamClient.ReconnectMaxAttempts = 0
 
 			if stream {
@@ -330,7 +334,7 @@ func newSessionSendCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var s backend.SessionDetail
 			if err := client.Post(cmd.Context(), "/v1/sessions/"+args[0]+"/messages",
 				backend.SessionMessageRequest{Prompt: prompt}, &s); err != nil {

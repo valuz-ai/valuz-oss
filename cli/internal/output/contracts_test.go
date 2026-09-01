@@ -183,3 +183,27 @@ func readFile(path string) (string, error) {
 }
 
 // keep os import minimal for tests
+
+// TestRunEndGolden asserts the exact run.end line shape (design §6.2),
+// catching field renames or ordering drift the "fields exist" assertion
+// would miss.
+func TestRunEndGolden(t *testing.T) {
+	var buf bytes.Buffer
+	sink, err := NewSink("jsonl", &buf, "")
+	if err != nil {
+		t.Fatalf("NewSink: %v", err)
+	}
+	res := sampleResult()
+	res.RunID = "run-golden"
+	res.MessageID = "msg-golden"
+	res.Status = StatusCompleted
+	res.ExitCode = 0
+	if _, err := sink.End(res); err != nil {
+		t.Fatalf("End: %v", err)
+	}
+	want := `{"schema_version":"valuz.run-event/v1","run_id":"run-golden","session_id":"sess-1","project_id":"proj-1","message_id":"msg-golden","source":"cli","source_seq":null,"type":"run.end","data":{"result":{"schema_version":"valuz.run-result/v1","run_id":"run-golden","session_id":"sess-1","project_id":"proj-1","message_id":"msg-golden","agent_slug":"valurion","runtime":"deepagents","model":"claude-sonnet-4-6","status":"completed","exit_code":0,"started_at":"2026-08-27T10:00:00Z","finished_at":"2026-08-27T10:01:30Z","duration_ms":90000,"usage":{"input_tokens":1000,"output_tokens":200,"cache_read_tokens":0,"cache_write_tokens":0},"num_turns":1,"final_message":"done"}}}`
+	got := strings.TrimRight(buf.String(), "\n")
+	if got != want {
+		t.Fatalf("run.end golden mismatch:\n got: %s\nwant: %s", got, want)
+	}
+}

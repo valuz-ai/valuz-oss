@@ -45,7 +45,7 @@ func newProjectMembersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			pid := ""
 			if len(args) == 1 {
 				pid = args[0]
@@ -103,7 +103,7 @@ func newProjectDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			pid, err := idOrResolve(client, cmd.Context(), projectID, cwd)
 			if err != nil {
 				return err
@@ -137,7 +137,8 @@ func newProjectDeployCmd() *cobra.Command {
 }
 
 func newProjectListCmd() *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List projects",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -149,18 +150,22 @@ func newProjectListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var list backend.ProjectList
 			if err := client.Get(cmd.Context(), "/v1/projects", &list); err != nil {
 				return err
 			}
-			w := cmd.OutOrStdout()
+			if printJSONOutput(cmd.OutOrStdout(), output, list.Projects) {
+				return nil
+			}
 			for _, p := range list.Projects {
-				fmt.Fprintf(w, "%-36s  %-16s  %s\n", p.ID, p.Name, p.RootPath)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-36s  %-16s  %s\n", p.ID, p.Name, p.RootPath)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
+	return cmd
 }
 
 func newProjectShowCmd() *cobra.Command {
@@ -182,7 +187,7 @@ func newProjectShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 
 			// Resolve id from cwd when no positional id is given (same
 			// normalization the run path uses, so `--cwd` and
@@ -234,7 +239,7 @@ func newProjectCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var created backend.Project
 			body := backend.Project{Name: args[0], RootPath: abs}
 			if err := client.Post(cmd.Context(), "/v1/projects", body, &created); err != nil {

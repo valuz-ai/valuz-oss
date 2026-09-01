@@ -16,6 +16,7 @@ func newActivityCmd() *cobra.Command {
 		status    string
 		projectID string
 		limit     int
+		output    string
 	)
 	cmd := &cobra.Command{
 		Use:   "activity",
@@ -33,10 +34,13 @@ func newActivityCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.RunListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
+			}
+			if printJSONOutput(cmd.OutOrStdout(), output, resp.Runs) {
+				return nil
 			}
 			if len(resp.Runs) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "(no runs)")
@@ -65,5 +69,6 @@ func newActivityCmd() *cobra.Command {
 	f.StringVar(&status, "status", "running", "running|finished")
 	f.StringVar(&projectID, "project", "", "filter by project id")
 	f.IntVar(&limit, "limit", 50, "max runs per group")
+	f.StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }

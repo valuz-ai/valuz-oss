@@ -41,6 +41,9 @@ func newAuthLoginCmd() *cobra.Command {
 		Short: "Log in to the control plane (email+password or vzp_ api key)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := rejectIfManaged("auth login"); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
@@ -137,6 +140,9 @@ func newAuthLogoutCmd() *cobra.Command {
 		Short: "Revoke the login and clear stored tokens",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := rejectIfManaged("auth logout"); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
