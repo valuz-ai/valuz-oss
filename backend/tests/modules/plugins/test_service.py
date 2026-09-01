@@ -743,3 +743,49 @@ async def test_owner_isolation(env: Env) -> None:
         await env.svc.get_plugin("someone-else", result.plugin.id)
     assert (await env.svc.memberships("someone-else", "skill", ["alpha"]))["alpha"] == []
     _ = SimpleNamespace  # keep the import used for future stubs
+
+
+async def test_plugin_view_reports_protected_when_a_member_skill_is(env: Env) -> None:
+    """A plugin is exactly as protected as the strictest thing inside it.
+
+    The client needs this to stop offering ``export`` (which the service refuses
+    with 403 for these) and to badge the plugin. It must be DERIVED per request:
+    a member that becomes protected later must not leave a stale ``False`` on the
+    parent, which is why it is not stored on the plugin row.
+    """
+    src = build_agent_plugin(env.tmp_path / "src", name="guarded", skills={"alpha": {}, "beta": {}})
+    result = await env.svc.install(USER, path=str(src))
+    assert result.plugin.protected is False
+
+    rows = await env.skill_ds.list_skills(USER)
+    target = next(r for r in rows if r.slug == "alpha")
+    target.protected = True
+    await env.skill_ds.update(target)
+
+    fetched = await env.svc.get_plugin(USER, result.plugin.id)
+    assert fetched.protected is True, "one protected member must protect the plugin"
+    # The plugin itself stays fully visible — only actions change.
+    assert fetched.name == "guarded"
+    assert sorted(m.slug for m in fetched.members) == ["alpha", "beta"]
+
+    listed = await env.svc.list_plugins(USER)
+    assert [p.protected for p in listed if p.id == result.plugin.id] == [True]
+
+
+async def test_plugin_view_protected_matches_what_export_refuses(env: Env) -> None:
+    """The badge and the 403 must agree — otherwise the UI hides an action that
+    would have worked, or offers one that cannot."""
+    from valuz_agent.modules.skills.errors import SkillProtected
+
+    src = build_agent_plugin(env.tmp_path / "src", name="guarded2", skills={"alpha": {}})
+    result = await env.svc.install(USER, path=str(src))
+    await env.svc.export_zip(USER, result.plugin.id)  # not protected yet → fine
+
+    rows = await env.skill_ds.list_skills(USER)
+    target = next(r for r in rows if r.slug == "alpha")
+    target.protected = True
+    await env.skill_ds.update(target)
+
+    assert (await env.svc.get_plugin(USER, result.plugin.id)).protected is True
+    with pytest.raises(SkillProtected):
+        await env.svc.export_zip(USER, result.plugin.id)

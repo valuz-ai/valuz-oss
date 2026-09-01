@@ -79,6 +79,8 @@ export interface AgentPluginView {
   installed_at: string;
   updated_at: string;
   update_available: boolean | null;
+  /** Any member skill is protected — derived per request, never stored. */
+  protected?: boolean;
 }
 
 export interface AgentPluginList {

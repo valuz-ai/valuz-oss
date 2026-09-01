@@ -5879,6 +5879,14 @@ components:
         installed_at: {type: string, description: "ISO-8601 UTC."}
         updated_at: {type: string, description: "ISO-8601 UTC."}
         update_available: {type: boolean, nullable: true}
+        protected:
+          type: boolean
+          default: false
+          description: >-
+            True when any member skill is protected; derived per request, never stored.
+            Clients use it to stop offering actions the server refuses (export returns 403)
+            and to badge the plugin. It does NOT hide the plugin: name, description and the
+            member list stay visible.
     PluginSkippedMember:
       type: object
       required: [kind, slug, reason]

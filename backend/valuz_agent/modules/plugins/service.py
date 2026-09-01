@@ -146,6 +146,10 @@ class _Library:
 
     skill_root: Path
     connectors: dict[str, ConnectorView] = field(default_factory=dict)
+    # Slugs of the user's protected skills. Carried here for the same reason the
+    # connectors are: ``_view`` runs once per plugin and must not issue a query
+    # per member.
+    protected_skill_slugs: set[str] = field(default_factory=set)
 
 
 def _iso(ms: int | None) -> str:
@@ -1262,6 +1266,11 @@ class PluginService:
         return _Library(
             skill_root=fs_registry.user_skill_root(user_id=user_id),
             connectors={v.slug: v for v in await self._connectors.list_connectors(user_id)},
+            protected_skill_slugs={
+                row.slug
+                for row in await self._skills.list_indexed_skills(user_id)
+                if row.slug and getattr(row, "protected", False)
+            },
         )
 
     def _view(
@@ -1302,6 +1311,13 @@ class PluginService:
             )
         skill_count = sum(1 for m in members if m.kind == "skill")
         connector_count = len(members) - skill_count
+        # Same rule the export gate enforces (``_refuse_protected_export``):
+        # protected if ANY member skill is. Kept as two independent derivations
+        # on purpose — the gate is the enforcement and must not depend on a view
+        # snapshot, while this is only what the client renders.
+        protected = any(
+            m.kind == "skill" and m.slug in library.protected_skill_slugs for m in members
+        )
         keywords = manifest.get("keywords")
         return PluginView(
             id=row.id,
@@ -1325,6 +1341,7 @@ class PluginService:
             installed_at=_iso(row.created_at),
             updated_at=_iso(row.updated_at),
             update_available=None,
+            protected=protected,
         )
 
     @staticmethod
