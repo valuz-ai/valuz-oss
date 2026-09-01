@@ -691,9 +691,12 @@ export const ConnectorsSection = () => {
       const cmdline = [connector.command, ...(connector.args ?? [])]
         .filter(Boolean)
         .join(" ");
-      const envEntries = Object.entries(connector.env ?? {}).map(
-        ([key, value]) => ({ key, value }),
-      );
+      // env is a CredView list now (a secret comes back valueless), not the
+      // old {name: value} map — seed the name with an empty box for those.
+      const envEntries = (connector.env ?? []).map((e) => ({
+        key: e.key,
+        value: e.value ?? "",
+      }));
       setEditForm({
         display_name: connector.display_name,
         url: "",
