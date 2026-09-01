@@ -185,9 +185,7 @@ class Extensions:
         # templates / plugins). OSS reads the packaged manifests only; the
         # commercial overlay binds a cloud-backed resolver that falls back to
         # the same packaged set offline. See ports/builtin_declaration.py.
-        self.builtin_declarations: BuiltinResourceDeclarationPort = (
-            PackagedBuiltinDeclarations()
-        )
+        self.builtin_declarations: BuiltinResourceDeclarationPort = PackagedBuiltinDeclarations()
         # Resolve a file's absolute path into a client-usable access address
         # (see docs/design/file-address-resolution.md). OSS default returns the
         # local absolute path (bundled desktop reads it directly); the commercial
@@ -252,6 +250,16 @@ class Extensions:
         # session after the five built-ins, with the same internal credential
         # headers and timeout; reserved built-in names are skipped.
         self.always_on_mcp_specs: list[AlwaysOnMcpServerSpec] = []
+        # Tool-name / command substrings whose events the kernel scrubs from
+        # every user surface (transcript + live stream), list semantics —
+        # editions append. The edition projects this into the process-level
+        # ``VALUZ_PRIVATE_TOOL_PATTERNS`` env, which the kernel observer reads on
+        # every turn (``_session_private_tool_patterns``) so the scrub fails
+        # CLOSED — it does not depend on a per-session write that could be absent
+        # on a session's first turn. Edition-neutral: OSS plumbs the list, it
+        # does not know why a tool is private. Used by protected-builtins v2 to
+        # hide the ``unseal`` decrypt tool's plaintext output.
+        self.private_tool_patterns: list[str] = []
         # Generated-UI artifact sinks (list semantics — editions append).
         # ``generate_ui`` offers every successful generation to each sink in
         # order and appends the FIRST returned receipt to its tool result;

@@ -458,6 +458,46 @@ def _session_task_coverage_enabled(session: Session) -> bool:
     return value if isinstance(value, bool) else False
 
 
+def _session_private_tool_patterns(session: Session) -> tuple[str, ...]:
+    """Tool-name / command substrings whose events stay off every user surface.
+
+    The kernel keeps the concept edition-neutral: it does not know *why* a tool
+    is private, only that a matching ``tool_use``/``tool_result`` (and their
+    streaming deltas) must never reach the transcript or the live stream. The
+    model still consumes the tool output inside the runtime loop before the
+    observer sees a normalized copy, so dropping it here changes nothing about
+    the turn — it only removes the UI/persistence echo. Used by the
+    protected-builtins v2 decrypt path so the unsealed plaintext never lands in
+    kernel.db / the SSE feed.
+
+    Two sources, unioned:
+
+    * ``VALUZ_PRIVATE_TOOL_PATTERNS`` (comma-separated env) — a **process-level
+      backstop the scrub must fail CLOSED on**. A per-session stamp that has not
+      landed yet (a brand-new session's first turn, or a transient write
+      failure) would otherwise leave the observer with empty patterns and stream
+      the decrypt plaintext — so the deployment-wide list lives in env, read on
+      every turn, and does not depend on any per-session write.
+    * ``session.metadata["valuz"]["private_tool_patterns"]`` — an optional
+      per-session override a host may set; kept for generality.
+    """
+    import os
+
+    patterns: list[str] = []
+    env = os.environ.get("VALUZ_PRIVATE_TOOL_PATTERNS", "")
+    patterns.extend(item.strip() for item in env.split(",") if item.strip())
+
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if isinstance(valuz, dict):
+        raw = valuz.get("private_tool_patterns")
+        if isinstance(raw, list):
+            patterns.extend(item for item in raw if isinstance(item, str) and item)
+
+    # Dedup, preserve order.
+    return tuple(dict.fromkeys(patterns))
+
+
 def _session_task_coverage_policy(session: Session) -> dict[str, Any] | None:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     valuz = metadata.get("valuz")
@@ -554,10 +594,13 @@ class _MessageObserverSink:
         semantic_verifier: SemanticVerifierPort | None = None,
         claim_normalizer: ClaimNormalizerPort | None = None,
         task_coverage_enabled: bool = False,
+        private_tool_patterns: tuple[str, ...] = (),
         mode_persist: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._inner = inner
         self._message_id = message_id
+        self._private_tool_patterns = private_tool_patterns
+        self._private_tool_ids: set[str] = set()
         self._user_prompt = user_prompt
         self._citation_policy_available = citation_policy_available
         self._citation_quality_policy = citation_quality_policy
@@ -600,7 +643,67 @@ class _MessageObserverSink:
         self.runtime_mode_change: Literal["default", "plan", "goal"] | None = None
         self._mode_persist = mode_persist
 
+    def _matches_private_tool(self, data: dict[str, Any], tool_name: str) -> bool:
+        """True when a ``tool_use`` targets a host-declared private tool.
+
+        Matches the tool name (covers MCP spellings — ``mcp__valuz__unseal`` /
+        ``valuz/unseal`` / bare ``unseal`` all contain the pattern) and, for the
+        shell/exec form, the command string in ``input`` (``vzskill unseal``).
+        Name is the primary key; the command match catches the case where the
+        model runs the unseal via a shell tool instead of an MCP call.
+        """
+
+        for pattern in self._private_tool_patterns:
+            if pattern in tool_name:
+                return True
+        raw_input = data.get("input")
+        if isinstance(raw_input, dict):
+            command = raw_input.get("command")
+            if isinstance(command, str):
+                for pattern in self._private_tool_patterns:
+                    if pattern in command:
+                        return True
+        return False
+
+    def _is_private_tool_event(self, event: Event) -> bool:
+        """Drop-decision for a private tool's ``tool_use`` / ``tool_result`` and
+        their streaming deltas. Mirrors ``_TaskCoverageProtocolSink`` but fully
+        drops (no private ingest): a decrypt result is not Evidence.
+
+        ``tool_use`` and ``tool_input_delta`` are matched by name/command AND
+        register the id — the input deltas of a streamed tool call arrive BEFORE
+        the canonical ``tool_use`` on the Claude and deepseek runtimes, so an
+        id-only check would let those deltas escape to the live stream. Once the
+        id is known, ``tool_result`` / ``tool_output_delta`` (which always follow
+        the ``tool_use``) are matched by that id.
+        """
+
+        event_type = event.type
+        if event_type in {"tool_use", "tool_input_delta"}:
+            tool_use_id = event.data.get("id") or event.data.get("tool_use_id")
+            if isinstance(tool_use_id, str) and tool_use_id in self._private_tool_ids:
+                return True
+            tool_name = event.data.get("name")
+            if isinstance(tool_name, str) and self._matches_private_tool(event.data, tool_name):
+                if isinstance(tool_use_id, str):
+                    self._private_tool_ids.add(tool_use_id)
+                return True
+            return False
+        if event_type in {"tool_result", "tool_output_delta"}:
+            tool_use_id = event.data.get("id") or event.data.get("tool_use_id")
+            return isinstance(tool_use_id, str) and tool_use_id in self._private_tool_ids
+        return False
+
     async def emit(self, event: Event) -> None:
+        # Host-declared private tools (protected-builtins v2 decrypt): the model
+        # already consumed the output inside the runtime loop, so dropping the
+        # normalized echo here keeps the plaintext off BOTH the transcript
+        # (this sink sits above persist) and the live stream (above broadcast),
+        # without touching the turn. Must run before any sidecar/redaction:
+        # a decrypt result must not be registered as Evidence or persisted.
+        if self._private_tool_patterns and self._is_private_tool_event(event):
+            return
+
         if event.type == "citation_evidence":
             self._register_private_evidence(event)
             return
@@ -1779,6 +1882,7 @@ class SessionOrchestrator:
             semantic_verifier=semantic_verifier,
             claim_normalizer=claim_normalizer,
             task_coverage_enabled=task_coverage_enabled,
+            private_tool_patterns=_session_private_tool_patterns(session),
             mode_persist=_make_mode_persist(self._store, user_id, session_id),
         )
 
@@ -2554,9 +2658,7 @@ class SessionOrchestrator:
             # cause: host restart. Seal lazily as well as at startup: older
             # rows and host/durable reconciliation races can still reach this
             # endpoint after the process that owned the parked future died.
-            sealed = await recovery.seal_pending(
-                self._store, user_id, session_id, pending_id
-            )
+            sealed = await recovery.seal_pending(self._store, user_id, session_id, pending_id)
             if sealed is not None:
                 resolved, message_id = sealed
                 bus = self._get_or_create_bus(session_id)
@@ -2703,13 +2805,9 @@ class SessionOrchestrator:
         offset = 0
         page_size = 500
         while True:
-            sessions = await self._store.list_sessions(
-                None, limit=page_size, offset=offset
-            )
+            sessions = await self._store.list_sessions(None, limit=page_size, offset=offset)
             for session in sessions:
-                sealed += await self._seal_session_pendings(
-                    session.user_id, session.id
-                )
+                sealed += await self._seal_session_pendings(session.user_id, session.id)
             if len(sessions) < page_size:
                 break
             offset += page_size
