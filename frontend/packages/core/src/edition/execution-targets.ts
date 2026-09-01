@@ -104,8 +104,12 @@ export function selectableExecutionTargets(
   return targets.filter((target) => target.selectable !== false);
 }
 
-export function targetUsesManagedCwd(target: ExecutionTarget | null | undefined): boolean {
-  return target?.remote === true && typeof target.selectDirectory !== "function";
+export function targetUsesManagedCwd(
+  target: ExecutionTarget | null | undefined,
+): boolean {
+  return (
+    target?.remote === true && typeof target.selectDirectory !== "function"
+  );
 }
 
 /**
@@ -140,7 +144,41 @@ function fanOutFingerprint(targets: readonly ExecutionTarget[]): string {
     .join(",");
 }
 
+/**
+ * Field-for-field equality over the whole set — every property, not just the
+ * fan-out subset, because {@link useExecutionTargets} hands the array to
+ * pickers that read labels, icons and choosers too.
+ *
+ * Function-valued properties compare by reference: an edition that mints a
+ * fresh closure per announcement is telling us the target changed, and this
+ * layer cannot know better.
+ */
+function sameTargets(
+  a: readonly ExecutionTarget[],
+  b: readonly ExecutionTarget[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((prev, i) => {
+    const next = b[i] as unknown as Record<string, unknown>;
+    const current = prev as unknown as Record<string, unknown>;
+    const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
+    for (const key of keys) {
+      if (!Object.is(current[key], next[key])) return false;
+    }
+    return true;
+  });
+}
+
 export function setExecutionTargets(targets: ExecutionTarget[]): void {
+  // Re-announcing an unchanged set is a no-op, and it has to stay one all the
+  // way down to the array identity. ``useExecutionTargets`` is a
+  // ``useSyncExternalStore`` view over this array, so publishing a fresh copy
+  // on every presence poll re-renders each consumer — including the app
+  // layout, which rebuilds its outlet context and re-renders every page under
+  // it. Pages then hand fresh callback props to their children, and anything
+  // that (reasonably) treats a prop identity as a dependency starts refetching
+  // on the poll's cadence.
+  if (sameTargets(_targets, targets)) return;
   _targets = [...targets];
   const fingerprint = fanOutFingerprint(_targets);
   if (fingerprint !== _fingerprint) {

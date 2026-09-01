@@ -64,6 +64,44 @@ describe("execution targets registry", () => {
     });
     expect(result.current.map((t) => t.id)).toEqual(["local", "cloud"]);
   });
+
+  it("keeps the array identity when the same set is re-announced", () => {
+    // Editions re-announce on every presence poll. A fresh array identity for
+    // an unchanged set re-renders every consumer on that cadence — including
+    // the app layout, which then re-renders every page under its outlet.
+    setExecutionTargets([LOCAL, CLOUD]);
+    const published = getExecutionTargets();
+    setExecutionTargets([{ ...LOCAL }, { ...CLOUD }]);
+    expect(getExecutionTargets()).toBe(published);
+  });
+
+  it("publishes again when a property outside the fan-out set changes", () => {
+    // ``labelKey`` does not affect fan-out (the revision stays put), but the
+    // pickers render it — so the array still has to be republished.
+    setExecutionTargets([LOCAL]);
+    const published = getExecutionTargets();
+    const revision = getExecutionTargetsRevision();
+    setExecutionTargets([{ ...LOCAL, labelKey: "commercial.exec.renamed" }]);
+    expect(getExecutionTargets()).not.toBe(published);
+    expect(getExecutionTargets()[0]?.labelKey).toBe("commercial.exec.renamed");
+    expect(getExecutionTargetsRevision()).toBe(revision);
+  });
+
+  it("useExecutionTargets does not re-render on a re-announcement", () => {
+    let renders = 0;
+    renderHook(() => {
+      renders += 1;
+      return useExecutionTargets();
+    });
+    act(() => {
+      setExecutionTargets([LOCAL, CLOUD]);
+    });
+    const afterChange = renders;
+    act(() => {
+      setExecutionTargets([{ ...LOCAL }, { ...CLOUD }]);
+    });
+    expect(renders).toBe(afterChange);
+  });
 });
 
 describe("default runtime location", () => {
@@ -98,7 +136,12 @@ describe("executionTargetIconKind", () => {
     setExecutionTargets([
       LOCAL,
       { id: "edge-1", labelKey: "x", baseUrl: "http://edge", icon: "device" },
-      { id: "device:legacy", labelKey: "y", baseUrl: "http://y", icon: "cloud" },
+      {
+        id: "device:legacy",
+        labelKey: "y",
+        baseUrl: "http://y",
+        icon: "cloud",
+      },
     ]);
     expect(executionTargetIconKind("edge-1")).toBe("device");
     expect(executionTargetIconKind("device:legacy")).toBe("cloud");

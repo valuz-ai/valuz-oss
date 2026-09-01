@@ -8,13 +8,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 import { Badge } from "../ui/badge";
@@ -89,6 +83,10 @@ export interface SkillDetailPanelProps {
    * Loads UTF-8 contents of a file path (relative to the skill dir).
    * Used to drive the inline preview pane. Required for clicking a file
    * to do anything; absent → tree is read-only.
+   *
+   * Identity is NOT a dependency — pass an inline arrow freely. The panel
+   * always calls the latest reference and refetches when the *file* changes
+   * (skill or selected path), never because the caller re-rendered.
    */
   onLoadFile?: (path: string) => Promise<string>;
   onDelete?: () => void;
@@ -380,8 +378,28 @@ export const SkillDetailPanel = ({
     }
   };
 
+  // WHICH file to show, independent of the closure that fetches it. Callers
+  // pass ``onLoadFile`` as an inline arrow, so its identity changes on every
+  // parent render — and a parent re-renders for reasons that have nothing to
+  // do with this skill (the app layout re-announces its execution targets on
+  // a poll, which re-renders every page under the outlet). Keying the fetch
+  // on the closure made the preview blank itself and refetch on that timer:
+  // a visible flash every few seconds. Key it on the file instead.
+  const fileKey = `${skill.path ?? ""}|${skill.name}|${selectedPath ?? ""}`;
+  const canLoadFile = Boolean(onLoadFile);
+
+  // Latest-ref for the loader: the effect must call the CURRENT closure (it
+  // captures the caller's skill id) without depending on its identity.
+  // Declared before the fetch effect so a commit that changes both the file
+  // and the loader syncs the ref first.
+  const loadFileRef = useRef(onLoadFile);
   useEffect(() => {
-    if (!selectedPath || !onLoadFile) {
+    loadFileRef.current = onLoadFile;
+  }, [onLoadFile]);
+
+  useEffect(() => {
+    const loadFile = loadFileRef.current;
+    if (!selectedPath || !loadFile) {
       setContent("");
       setContentLoading(false);
       return;
@@ -389,7 +407,7 @@ export const SkillDetailPanel = ({
     let cancelled = false;
     setContent("");
     setContentLoading(true);
-    onLoadFile(selectedPath)
+    loadFile(selectedPath)
       .then((c) => {
         if (!cancelled) setContent(c);
       })
@@ -405,7 +423,10 @@ export const SkillDetailPanel = ({
     return () => {
       cancelled = true;
     };
-  }, [selectedPath, onLoadFile]);
+    // ``selectedPath`` is folded into ``fileKey`` — it is read above, not a
+    // separate trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileKey, canLoadFile]);
 
   // Subtitle below the name: ``来源 · 位置 · 版本`` (any missing piece
   // is dropped).
