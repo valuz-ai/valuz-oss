@@ -113,6 +113,11 @@ export function PluginDetailPanel({
                   ] as Parameters<typeof t>[0],
                 )}
               </Badge>
+              {plugin.protected ? (
+                <Badge variant="metaOutline">
+                  {t("skill.protectedBadge" as Parameters<typeof t>[0])}
+                </Badge>
+              ) : null}
               {plugin.update_available ? (
                 <Badge variant="brand">{t("plugin.updateAvailable")}</Badge>
               ) : null}
@@ -167,22 +172,29 @@ export function PluginDetailPanel({
                   <TooltipContent>{t("plugin.update")}</TooltipContent>
                 </Tooltip>
               ) : null}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-ink-meta hover:text-ink-body"
-                    loading={busy === "export"}
-                    disabled={!!busy}
-                    onClick={onExport}
-                    aria-label={t("plugin.export")}
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{t("plugin.export")}</TooltipContent>
-              </Tooltip>
+              {/* Export zips PLUGIN_ROOT wholesale, so the server refuses it for a
+                  protected plugin (403). Offering a button that can only fail is
+                  worse than not offering it — and there is nothing to export
+                  anyway, since a protected plugin's member payload is pruned on
+                  install. Everything else about the plugin stays visible. */}
+              {plugin.protected ? null : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-ink-meta hover:text-ink-body"
+                      loading={busy === "export"}
+                      disabled={!!busy}
+                      onClick={onExport}
+                      aria-label={t("plugin.export")}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("plugin.export")}</TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button

@@ -155,6 +155,13 @@ class PluginView(BaseModel):
     installed_at: str
     updated_at: str
     update_available: bool | None = None
+    # True when any member skill is protected — a plugin is exactly as protected
+    # as the strictest thing inside it. DERIVED per request, never stored: a
+    # member that becomes protected later must not leave a stale ``False`` on the
+    # parent. Clients use it to stop offering actions the server will refuse
+    # (``export`` returns 403 for these); it does not hide the plugin itself,
+    # whose name, description and member list stay visible.
+    protected: bool = False
 
 
 class PluginSkippedMember(BaseModel):
