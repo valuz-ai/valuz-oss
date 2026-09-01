@@ -32,7 +32,10 @@ export interface ConnectorItem {
   command: string | null;
   args: string[];
   working_dir: string | null;
-  env: Record<string, string>;
+  /** stdio environment, same contract as headers/params: a secret entry
+   *  comes back without its value so the edit form can show what is set
+   *  without ever shipping the value back to the client. */
+  env: HeaderParam[];
   headers: HeaderParam[];
   params: HeaderParam[];
   enabled: boolean;

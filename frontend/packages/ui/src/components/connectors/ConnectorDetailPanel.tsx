@@ -1,4 +1,4 @@
-import { Loader2, Plug, Wrench } from "lucide-react";
+import { Loader2, Pencil, Plug, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ToolInfo } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
@@ -61,8 +61,25 @@ export const ConnectorDetailPanel = ({
   if (!connected) {
     return (
       <aside className="relative flex h-full flex-col items-center justify-center px-6 text-center">
-        {headerActions ? (
-          <div className="absolute right-4 top-4">{headerActions}</div>
+        {headerActions || onEdit ? (
+          // Top-right, mirroring the connected header: a connector that
+          // FAILED to connect is exactly the one whose configuration needs
+          // fixing, so Edit has to be reachable without connecting first.
+          <div className="absolute right-4 top-4 flex items-center gap-2">
+            {headerActions}
+            {onEdit ? (
+              <button
+                type="button"
+                aria-label={t("connector.edit")}
+                title={t("connector.edit")}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-meta transition-colors hover:bg-surface-2 hover:text-ink-heading disabled:opacity-50"
+                disabled={busy}
+                onClick={onEdit}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
         ) : null}
         <div className="w-[300px] -translate-y-[100px] rounded-xl px-5 py-8 text-center">
           <ConnectorIcon
@@ -122,15 +139,16 @@ export const ConnectorDetailPanel = ({
           </div>
           {headerActions}
           {onEdit ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0"
+            <button
+              type="button"
+              aria-label={t("connector.edit")}
+              title={t("connector.edit")}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-meta transition-colors hover:bg-surface-2 hover:text-ink-heading disabled:opacity-50"
               disabled={busy}
               onClick={onEdit}
             >
-              {t("connector.edit")}
-            </Button>
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
           ) : null}
           <Button
             variant="outline"

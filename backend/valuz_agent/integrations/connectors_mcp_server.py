@@ -16,6 +16,7 @@ Wire shape::
 from __future__ import annotations
 
 import json
+import shlex
 import logging
 from typing import Any
 
@@ -283,20 +284,47 @@ def _as_args(raw: list[str] | str | None) -> list[str] | None:
 
     A JSON string is still accepted so anything reaching ``_invoke``
     directly (or an older caller) keeps working; dropping it silently would
-    be worse than parsing it.
+    be worse than parsing it. So is a plain space-joined string ("-y pkg") —
+    a session opened under the old ``args: str`` schema keeps that declaration
+    for its whole life, and space-joining is what a model guesses first
+    (observed as the opening attempt in a real session). ``shlex`` rather
+    than ``str.split`` so a quoted argument containing a space survives.
     """
     if raw is None or raw == "":
         return None
     if isinstance(raw, str):
-        return [str(v) for v in json.loads(raw)]
+        text = raw.strip()
+        if text.startswith("["):
+            return [str(v) for v in json.loads(text)]
+        return [str(v) for v in shlex.split(text)]
     return [str(v) for v in raw]
 
 
 def _as_env(raw: dict[str, str] | str | None) -> dict[str, str] | None:
-    """``env`` as the tool now declares it — a real object. See ``_as_args``."""
+    """``env`` as the tool now declares it — a real object. See ``_as_args``.
+
+    A string is still accepted, and not only as JSON: a session opened before
+    the array/object schema landed keeps the cached ``env: str`` declaration
+    for its whole life, and a model guessing that string's format reliably
+    produces ``KEY=VAL KEY=VAL`` or newline-separated pairs (observed: four of
+    eight attempts in one real session — the model only "succeeded" once it
+    dropped env entirely, creating a connector that could never start).
+    Refusing those shapes doesn't teach the model JSON; it teaches it to give
+    up. Values may contain ``=`` (URLs, base64), so split each pair once.
+    """
     if raw is None or raw == "":
         return None
-    data = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(raw, str):
+        return {str(k): str(v) for k, v in raw.items()}
+    text = raw.strip()
+    if text.startswith("{"):
+        data = json.loads(text)
+        return {str(k): str(v) for k, v in data.items()}
+    pairs = [p for chunk in text.splitlines() for p in chunk.split() if p]
+    if pairs and all("=" in p for p in pairs):
+        return dict(p.split("=", 1) for p in pairs)
+    # Neither JSON nor KEY=VAL — let json.loads raise the descriptive error.
+    data = json.loads(text)
     return {str(k): str(v) for k, v in data.items()}
 
 
