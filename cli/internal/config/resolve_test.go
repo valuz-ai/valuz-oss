@@ -29,6 +29,11 @@ func TestResolverBackendURLPrecedence(t *testing.T) {
 		{"discovery wins over default", "", "", nil, 19100, "http://127.0.0.1:19100"},
 		{"default fallback", "", "", nil, 0, "http://127.0.0.1:8000"},
 		{"trailing slash trimmed", "http://flag:1/", "", nil, 0, "http://flag:1"},
+		// valuz env use/set pinning: ENV -> BACKEND_URL_<env> in the profile.
+		{"env pin beats discovery", "", "", &Profile{Defaults: map[string]string{"ENV": "cloud", "BACKEND_URL_cloud": "https://cloud:9"}}, 19100, "https://cloud:9"},
+		{"env pin without url falls through", "", "", &Profile{Defaults: map[string]string{"ENV": "cloud"}}, 19100, "http://127.0.0.1:19100"},
+		{"flag beats env pin", "http://flag:1", "", &Profile{Defaults: map[string]string{"ENV": "cloud", "BACKEND_URL_cloud": "https://cloud:9"}}, 0, "http://flag:1"},
+		{"backend_url field beats env pin", "", "", &Profile{BackendURL: "http://prof:3", Defaults: map[string]string{"ENV": "cloud", "BACKEND_URL_cloud": "https://cloud:9"}}, 0, "http://prof:3"},
 	}
 
 	for _, tc := range cases {

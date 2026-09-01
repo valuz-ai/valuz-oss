@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/config"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/output"
@@ -107,8 +106,8 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 			r := runner.New(
-				backend.NewControlClient(opts.BackendURL, token),
-				backend.NewStreamClient(opts.BackendURL, token),
+				newControlClient(opts, token),
+				newStreamClient(opts, token),
 				humanWriter(cmd, human),
 			)
 			res, err := r.Run(runCtx, runner.Options{

@@ -57,7 +57,7 @@ func newTaskKickoffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			pid, err := idOrResolve(client, cmd.Context(), projectID, cwd)
 			if err != nil {
 				return err
@@ -101,7 +101,7 @@ func newTaskListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var list backend.TaskListResponse
 			if err := client.Get(cmd.Context(), "/v1/tasks?limit="+fmt.Sprint(limit), &list); err != nil {
 				return err
@@ -130,7 +130,7 @@ func newTaskShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var detail backend.TaskDetail
 			if err := client.Get(cmd.Context(), "/v1/tasks/"+args[0], &detail); err != nil {
 				return err
@@ -167,7 +167,7 @@ func newTaskEventsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			if stream {
 				return streamTaskEvents(cmd, opts, args[0])
 			}
@@ -194,8 +194,8 @@ func streamTaskEvents(cmd *cobra.Command, opts *RootOptions, taskID string) erro
 	if err != nil {
 		return err
 	}
-	client := backend.NewControlClient(opts.BackendURL, token)
-	streamClient := backend.NewStreamClient(opts.BackendURL, token)
+	client := newControlClient(opts, token)
+	streamClient := newStreamClient(opts, token)
 	streamClient.ReconnectMaxAttempts = 0
 
 	var afterSeq int64
@@ -245,7 +245,7 @@ func newTaskInterveneCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var task backend.Task
 			body := backend.TaskInterveneRequest{Action: action}
 			switch action {
@@ -282,7 +282,7 @@ func newTaskCommitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				TaskID        string `json:"task_id"`
 				LeadSessionID string `json:"lead_session_id"`
@@ -312,7 +312,7 @@ func newTaskAbandonCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				TaskID string `json:"task_id"`
 				Status string `json:"status"`
@@ -344,7 +344,7 @@ func newTaskInjectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				Delivered bool `json:"delivered"`
 			}
@@ -374,7 +374,7 @@ func newTaskPlanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var plan backend.TaskPlan
 			if err := client.Get(cmd.Context(), "/v1/tasks/"+args[0]+"/plan", &plan); err != nil {
 				return err

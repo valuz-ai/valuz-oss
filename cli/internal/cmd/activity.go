@@ -33,7 +33,7 @@ func newActivityCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.RunListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err

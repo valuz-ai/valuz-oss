@@ -19,6 +19,7 @@ import (
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/version"
 )
 
 // Control-plane identity endpoints (mounted under the cloud prefix; the
@@ -143,7 +144,9 @@ type Client struct {
 
 // NewClient builds an identity client against cloudBaseURL.
 func NewClient(cloudBaseURL string) *Client {
-	return &Client{HTTP: backend.NewControlClient(cloudBaseURL, "")}
+	c := backend.NewControlClient(cloudBaseURL, "")
+	c.ExtraHeaders = version.Current(true).Headers()
+	return &Client{HTTP: c}
 }
 
 // Login exchanges email+password for a token pair.

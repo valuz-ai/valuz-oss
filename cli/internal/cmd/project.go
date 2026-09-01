@@ -45,7 +45,7 @@ func newProjectMembersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			pid := ""
 			if len(args) == 1 {
 				pid = args[0]
@@ -103,7 +103,7 @@ func newProjectDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			pid, err := idOrResolve(client, cmd.Context(), projectID, cwd)
 			if err != nil {
 				return err
@@ -149,7 +149,7 @@ func newProjectListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var list backend.ProjectList
 			if err := client.Get(cmd.Context(), "/v1/projects", &list); err != nil {
 				return err
@@ -182,7 +182,7 @@ func newProjectShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 
 			// Resolve id from cwd when no positional id is given (same
 			// normalization the run path uses, so `--cwd` and
@@ -234,7 +234,7 @@ func newProjectCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var created backend.Project
 			body := backend.Project{Name: args[0], RootPath: abs}
 			if err := client.Post(cmd.Context(), "/v1/projects", body, &created); err != nil {

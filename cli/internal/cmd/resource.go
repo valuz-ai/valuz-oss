@@ -22,7 +22,6 @@ func newResourceCmd() *cobra.Command {
 		newResourceAgentShowCmd(),
 		newResourceSkillsCmd(),
 		newResourceConnectorsCmd(),
-		newAgentUseCmd(),
 	)
 	return cmd
 }
@@ -45,7 +44,7 @@ func newResourceAgentsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.AgentListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
@@ -75,7 +74,7 @@ func newResourceAgentShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var a backend.Agent
 			if err := client.Get(cmd.Context(), "/v1/agents/"+args[0], &a); err != nil {
 				return err
@@ -114,7 +113,7 @@ func newResourceSkillsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.SkillListResponse
 			if err := client.Get(cmd.Context(), path, &resp); err != nil {
 				return err
@@ -147,7 +146,7 @@ func newResourceConnectorsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp backend.ConnectorListResponse
 			if err := client.Get(cmd.Context(), "/v1/connectors", &resp); err != nil {
 				return err

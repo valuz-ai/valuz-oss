@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/config"
 )
 
@@ -42,7 +41,7 @@ func newModelListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := backend.NewControlClient(opts.BackendURL, token)
+			client := newControlClient(opts, token)
 			var resp struct {
 				Providers []struct {
 					ID     string `json:"id"`
