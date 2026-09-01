@@ -11,7 +11,10 @@ vi.mock("../conversation/MarkdownContent", () => ({
 
 import { t } from "@valuz/shared/i18n";
 
-import { SkillDetailPanel, type SkillDetailPanelFile } from "./SkillDetailPanel";
+import {
+  SkillDetailPanel,
+  type SkillDetailPanelFile,
+} from "./SkillDetailPanel";
 
 const skill = (name: string) => ({
   name,
@@ -129,6 +132,49 @@ description: second description
     });
   });
 
+  it("keeps the preview when only the loader identity changes", async () => {
+    // Callers pass ``onLoadFile`` as an inline arrow, so it is a fresh closure
+    // on every parent render — and the app layout re-renders every page under
+    // it on a background poll. Refetching on that identity blanked the preview
+    // on a timer (a visible flash every few seconds). Assert the loader is
+    // called ONCE, not merely that the content ends up right: a blank-then-
+    // refetch cycle also ends up right.
+    const load = vi.fn().mockResolvedValue(`---
+name: stable-skill
+description: stable description
+---
+
+# Stable`);
+
+    const { rerender } = render(
+      <SkillDetailPanel
+        skill={skill("Stable")}
+        files={files}
+        onLoadFile={(path) => load(path)}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("markdown-content").textContent).toContain(
+        "stable-skill",
+      );
+    });
+
+    // Same skill, same file tree — only the closure is new.
+    rerender(
+      <SkillDetailPanel
+        skill={skill("Stable")}
+        files={files}
+        onLoadFile={(path) => load(path)}
+      />,
+    );
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("markdown-content").textContent).toContain(
+      "stable-skill",
+    );
+  });
+
   it("says the files are withheld, not missing, for a protected skill", () => {
     // "无文件" would read as a broken load and send people hunting for a bug.
     // There ARE files; the panel is declining to list them.
@@ -141,7 +187,9 @@ description: second description
 
     expect(screen.queryByText(t("skill.noFiles"))).toBeNull();
     expect(screen.queryByText(t("skill.selectFileToPreview"))).toBeNull();
-    expect(screen.getAllByText(t("skill.protectedBadge")).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(t("skill.protectedBadge")).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText(t("skill.protectedFilesHidden"))).toBeTruthy();
   });
 
