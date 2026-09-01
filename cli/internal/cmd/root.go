@@ -40,8 +40,6 @@ type RootOptions struct {
 	BackendURL string
 	// Debug enables the redacted error chain on stderr.
 	Debug bool
-	// Output is the machine-output protocol ("" = human).
-	Output string
 	// Token is the bearer credential for commercial backends
 	// (VALUZ_BACKEND_TOKEN env or --token-file; never a raw flag).
 	Token string
@@ -52,15 +50,6 @@ type RootOptions struct {
 // ResolveProfile loads the named profile via the product shell's store.
 func (o *RootOptions) ResolveProfile() (*config.Profile, error) {
 	return config.NewProfileStore("").Load(o.ProfileName)
-}
-
-// NewResolver builds a resolver bound to this invocation's profile.
-func (o *RootOptions) NewResolver() (*config.Resolver, error) {
-	p, err := o.ResolveProfile()
-	if err != nil {
-		return nil, err
-	}
-	return config.NewResolver(p), nil
 }
 
 // Root returns the configured root command. Tests and main() both call this
@@ -143,8 +132,10 @@ func resolveRootOptions(cmd *cobra.Command) (*RootOptions, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", flagDebug, err)
 	}
-	output, _ := cmd.Flags().GetString(flagOutput)
-	tokenFile, _ := cmd.Flags().GetString(flagTokenFile)
+	tokenFile, err := cmd.Flags().GetString(flagTokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", flagTokenFile, err)
+	}
 
 	token, err := resolveToken(tokenFile)
 	if err != nil {
@@ -155,10 +146,11 @@ func resolveRootOptions(cmd *cobra.Command) (*RootOptions, error) {
 		cloudURL = "http://127.0.0.1:8001/cloud"
 	}
 
-	resolver, err := (&RootOptions{ProfileName: profile}).NewResolver()
+	p, err := (&RootOptions{ProfileName: profile}).ResolveProfile()
 	if err != nil {
 		return nil, err
 	}
+	resolver := config.NewResolver(p)
 	resolvedURL, err := resolver.BackendURL(backendURL)
 	if err != nil {
 		return nil, err
@@ -167,7 +159,6 @@ func resolveRootOptions(cmd *cobra.Command) (*RootOptions, error) {
 		ProfileName: profile,
 		BackendURL:  resolvedURL,
 		Debug:       debug,
-		Output:      output,
 		Token:       token,
 		CloudURL:    cloudURL,
 	}, nil
@@ -222,8 +213,17 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	if err := root.Execute(); err != nil {
 		var ece *errs.ExitCodeError
 		if errors.As(err, &ece) {
-			fmt.Fprintln(stderr, ece.Message)
+			// ExitCodeError carries backend-derived text (run.failed
+			// messages, status strings); render it through the same
+			// redaction boundary as every other error so tokens and
+			// secrets never reach stderr (design §7).
+			fmt.Fprintln(stderr, errs.Redact(ece.Message))
 			return ece.Code
+		}
+		// cobra framework errors (flag parse, args validation, unknown
+		// command) are usage errors, not protocol/internal failures.
+		if errs.As(err) == nil {
+			err = errs.New(errs.KindUsage, "%s", err.Error())
 		}
 		debug := false
 		if o, rerr := Options(root); rerr == nil {
@@ -261,6 +261,3 @@ func newVersionCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")
 	return cmd
 }
-
-// silentExit wraps os.Exit so tests can exercise the exit boundary.
-var _ = os.Exit

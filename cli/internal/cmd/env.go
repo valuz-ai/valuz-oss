@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 
@@ -126,6 +127,11 @@ func newEnvUseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			url := profile.Default("BACKEND_URL_" + name)
+			if name == envCloud && url == "" {
+				return errs.New(errs.KindUsage,
+					"cloud has no backend URL pinned; run `valuz env set cloud --url <backend-base>` first")
+			}
 			if profile.Defaults == nil {
 				profile.Defaults = map[string]string{}
 			}
@@ -134,7 +140,7 @@ func newEnvUseCmd() *cobra.Command {
 			if err := store.Save(profile); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "switched to %s\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "switched to %s (%s)\n", name, url)
 			return nil
 		},
 	}
@@ -147,7 +153,7 @@ func newEnvSetCmd() *cobra.Command {
 		Short: "Pin a custom backend base URL for an environment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := rejectIfManaged("env use"); err != nil {
+			if err := rejectIfManaged("env set"); err != nil {
 				return err
 			}
 			name := args[0]
@@ -156,6 +162,9 @@ func newEnvSetCmd() *cobra.Command {
 			}
 			if url == "" {
 				return errs.New(errs.KindUsage, "--url is required")
+			}
+			if err := validateBackendURL(url); err != nil {
+				return err
 			}
 			opts, err := Options(cmd)
 			if err != nil {
@@ -179,4 +188,20 @@ func newEnvSetCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&url, "url", "", "backend base URL for this environment")
 	return cmd
+}
+
+// validateBackendURL rejects values that would poison every later run:
+// a base URL must be an absolute http(s) URL without a path.
+func validateBackendURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errs.Wrap(errs.KindUsage, err, "invalid --url %q", raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errs.New(errs.KindUsage, "--url must be an http(s) URL (got %q)", raw)
+	}
+	if u.Host == "" {
+		return errs.New(errs.KindUsage, "--url must include a host (got %q)", raw)
+	}
+	return nil
 }

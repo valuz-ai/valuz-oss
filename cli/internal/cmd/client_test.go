@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/auth"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/version"
 )
 
@@ -34,8 +36,20 @@ func TestClientIdentityHeaders(t *testing.T) {
 
 	// stream client (headers on the SSE request)
 	s := newStreamClient(opts, token)
-	_ = s // header injection is verified via the control path below
-	_ = h
+	_ = s.Stream(context.Background(), "/v1/sessions/x/events/stream", 0, func(context.Context, *backend.SSEFrame) error {
+		return nil
+	})
+	h = <-seen
+	assertHeaders(t, h, token)
+
+	// auth client (control-plane identity headers)
+	authc := auth.NewClient(srv.URL)
+	var out2 any
+	if err := authc.HTTP.Get(context.Background(), "/v1/auth/me", &out2); err != nil {
+		t.Fatalf("auth get: %v", err)
+	}
+	h = <-seen
+	assertHeaders(t, h, "")
 }
 
 func assertHeaders(t *testing.T, h http.Header, token string) {
@@ -50,8 +64,10 @@ func assertHeaders(t *testing.T, h http.Header, token string) {
 	if got := h.Get("X-Valuz-Client-Schemas"); !strings.Contains(got, "valuz.run-result/v1") {
 		t.Fatalf("schemas header = %q", got)
 	}
-	if got := h.Get("Authorization"); got != "Bearer "+token {
-		t.Fatalf("authorization header = %q", got)
+	if token != "" {
+		if got := h.Get("Authorization"); got != "Bearer "+token {
+			t.Fatalf("authorization header = %q", got)
+		}
 	}
 }
 

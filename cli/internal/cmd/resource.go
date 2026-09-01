@@ -32,31 +32,14 @@ func newResourceAgentsCmd() *cobra.Command {
 		Use:   "agents",
 		Short: "List agents (execution identities: skills/connectors/instructions)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkOutputFormat(output); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
 			}
-			path := "/v1/agents"
-			if source != "" {
-				path += "?source=" + source
-			}
-			token, err := resolveBearer(opts)
-			if err != nil {
-				return err
-			}
-			client := newControlClient(opts, token)
-			var resp backend.AgentListResponse
-			if err := client.Get(cmd.Context(), path, &resp); err != nil {
-				return err
-			}
-			if printJSONOutput(cmd.OutOrStdout(), output, resp.Agents) {
-				return nil
-			}
-			for _, a := range resp.Agents {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-28s  %-10s  %-14s  %-18s  %s\n",
-					a.Slug, a.Runtime, a.Model, truncate(a.Name, 18), truncate(a.Description, 40))
-			}
-			return nil
+			return runAgentList(cmd, opts, source, output)
 		},
 	}
 	cmd.Flags().StringVar(&source, "source", "", "official|custom")
@@ -74,27 +57,7 @@ func newResourceAgentShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token, err := resolveBearer(opts)
-			if err != nil {
-				return err
-			}
-			client := newControlClient(opts, token)
-			var a backend.Agent
-			if err := client.Get(cmd.Context(), "/v1/agents/"+args[0], &a); err != nil {
-				return err
-			}
-			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "slug:       %s\n", a.Slug)
-			fmt.Fprintf(w, "name:       %s\n", a.Name)
-			fmt.Fprintf(w, "runtime:    %s\n", a.Runtime)
-			fmt.Fprintf(w, "model:      %s\n", a.Model)
-			fmt.Fprintf(w, "permission: %s\n", a.PermissionMode)
-			fmt.Fprintf(w, "skills:     %v\n", a.Skills)
-			fmt.Fprintf(w, "connectors: %v\n", a.ConnectorTypes)
-			if a.Description != "" {
-				fmt.Fprintf(w, "desc:       %s\n", truncate(a.Description, 120))
-			}
-			return nil
+			return runAgentShow(cmd, opts, args[0])
 		},
 	}
 }

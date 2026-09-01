@@ -39,6 +39,10 @@ type StreamClient struct {
 // ErrIdleTimeout signals that a connection went silent past IdleDeadline.
 var ErrIdleTimeout = errors.New("SSE stream idle timeout (no heartbeat)")
 
+// maxFrameBytes caps one SSE data frame (kept in sync with the backend's
+// event size ceiling; a larger frame is a contract violation).
+const maxFrameBytes = 4 << 20
+
 // NewStreamClient builds an SSE client with Timeout=0.
 func NewStreamClient(baseURL, token string) *StreamClient {
 	return &StreamClient{
@@ -142,7 +146,7 @@ func (s *StreamClient) streamOnce(ctx context.Context, path string, afterSeq int
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return errs.New(errorKindForStatus(resp.StatusCode), "SSE stream → HTTP %d", resp.StatusCode)
+		return errs.New(errorKindForStatus(resp.StatusCode), "SSE stream -> HTTP %d", resp.StatusCode)
 	}
 
 	return s.consume(ctx, resp.Body, handler, cursor)
@@ -156,7 +160,7 @@ func (s *StreamClient) streamOnce(ctx context.Context, path string, afterSeq int
 // frames with EventType == nil.
 func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler FrameHandler, cursor *int64) error {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20) // 4 MiB max frame
+	scanner.Buffer(make([]byte, 0, 64<<10), maxFrameBytes) // max frame
 
 	// The scanner blocks on Read; run it in a goroutine and select on
 	// lines vs. the idle deadline so a silent connection is detectable.
@@ -230,7 +234,7 @@ func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler Fram
 					}
 					if errors.Is(err, bufio.ErrTooLong) {
 						// Contract violation, not a transient fault.
-						return errs.New(errs.KindUsage, "SSE frame exceeds the %d MiB limit", 4)
+						return errs.New(errs.KindUsage, "SSE frame exceeds the %d MiB limit", maxFrameBytes>>20)
 					}
 					return errs.Wrap(errs.KindInternal, err, "read SSE stream")
 				}
@@ -248,8 +252,8 @@ func (s *StreamClient) consume(ctx context.Context, body io.Reader, handler Fram
 			case strings.HasPrefix(line, "data:"):
 				data := strings.TrimPrefix(line, "data:")
 				data = strings.TrimPrefix(data, " ")
-				if dataBuf.Len()+len(data) > 4<<20 {
-					return errs.New(errs.KindUsage, "SSE frame exceeds the 4 MiB limit")
+				if dataBuf.Len()+len(data) > maxFrameBytes {
+					return errs.New(errs.KindUsage, "SSE frame exceeds the %d MiB limit", maxFrameBytes>>20)
 				}
 				if dataBuf.Len() > 0 {
 					dataBuf.WriteString("\n")

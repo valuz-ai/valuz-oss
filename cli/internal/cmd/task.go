@@ -62,6 +62,8 @@ func newTaskWaitCmd() *cobra.Command {
 			}
 
 			poll := 500 * time.Millisecond
+			started := time.Now()
+			nextBeat := started.Add(10 * time.Second)
 			for {
 				var detail backend.TaskDetail
 				if err := client.Get(ctx, "/v1/tasks/"+args[0], &detail); err != nil {
@@ -71,6 +73,13 @@ func newTaskWaitCmd() *cobra.Command {
 				if st == "completed" || st == "abandoned" {
 					fmt.Fprintf(cmd.OutOrStdout(), "task %s -> %s\n", detail.Task.ID, st)
 					return nil
+				}
+				// Periodic heartbeat so a long wait reads as "waiting",
+				// not "hung" (squad receive --wait gives the same signal).
+				if now := time.Now(); now.After(nextBeat) {
+					fmt.Fprintf(cmd.OutOrStdout(), "task %s still %s (elapsed %s)\n",
+						args[0], st, now.Sub(started).Round(time.Second))
+					nextBeat = now.Add(10 * time.Second)
 				}
 				select {
 				case <-ctx.Done():
@@ -90,6 +99,8 @@ func newTaskKickoffCmd() *cobra.Command {
 		projectID string
 		cwd       string
 		title     string
+		goal      string
+		lead      string
 		worktree  bool
 	)
 	cmd := &cobra.Command{
@@ -101,8 +112,6 @@ func newTaskKickoffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			goal, _ := cmd.Flags().GetString("goal")
-			lead, _ := cmd.Flags().GetString("lead")
 			if goal == "" || lead == "" {
 				return errs.New(errs.KindUsage, "--goal and --lead are required")
 			}
@@ -147,6 +156,9 @@ func newTaskListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List tasks",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkOutputFormat(output); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
@@ -181,6 +193,9 @@ func newTaskShowCmd() *cobra.Command {
 		Short: "Show a task with its runs and events",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutputFormat(output); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
@@ -261,6 +276,7 @@ func streamTaskEvents(cmd *cobra.Command, opts *RootOptions, taskID string) erro
 	client := newControlClient(opts, token)
 	streamClient := newStreamClient(opts, token)
 	streamClient.ReconnectMaxAttempts = 0
+	streamClient.IdleDeadline = 30 * time.Second
 
 	var afterSeq int64
 	for {

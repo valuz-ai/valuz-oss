@@ -127,14 +127,15 @@ func (m *Machine) NoteIdle(stopReason string) {
 	m.signalDoneLocked()
 }
 
-// NoteUsage accumulates the four-bucket usage for the target turn.
+// NoteUsage accumulates the four-bucket usage for the target turn (usage
+// events may arrive per model call; each is an increment, not a snapshot).
 func (m *Machine) NoteUsage(input, output, cacheRead, cacheWrite int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Usage.InputTokens = input
-	m.Usage.OutputTokens = output
-	m.Usage.CacheReadTokens = cacheRead
-	m.Usage.CacheWriteTokens = cacheWrite
+	m.Usage.InputTokens += input
+	m.Usage.OutputTokens += output
+	m.Usage.CacheReadTokens += cacheRead
+	m.Usage.CacheWriteTokens += cacheWrite
 }
 
 // RequiresAction parks the run on an approval (headless cannot answer).

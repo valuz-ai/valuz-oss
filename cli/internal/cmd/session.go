@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -87,7 +88,6 @@ func newSessionCreateCmd() *cobra.Command {
 		runtimeID      string
 		permissionMode string
 		title          string
-		quick          bool
 		mcpSlugs       []string
 		skillIDs       []string
 	)
@@ -95,6 +95,9 @@ func newSessionCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a session (quick chat by default, or bound to a project)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if projectID != "" && cwd != "" {
+				return errs.New(errs.KindUsage, "--project and --cwd are mutually exclusive")
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
@@ -104,7 +107,6 @@ func newSessionCreateCmd() *cobra.Command {
 				return err
 			}
 			client := newControlClient(opts, token)
-			_ = quick // --quick is the default fallback; kept for explicitness
 
 			pid, err := idOrQuick(client, cmd.Context(), projectID, cwd)
 			if err != nil {
@@ -130,7 +132,6 @@ func newSessionCreateCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&projectID, "project", "", "project id (default: quick chat)")
 	f.StringVar(&cwd, "cwd", "", "resolve project from a local directory")
-	f.BoolVar(&quick, "quick", false, "quick chat (default when no project given)")
 	f.StringVar(&agentSlug, "agent", "", "agent slug to bind")
 	f.StringVar(&modelID, "model", "", "model id")
 	f.StringVar(&providerID, "provider", "", "provider id")
@@ -148,6 +149,9 @@ func newSessionListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List sessions (optionally filtered by project)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkOutputFormat(output); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
@@ -267,6 +271,7 @@ func newSessionEventsCmd() *cobra.Command {
 			client := newControlClient(opts, token)
 			streamClient := newStreamClient(opts, token)
 			streamClient.ReconnectMaxAttempts = 0
+			streamClient.IdleDeadline = 30 * time.Second
 
 			if stream {
 				return streamClient.Stream(cmd.Context(), "/v1/sessions/"+sessionID+"/events/stream", 0, func(ctx context.Context, f *backend.SSEFrame) error {
@@ -286,18 +291,7 @@ func newSessionEventsCmd() *cobra.Command {
 				})
 			}
 
-			var history struct {
-				SessionID string `json:"session_id"`
-				Items     []struct {
-					Seq   int64 `json:"seq"`
-					Event struct {
-						EventType string            `json:"event_type"`
-						Payload   map[string]string `json:"payload"`
-					} `json:"event"`
-					Timestamp *int64  `json:"timestamp"`
-					EventUID  *string `json:"event_uid"`
-				} `json:"items"`
-			}
+			var history backend.SessionHistory
 			if err := client.Get(cmd.Context(), "/v1/sessions/"+sessionID+"/events", &history); err != nil {
 				return err
 			}

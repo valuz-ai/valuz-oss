@@ -89,3 +89,18 @@ func TestRendererDebugAndHuman(t *testing.T) {
 		t.Fatalf("debug render leaked token: %q", debug)
 	}
 }
+
+// TestExitCodeErrorRedact pins the root-boundary contract: ExitCodeError
+// messages (which carry backend-derived text like run.failed messages)
+// must be redactable so a token in a status string never reaches stderr.
+func TestExitCodeErrorRedact(t *testing.T) {
+	msg := "run failed: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc"
+	ece := &ExitCodeError{Code: 5, Message: msg}
+	rendered := Redact(ece.Message)
+	if strings.Contains(rendered, "eyJ") || strings.Contains(rendered, "Bearer eyJ") {
+		t.Fatalf("ExitCodeError message leaked a token: %q", rendered)
+	}
+	if !strings.Contains(rendered, "[REDACTED]") {
+		t.Fatalf("ExitCodeError message not redacted: %q", rendered)
+	}
+}

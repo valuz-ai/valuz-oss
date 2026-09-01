@@ -119,7 +119,7 @@ func (c *ControlClient) classifyError(resp *http.Response, method, path string) 
 	var ve ValuzError
 	if json.Unmarshal(raw, &ve) == nil && ve.Error.Message != "" {
 		return errs.Wrap(errorKindForStatus(resp.StatusCode), nil,
-			"backend %s %s: %s", method, path, errs.Redact(ve.Error.Message))
+			"backend %s %s -> HTTP %d: %s", method, path, resp.StatusCode, errs.Redact(ve.Error.Message))
 	}
 	var de DetailError
 	if json.Unmarshal(raw, &de) == nil {
@@ -127,7 +127,7 @@ func (c *ControlClient) classifyError(resp *http.Response, method, path string) 
 		case string:
 			if d != "" {
 				return errs.Wrap(errorKindForStatus(resp.StatusCode), nil,
-					"backend %s %s: %s", method, path, errs.Redact(d))
+					"backend %s %s -> HTTP %d: %s", method, path, resp.StatusCode, errs.Redact(d))
 			}
 		case []any:
 			// FastAPI 422: {"detail": [{"loc": ..., "msg": ..., "type": ...}]}
@@ -141,21 +141,27 @@ func (c *ControlClient) classifyError(resp *http.Response, method, path string) 
 			}
 			if len(msgs) > 0 {
 				return errs.Wrap(errorKindForStatus(resp.StatusCode), nil,
-					"backend %s %s: %s", method, path, errs.Redact(strings.Join(msgs, "; ")))
+					"backend %s %s -> HTTP %d: %s", method, path, resp.StatusCode, errs.Redact(strings.Join(msgs, "; ")))
 			}
 		}
 	}
 	if body == "" {
-		return errs.New(errorKindForStatus(resp.StatusCode), "%s %s → HTTP %d", method, path, resp.StatusCode)
+		return errs.New(errorKindForStatus(resp.StatusCode), "%s %s -> HTTP %d", method, path, resp.StatusCode)
 	}
-	return errs.New(errorKindForStatus(resp.StatusCode), "%s %s → HTTP %d: %s", method, path, resp.StatusCode, errs.Redact(body))
+	return errs.New(errorKindForStatus(resp.StatusCode), "%s %s -> HTTP %d: %s", method, path, resp.StatusCode, errs.Redact(body))
 }
 
 func errorKindForStatus(status int) errs.Kind {
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return errs.KindAuth
+	case status == http.StatusNotFound:
+		// The endpoint/resource does not exist server-side — an internal
+		// mismatch (client and server versions), not a caller usage error.
+		return errs.KindInternal
 	case status >= 400 && status < 500:
+		// 409/422/400: the caller's request/params are rejected by the
+		// server contract — usage.
 		return errs.KindUsage
 	default:
 		return errs.KindInternal

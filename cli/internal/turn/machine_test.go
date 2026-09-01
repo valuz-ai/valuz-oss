@@ -149,3 +149,21 @@ func TestHeartbeatIgnored(t *testing.T) {
 		t.Fatalf("status = %+v", s)
 	}
 }
+
+// TestNoteUsageAccumulates pins the accumulate semantics: usage events
+// arrive per model call (one turn's tokens each, backend contract) and
+// must sum, not overwrite — the run.failed recovery and multi-call runs
+// both depend on it.
+func TestNoteUsageAccumulates(t *testing.T) {
+	m := NewMachine()
+	m.NoteUsage(100, 10, 20, 30)
+	m.NoteUsage(50, 5, 6, 7)
+	m.NoteUsage(0, 0, 0, 0)
+	s := m.Snapshot()
+	if s.Usage.InputTokens != 150 || s.Usage.OutputTokens != 15 {
+		t.Fatalf("usage not accumulated: %+v", s.Usage)
+	}
+	if s.Usage.CacheReadTokens != 26 || s.Usage.CacheWriteTokens != 37 {
+		t.Fatalf("cache buckets not accumulated: %+v", s.Usage)
+	}
+}

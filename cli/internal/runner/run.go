@@ -141,6 +141,17 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	sessionRuntime := session.Runtime
+	if sessionRuntime == "" {
+		sessionRuntime = o.RuntimeID
+	}
+	sessionModel := ""
+	if session.ModelID != nil {
+		sessionModel = *session.ModelID
+	}
+	if sessionModel == "" {
+		sessionModel = o.ModelID
+	}
 
 	// 4. pre-subscribe SSE (before POST so no live delta is lost)
 	streamCtx, streamCancel := context.WithCancel(runCtx)
@@ -192,33 +203,51 @@ func (r *Runner) Run(ctx context.Context, o Options) (*Result, error) {
 	// 6. wait for terminal: machine done (target idle / action required),
 	// stream failure, or run context end.
 	var streamErr error
+	// drained reports whether the stream goroutine has exited (its error
+	// was read); when false the final drain below still waits for it.
+	drained := false
+	drain := func() {
+		select {
+		case streamErr = <-eventErr:
+			drained = true
+		case <-time.After(streamDrainGrace):
+		}
+	}
 	select {
 	case <-machine.Done():
 		streamCancel()
 		// Drain the stream goroutine so its writes finish before we read
 		// machine state (bounded by the drain grace).
-		select {
-		case streamErr = <-eventErr:
-		case <-time.After(streamDrainGrace):
-		}
+		drain()
 	case streamErr = <-eventErr:
+		drained = true
 		// Stream ended (or failed) before the machine finished — if the
 		// run is actually terminal we proceed; otherwise reconcile.
 	case <-runCtx.Done():
 		streamCancel()
-		select {
-		case streamErr = <-eventErr:
-		case <-time.After(streamDrainGrace):
-		}
+		drain()
 	}
 
 	// 7. classify the outcome (design §5.4 priority order).
-	return r.classify(runCtx, machine, session.ID, projectID, o, started, streamErr, streamCancel)
+	res, runErr := r.classify(runCtx, machine, session.ID, projectID, o, started, sessionRuntime, sessionModel, streamErr, streamCancel)
+
+	// 8. final drain: the stream goroutine may have outlived the drain
+	// grace above (a handler write stuck behind a slow sink). Cancel the
+	// stream and wait for the goroutine to exit before returning, so the
+	// caller's sink.Close() can never race an in-flight Event write.
+	streamCancel()
+	if !drained {
+		select {
+		case <-eventErr:
+		case <-time.After(streamDrainGrace):
+		}
+	}
+	return res, runErr
 }
 
 // classify derives the terminal status and assembles the Result, emitting
 // the run.end document on the sink in every started-run path.
-func (r *Runner) classify(runCtx context.Context, m *turn.Machine, sessionID, projectID string, o Options, started time.Time, streamErr error, streamCancel context.CancelFunc) (*Result, error) {
+func (r *Runner) classify(runCtx context.Context, m *turn.Machine, sessionID, projectID string, o Options, started time.Time, sessionRuntime, sessionModel string, streamErr error, streamCancel context.CancelFunc) (*Result, error) {
 	snap := m.Snapshot()
 	finished := time.Now()
 	res := &Result{
@@ -227,17 +256,29 @@ func (r *Runner) classify(runCtx context.Context, m *turn.Machine, sessionID, pr
 		ProjectID: projectID,
 		MessageID: snap.MessageID,
 		AgentSlug: o.AgentSlug,
-		Runtime:   "",
-		Model:     o.ModelID,
+		Runtime:   sessionRuntime,
+		Model:     sessionModel,
 		Usage:     snap.Usage,
 		FinalText: snap.FinalText,
-		NumTurns:  1, // one run, one new session, one turn (Slice 2 scope)
+		NumTurns:  1, // one run = one new session = one turn (Slice 2 scope; multi-turn sessions are out of contract)
 		Signal:    o.Signal,
 		StartedAt: started,
 		Finished:  finished,
 	}
 
 	switch {
+	case runCtx.Err() == context.DeadlineExceeded:
+		// design §5.4 priority 1: the local wall-clock limit outranks a
+		// turn that finished at (or just before) the deadline.
+		r.interruptBestEffort(runCtx, sessionID)
+		res.Status = output.StatusTimeout
+	case runCtx.Err() == context.Canceled:
+		// Context cancelled by a signal (or parent ctx): classify as
+		// interrupted. The concrete signal name is filled in by the
+		// command layer from its signal channel (runner can't observe
+		// which signal fired).
+		r.interruptBestEffort(runCtx, sessionID)
+		res.Status = output.StatusInterrupted
 	case snap.Finished() && snap.Status == turn.StatusActionRequired:
 		// Headless cannot answer an approval: interrupt best-effort and
 		// report action_required (design §4.2 rule 6 fail-fast).
@@ -251,16 +292,15 @@ func (r *Runner) classify(runCtx context.Context, m *turn.Machine, sessionID, pr
 		} else {
 			res.Status = output.StatusCompleted
 		}
-	case runCtx.Err() == context.Canceled:
-		// Context cancelled by a signal (or parent ctx): classify as
-		// interrupted. The concrete signal name is filled in by the
-		// command layer from its signal channel (runner can't observe
-		// which signal fired).
-		r.interruptBestEffort(runCtx, sessionID)
-		res.Status = output.StatusInterrupted
-	case runCtx.Err() == context.DeadlineExceeded:
-		r.interruptBestEffort(runCtx, sessionID)
-		res.Status = output.StatusTimeout
+	case streamErr != nil && errs.KindOf(streamErr) == errs.KindAuth:
+		// SSE returned 401/403: the credential is rejected. Never
+		// reconcile over an auth failure — the durable history is also
+		// behind the same gate. Exit 6 + no reconnect (design.md §7).
+		streamCancel()
+		res.Status = output.StatusAuthError
+		res.Error = streamErr.Error()
+		r.emitEnd(o.EventSink, res)
+		return nil, streamErr
 	case streamErr != nil:
 		// Reconnect exhausted (or stream failed): reconcile against
 		// durable history before giving up (design.md §5.3 step 8).
@@ -441,6 +481,7 @@ func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.S
 			EventUID:      strOrNil(f.EventUID),
 			Source:        output.SourceLive,
 			SourceSeq:     int64OrNil(f.Seq),
+			Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 			Type:          evType,
 			Data:          data,
 		}
@@ -453,6 +494,13 @@ func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.S
 	}
 
 	switch et {
+	case event.EventUser:
+		// Anchor the turn and surface the user message to the stream
+		// consumer (evaluation needs the prompt echo).
+		u := r.Mapper.DecodeUser(f.Payload)
+		if err := emit(et, map[string]any{"text": u.Text}); err != nil {
+			return err
+		}
 	case event.EventAssistantDelta, event.EventAssistantText:
 		d := r.Mapper.DecodeDelta(f.Payload)
 		m.AppendText(d.Text)
@@ -462,6 +510,19 @@ func (r *Runner) handleFrame(m *turn.Machine, seen map[string]bool, f *backend.S
 			fmt.Fprint(r.Stdout, output.NormalizeNewlines(errs.Redact(d.Text)))
 		}
 		if err := emit(et, map[string]any{"text": d.Text}); err != nil {
+			return err
+		}
+	case event.EventThinking:
+		// Thinking deltas carry no run-state mutation; forward to the
+		// stream consumer so trajectory consumers see the reasoning.
+		if err := emit(et, map[string]any{"text": f.Payload["text"], "signature": f.Payload["signature"]}); err != nil {
+			return err
+		}
+	case event.EventToolStarted, event.EventToolCompleted:
+		t := r.Mapper.DecodeTool(f.Payload)
+		if err := emit(et, map[string]any{
+			"id": t.ID, "name": t.Name, "input": t.Input, "content": t.Content, "is_error": t.IsError,
+		}); err != nil {
 			return err
 		}
 	case event.EventRunFailed:
@@ -513,18 +574,7 @@ func (r *Runner) interruptBestEffort(ctx context.Context, sessionID string) {
 func (r *Runner) reconcile(ctx context.Context, m *turn.Machine, sessionID, projectID string, o Options) bool {
 	// The REST history shape differs from the flat SSE frame; decode
 	// into envelopes.
-	var history struct {
-		SessionID string `json:"session_id"`
-		Items     []struct {
-			Seq   int64 `json:"seq"`
-			Event struct {
-				EventType string            `json:"event_type"`
-				Payload   map[string]string `json:"payload"`
-			} `json:"event"`
-			Timestamp *int64  `json:"timestamp"`
-			EventUID  *string `json:"event_uid"`
-		} `json:"items"`
-	}
+	var history backend.SessionHistory
 	rc, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := r.Control.Get(rc, "/v1/sessions/"+sessionID+"/events", &history); err != nil {

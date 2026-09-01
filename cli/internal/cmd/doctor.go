@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/runtime"
 )
 
@@ -21,21 +20,25 @@ func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose the local environment",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts, err := Options(cmd)
+			if err != nil {
+				return err
+			}
 			paths, err := runtime.Discover()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("repo root : %s\n", paths.RepoRoot)
-			fmt.Printf("mode      : %s\n\n", paths.Mode)
+			fmt.Fprintf(cmd.OutOrStdout(), "repo root : %s\n", paths.RepoRoot)
+			fmt.Fprintf(cmd.OutOrStdout(), "mode      : %s\n\n", paths.Mode)
 
-			fmt.Println("required tools:")
+			fmt.Fprintln(cmd.OutOrStdout(), "required tools:")
 			for _, tool := range []string{"uv", "pnpm", "node", "go"} {
 				ok, info := probe(tool)
-				printCheck(ok, fmt.Sprintf("%-6s %s", tool, info))
+				printCheck(cmd, ok, fmt.Sprintf("%-6s %s", tool, info))
 			}
 
-			fmt.Println("\nkey paths:")
+			fmt.Fprintln(cmd.OutOrStdout(), "\nkey paths:")
 			for _, p := range []struct {
 				label string
 				path  string
@@ -46,52 +49,52 @@ func newDoctorCmd() *cobra.Command {
 				{"frontend  ", paths.FrontendDir},
 			} {
 				_, err := os.Stat(p.path)
-				printCheck(err == nil, fmt.Sprintf("%s %s", p.label, p.path))
+				printCheck(cmd, err == nil, fmt.Sprintf("%s %s", p.label, p.path))
 			}
 
-			fmt.Println()
-			printAutostartStatus()
+			fmt.Fprintln(cmd.OutOrStdout())
+			printAutostartStatus(cmd)
 
-			fmt.Println()
-			printWriterLockStatus()
+			fmt.Fprintln(cmd.OutOrStdout())
+			printWriterLockStatus(cmd)
 
-			fmt.Println()
-			printBackendProbe()
+			fmt.Fprintln(cmd.OutOrStdout())
+			printBackendProbe(cmd, opts)
 
 			return nil
 		},
 	}
 }
 
-func printAutostartStatus() {
+func printAutostartStatus(cmd *cobra.Command) {
 	if goruntime.GOOS != "darwin" {
-		fmt.Println("launchd plist: skipped (non-macOS)")
+		fmt.Fprintln(cmd.OutOrStdout(), "launchd plist: skipped (non-macOS)")
 		return
 	}
 	plist, err := launchdPlistPath()
 	if err != nil {
-		fmt.Printf("launchd plist: error: %v\n", err)
+		fmt.Fprintf(cmd.OutOrStdout(), "launchd plist: error: %v\n", err)
 		return
 	}
 	if _, err := os.Stat(plist); err == nil {
-		fmt.Printf("launchd plist: installed at %s\n", plist)
+		fmt.Fprintf(cmd.OutOrStdout(), "launchd plist: installed at %s\n", plist)
 	} else {
-		fmt.Println("launchd plist: NOT installed")
+		fmt.Fprintln(cmd.OutOrStdout(), "launchd plist: NOT installed")
 	}
 }
 
 // printWriterLockStatus surfaces ~/.valuz-oss/.single-writer.lock so the
 // user can see which backend process currently holds the single-writer lock.
-func printWriterLockStatus() {
+func printWriterLockStatus(cmd *cobra.Command) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Printf("writer lock file: error: %v\n", err)
+		fmt.Fprintf(cmd.OutOrStdout(), "writer lock file: error: %v\n", err)
 		return
 	}
 	lockPath := filepath.Join(home, ".valuz-oss", ".single-writer.lock")
 	info, err := os.Stat(lockPath)
 	if err != nil {
-		fmt.Println("writer lock file: not present (no recent backend)")
+		fmt.Fprintln(cmd.OutOrStdout(), "writer lock file: not present (no recent backend)")
 		return
 	}
 	pid := "?"
@@ -101,17 +104,18 @@ func printWriterLockStatus() {
 			pid = "?"
 		}
 	}
-	fmt.Printf("writer lock file: %s (size=%d, last PID = %s)\n", lockPath, info.Size(), pid)
+	fmt.Fprintf(cmd.OutOrStdout(), "writer lock file: %s (size=%d, last PID = %s)\n", lockPath, info.Size(), pid)
 }
 
-func printBackendProbe() {
-	base := backend.BaseURL()
-	url := base + "/v1/system/status"
-	fmt.Printf("backend probe: %s …\n", url)
+// printBackendProbe probes the resolved backend URL (the same resolution
+// every other command uses — --backend-url / env / profile / discovery).
+func printBackendProbe(cmd *cobra.Command, opts *RootOptions) {
+	url := opts.BackendURL + "/v1/system/status"
+	fmt.Fprintf(cmd.OutOrStdout(), "backend probe: %s …\n", url)
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		fmt.Printf("  → unreachable (%s)\n", classifyHTTPErr(err))
+		fmt.Fprintf(cmd.OutOrStdout(), "  → unreachable (%s)\n", classifyHTTPErr(err))
 		return
 	}
 	defer resp.Body.Close()
@@ -119,7 +123,7 @@ func printBackendProbe() {
 	if resp.StatusCode >= 400 {
 		tag = "FAIL"
 	}
-	fmt.Printf("  → HTTP %d (%s)\n", resp.StatusCode, tag)
+	fmt.Fprintf(cmd.OutOrStdout(), "  → HTTP %d (%s)\n", resp.StatusCode, tag)
 }
 
 func classifyHTTPErr(err error) string {
@@ -149,10 +153,10 @@ func probe(tool string) (bool, string) {
 	return true, first
 }
 
-func printCheck(ok bool, body string) {
+func printCheck(cmd *cobra.Command, ok bool, body string) {
 	tag := "[ok ]"
 	if !ok {
 		tag = "[MISS]"
 	}
-	fmt.Printf("  %s %s\n", tag, body)
+	fmt.Fprintf(cmd.OutOrStdout(), "  %s %s\n", tag, body)
 }

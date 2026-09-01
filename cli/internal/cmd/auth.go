@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/auth"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
@@ -67,7 +68,7 @@ func newAuthLoginCmd() *cobra.Command {
 			if email == "" {
 				return errs.New(errs.KindUsage, "--email or --api-key is required")
 			}
-			password, err := readPassword(cmd)
+			password, err := readPassword(cmd, passwordStdin)
 			if err != nil {
 				return err
 			}
@@ -97,7 +98,6 @@ func newAuthLoginCmd() *cobra.Command {
 	f.StringVar(&clientID, "client-id", "", "oauth client id (default: VALUZ_OAUTH_CLIENT_ID)")
 	f.StringVar(&resource, "resource", "", "RFC 8707 resource (distribution tenant hint)")
 	f.BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin (no prompt)")
-	_ = passwordStdin
 	return cmd
 }
 
@@ -120,7 +120,9 @@ func newAuthStatusCmd() *cobra.Command {
 				return nil
 			}
 			if pair.Expired() {
-				fmt.Fprintln(cmd.OutOrStdout(), "logged in (access token expired; will refresh on next command)")
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"logged in (access token expired; the next command refreshes it against the control plane %s)\n",
+					opts.CloudURL)
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "logged in")
 			}
@@ -128,7 +130,6 @@ func newAuthStatusCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "distribution: %s\n", pair.Principal.Distribution)
 			fmt.Fprintf(cmd.OutOrStdout(), "org:          %s\n", pair.Principal.OrgName)
 			fmt.Fprintf(cmd.OutOrStdout(), "role:         %s\n", pair.Principal.Role)
-			_ = opts
 			return nil
 		},
 	}
@@ -164,15 +165,36 @@ func newAuthLogoutCmd() *cobra.Command {
 	}
 }
 
-// readPassword reads the password from stdin (never echoes, never stores).
-func readPassword(cmd *cobra.Command) (string, error) {
-	data, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), 4096))
+// readPassword reads the password: with --password-stdin from the piped
+// stdin (never echoes, never stores); otherwise — when stdin is a TTY —
+// with a masked prompt via the terminal API. Piping on a TTY without
+// --password-stdin (io.ReadAll would block until EOF) is rejected.
+func readPassword(cmd *cobra.Command, passwordStdin bool) (string, error) {
+	if passwordStdin {
+		data, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), 4096))
+		if err != nil {
+			return "", errs.Wrap(errs.KindUsage, err, "read password from stdin")
+		}
+		pw := strings.TrimRight(string(data), "\r\n")
+		if pw == "" {
+			return "", errs.New(errs.KindUsage, "empty password (pipe it via --password-stdin)")
+		}
+		return pw, nil
+	}
+	in, ok := cmd.InOrStdin().(*os.File)
+	if !ok || !term.IsTerminal(int(in.Fd())) {
+		return "", errs.New(errs.KindUsage,
+			"password input requires a terminal; pipe it with --password-stdin")
+	}
+	fmt.Fprint(cmd.OutOrStdout(), "Password: ")
+	raw, err := term.ReadPassword(int(in.Fd()))
+	fmt.Fprintln(cmd.OutOrStdout())
 	if err != nil {
 		return "", errs.Wrap(errs.KindUsage, err, "read password")
 	}
-	pw := strings.TrimRight(string(data), "\r\n")
+	pw := string(raw)
 	if pw == "" {
-		return "", errs.New(errs.KindUsage, "empty password (pipe it via --password-stdin or stdin)")
+		return "", errs.New(errs.KindUsage, "empty password")
 	}
 	return pw, nil
 }

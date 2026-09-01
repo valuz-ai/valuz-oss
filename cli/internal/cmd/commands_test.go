@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -205,5 +203,27 @@ func TestResolveBearerConcurrentRefresh(t *testing.T) {
 	}
 }
 
-var _ = context.Background
-var _ = fmt.Sprintf
+// TestExecuteUsageExitCode pins the cobra-framework error mapping: flag
+// parse errors, args validation and unknown commands are usage errors
+// (exit 1), never the internal/protocol code (5).
+func TestExecuteUsageExitCode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, tc := range []struct {
+		args []string
+		want int
+	}{
+		{[]string{"frobnicate"}, 1},
+		{[]string{"run", "--timeout", "bogus"}, 1},
+		{[]string{"session", "show"}, 1},
+		{[]string{"env", "use"}, 1},
+	} {
+		var out, errBuf bytes.Buffer
+		code := Execute(tc.args, &out, &errBuf)
+		if code != tc.want {
+			t.Fatalf("Execute(%v) = %d, want %d (stderr: %s)", tc.args, code, tc.want, errBuf.String())
+		}
+		if errBuf.Len() == 0 {
+			t.Fatalf("Execute(%v): expected an error message on stderr", tc.args)
+		}
+	}
+}
