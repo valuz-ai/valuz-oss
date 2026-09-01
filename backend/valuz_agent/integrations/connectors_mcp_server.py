@@ -92,6 +92,26 @@ always use this tool. Do not attempt any other approach.
 - url: required for http/sse. command: required for stdio.
 - transport: "http" | "sse" | "stdio" — inferred if omitted.
 
+### stdio connectors
+
+The user usually pastes a config block. Map it field by field — do NOT
+flatten anything into a string:
+
+- command: the executable alone ("npx", "uvx", "python"). Never the whole
+  command line.
+- args: an ARRAY of strings, one element per argument. Pass
+  ["-y", "some-mcp@latest"], not "-y some-mcp@latest".
+- env: an OBJECT of string values. Pass {"API_KEY": "abc"}, not a string.
+- working_dir: optional absolute path to run the command in.
+
+So this config:
+
+    {"command": "npx", "args": ["-y", "foo-mcp@latest"],
+     "env": {"FOO_URL": "https://x", "FOO_TOKEN": "t"}}
+
+becomes exactly those four values — display_name (ask the user), command,
+args, env — with transport "stdio".
+
 ## Credential parameters (both modes)
 
 - bearer_token: the API key / bearer token. THE common case — use this
@@ -221,9 +241,16 @@ async def create_mcp(
     params: str | None = None,  # JSON: {name:value} OR [{key,secret,value}]
     oauth_authorization_endpoint: str | None = None,
     oauth_token_endpoint: str | None = None,
-    args: str | None = None,  # JSON string → list[str]
+    # Native array/object, NOT a JSON string. These used to be ``str``
+    # carrying JSON, which made the caller hand-escape JSON inside a JSON
+    # tool call — the one thing models reliably get wrong. A stdio install
+    # with five env vars produced ``"args": "-y pkg"`` (space-joined, which
+    # ``json.loads`` rejects) and a truncated ``"env":`` that never parsed as
+    # a tool call at all. Declaring the real shape removes the nesting.
+    # ``_invoke`` still accepts the old JSON-string form.
+    args: list[str] | None = None,
     working_dir: str | None = None,
-    env: str | None = None,  # JSON string → dict
+    env: dict[str, str] | None = None,
 ) -> str:
     """Create a connector and return a JSON result."""
     try:
@@ -251,6 +278,28 @@ async def create_mcp(
         return json.dumps({"ok": False, "error": str(exc)})
 
 
+def _as_args(raw: list[str] | str | None) -> list[str] | None:
+    """``args`` as the tool now declares it — a real array.
+
+    A JSON string is still accepted so anything reaching ``_invoke``
+    directly (or an older caller) keeps working; dropping it silently would
+    be worse than parsing it.
+    """
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str):
+        return [str(v) for v in json.loads(raw)]
+    return [str(v) for v in raw]
+
+
+def _as_env(raw: dict[str, str] | str | None) -> dict[str, str] | None:
+    """``env`` as the tool now declares it — a real object. See ``_as_args``."""
+    if raw is None or raw == "":
+        return None
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    return {str(k): str(v) for k, v in data.items()}
+
+
 async def _invoke(
     *,
     display_name: str | None,
@@ -267,9 +316,9 @@ async def _invoke(
     oauth_authorization_endpoint: str | None,
     oauth_token_endpoint: str | None,
     command: str | None,
-    args: str | None,
+    args: list[str] | str | None,
     working_dir: str | None,
-    env: str | None,
+    env: dict[str, str] | str | None,
 ) -> str:
     from valuz_agent.api.routes.connectors import (
         CONNECTOR_DIRECTORY,
@@ -306,8 +355,8 @@ async def _invoke(
     # entry's declared secret field for a recommended connector.
     parsed_headers: list[HeaderParam] = _cred_list(headers)
     parsed_params: list[HeaderParam] = _cred_list(params)
-    parsed_args: list[str] | None = json.loads(args) if args else None
-    parsed_env: dict[str, str] | None = json.loads(env) if env else None
+    parsed_args: list[str] | None = _as_args(args)
+    parsed_env: dict[str, str] | None = _as_env(env)
 
     # Normalize transport aliases and infer from context
     if transport in (None, "streamable-http"):
