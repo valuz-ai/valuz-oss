@@ -33,6 +33,15 @@ export interface SkillVersionListProps {
   /** Restoring revision id, while the request is in flight. */
   restoringId?: string | null;
   onRestore?: (revisionId: string) => void;
+  /** Which version the viewer beside this list is showing. */
+  selectedId?: string | null;
+  /** Selecting a version drives that viewer. Omit for a read-only list. */
+  onSelect?: (revisionId: string) => void;
+  /** Compared against ``selectedId`` when a diff is on screen. */
+  compareId?: string | null;
+  /** Render as a plain list without the collapsible header — for a surface
+   *  that already titles the section itself (the detail page's version tab). */
+  bare?: boolean;
   className?: string;
 }
 
@@ -60,14 +69,20 @@ export const SkillVersionList = memo(function SkillVersionList({
   loading = false,
   restoringId,
   onRestore,
+  selectedId,
+  onSelect,
+  compareId,
+  bare = false,
   className,
 }: SkillVersionListProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(true);
+  const expanded = bare || open;
   const ordered = [...versions].sort((a, b) => b.versionNo - a.versionNo);
 
   return (
     <div className={cn("text-xs", className)}>
+      {bare ? null : (
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -82,8 +97,9 @@ export const SkillVersionList = memo(function SkillVersionList({
           </span>
         ) : null}
       </button>
+      )}
 
-      {open ? (
+      {expanded ? (
         loading ? (
           <div className="mt-2 flex items-center gap-1.5 text-2xs text-ink-meta">
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -100,11 +116,17 @@ export const SkillVersionList = memo(function SkillVersionList({
               return (
                 <li
                   key={version.revisionId}
+                  onClick={onSelect ? () => onSelect(version.revisionId) : undefined}
                   className={cn(
                     "flex items-center gap-2 rounded-md border px-2 py-1.5",
-                    version.isCurrent
-                      ? "border-brand/40 bg-brand-light"
-                      : "border-transparent hover:border-surface-border hover:bg-surface-2",
+                    onSelect && "cursor-pointer",
+                    selectedId === version.revisionId
+                      ? "border-brand bg-brand-light"
+                      : compareId === version.revisionId
+                        ? "border-warning-border bg-warning-light"
+                        : version.isCurrent
+                          ? "border-brand/40 bg-brand-light"
+                          : "border-transparent hover:border-surface-border hover:bg-surface-2",
                   )}
                 >
                   <span

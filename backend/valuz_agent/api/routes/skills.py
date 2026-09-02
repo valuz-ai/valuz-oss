@@ -47,6 +47,7 @@ from valuz_agent.modules.skills.models import (
     SkillSubmissionDismissResponse,
     SkillTagsResponse,
     SkillUpdateRequest,
+    SkillVersionDetail,
     SkillVersionFileResponse,
     SkillVersionListResponse,
     SkillVersionRestoreResponse,
@@ -799,6 +800,21 @@ async def list_skill_versions(
     """Saved versions of one skill, oldest first. Empty for a skill that was
     never saved through the library."""
     return await svc.list_versions(user_id, skill_id)
+
+
+@router.get(
+    "/v1/skills/{skill_id}/versions/{revision_id}",
+    response_model=SkillVersionDetail,
+)
+async def get_skill_version(
+    skill_id: str,
+    revision_id: str,
+    svc: SkillLibraryService = Depends(get_skill_service),
+    user_id: str = Depends(get_current_user_id),
+) -> SkillVersionDetail:
+    """One version and the files it holds — which files a version contains is
+    part of what changed between versions."""
+    return await svc.get_version_detail(user_id, skill_id, revision_id)
 
 
 @router.get(

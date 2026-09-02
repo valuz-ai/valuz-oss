@@ -56,6 +56,8 @@ from valuz_agent.modules.skills.models import (
     SkillOrigin,
     SkillsCatalog,
     SkillUpdateRequest,
+    SkillVersionDetail,
+    SkillVersionFileNode,
     SkillVersionFileResponse,
     SkillVersionItem,
     SkillVersionListResponse,
@@ -2091,6 +2093,33 @@ class SkillLibraryService:
 
             raise InvalidSkill(f"version {revision.version_no} archive is missing on disk")
         return skill, row, revision, Path(revision.abs_path).read_bytes()
+
+    async def get_version_detail(
+        self, user_id: str, skill_id: str, revision_id: str
+    ) -> SkillVersionDetail:
+        """One version plus the files it contains, read from the archive."""
+        from valuz_agent.modules.artifacts.service import get_head_revision
+        from valuz_agent.modules.skills import versioning
+
+        skill, row, revision, archive = await self._version_archive(user_id, skill_id, revision_id)
+        del skill
+        head = await get_head_revision(
+            self._ds.session, user_id, getattr(row, "artifact_id", "") or ""
+        )
+        return SkillVersionDetail(
+            revision_id=revision.id,
+            version_no=revision.version_no,
+            created_at=revision.created_at,
+            source_session_id=revision.source_session_id,
+            created_by=revision.created_by,
+            byte_size=len(archive),
+            content_hash=revision.content_hash,
+            is_current=head is not None and head.id == revision.id,
+            files=[
+                SkillVersionFileNode(path=path, size=size)
+                for path, size in sorted(versioning.list_archive_members(archive))
+            ],
+        )
 
     async def read_version_file(
         self, user_id: str, skill_id: str, revision_id: str, path: str

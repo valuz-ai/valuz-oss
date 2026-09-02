@@ -1,4 +1,4 @@
-import { useState, useMemo, type FC } from "react";
+import { useState, type FC } from "react";
 import { ChevronDown, ExternalLink, FileEdit, AlertCircle } from "lucide-react";
 import type { TurnDiffSummary } from "./diff-aggregator";
 import {
@@ -11,6 +11,7 @@ import {
 import { Badge } from "../ui/badge";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
+import { UnifiedDiffView } from "../common/UnifiedDiffView";
 
 export interface TurnDiffSummaryCardProps {
   summary: TurnDiffSummary;
@@ -19,76 +20,6 @@ export interface TurnDiffSummaryCardProps {
    *  webui simply omits the prop and the icon hides. */
   onRevealFile?: (filePath: string) => void;
 }
-
-interface UnifiedDiffViewProps {
-  diff: string;
-}
-
-/**
- * Render a unified-diff string with simple +/- background coloring.
- * No syntax highlighting, no line numbers — the goal is a quick visual
- * scan, not a full code-review surface.
- */
-const UnifiedDiffView: FC<UnifiedDiffViewProps> = ({ diff }) => {
-  const lines = useMemo(() => diff.split("\n"), [diff]);
-  return (
-    <div className="overflow-x-auto rounded-md border border-surface-border bg-surface-soft text-2xs">
-      <pre className="m-0 px-3 py-2 font-mono leading-relaxed">
-        {lines.map((line, idx) => {
-          // Skip the patch's own file headers — they were stripped by
-          // ``createPatch`` to "" but the leading "===" + "---"/"+++"
-          // separators still appear; render them muted so they don't
-          // visually compete with the actual content.
-          if (line.startsWith("+++") || line.startsWith("---")) {
-            return (
-              <span
-                key={idx}
-                className="block whitespace-pre-wrap text-ink-meta"
-              >
-                {line || " "}
-              </span>
-            );
-          }
-          if (line.startsWith("@@")) {
-            return (
-              <span
-                key={idx}
-                className="block whitespace-pre-wrap text-brand/80"
-              >
-                {line}
-              </span>
-            );
-          }
-          if (line.startsWith("+")) {
-            return (
-              <span
-                key={idx}
-                className="block whitespace-pre-wrap bg-success/10 text-success"
-              >
-                {line || " "}
-              </span>
-            );
-          }
-          if (line.startsWith("-")) {
-            return (
-              <span
-                key={idx}
-                className="block whitespace-pre-wrap bg-error-light text-error-text"
-              >
-                {line || " "}
-              </span>
-            );
-          }
-          return (
-            <span key={idx} className="block whitespace-pre-wrap text-ink-body">
-              {line || " "}
-            </span>
-          );
-        })}
-      </pre>
-    </div>
-  );
-};
 
 export const TurnDiffSummaryCard: FC<TurnDiffSummaryCardProps> = ({
   summary,

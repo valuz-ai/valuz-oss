@@ -18,11 +18,15 @@ import {
   BackLink,
   Input,
   MarkdownContent,
-  SkillVersionList,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   type SkillVersionEntry,
 } from "@valuz/ui";
 import { skillsApi } from "@valuz/core";
 import { isBinaryContent } from "./skill-file-preview";
+import { SkillVersionsTab } from "./SkillVersionsTab";
 import type { SkillDetail } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
 import { useProjectOutlet } from "@valuz/app/layout";
@@ -142,13 +146,12 @@ export const SkillDetailPage = () => {
   // Version history — present only for skills saved through the library
   // (skill-creator confirm, staging sync). Everything else has no lineage
   // yet and renders the empty state.
+  // Only the count for the tab badge lives here; the versions tab owns
+  // selection, viewing and restore.
   const [versions, setVersions] = useState<SkillVersionEntry[]>([]);
-  const [versionsLoading, setVersionsLoading] = useState(false);
-  const [restoringId, setRestoringId] = useState<string | null>(null);
 
   const loadVersions = useCallback(async () => {
     if (!decodedId) return;
-    setVersionsLoading(true);
     try {
       const res = await skillsApi.listVersions(decodedId);
       setVersions(
@@ -162,45 +165,14 @@ export const SkillDetailPage = () => {
         })),
       );
     } catch {
-      // Non-fatal: an older backend has no versions endpoint, and a skill
-      // with no lineage is the same empty list.
+      // A skill with no lineage simply has no versions.
       setVersions([]);
-    } finally {
-      setVersionsLoading(false);
     }
   }, [decodedId]);
 
   useEffect(() => {
     void loadVersions();
   }, [loadVersions]);
-
-  const handleRestoreVersion = useCallback(
-    async (revisionId: string) => {
-      if (!decodedId) return;
-      setRestoringId(revisionId);
-      try {
-        const res = await skillsApi.restoreVersion(decodedId, revisionId);
-        toast.success(
-          _t("skill.versionRestored" as Parameters<typeof _t>[0], {
-            version: String(res.version_no),
-          }),
-        );
-        await loadVersions();
-        // The library directory changed under the open editor — reload the
-        // file the user is looking at rather than leaving a stale buffer.
-        window.location.reload();
-      } catch (cause) {
-        toast.error(
-          cause instanceof Error
-            ? cause.message
-            : _t("skill.versionRestoreFailed" as Parameters<typeof _t>[0]),
-        );
-      } finally {
-        setRestoringId(null);
-      }
-    },
-    [decodedId, loadVersions],
-  );
 
   const handleSave = useCallback(async () => {
     if (!selectedFile || !decodedId) return;
@@ -312,7 +284,7 @@ export const SkillDetailPage = () => {
     );
   }
 
-  return (
+  const filesTab = (
     <div className="flex h-full">
       {/* Left sidebar: metadata + file tree */}
       <div className="w-[280px] shrink-0 border-r border-surface-border bg-surface-base">
@@ -431,18 +403,6 @@ export const SkillDetailPage = () => {
           )}
         </div>
 
-        {/* Version history */}
-        {!skill?.protected ? (
-          <div className="border-b border-surface-border px-4 py-3">
-            <SkillVersionList
-              versions={versions}
-              loading={versionsLoading}
-              restoringId={restoringId}
-              onRestore={(revisionId) => void handleRestoreVersion(revisionId)}
-            />
-          </div>
-        ) : null}
-
         {/* File tree */}
         <div className="overflow-y-auto p-2">
           <FileTreeNode
@@ -545,6 +505,37 @@ export const SkillDetailPage = () => {
         </div>
       </div>
     </div>
+  );
+
+  // Versions are a way of LOOKING at the skill, level with its files — the
+  // page's own convention for that is tabs (see frontend/CLAUDE.md, detail
+  // page composition). Hanging the list off the metadata sidebar, as the
+  // first cut did, read as an afterthought and sat at a different scale to
+  // everything around it.
+  return (
+    <Tabs defaultValue="files" className="flex h-full flex-col">
+      <div className="flex items-center border-b border-surface-border px-4">
+        <TabsList variant="line" className="h-9 justify-start gap-4 border-0 p-0">
+          <TabsTrigger value="files">
+            {t("skill.filesTab" as Parameters<typeof t>[0])}
+          </TabsTrigger>
+          <TabsTrigger value="versions">
+            {t("skill.versionsTitle" as Parameters<typeof t>[0])}
+            {versions.length > 0 ? (
+              <span className="ml-1.5 text-2xs text-ink-meta">
+                {versions.length}
+              </span>
+            ) : null}
+          </TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent value="files" className="mt-0 min-h-0 flex-1">
+        {filesTab}
+      </TabsContent>
+      <TabsContent value="versions" className="mt-0 min-h-0 flex-1">
+        <SkillVersionsTab skillId={decodedId} onRestored={() => void loadVersions()} />
+      </TabsContent>
+    </Tabs>
   );
 };
 

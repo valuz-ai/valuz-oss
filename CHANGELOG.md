@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained `decision` on confirm, an optional cancel hook, and run handlers
   with commits deferred (`infra.db.defer_commits`). The legacy
   `/v1/skills/submissions/*` endpoints are deprecated and kept one release.
+- **Skill versions became a view, not a footnote** — the version list hung
+  off the detail page's metadata sidebar, where it sat at a different scale to
+  everything around it and could only be read, never opened. The page now has
+  Files / Versions tabs (the convention every other detail page follows), and
+  the versions tab shows the selected version's own files with the same
+  tree-and-viewer shape as the files tab, plus a compare toggle that renders
+  the difference with the conversation's diff visuals. Restore moved from a
+  per-row icon to an explicit action that says what it will do. New
+  `GET /v1/skills/{id}/versions/{revision_id}` returns a version's file list —
+  which files a version holds is part of what changed, so reusing the current
+  tree would mis-describe every version where a file was added or removed.
 - **Skill panel proportions** — the skill-creator panel's "saved in this
   conversation" list is a real section (rows with a version badge, one click
   to the skill) instead of a strip of fine print, and its empty state no

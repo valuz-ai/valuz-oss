@@ -252,3 +252,22 @@ async def test_restore_refuses_readonly(env, monkeypatch) -> None:  # type: igno
     monkeypatch.setattr(env.svc, "_resolve_skill", _readonly)
     with pytest.raises(SkillReadOnly):
         await env.svc.restore_version(USER, skill.id, v1.revision_id)
+
+
+async def test_version_detail_lists_that_version_s_own_files(env) -> None:  # type: ignore[no-untyped-def]
+    """Which files a version holds is part of what changed between versions,
+    so the viewer must read them from the archive rather than reuse the
+    current skill's tree."""
+    _stage(env.staging, "demo", "v1", extra={"references/only-in-v1.md": "gone later"})
+    skill, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
+    _stage(env.staging, "demo", "v2", extra={"scripts/new.sh": "echo hi"})
+    await env.svc.confirm_submission(USER, SESSION, "demo")
+
+    versions = await env.svc.list_versions(USER, skill.id)
+    v1 = await env.svc.get_version_detail(USER, skill.id, versions.items[0].revision_id)
+    v2 = await env.svc.get_version_detail(USER, skill.id, versions.items[1].revision_id)
+
+    assert {f.path for f in v1.files} == {"SKILL.md", "references/only-in-v1.md"}
+    assert {f.path for f in v2.files} == {"SKILL.md", "scripts/new.sh"}
+    assert v1.is_current is False and v2.is_current is True
+    assert all(f.size > 0 for f in v2.files)
