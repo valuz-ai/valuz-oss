@@ -55,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Skill version endpoints mounted at the application root** — `routes/skills.py`
+  carries no router prefix (every path is written in full), so the three
+  version routes' relative paths landed on `/{skill_id}/versions` instead of
+  `/v1/skills/{skill_id}/versions`. Because the auth dependency still ran,
+  the stray paths answered 401 while the documented ones 404'd. A test now
+  pins the mounted paths.
 - **Restoring a backup could silently empty every data directory** — the
   pre-restore safety snapshot ran retention pruning into the same destination,
   which could delete the very version being restored; the apply step then
