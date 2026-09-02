@@ -196,6 +196,8 @@ def build_sources(
     _add("plugins", fs_registry.plugins_root(user_id))
     _add("plugins-data", fs_registry.plugins_data_root(user_id))
     _add("installation.json", fs_registry.installation_file(user_id))
+    # Per-version archives of saved skills (history the library cannot rebuild).
+    _add("skill-versions", fs_registry.skill_versions_root(user_id))
 
     # Managed KB roots: the default root plus one per KB class this owner
     # actually has (a host that installs a root resolver routes classes to

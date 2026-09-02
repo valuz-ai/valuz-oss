@@ -56,8 +56,13 @@ from valuz_agent.modules.skills.models import (
     SkillOrigin,
     SkillsCatalog,
     SkillUpdateRequest,
+    SkillVersionFileResponse,
+    SkillVersionItem,
+    SkillVersionListResponse,
+    SkillVersionRestoreResponse,
     SkillView,
 )
+from valuz_agent.modules.skills.versioning import RecordedVersion
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +164,7 @@ def _official_skill_view_from_index_row(
         manifest_hash=getattr(row, "manifest_hash", None),
         folder_created_at=getattr(row, "folder_created_at", None),
         creation_origin=_creation_origin_from_index_row(row),
+        artifact_id=getattr(row, "artifact_id", None),
     )
 
 
@@ -195,6 +201,7 @@ def _skill_view_from_index_row(row: Any, *, enabled: bool) -> SkillView:
         manifest_hash=getattr(row, "manifest_hash", None),
         folder_created_at=getattr(row, "folder_created_at", None),
         creation_origin=_creation_origin_from_index_row(row),
+        artifact_id=getattr(row, "artifact_id", None),
     )
 
 
@@ -759,6 +766,20 @@ class SkillLibraryService:
                 continue
             await self._ds.set_creation_origin_by_path(user_id, written.path, "created")
             await self._ds.set_library_enabled_by_path(user_id, written.path, True)
+            if target_scope == "user":
+                # The panel path lands the directory first, so the version is
+                # taken from the library copy after the fact. Project-scoped
+                # skills are not versioned (docs/design/skill-versioning §0).
+                try:
+                    recorded = await self._record_library_version(
+                        user_id, Path(result.written_path), source_session_id=session_id
+                    )
+                    await self._ds.set_artifact_id_by_path(
+                        user_id, written.path, recorded.artifact_id
+                    )
+                    written.artifact_id = recorded.artifact_id
+                except Exception:  # noqa: BLE001 — the landing must not fail on history
+                    logger.exception("skill versioning: could not record %s", written.path)
             await _after_skill_saved_hook(self._ds.session, user_id, written, "created")
 
         return results
@@ -1907,6 +1928,18 @@ class SkillLibraryService:
                 f"Ask the agent to regenerate the skill."
             )
 
+        # Version first, then overwrite (docs/design/skill-versioning §4.1):
+        # whatever the library holds is captured as a baseline if it was
+        # never recorded, the staged copy gets the next version number in
+        # its frontmatter, and its archive becomes the new head. Only then
+        # does the library directory change — a failed record leaves the
+        # library untouched, a failed copy leaves a head the next save or a
+        # restore can bring the library back to.
+        library_root = _default_user_skill_root(user_id)
+        recorded = await self._record_staged_version(
+            user_id, slug, canonical_dir, library_root / slug, source_session_id=session_id
+        )
+
         # Always promote into the user's library. Cloud/shared deployments
         # scope this root by owner; local desktop keeps the agentskills.io
         # standard location.
@@ -1915,7 +1948,7 @@ class SkillLibraryService:
             session_id=session_id,
             slug=slug,
             strategy="overwrite",
-            target_root=_default_user_skill_root(user_id),
+            target_root=library_root,
         )
         if not result.written_path:
             raise RuntimeError("staging.sync_slug returned no written_path")
@@ -1950,8 +1983,10 @@ class SkillLibraryService:
         # never a same-slug built-in that coexists.
         await self._ds.set_creation_origin_by_path(user_id, skill.path, "created")
         await self._ds.set_library_enabled_by_path(user_id, skill.path, True)
+        await self._ds.set_artifact_id_by_path(user_id, skill.path, recorded.artifact_id)
         skill.creation_origin = "created"
         skill.library_enabled = True
+        skill.artifact_id = recorded.artifact_id
         await _after_skill_saved_hook(self._ds.session, user_id, skill, "created")
 
         return skill, creation_context, bound_project_id
@@ -1969,6 +2004,221 @@ class SkillLibraryService:
         if existed:
             await staging.remove_slug(user_id, session_id, slug)
         return existed
+
+    # ------------------------------------------------------------------
+    # Versions (docs/design/skill-versioning)
+    # ------------------------------------------------------------------
+
+    async def _index_row_for(self, user_id: str, skill: SkillView) -> Any:
+        row = await self._ds.get_by_source_path(user_id, skill.path)
+        if row is None:
+            from valuz_agent.modules.skills.errors import SkillNotFound
+
+            raise SkillNotFound()
+        return row
+
+    async def list_versions(self, user_id: str, skill_id: str) -> SkillVersionListResponse:
+        """The skill's saved versions, oldest first; empty for a skill that was
+        never saved through the library (not an error — it simply has no
+        history yet)."""
+        from valuz_agent.modules.artifacts.service import list_artifact_revisions
+        from valuz_agent.modules.skills.errors import SkillNotFound
+
+        try:
+            skill = await self._resolve_skill(user_id, skill_id=skill_id, purpose="metadata")
+        except KeyError as exc:
+            raise SkillNotFound() from exc
+        row = await self._index_row_for(user_id, skill)
+        artifact_id = getattr(row, "artifact_id", None)
+        if not artifact_id:
+            return SkillVersionListResponse(skill_id=skill_id, artifact_id=None, items=[])
+        revisions, contents = await list_artifact_revisions(self._ds.session, user_id, artifact_id)
+        head_id = revisions[-1].id if revisions else None
+        items = [
+            SkillVersionItem(
+                revision_id=rev.id,
+                version_no=rev.version_no,
+                created_at=rev.created_at,
+                source_session_id=rev.source_session_id,
+                created_by=rev.created_by,
+                byte_size=(contents[rev.content_id].byte_size if rev.content_id in contents else 0),
+                content_hash=rev.content_hash,
+                is_current=rev.id == head_id,
+            )
+            for rev in revisions
+        ]
+        return SkillVersionListResponse(skill_id=skill_id, artifact_id=artifact_id, items=items)
+
+    async def _version_archive(
+        self, user_id: str, skill_id: str, revision_id: str
+    ) -> tuple[SkillView, Any, Any, bytes]:
+        """``(skill, row, revision, archive bytes)`` for one of the skill's
+        own versions. Disclosure-gated: bytes of a protected package never
+        leave through here."""
+        from valuz_agent.modules.artifacts.service import get_artifact_revision
+        from valuz_agent.modules.skills.errors import SkillNotFound
+
+        try:
+            skill = await self._resolve_skill(user_id, skill_id=skill_id, purpose="disclose")
+        except KeyError as exc:
+            raise SkillNotFound() from exc
+        row = await self._index_row_for(user_id, skill)
+        revision = await get_artifact_revision(self._ds.session, user_id, revision_id)
+        if revision is None or revision.artifact_id != getattr(row, "artifact_id", None):
+            raise SkillNotFound()
+        if not revision.abs_path or not Path(revision.abs_path).is_file():
+            from valuz_agent.modules.skills.errors import InvalidSkill
+
+            raise InvalidSkill(f"version {revision.version_no} archive is missing on disk")
+        return skill, row, revision, Path(revision.abs_path).read_bytes()
+
+    async def read_version_file(
+        self, user_id: str, skill_id: str, revision_id: str, path: str
+    ) -> SkillVersionFileResponse:
+        from valuz_agent.modules.skills import versioning
+        from valuz_agent.modules.skills.errors import SkillNotFound
+
+        rel = path.strip("/")
+        if not rel or ".." in rel.split("/"):
+            raise SkillNotFound()
+        _skill, _row, revision, archive = await self._version_archive(
+            user_id, skill_id, revision_id
+        )
+        data = versioning.read_archive_member(archive, rel)
+        if data is None:
+            raise SkillNotFound()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = "<binary file>"
+        return SkillVersionFileResponse(
+            revision_id=revision.id, path=rel, content=text, size=len(data)
+        )
+
+    async def restore_version(
+        self, user_id: str, skill_id: str, revision_id: str
+    ) -> SkillVersionRestoreResponse:
+        """Make the library directory equal to an earlier version, as a NEW
+        version: the current content is captured first if unrecorded, the
+        archive is unpacked with the next version number stamped into its
+        frontmatter, recorded, and only then swapped over the library dir."""
+        import secrets
+
+        from valuz_agent.infra.db import async_commit_with_retry
+        from valuz_agent.modules.skills import versioning
+        from valuz_agent.modules.skills.errors import SkillReadOnly
+
+        skill, row, revision, archive = await self._version_archive(user_id, skill_id, revision_id)
+        if skill.readonly or skill.is_locked:
+            raise SkillReadOnly()
+        library_dir = Path(skill.path)
+        slug = library_dir.name
+        artifact_id = getattr(row, "artifact_id", None)
+        db = self._ds.session
+
+        scratch = (
+            versioning.library_scope_cwd(user_id) / ".restore" / f"{slug}-{secrets.token_hex(4)}"
+        )
+        try:
+            versioning.unpack_skill_archive(archive, scratch)
+            manifest = _detect_manifest(scratch)
+            if manifest is None:
+                from valuz_agent.modules.skills.errors import InvalidSkill
+
+                raise InvalidSkill("archived version has no SKILL.md")
+            await versioning.capture_baseline(
+                db, user_id, slug, library_dir, artifact_id=artifact_id
+            )
+            next_no = await versioning.next_version_no(db, user_id, artifact_id)
+            versioning.set_manifest_version(manifest, next_no)
+            recorded = await versioning.record_skill_version(
+                db, user_id, slug, versioning.pack_skill_dir(scratch), artifact_id=artifact_id
+            )
+            await async_commit_with_retry(db, where="SkillLibraryService.restore_version")
+            versioning.replace_library_dir(scratch, library_dir)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+        try:
+            await self.startup_scan(user_id)
+        except Exception:  # noqa: BLE001
+            pass
+        await self._ds.set_artifact_id_by_path(user_id, str(library_dir), recorded.artifact_id)
+        refreshed = await self._resolve_created_skill(user_id, library_dir)
+        refreshed.artifact_id = recorded.artifact_id
+        return SkillVersionRestoreResponse(
+            skill=redact_protected(refreshed),
+            revision_id=recorded.revision_id,
+            version_no=recorded.version_no,
+        )
+
+    async def _record_staged_version(
+        self,
+        user_id: str,
+        slug: str,
+        staging_dir: Path,
+        library_dir: Path,
+        *,
+        source_session_id: str | None,
+    ) -> RecordedVersion:
+        """The save pipeline's history step, run BEFORE the library directory
+        is overwritten: baseline capture of what is there, frontmatter
+        ``version:`` of the staged copy set to the next number, staged copy
+        packed and recorded as the new head. Committed here: the caller's
+        later filesystem writes are not in this unit of work."""
+        from valuz_agent.infra.db import async_commit_with_retry
+        from valuz_agent.modules.skills import versioning
+
+        db = self._ds.session
+        existing = await self._ds.get_by_source_path(user_id, str(library_dir))
+        artifact_id = getattr(existing, "artifact_id", None) if existing is not None else None
+        baseline = await versioning.capture_baseline(
+            db, user_id, slug, library_dir, artifact_id=artifact_id
+        )
+        if baseline is not None:
+            artifact_id = baseline.artifact_id
+        next_no = await versioning.next_version_no(db, user_id, artifact_id)
+        manifest = _detect_manifest(staging_dir)
+        if manifest is not None:
+            versioning.set_manifest_version(manifest, next_no)
+        recorded = await versioning.record_skill_version(
+            db,
+            user_id,
+            slug,
+            versioning.pack_skill_dir(staging_dir),
+            artifact_id=artifact_id,
+            source_session_id=source_session_id,
+        )
+        await async_commit_with_retry(db, where="SkillLibraryService._record_staged_version")
+        return recorded
+
+    async def _record_library_version(
+        self, user_id: str, library_dir: Path, *, source_session_id: str | None
+    ) -> RecordedVersion:
+        """History step for paths that land the directory first (the staging
+        panel's sync): stamp the next version into the library copy's
+        frontmatter and record it."""
+        from valuz_agent.infra.db import async_commit_with_retry
+        from valuz_agent.modules.skills import versioning
+
+        db = self._ds.session
+        slug = library_dir.name
+        existing = await self._ds.get_by_source_path(user_id, str(library_dir))
+        artifact_id = getattr(existing, "artifact_id", None) if existing is not None else None
+        next_no = await versioning.next_version_no(db, user_id, artifact_id)
+        manifest = _detect_manifest(library_dir)
+        if manifest is not None:
+            versioning.set_manifest_version(manifest, next_no)
+        recorded = await versioning.record_skill_version(
+            db,
+            user_id,
+            slug,
+            versioning.pack_skill_dir(library_dir),
+            artifact_id=artifact_id,
+            source_session_id=source_session_id,
+        )
+        await async_commit_with_retry(db, where="SkillLibraryService._record_library_version")
+        return recorded
 
     # ------------------------------------------------------------------
     # Private helpers

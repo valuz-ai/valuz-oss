@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than as a file. Bytes are stored as a file snapshot only, never inline. This
   is the artifacts-side groundwork for versioning skill-creator output; the
   skills module owns the rest.
+- **Skill versions** — every skill saved through the library (skill-creator
+  confirm, staging-panel sync into the user library) is recorded as a version:
+  a deterministic zip of the skill directory delivered as a `kind=skill`
+  artifact in a reserved per-user scope under `<data_dir>/skill-versions/`.
+  The head's `version_no` is the truth and the host writes it into the
+  SKILL.md frontmatter `version:` before saving. Content the library held that
+  was never saved through it (hand edits, imports) is captured as a baseline
+  version before being overwritten — nothing is destroyed unrecorded.
+  `GET /v1/skills/{id}/versions`, `GET …/versions/{rev}/files?path=` and
+  `POST …/versions/{rev}/restore` (restore = a new version on top of the
+  history). `valuz_skill_index.artifact_id` links a skill folder to its
+  lineage (migration 0044). Local backup now includes `skill-versions/`.
 
 ### Fixed
 

@@ -47,6 +47,9 @@ from valuz_agent.modules.skills.models import (
     SkillSubmissionDismissResponse,
     SkillTagsResponse,
     SkillUpdateRequest,
+    SkillVersionFileResponse,
+    SkillVersionListResponse,
+    SkillVersionRestoreResponse,
     SkillView,
     StagingFileNodeView,
     StagingOptimizeRequest,
@@ -753,3 +756,47 @@ async def project_skills_catalog(
 # NOTE: project skill *binding* endpoints (PUT skills / scan / state) were
 # removed — skills bind on the Agent now (08-agents-module). The GET above
 # stays: it still feeds the conversation composer's skill-insert chips.
+
+
+# ── versions (docs/design/skill-versioning) ───────────────────────────
+
+
+@router.get("/{skill_id}/versions", response_model=SkillVersionListResponse)
+async def list_skill_versions(
+    skill_id: str,
+    svc: SkillLibraryService = Depends(get_skill_service),
+    user_id: str = Depends(get_current_user_id),
+) -> SkillVersionListResponse:
+    """Saved versions of one skill, oldest first. Empty for a skill that was
+    never saved through the library."""
+    return await svc.list_versions(user_id, skill_id)
+
+
+@router.get(
+    "/{skill_id}/versions/{revision_id}/files",
+    response_model=SkillVersionFileResponse,
+)
+async def read_skill_version_file(
+    skill_id: str,
+    revision_id: str,
+    path: str = Query(..., min_length=1),
+    svc: SkillLibraryService = Depends(get_skill_service),
+    user_id: str = Depends(get_current_user_id),
+) -> SkillVersionFileResponse:
+    """One file out of an archived version, read straight from the archive."""
+    return await svc.read_version_file(user_id, skill_id, revision_id, path)
+
+
+@router.post(
+    "/{skill_id}/versions/{revision_id}/restore",
+    response_model=SkillVersionRestoreResponse,
+)
+async def restore_skill_version(
+    skill_id: str,
+    revision_id: str,
+    svc: SkillLibraryService = Depends(get_skill_service),
+    user_id: str = Depends(get_current_user_id),
+) -> SkillVersionRestoreResponse:
+    """Make the library copy equal to an earlier version — recorded as a new
+    version on top of the history, never by rewriting it."""
+    return await svc.restore_version(user_id, skill_id, revision_id)

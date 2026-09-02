@@ -342,7 +342,10 @@ def test_sync_fork_creates_versioned_slug_and_bumps_version(isolated_app):  # ty
     assert result["new_slug"] == "weekly-report-v2"
 
     md = (user_skills / "weekly-report-v2" / "SKILL.md").read_text("utf-8")
-    assert "version: 2" in md
+    # A fork is a NEW skill, so its lineage starts at v1 and the host aligns
+    # the frontmatter to the lineage (docs/design/skill-versioning §3.3) —
+    # the ``-v2`` slug suffix names the fork, it is not its version number.
+    assert "version: 1" in md
     # Original is preserved.
     assert "Original." in (user_skills / "weekly-report" / "SKILL.md").read_text("utf-8")
 

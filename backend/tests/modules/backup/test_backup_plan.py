@@ -66,6 +66,7 @@ def test_default_scope_covers_every_user_data_directory(data_env: Path) -> None:
         "plugins",
         "plugins-data",
         "installation.json",
+        "skill-versions",
         "kb",
         "deepagents-checkpoints",
         "dsh-state",
