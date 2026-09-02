@@ -26,13 +26,12 @@ describe("Composer mode guidance", () => {
     await user.hover(screen.getByRole("button", { name: "对话" }));
 
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.classList.contains("max-w-48")).toBe(true);
+    expect(tooltip.classList.contains("max-w-44")).toBe(true);
     expect(tooltip.classList.contains("w-60")).toBe(false);
     expect(tooltip.classList.contains("whitespace-normal")).toBe(true);
     expect(tooltip.classList.contains("break-words")).toBe(true);
     expect(tooltip.classList.contains("text-left")).toBe(true);
-    expect(tooltip.classList.contains("text-wrap")).toBe(true);
-    expect(tooltip.classList.contains("text-balance")).toBe(false);
+    expect(tooltip.classList.contains("text-balance")).toBe(true);
   });
 });
 

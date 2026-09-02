@@ -1763,7 +1763,7 @@ export const Composer = ({
                         <TooltipContent
                           side="bottom"
                           sideOffset={4}
-                          className="max-w-48 whitespace-normal break-words text-left text-wrap"
+                          className="max-w-44 whitespace-normal break-words text-left"
                         >
                           {tip}
                         </TooltipContent>
