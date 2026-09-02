@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Restoring a backup could silently empty every data directory** — the
+  pre-restore safety snapshot ran retention pruning into the same destination,
+  which could delete the very version being restored; the apply step then
+  mirrored the missing payload as an empty directory and reported success.
+  The safety snapshot no longer prunes, every restore target is validated
+  against the manifest before anything on disk is touched (a missing payload
+  fails the whole restore and leaves live data alone), recorded symlinks are
+  recreated on restore, and a manifest newer than the app is refused.
+- **Backup coverage caught up with the data-dir layout** — the source list was a
+  hardcoded four-name tuple that never learned about Agent Plugins
+  (`plugins/`, `plugins-data/`), the DeepAgents checkpoint store, DeepSeek
+  Harness state, or knowledge-base roots routed by a host resolver. Sources are
+  now resolved through `FsRegistry`, exclusions are explicit with a reason, and
+  a registry tripwire test fails on any new data directory the backup has not
+  taken a position on. First-run preflight sizes the whole payload instead of
+  the DBs alone.
+
 ## [0.5.1] - 2026-08-28
 
 ### Added

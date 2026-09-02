@@ -275,3 +275,183 @@ def test_restore_missing_manifest_reports_error(tmp_path: Path) -> None:
     assert report is not None and not report["ok"]
     assert report["error"]
     assert not pointer.exists()  # still one-shot on failure
+
+
+# ── restore safety: the version under restore must survive, and a damaged
+# version must never be applied as "empty" ─────────────────────────────
+
+
+def _many_versions(tmp_path: Path, count: int) -> tuple[BackupPlan, list[str]]:
+    """``count`` versions of one plan, oldest first, none pruned during setup."""
+    plan = _plan(tmp_path, retention=BackupRetention(keep_recent=100, max_total_gb=0))
+    ids: list[str] = []
+    for _ in range(count):
+        _touch_db(plan.host_db)
+        ids.append(run_backup(plan).version_id)
+    return plan, ids
+
+
+def test_restore_does_not_prune_the_version_being_restored(tmp_path: Path) -> None:
+    """Regression: the pre-restore safety snapshot is a backup run into the
+    same destination. With default retention (keep_recent=7, one survivor per
+    older day) nine same-day versions lose their oldest — which is exactly
+    the one the user picked. Restoring it then swapped EMPTY directories over
+    live data and reported success."""
+    plan, ids = _many_versions(tmp_path, 8)
+    oldest = ids[0]
+    vdir = mf.version_dir(plan.destination, oldest)
+    (tmp_path / "data" / "memories" / "MEMORY.md").write_text("changed", encoding="utf-8")
+
+    pointer = tmp_path / "pending.json"
+    write_pending_request(pointer, vdir)
+    report = apply_pending_restore(pointer, tmp_path / "result.json", "u1")
+
+    assert report is not None and report["ok"], report
+    assert vdir.is_dir() and mf.load_manifest(vdir) is not None  # still there
+    assert (tmp_path / "data" / "memories" / "MEMORY.md").read_text() == "hello"
+    kinds = {m.kind for _, m in mf.scan_versions(plan.destination)}
+    assert "pre_restore" in kinds
+    # nothing was pruned by the restore — every version is still listed
+    assert len(mf.scan_versions(plan.destination)) == len(ids) + 1
+
+
+def test_restore_refuses_a_version_whose_payload_is_missing(tmp_path: Path) -> None:
+    """A manifest that lists files under a category whose payload directory
+    is gone is a damaged version. It must fail loudly and leave live data
+    alone — never mirror the absence as an empty directory."""
+    plan = _plan(tmp_path)
+    result = run_backup(plan)
+    vdir = mf.version_dir(plan.destination, result.version_id)
+    import shutil as _shutil
+
+    _shutil.rmtree(vdir / "data" / "memories")
+
+    live = tmp_path / "data" / "memories" / "MEMORY.md"
+    live.write_text("still here", encoding="utf-8")
+    pointer = tmp_path / "pending.json"
+    write_pending_request(pointer, vdir)
+    report = apply_pending_restore(pointer, tmp_path / "result.json", "u1")
+
+    assert report is not None and not report["ok"]
+    assert "data/memories" in (report["error"] or "")
+    assert live.read_text() == "still here"
+    assert (tmp_path / "data" / "installation.json").exists()
+    # not even a pre_restore snapshot was minted for a damaged version
+    kinds = {m.kind for _, m in mf.scan_versions(plan.destination)}
+    assert "pre_restore" not in kinds
+
+
+def test_restore_replays_a_category_that_was_empty_at_backup_time(tmp_path: Path) -> None:
+    """The legitimate case for ``_replace_tree(None, …)``: the category
+    existed but held nothing, so the manifest lists nothing under it and
+    the restore makes the live directory empty again."""
+    empty = tmp_path / "data" / "empty-cat"
+    empty.mkdir(parents=True)
+    plan = _plan(tmp_path)
+    plan.sources.append(SourceSpec(rel="empty-cat", src=empty))
+    result = run_backup(plan)
+    vdir = mf.version_dir(plan.destination, result.version_id)
+
+    (empty / "later.txt").write_text("added after backup", encoding="utf-8")
+    pointer = tmp_path / "pending.json"
+    write_pending_request(pointer, vdir)
+    report = apply_pending_restore(pointer, tmp_path / "result.json", "u1")
+
+    assert report is not None and report["ok"], report
+    assert empty.is_dir() and not any(empty.iterdir())
+
+
+def test_restore_recreates_symlinks(tmp_path: Path) -> None:
+    """Links are recorded in the manifest and never copied, so the payload
+    has no entry for them; the restore must recreate them from the record."""
+    memories = tmp_path / "data" / "memories"
+    plan = _plan(tmp_path)
+    (memories / "nested").mkdir()
+    os.symlink("MEMORY.md", memories / "alias.md")
+    os.symlink("../MEMORY.md", memories / "nested" / "up.md")
+    result = run_backup(plan)
+    vdir = mf.version_dir(plan.destination, result.version_id)
+    manifest = mf.load_manifest(vdir)
+    assert manifest is not None
+    assert {f.path for f in manifest.files if f.link} == {
+        "data/memories/alias.md",
+        "data/memories/nested/up.md",
+    }
+
+    (memories / "alias.md").unlink()
+    pointer = tmp_path / "pending.json"
+    write_pending_request(pointer, vdir)
+    report = apply_pending_restore(pointer, tmp_path / "result.json", "u1")
+
+    assert report is not None and report["ok"], report
+    assert (memories / "alias.md").is_symlink()
+    assert os.readlink(memories / "alias.md") == "MEMORY.md"
+    assert (memories / "nested" / "up.md").is_symlink()
+    assert (memories / "alias.md").read_text() == "hello"
+
+
+def test_restore_rejects_a_newer_manifest_format(tmp_path: Path) -> None:
+    plan = _plan(tmp_path)
+    result = run_backup(plan)
+    vdir = mf.version_dir(plan.destination, result.version_id)
+    raw = json.loads((vdir / mf.MANIFEST_NAME).read_text(encoding="utf-8"))
+    raw["format"] = mf.MANIFEST_FORMAT + 1
+    (vdir / mf.MANIFEST_NAME).write_text(json.dumps(raw), encoding="utf-8")
+
+    pointer = tmp_path / "pending.json"
+    write_pending_request(pointer, vdir)
+    report = apply_pending_restore(pointer, tmp_path / "result.json", "u1")
+    assert report is not None and not report["ok"]
+    assert "format" in (report["error"] or "")
+
+
+def test_extra_dbs_ride_along_and_restore(tmp_path: Path) -> None:
+    ckpt = tmp_path / "deepagents_checkpoints.db"
+    _make_sqlite(ckpt, "checkpoints", 2)
+    plan = _plan(tmp_path, extra_dbs=[SourceSpec(rel="deepagents_checkpoints.db", src=ckpt)])
+    result = run_backup(plan)
+    vdir = mf.version_dir(plan.destination, result.version_id)
+    assert (vdir / "db" / "deepagents_checkpoints.db").is_file()
+    assert any(rt.rel == "db/deepagents_checkpoints.db" for rt in result.manifest.restore_targets)
+
+    conn = sqlite3.connect(str(ckpt))
+    try:
+        conn.execute("INSERT INTO checkpoints (v) VALUES ('after')")
+        conn.commit()
+    finally:
+        conn.close()
+    pointer = tmp_path / "pending.json"
+    write_pending_request(pointer, vdir)
+    report = apply_pending_restore(pointer, tmp_path / "result.json", "u1")
+    assert report is not None and report["ok"], report
+    conn = sqlite3.connect(str(ckpt))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_first_backup_preflight_counts_source_bytes(tmp_path: Path, monkeypatch) -> None:
+    """The first version copies every byte; sizing it from the DBs alone
+    let a large project tree fill the disk mid-run."""
+    from valuz_agent.modules.backup import engine as engine_mod
+
+    plan = _plan(tmp_path)
+    big = tmp_path / "data" / "memories" / "big.bin"
+    big.write_bytes(b"x" * 4096)
+    seen: dict[str, int] = {}
+    real = engine_mod.shutil.disk_usage
+
+    class _Usage:
+        def __init__(self, free: int) -> None:
+            self.free = free
+
+    def _fake_usage(path):  # type: ignore[no-untyped-def]
+        seen["called"] = 1
+        return _Usage(free=1024)  # smaller than the 4 KiB source alone
+
+    monkeypatch.setattr(engine_mod.shutil, "disk_usage", _fake_usage)
+    with pytest.raises(BackupPreflightFailed):
+        run_backup(plan)
+    monkeypatch.setattr(engine_mod.shutil, "disk_usage", real)
+    assert seen

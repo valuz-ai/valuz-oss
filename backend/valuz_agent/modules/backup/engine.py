@@ -52,13 +52,24 @@ class SourceSpec:
         return self.restore_target or self.src
 
 
+HOST_DB_NAME = "valuz.db"
+KERNEL_DB_NAME = "kernel.db"
+
+
 @dataclass
 class BackupPlan:
     user_id: str
     destination: Path
     kind: str  # manual | scheduled | pre_restore
     scope: BackupScope
-    retention: BackupRetention
+    # ``None`` means "do not prune after this run". The boot-time pre-restore
+    # snapshot MUST pass ``None``: it runs inside a restore of an existing
+    # version, and pruning there can delete the very version about to be
+    # applied (it is, by construction, an OLD version — exactly what a
+    # retention ladder targets). Retention belongs to the scheduled/manual
+    # runs, which see the user's real policy; the pre-restore path cannot
+    # even read it (no DB is open yet).
+    retention: BackupRetention | None
     host_db: Path | None
     kernel_db: Path | None
     sources: list[SourceSpec]
@@ -69,6 +80,23 @@ class BackupPlan:
     # Paths the walk must never descend into (the destination itself, so a
     # backup can't recursively contain backups).
     exclude_roots: list[Path] = field(default_factory=list)
+    # Further SQLite files that ride along under ``db/<rel>`` with the same
+    # VACUUM INTO / file-copy treatment as the two primary DBs — runtime
+    # state that lives NEXT TO ``kernel.db`` (the DeepAgents langgraph
+    # checkpointer). ``rel`` is the bare file name.
+    extra_dbs: list[SourceSpec] = field(default_factory=list)
+
+    def databases(self) -> list[tuple[str, Path]]:
+        """Every SQLite file this plan snapshots, as ``(db/<name>, path)``
+        pairs. The two primaries come first so the manifest keeps its historic
+        ordering."""
+        out: list[tuple[str, Path]] = []
+        for name, src in ((HOST_DB_NAME, self.host_db), (KERNEL_DB_NAME, self.kernel_db)):
+            if src is not None:
+                out.append((name, src))
+        for spec in self.extra_dbs:
+            out.append((spec.rel, spec.src))
+        return out
 
 
 @dataclass
@@ -157,8 +185,8 @@ def compute_fingerprint(plan: BackupPlan) -> str:
     mtime) plus the DB files' (size, mtime). If it matches the previous
     version's fingerprint, nothing moved and the run is skipped."""
     digest = hashlib.sha256()
-    for db in (plan.host_db, plan.kernel_db):
-        st = _stat_or_none(db) if db else None
+    for _name, db in plan.databases():
+        st = _stat_or_none(db)
         if st is not None:
             digest.update(f"db:{db}:{st.st_size}:{st.st_mtime_ns}\n".encode())
     for spec in plan.sources:
@@ -182,10 +210,19 @@ def _preflight(plan: BackupPlan, prev: mf.BackupManifest | None) -> None:
     if prev is not None:
         needed = int(prev.total_bytes * 1.2)
     else:
-        for db in (plan.host_db, plan.kernel_db):
-            st = _stat_or_none(db) if db else None
+        # First version: nothing to hardlink against, so every source byte is
+        # copied. Size the whole payload, not just the DBs — the project tree
+        # and skill library are routinely orders of magnitude larger, and
+        # running out of space mid-copy wastes the full walk.
+        for _name, db in plan.databases():
+            st = _stat_or_none(db)
             if st is not None:
                 needed += st.st_size * 2
+        for spec in plan.sources:
+            for fpath, _rel in _iter_source_files(spec, plan.exclude_roots):
+                st = _stat_or_none(fpath)
+                if st is not None and not fpath.is_symlink():
+                    needed += st.st_size
     try:
         free = shutil.disk_usage(dest).free
     except OSError as exc:
@@ -400,8 +437,8 @@ def run_backup(
         db_targets: list[mf.RestoreTarget] = []
         db_entries: list[mf.ManifestFile] = []
         db_bytes = 0
-        for name, src in (("valuz.db", plan.host_db), ("kernel.db", plan.kernel_db)):
-            if src is None or not src.exists():
+        for name, src in plan.databases():
+            if not src.exists():
                 continue
             dest = vdir / mf.DB_SUBDIR / name
             if plan.db_file_copy:
@@ -422,9 +459,7 @@ def run_backup(
             db_bytes += st.st_size
             progress("db", st.st_size)
 
-        file_entries, data_bytes, new_bytes, dedup = _snapshot_files(
-            plan, vdir, prev, progress
-        )
+        file_entries, data_bytes, new_bytes, dedup = _snapshot_files(plan, vdir, prev, progress)
 
         progress("summary", 0)
         summary = build_summary(vdir)
@@ -460,7 +495,8 @@ def run_backup(
         manifest.source_fingerprint = fingerprint
         mf.write_manifest(vdir, manifest)
 
-        apply_retention(plan.destination, plan.retention)
+        if plan.retention is not None:
+            apply_retention(plan.destination, plan.retention)
         return BackupResult(version_id=version_id, manifest=manifest)
     except Exception:
         # leave no half-version behind on a controlled failure path

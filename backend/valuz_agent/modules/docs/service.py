@@ -2062,6 +2062,19 @@ class DocumentLibraryService:
         return asyncio.run(self._parser.parse(file_path, options))
 
 
+async def owner_kb_kinds(user_id: str) -> list[str]:
+    """The distinct knowledge-base classes (``KnowledgeBaseRow.kind``) this
+    owner has. The backup module maps each through ``fs_registry.kb_root``
+    so a host that routes classes to separate roots gets every root covered
+    — without the backup module learning the docs datastore."""
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.docs.datastore import DocumentDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        rows = await DocumentDatastore(db).list_kbs(user_id)
+    return sorted({row.kind for row in rows if row.kind})
+
+
 async def owner_kb_root_paths(user_id: str) -> list[str]:
     """Every knowledge base's own ``root_path`` for ``user_id``.
 

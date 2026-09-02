@@ -69,17 +69,25 @@
 | 类别 | 路径 | 一期默认 | 说明 |
 |---|---|---|---|
 | **业务库** | `~/.valuz-oss/valuz.db` | ✅ 必备 | agents、projects、KB/技能索引、automations、设置 |
-| **kernel 库** | `~/.valuz-oss/kernel.db` | ✅ 必备 | sessions/messages/events = **对话历史**、langgraph checkpoint |
+| **kernel 库** | `~/.valuz-oss/kernel.db` | ✅ 必备 | sessions/messages/events = **对话历史** |
+| **runtime 续跑状态** | `deepagents_checkpoints.db`（VACUUM INTO，进 `db/`）、`deepagents-checkpoints/`、`dsh-state/` | ✅ | kernel.db 里的会话引用它们；缺了 Valuz Agent / DSH 会话恢复后无法续聊。位置以 boot 导出的 env 为准 |
 | **KB 派生物** | `docs/`（assets + preview + scan_state） | ✅ | 解析产物，重建成本高 |
 | **记忆** | `memories/`（USER.md、MEMORY.md、projects/*） | ✅ | 纯文本，小 |
 | **会话附件** | `attachments/<session_id>/` | ✅ | 用户上传原件 |
-| **托管 KB 根** | `kb/<kb_id>/` | ✅ | 托管型知识库的内容根 |
+| **托管 KB 根** | `kb/<kb_id>/`，以及 `fs_registry.kb_root(user_id, kind)` 对该用户实际存在的每个 KB kind 解析出的根 | ✅ | 托管型知识库的内容根；装了 root resolver 的宿主会把不同 kind 路由到不同目录，按 kind 逐个覆盖 |
+| **Agent Plugins** | `plugins/<name>/`（包体）、`plugins-data/<name>/`（插件持久状态） | ✅ | `valuz_plugin` 行指向这两处；`plugins-data` 不可再下载 |
 | **用户技能库** | `~/.agents/skills/`（`user_skill_root`） | ✅ | 用户自建 SKILL 的本体 |
 | **安装标识** | `installation.json` | ✅ | 本地 owner id |
 | **托管项目目录** | `~/Valuz/<project_id>`（kind=chat 的 cwd） | ✅（可关） | 会话产出的文件；含 task 运行目录，可能较大 |
 | **外部绑定项目** | `valuz_project.root_path`（kind=project） | ❌（可开） | 用户自有目录，尊重边界 |
 | **secrets** | `secrets/` | ❌ 硬排除 | 明文凭据，见拍板 3 |
-| 可再生/进程级 | `cache/` `models/` `bin/` `logs/` `browser-chrome/` `official-skills/` `memory-review/` `generative-ui/` `skill-creator/staging/` | ❌ | 可重新下载/重建/随包分发 |
+| 可再生/进程级 | `cache/` `models/` `bin/` `logs/` `browser-chrome/` `official-skills/` `memory-review/` `generative-ui/` `skill-creator/staging/` `ptc/` | ❌ | 可重新下载/重建/随包分发。`official-skills/` 还可能装着封印（DRM）技能的密文，备份文件下载接口没有披露门，**不得**纳入 |
+
+覆盖清单在 `modules/backup/service.py::build_sources` 里定义，每一项都经
+`FsRegistry` 解析；排除项集中在 `EXCLUDED_DATA_DIR_ENTRIES` 并带理由。
+`tests/modules/backup/test_backup_plan.py` 会枚举 `FsRegistry` 能在 data dir
+下创建的顶层条目，凡既不在覆盖里也不在排除里的直接判失败——新增数据目录时必须
+二选一表态。
 
 范围开关持久化为三个布尔偏好（§6）：托管项目目录、外部绑定项目、用户技能库
 （前两个见上表，技能库默认开）。业务库/kernel 库/KB 派生物等"应用数据"不可关。
@@ -266,6 +274,16 @@ Registry 驱动接入（`settings-sections.ts` 加 `backup` section +
 - **恢复后 secrets 缺失** → 首次启动检测到 provider 凭据不可用时引导重新登录
   （复用订阅渠道 materialize-on-detection 的现状能力）。
 - **时钟回拨** → 版本 id 冲突时追加序号；调度以 `next_run_at` 单调推进。
+- **恢复时的安全快照不得修剪**：pre_restore 快照就是一次写进同一目的地的备份，
+  若它跑保留策略，被恢复的那个旧版本正是保留阶梯要删的对象（默认 6h 频率 +
+  keep_recent=7 下同一天里较旧的版本必被顶掉）。所以 pre_restore 用
+  `retention=None`，永不修剪。
+- **payload 缺失 ≠ 类别为空**：manifest 记录了每个文件，某个 restore target 的
+  payload 目录不在而 manifest 下面列了文件，就是损坏/被删的版本。apply 前先对
+  全部 target 做校验，任何一项缺失整次恢复失败、不动线上数据；只有 manifest
+  下面确实没有文件（或只有 symlink）时才允许把类别恢复成空目录。
+- **symlink**：备份只记 manifest（目标字符串）不拷贝，恢复时按记录重建；
+  manifest `format` 比当前程序新则拒绝恢复。
 
 ## 12. 后续演进（明确不在一期）
 

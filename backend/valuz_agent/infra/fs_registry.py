@@ -351,8 +351,16 @@ class FsRegistry:
 
     # ---- FS-6 — session attachments (V5 UserMessage.attachments source) ----
 
+    def attachments_root(self, user_id: str) -> Path:
+        """Root of every session's upload originals (``attachment_dir`` is
+        the per-session child). Created on demand so the backup walk sees a
+        real directory."""
+        path = self.data_dir(user_id) / "attachments"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def attachment_dir(self, user_id: str, session_id: str) -> Path:
-        path = self.data_dir(user_id) / "attachments" / session_id
+        path = self.attachments_root(user_id) / session_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
