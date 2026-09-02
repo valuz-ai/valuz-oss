@@ -66,6 +66,40 @@ def _is_locked(exc: OperationalError) -> bool:
     return "locked" in str(exc).lower()
 
 
+# ── deferred commits ──────────────────────────────────────────────────
+#
+# A unit of work that runs INSIDE another transaction's savepoint (an
+# operation handler under ``OperationService.confirm`` → ``begin_nested()``)
+# must not commit: SQLAlchemy closes the savepoint context on ``commit()``
+# and every statement after it fails with "Can't operate on closed
+# transaction inside context manager". The domain code it reuses (the skill
+# library's save pipeline, for one) commits at several points, because it
+# was written for the request path where it owns the transaction. Rather
+# than threading a ``commit=`` flag through every layer, the OUTER owner
+# declares the intent here and ``async_commit_with_retry`` turns each commit
+# into a flush for the duration. The outer transaction commits once, at the
+# end, and a failure rolls everything back together — which is exactly the
+# atomicity the operation record promises.
+
+_DEFER_COMMITS: ContextVar[bool] = ContextVar("valuz_defer_commits", default=False)
+
+
+@asynccontextmanager
+async def defer_commits() -> AsyncIterator[None]:
+    """Within this block ``async_commit_with_retry`` flushes instead of
+    committing. Task-local (a ``ContextVar``), so concurrent requests on the
+    same loop are unaffected."""
+    token = _DEFER_COMMITS.set(True)
+    try:
+        yield
+    finally:
+        _DEFER_COMMITS.reset(token)
+
+
+def commits_deferred() -> bool:
+    return _DEFER_COMMITS.get()
+
+
 async def async_commit_with_retry(
     db: AsyncSession, *, where: str = "commit", attempts: int = _LOCK_RETRY_ATTEMPTS
 ) -> None:
@@ -97,6 +131,10 @@ async def async_commit_with_retry(
     The happy path (commit succeeds first try) is unchanged: no contention, no
     rollback, no behavior difference.
     """
+    if _DEFER_COMMITS.get():
+        # See ``defer_commits``: an enclosing transaction owns the commit.
+        await db.flush()
+        return
     last_exc: Exception | None = None
     for attempt in range(attempts):
         # Snapshot the INSERTs a rollback would expunge, and note whether this

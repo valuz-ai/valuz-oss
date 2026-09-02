@@ -18,6 +18,7 @@ from valuz_agent.modules.operations.schemas import (
 )
 from valuz_agent.modules.operations.service import OperationService
 from valuz_agent.modules.playbooks import operations as _playbook_operations  # noqa: F401
+from valuz_agent.modules.skills import operations as _skill_operations  # noqa: F401
 
 router = APIRouter(prefix="/v1/operations", tags=["operations"])
 
@@ -83,6 +84,7 @@ async def confirm_operation(
             operation_id,
             expected_proposal_hash=body.proposal_hash,
             comment=body.comment,
+            decision=body.decision,
         )
         return operation_view(row)
     except LookupError as exc:

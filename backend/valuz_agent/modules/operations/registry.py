@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,11 @@ class OperationContext:
     db: AsyncSession
     projects: ProjectLibrary
     user_id: str
+    #: What the confirming user chose, when the proposal left a choice open
+    #: (``OperationDecisionRequest.decision``). Not part of the proposal
+    #: hash: the proposal is what was shown, the decision is the answer to
+    #: it. Empty for a plain confirm.
+    decision: dict[str, Any] = field(default_factory=dict)
 
 
 OperationHandler = Callable[[OperationContext, dict[str, Any]], Awaitable[OperationResult]]
@@ -32,6 +37,10 @@ class OperationRegistration:
     operation_type: str
     version: int
     handler: OperationHandler
+    #: Optional cleanup when the user cancels: best-effort, outside the
+    #: record's transaction, never able to fail the cancel (a proposal that
+    #: parked files somewhere gets to remove them).
+    cancel_handler: OperationHandler | None = None
 
 
 class OperationRegistry:

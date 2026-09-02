@@ -279,6 +279,10 @@ def _list_files(slug_dir: Path) -> tuple[list[StagingFileNode], int, int]:
     return files, file_count, total
 
 
+#: Public name for the file walk the submission proposal reuses.
+list_staged_files = _list_files
+
+
 def _next_versioned_slug(target_root: Path, base_slug: str) -> str:
     """Find an unused -vN suffix above the highest existing version."""
     match = VERSION_SUFFIX_RE.match(base_slug)

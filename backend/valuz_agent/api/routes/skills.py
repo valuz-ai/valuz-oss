@@ -457,6 +457,7 @@ async def optimize_staging_endpoint(
 @router.post(
     "/v1/skills/submissions/{session_id}/{slug}/confirm",
     response_model=SkillSubmissionConfirmResponse,
+    deprecated=True,
 )
 async def confirm_skill_submission(
     session_id: str,
@@ -466,6 +467,13 @@ async def confirm_skill_submission(
     user_id: str = Depends(get_current_user_id),
 ) -> SkillSubmissionConfirmResponse:
     """User accepts the skill the agent submitted via ``submit_skill``.
+
+    DEPRECATED: ``submit_skill`` now proposes a ``skill.submit`` operation
+    and the card confirms through ``POST /v1/operations/{id}/confirm``,
+    which is durable across refreshes, checks the staged content did not
+    change since submission and carries the collision decision. Kept for
+    one release so cards from sessions that predate the operation flow
+    still work; remove once the client stops calling it.
 
     Promotes the staged slug into the user library at
     ``~/.agents/skills/{slug}/`` and applies the per-entry-point side
@@ -503,6 +511,7 @@ async def confirm_skill_submission(
 @router.post(
     "/v1/skills/submissions/{session_id}/{slug}/dismiss",
     response_model=SkillSubmissionDismissResponse,
+    deprecated=True,
 )
 async def dismiss_skill_submission(
     session_id: str,
@@ -511,6 +520,9 @@ async def dismiss_skill_submission(
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillSubmissionDismissResponse:
     """User discards the agent's submission.
+
+    DEPRECATED — see ``confirm_skill_submission``; the operation flow's
+    ``cancel`` removes the staged slug itself.
 
     Cleans up the staged slug; no library write. Idempotent — calling
     twice returns ``removed=False`` on the second call.

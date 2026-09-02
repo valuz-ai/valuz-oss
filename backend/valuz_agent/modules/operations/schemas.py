@@ -31,6 +31,10 @@ class OperationProposal(BaseModel):
 class OperationDecisionRequest(BaseModel):
     proposal_hash: str = Field(min_length=64, max_length=64)
     comment: str | None = Field(default=None, max_length=4_000)
+    #: Parameters of the confirmation itself, for proposals that leave a
+    #: choice to the user (which of two ways to resolve a conflict). Handed
+    #: to the handler as ``OperationContext.decision``; ignored on cancel.
+    decision: dict[str, Any] | None = None
 
 
 class OperationView(BaseModel):
