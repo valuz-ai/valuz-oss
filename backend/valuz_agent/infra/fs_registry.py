@@ -758,6 +758,20 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ---- FS-16 — skill version snapshots ----
+    #
+    # Where the skill library keeps the per-version archives of a saved skill
+    # (``.artifact/<artifact_id>/v<N>/<slug>.zip`` under this root, written by
+    # the artifacts snapshot layer). Deliberately NOT under ``user_skill_root``:
+    # that tree is what every runtime materializes into a session and what a
+    # sandbox host packs and mounts wholesale, so history stored inside it
+    # would ship into every session and re-pack on every save.
+
+    def skill_versions_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "skill-versions"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     # ---- FS-15 — local backup (docs/design/client-local-backup.md) ----
     #
     # The backup destination is user-configurable (a preference); this method

@@ -18,7 +18,9 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from valuz_agent.modules.artifacts.datastore import Scope
+from valuz_agent.modules.artifacts.datastore import (
+    Scope as Scope,  # re-exported: the scope type is this module's API
+)
 from valuz_agent.modules.artifacts.models import SHARED_CWD
 
 logger = logging.getLogger(__name__)
@@ -101,9 +103,7 @@ async def resolve_delivery_scope(user_id: str, session_id: str) -> DeliveryScope
     )
 
 
-async def resolve_artifact_scope(
-    user_id: str, artifact: object
-) -> DeliveryScope | None:
+async def resolve_artifact_scope(user_id: str, artifact: object) -> DeliveryScope | None:
     """Reconstruct the delivery scope ``artifact`` was recorded under.
 
     A host-targeted regeneration must land on the lineage the host is already
@@ -132,9 +132,7 @@ async def resolve_artifact_scope(
     if worktree != SHARED_CWD:
         from valuz_agent.modules.worktrees.service import worktree_service
 
-        resolved = await worktree_service.resolve_session_cwd(
-            user_id, project_row, worktree
-        )
+        resolved = await worktree_service.resolve_session_cwd(user_id, project_row, worktree)
         if not resolved:
             return None
         return DeliveryScope(

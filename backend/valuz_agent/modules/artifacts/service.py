@@ -39,7 +39,9 @@ from valuz_agent.modules.artifacts.models import (
     STORAGE_KIND_FILE,
     STORAGE_KIND_INLINE,
     ArtifactBindingRow,
+    ArtifactContentRow,
     ArtifactKind,
+    ArtifactRevisionRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -397,6 +399,38 @@ class BindResult:
     #: What the slot shows now — set on STALE so the caller can show the user
     #: what they would be overwriting without a second round trip.
     current_revision_id: str | None = None
+
+
+# ── reads for other modules ─────────────────────────────────────────
+#
+# Modules may not import this module's datastore (module boundary), so the
+# few reads a lineage owner needs — the skill library versioning its saved
+# skills — are exposed here. Thin on purpose: they return rows, and the
+# caller decides what to show.
+
+
+async def get_head_revision(
+    db: AsyncSession, user_id: str, artifact_id: str
+) -> ArtifactRevisionRow | None:
+    """The revision the head points at, or ``None`` for an unknown artifact."""
+    current = await ArtifactDatastore(db).get_head_with_revision(user_id, artifact_id)
+    return current[1] if current is not None else None
+
+
+async def list_artifact_revisions(
+    db: AsyncSession, user_id: str, artifact_id: str
+) -> tuple[list[ArtifactRevisionRow], dict[str, ArtifactContentRow]]:
+    """Every revision oldest first, plus their content rows keyed by id."""
+    ds = ArtifactDatastore(db)
+    revisions = await ds.list_revisions(user_id, artifact_id)
+    contents = await ds.get_contents(user_id, [rev.content_id for rev in revisions])
+    return revisions, contents
+
+
+async def get_artifact_revision(
+    db: AsyncSession, user_id: str, revision_id: str
+) -> ArtifactRevisionRow | None:
+    return await ArtifactDatastore(db).get_revision(user_id, revision_id)
 
 
 async def bind_host_revision(

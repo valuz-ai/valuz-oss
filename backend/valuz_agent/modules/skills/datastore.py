@@ -90,9 +90,7 @@ class SkillDatastore:
             .first()
         )
 
-    async def get_by_source_path(
-        self, user_id: str, source_path: str
-    ) -> SkillIndexRow | None:
+    async def get_by_source_path(self, user_id: str, source_path: str) -> SkillIndexRow | None:
         """The row for one on-disk skill directory — the business identity.
 
         This is the exact-row lookup the upsert and the create/import/delete
@@ -144,6 +142,18 @@ class SkillDatastore:
             return
         row.creation_origin = origin
         await async_commit_with_retry(self._db, where="SkillDatastore.set_creation_origin_by_path")
+
+    async def set_artifact_id_by_path(
+        self, user_id: str, source_path: str, artifact_id: str
+    ) -> None:
+        """Bind a skill folder to its version lineage. Host-only bookkeeping
+        like ``creation_origin`` — the scan never writes it. A missing row is
+        a no-op."""
+        row = await self.get_by_source_path(user_id, source_path)
+        if row is None:
+            return
+        row.artifact_id = artifact_id
+        await async_commit_with_retry(self._db, where="SkillDatastore.set_artifact_id_by_path")
 
     async def set_origin_metadata(self, user_id: str, skill_id: str, origin_json: str) -> None:
         """Stamp import provenance (``origin_json``) on an existing row.

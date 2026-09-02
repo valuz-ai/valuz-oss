@@ -2699,6 +2699,99 @@ paths:
               schema:
                 $ref: "#/components/schemas/SkillFileContent"
 
+  /v1/skills/{skill_id}/versions:
+    get:
+      summary: List a skill's saved versions
+      description: |
+        Every version saved through the skill library, oldest first. A skill
+        that was never saved through the library (hand-dropped, imported before
+        versioning) has no lineage yet and returns an empty list — not a 404.
+      operationId: listSkillVersions
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Version list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillVersionListResponse"
+        "404":
+          description: Skill not found
+
+  /v1/skills/{skill_id}/versions/{revision_id}/files:
+    get:
+      summary: Read one file out of an archived skill version
+      description: |
+        Read straight from the version's archive; nothing is unpacked to disk.
+        Binary content is reported as the literal `<binary file>` sentinel, as
+        the staging file endpoint does. Protected packages refuse (403).
+      operationId: readSkillVersionFile
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: revision_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+          description: Path inside the skill directory, e.g. `SKILL.md` or `scripts/run.sh`.
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillVersionFileResponse"
+        "403":
+          description: Protected package
+        "404":
+          description: Skill, version or file not found
+
+  /v1/skills/{skill_id}/versions/{revision_id}/restore:
+    post:
+      summary: Restore a skill to an earlier version
+      description: |
+        Makes the library directory equal to the chosen version — recorded as
+        a NEW version on top of the history (its frontmatter `version:` is the
+        next number), never by rewriting earlier ones. If the library directory
+        held content that was never saved through the library, that content is
+        captured as a `baseline` version first, so nothing is destroyed.
+      operationId: restoreSkillVersion
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: revision_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillVersionRestoreResponse"
+        "400":
+          description: Skill is read-only or locked
+        "403":
+          description: Protected package
+        "404":
+          description: Skill or version not found
+
   /v1/projects/{project_id}/skills:
     get:
       summary: Project skills catalog
@@ -7084,6 +7177,14 @@ components:
             `~/.agents/skills/`) rather than originated by Valuz. Drives
             the "创建" vs "同步" badge in the .agents group on the skill
             management page; `"discovered"` renders no badge.
+        artifact_id:
+          type: string
+          nullable: true
+          description: |
+            Version lineage of this skill — the `kind=skill` artifact whose
+            revisions are the skill's saved versions. `null` for a skill that
+            was never saved through the library. Host-side bookkeeping in
+            `valuz_skill_index`, never written into SKILL.md.
     SkillDetail:
       allOf:
         - $ref: "#/components/schemas/SkillView"
@@ -7348,6 +7449,78 @@ components:
           nullable: true
           minimum: 1
           description: Parsed from SKILL.md frontmatter `version:`.
+
+    SkillVersionItem:
+      type: object
+      required: [revision_id, version_no, created_at]
+      properties:
+        revision_id:
+          type: string
+        version_no:
+          type: integer
+          minimum: 1
+        created_at:
+          type: integer
+          description: Epoch milliseconds.
+        source_session_id:
+          type: string
+          nullable: true
+          description: The session whose save produced this version, when known.
+        created_by:
+          type: string
+          nullable: true
+          description: |
+            `"baseline"` for a version captured from the library directory
+            right before it was overwritten (content that had never been saved
+            through the library); `null` for a regular save.
+        byte_size:
+          type: integer
+          default: 0
+        content_hash:
+          type: string
+          default: ""
+        is_current:
+          type: boolean
+          default: false
+
+    SkillVersionListResponse:
+      type: object
+      required: [skill_id, items]
+      properties:
+        skill_id:
+          type: string
+        artifact_id:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillVersionItem"
+
+    SkillVersionFileResponse:
+      type: object
+      required: [revision_id, path, content, size]
+      properties:
+        revision_id:
+          type: string
+        path:
+          type: string
+        content:
+          type: string
+          description: File text, or the literal `<binary file>` sentinel.
+        size:
+          type: integer
+
+    SkillVersionRestoreResponse:
+      type: object
+      required: [skill, revision_id, version_no]
+      properties:
+        skill:
+          $ref: "#/components/schemas/SkillView"
+        revision_id:
+          type: string
+        version_no:
+          type: integer
 
     StagingScanResponse:
       type: object

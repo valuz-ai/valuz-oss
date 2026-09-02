@@ -81,6 +81,12 @@ class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     protected: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # The ``kind=skill`` artifact whose revisions are this skill's versions
+    # (``modules/skills/versioning.py``). Host-only bookkeeping like
+    # ``creation_origin``: set on the first save through the skill library,
+    # never written by the scan, so it survives rescans. NULL until then, and
+    # NULL again on a renamed/forked directory (new row, new lineage).
+    artifact_id: Mapped[str | None] = mapped_column(String(16), default=None, index=True)
 
 
 class ProjectSkillConfigRow(Base, UserMixin):
@@ -153,6 +159,9 @@ class SkillView(BaseModel):
     # — never SKILL.md. Drives the "创建" / "同步" badge in the .agents
     # group; ``discovered`` renders no badge.
     creation_origin: Literal["created", "imported", "discovered"] = "discovered"
+    # Version lineage (``kind=skill`` artifact id), or None for a skill that has
+    # never been saved through the library. Drives the "versions" affordance.
+    artifact_id: str | None = None
 
 
 class SkillDetail(SkillView):
@@ -481,3 +490,40 @@ class SkillImportUrlConfirmRequest(BaseModel):
     target_scope: SkillTargetScope = "user"
     project_id: str | None = None
     add_to_project: bool = False
+
+
+# ── versions ────────────────────────────────────────────────────────
+
+
+class SkillVersionItem(BaseModel):
+    revision_id: str
+    version_no: int
+    created_at: int
+    #: The session whose save produced this version, when known.
+    source_session_id: str | None = None
+    #: ``"baseline"`` for a version captured from the library directory right
+    #: before it was overwritten (content that was never saved through the
+    #: library), ``None`` for a regular save.
+    created_by: str | None = None
+    byte_size: int = 0
+    content_hash: str = ""
+    is_current: bool = False
+
+
+class SkillVersionListResponse(BaseModel):
+    skill_id: str
+    artifact_id: str | None = None
+    items: list[SkillVersionItem] = Field(default_factory=list)
+
+
+class SkillVersionFileResponse(BaseModel):
+    revision_id: str
+    path: str
+    content: str
+    size: int
+
+
+class SkillVersionRestoreResponse(BaseModel):
+    skill: SkillView
+    revision_id: str
+    version_no: int
