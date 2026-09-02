@@ -124,3 +124,64 @@ def test_explicit_agent_slug_wins_over_default(client_and_svc) -> None:
     assert resp.status_code == 201
     (call,) = svc.calls
     assert call["agent_slug"] == "researcher"
+
+
+# ── agentless launch (composer parity) ────────────────────────────────
+
+
+def test_explicit_brain_launches_without_binding_an_agent(client_and_svc) -> None:
+    """A runtime + model pick with no agent runs on exactly that brain.
+
+    Falling back to the default assistant here would hand the AGENT's
+    runtime to a user who just picked one — the inconsistency this endpoint
+    had with the conversation composer, which lets a quick chat run
+    agentless.
+    """
+    client, svc = client_and_svc
+
+    resp = client.post(
+        "/v1/skills/create/start",
+        json={
+            "context": {"kind": "skills_library"},
+            "provider_id": "prov-1",
+            "model_id": "gpt-5",
+            "runtime_id": "codex",
+            "effort": "high",
+        },
+    )
+
+    assert resp.status_code == 201
+    (call,) = svc.calls
+    assert call["agent_slug"] is None
+    assert call["provider_id"] == "prov-1"
+    assert call["model_id"] == "gpt-5"
+    assert call["runtime_id"] == "codex"
+    assert call["effort"] == "high"
+
+
+def test_a_named_agent_still_wins_over_the_default(client_and_svc) -> None:
+    client, svc = client_and_svc
+
+    resp = client.post(
+        "/v1/skills/create/start",
+        json={"context": {"kind": "skills_library"}, "agent_slug": "my-agent"},
+    )
+
+    assert resp.status_code == 201
+    (call,) = svc.calls
+    assert call["agent_slug"] == "my-agent"
+
+
+def test_choosing_nothing_still_falls_back_to_the_default_assistant(client_and_svc) -> None:
+    """The fallback is for a launch that expressed no preference at all —
+    it must not disappear along with the agent requirement."""
+    client, svc = client_and_svc
+
+    resp = client.post(
+        "/v1/skills/create/start",
+        json={"context": {"kind": "skills_library"}},
+    )
+
+    assert resp.status_code == 201
+    (call,) = svc.calls
+    assert call["agent_slug"] == DEFAULT_ASSISTANT_SLUG

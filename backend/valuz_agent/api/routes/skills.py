@@ -241,22 +241,33 @@ async def start_create(
     skill should be filed: user library only, or library + project
     binding.
 
-    The session binds the seeded default assistant when it exists (see
-    ``_default_assistant_slug_if_present``) — the default assistant
-    resolves as a global library agent in any project, and the
-    skill-creator capabilities (skill + ``submit_skill`` tool) ride the
-    always-on baseline, not the agent.
+    Agent binding follows the composer rather than forcing one. A named
+    agent is bound. An explicit brain (runtime / model / provider) with no
+    agent runs agentless on exactly that brain — binding the default
+    assistant there would hand the AGENT's runtime to a user who just
+    picked one, which is the inconsistency this endpoint had with the
+    conversation composer. Only a launch that chose nothing at all falls
+    back to the seeded default assistant, which resolves as a global
+    library agent in any project. Either way the skill-creator capabilities
+    (the skill + ``submit_skill``) ride the always-on baseline, not the
+    agent, so an agentless session is fully able to author a skill.
     """
     project_id = _resolve_project_for_creation(body.context)
     creation_context = body.context.model_dump(exclude_none=True)
+    chose_a_brain = any((body.runtime_id, body.model_id, body.provider_id))
+    agent_slug = body.agent_slug
+    if agent_slug is None and not chose_a_brain:
+        agent_slug = await _default_assistant_slug_if_present(user_id)
     session = await session_svc.create_session(
         project_id=project_id,
         title=None,
         model_id=body.model_id,
         provider_id=body.provider_id,
+        runtime_id=body.runtime_id,
+        effort=body.effort,
         trigger_meta={"mode": "skill-creator"},
         creation_context=creation_context,
-        agent_slug=body.agent_slug or await _default_assistant_slug_if_present(user_id),
+        agent_slug=agent_slug,
         user_id=user_id,
     )
     return SkillCreateStartResponse(

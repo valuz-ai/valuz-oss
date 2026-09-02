@@ -272,14 +272,22 @@ class SkillCreateStartRequest(BaseModel):
     """
 
     context: SkillCreationContext
-    # Agent to bind the authoring conversation to. ``None`` lets the
-    # backend pick the default assistant (see
-    # ``routes.skills._default_assistant_slug_if_present``); the
-    # draft-first frontend passes the agent the user chose in the
-    # composer so the skill-creator chat behaves exactly like 新对话.
+    # Agent to bind the authoring conversation to. ``None`` is a real
+    # choice, not just an omission: the composer lets a conversation run on
+    # a runtime + model with no agent, and skill-creator has to match it —
+    # the capability (the skill itself and ``submit_skill``) rides the
+    # always-on baseline, not the agent. When nothing at all is chosen the
+    # route still falls back to the default assistant; see
+    # ``routes.skills.start_create``.
     agent_slug: str | None = None
     model_id: str | None = None
     provider_id: str | None = None
+    # The rest of the composer's brain picks. Without these an agentless
+    # launch could only ever run the default runtime, so a user who chose
+    # Codex would silently get something else — the inconsistency this
+    # endpoint had with the conversation composer.
+    runtime_id: str | None = None
+    effort: str | None = None
 
 
 class SkillCreateStartResponse(BaseModel):
