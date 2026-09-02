@@ -1950,6 +1950,14 @@ class SkillLibraryService:
                 f"Ask the agent to regenerate the skill."
             )
 
+        # Before anything reads these bytes: a package that documents its own
+        # helpers by their staging path documents a directory that is about to
+        # be deleted. Rewriting here means the recorded version and the library
+        # copy are both correct — doing it after the record would put the wrong
+        # bytes in the history forever.
+        staging.strip_staging_paths(
+            canonical_dir, slug, await staging.staging_dir_for_session(user_id, session_id) / slug
+        )
         # Version first, then overwrite (docs/design/skill-versioning §4.1):
         # whatever the library holds is captured as a baseline if it was
         # never recorded, the staged copy gets the next version number in

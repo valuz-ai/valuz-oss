@@ -136,6 +136,25 @@ The host enforces this:
   in the chat. Confirmation moves it to their library; dismissal
   cleans up the staging directory.
 
+**Staging is where you WRITE the skill, never what the skill REFERS to.**
+Saving moves the package into the library and deletes staging, so anything
+inside the skill that names `./.skill-staging/{slug}/...` names a directory
+that no longer exists — and it fails at the moment someone actually uses the
+skill, long after you are gone. Inside SKILL.md (and any file you ship with
+it), refer to the package's own files RELATIVELY, as they sit next to the
+manifest:
+
+```
+✅  python3 scripts/fetch_weather.py --region all
+✅  open assets/board.html
+❌  python3 ./.skill-staging/{slug}/scripts/fetch_weather.py
+❌  python3 /abs/path/to/staging/{slug}/scripts/fetch_weather.py
+```
+
+The host strips this prefix at save time as a backstop, but write it
+relatively in the first place: the backstop cannot repair a sentence that
+merely *describes* the staging layout.
+
 ### Telling the user the skill is ready: the `submit_skill` tool
 
 When the SKILL.md and any required assets are written and you're ready

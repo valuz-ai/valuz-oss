@@ -454,3 +454,32 @@ async def test_manifest_version_reads_the_same_declaration_the_scan_does(tmp_pat
         d.mkdir()
         (d / "SKILL.md").write_text(f"---\n{raw}\nname: demo\ndescription: d\n---\nbody\n")
         assert versioning.manifest_version_of(d) == expected, raw
+
+
+async def test_saving_rewrites_the_packages_own_staging_paths(env) -> None:  # type: ignore[no-untyped-def]
+    """End to end: the recorded version and the library copy are both clean.
+
+    The rewrite has to happen BEFORE the version is recorded — a history that
+    holds the broken paths keeps handing them back on every restore.
+    """
+    d = env.staging / "weather"
+    (d / "scripts").mkdir(parents=True)
+    (d / "scripts" / "fetch.py").write_text("print(1)\n", encoding="utf-8")
+    (d / "SKILL.md").write_text(
+        "---\nname: weather\ndescription: d\n---\n\n"
+        "run `python3 .skill-staging/weather/scripts/fetch.py`\n",
+        encoding="utf-8",
+    )
+
+    skill, _, _ = await env.svc.confirm_submission(USER, SESSION, "weather")
+
+    saved = (env.library / "weather" / "SKILL.md").read_text(encoding="utf-8")
+    assert "run `python3 scripts/fetch.py`" in saved
+    assert ".skill-staging" not in saved
+    assert (env.library / "weather" / "scripts" / "fetch.py").is_file()
+
+    versions = await env.svc.list_versions(USER, skill.id)
+    recorded = await env.svc.read_version_file(
+        USER, skill.id, versions.items[-1].revision_id, "SKILL.md"
+    )
+    assert ".skill-staging" not in recorded.content

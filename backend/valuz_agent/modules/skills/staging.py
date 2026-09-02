@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 from dataclasses import dataclass
@@ -215,6 +216,88 @@ async def staging_dir_for_session(user_id: str, session_id: str, *, mkdir: bool 
 
 
 # ── Hashing & meta ────────────────────────────────────────────────────
+
+
+logger = logging.getLogger(__name__)
+
+
+#: Text a saved skill may still carry from where it was written. The agent
+#: authors under ``.skill-staging/<slug>/`` and refers to its own helper files
+#: by the path it can see; that path stops existing the moment the skill is
+#: saved (staging is emptied) and is not where the package lives anyway.
+_STAGING_SEGMENT = ".skill-staging"
+
+#: File suffixes worth rewriting. Instructions and their neighbours are text;
+#: nothing else should be rewritten sight-unseen.
+_REWRITABLE_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".json", ".yaml", ".yml"})
+
+#: Bounded: a package this big is not a set of instructions, and a rewrite pass
+#: over it would read megabytes off a network mount for nothing.
+_MAX_REWRITE_BYTES = 1 * 1024 * 1024
+
+
+def _staging_reference_patterns(slug: str, staging_dir: Path) -> list[str]:
+    """Every spelling of "this package's staging directory" worth removing.
+
+    Longest first, so ``./.skill-staging/<slug>/`` is consumed before the
+    bare relative form inside it.
+    """
+    rel = f"{_STAGING_SEGMENT}/{slug}/"
+    return [
+        f"{staging_dir.resolve(strict=False)}/",
+        f"{staging_dir}/",
+        f"./{rel}",
+        rel,
+    ]
+
+
+def strip_staging_paths(skill_dir: Path, slug: str, staging_dir: Path) -> list[str]:
+    """Make a package's references to its own files relative to itself.
+
+    Returns the relative paths of the files that changed.
+
+    The agent writes the skill in ``.skill-staging/<slug>/`` and, reasonably,
+    documents how to run its own helpers using the path it can see:
+    ``python3 .skill-staging/daily-weather-forecast/scripts/fetch_weather.py``.
+    Saving the skill moves the package and DELETES staging, so that command
+    names a directory that no longer exists — while ``scripts/fetch_weather.py``
+    sits right there in the package. Observed on qa 2026-09-02: six such lines
+    in one saved manifest, every one of them a runtime failure waiting for the
+    skill to be used.
+
+    Instructing the agent to write relative paths is necessary but not
+    sufficient — it is one more rule in a long manifest, and the failure is
+    silent until someone runs the skill. This closes it at the save, where the
+    package's new home is known: the prefix is simply removed, which is exactly
+    the relative path, since the kernel materializes the package at
+    ``<cwd>/.claude/skills/<slug>/`` and runs the agent from ``<cwd>``.
+    """
+    patterns = _staging_reference_patterns(slug, staging_dir)
+    changed: list[str] = []
+    for path in sorted(skill_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in _REWRITABLE_SUFFIXES:
+            continue
+        try:
+            if path.stat().st_size > _MAX_REWRITE_BYTES:
+                continue
+            raw = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or unreadable: not ours to rewrite
+        rewritten = raw
+        for pattern in patterns:
+            rewritten = rewritten.replace(pattern, "")
+        if rewritten != raw:
+            try:
+                path.write_text(rewritten, encoding="utf-8")
+            except OSError:
+                logger.warning("staging: could not rewrite %s", path, exc_info=True)
+                continue
+            changed.append(path.relative_to(skill_dir).as_posix())
+    if changed:
+        logger.info(
+            "staging: removed staging-relative paths from %s in %s", ", ".join(changed), slug
+        )
+    return changed
 
 
 def hash_skill_directory(skill_dir: Path) -> str:
@@ -425,6 +508,10 @@ async def sync_slug(
     src = await staging_dir_for_session(user_id, session_id) / slug
     if not src.is_dir() or _detect_manifest(src) is None:
         raise FileNotFoundError(f"no staging slug {slug!r} for session {session_id!r}")
+    # The panel's sync is the second door into the library — same rewrite as
+    # ``confirm_submission`` does, and for the same reason: staging is deleted
+    # after this and any reference to it stops resolving.
+    strip_staging_paths(src, slug, src)
 
     root = (target_root or _default_user_skill_root(user_id)).expanduser()
     root.mkdir(parents=True, exist_ok=True)
