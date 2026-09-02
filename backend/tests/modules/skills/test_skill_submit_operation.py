@@ -490,3 +490,83 @@ async def test_a_failing_lifecycle_hook_does_not_undo_the_save(env, monkeypatch)
     assert (env.library / "demo" / "SKILL.md").is_file()
     assert await _versions(env, "demo") == [1]
     assert skills_service is not None  # import kept meaningful for the reader
+
+
+# ── prepare_skill_edit: hand back the manifest, never eat a draft ─────
+
+
+async def test_prepare_skill_edit_returns_the_manifest_body(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The tool exists so the agent edits what is really there.
+
+    Handing the manifest back in the same call is what removes the excuse to
+    reconstruct the skill from memory — the failure mode seen on qa, where
+    the agent listed the library, saw the skill, and rewrote it anyway.
+    """
+    import json
+
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _prepare_skill_edit_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    _stage(env.staging, "demo", "first body")
+    op_id, digest, _, _ = await _propose(env, "demo")
+    await _confirm(env, op_id, digest)
+
+    result = await _prepare_skill_edit_handler(
+        {"slug": "demo"}, HostExecContext(session_id=SESSION, user_id=USER)
+    )
+
+    assert not result.is_error, result.content
+    body = json.loads(result.content)
+    assert body["current_version"] == 1
+    assert "first body" in body["skill_md"]
+    assert "version: 1" in body["skill_md"]
+
+
+async def test_prepare_skill_edit_refuses_to_discard_an_unsaved_draft(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Staging is the one place with no version history behind it.
+
+    ``prepare_optimize`` rmtree's the destination, so re-seeding over a draft
+    the user has not saved destroys work that nothing can bring back.
+    """
+    import json
+
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _prepare_skill_edit_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    _stage(env.staging, "demo", "first body")
+    op_id, digest, _, _ = await _propose(env, "demo")
+    await _confirm(env, op_id, digest)
+
+    ctx = HostExecContext(session_id=SESSION, user_id=USER)
+    await _prepare_skill_edit_handler({"slug": "demo"}, ctx)
+    # the agent edits the staged draft
+    (env.staging / "demo" / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: demo\n---\n\nwork in progress\n", encoding="utf-8"
+    )
+
+    refused = await _prepare_skill_edit_handler({"slug": "demo"}, ctx)
+    assert refused.is_error
+    assert "already holds a draft" in refused.content
+    assert "work in progress" in (env.staging / "demo" / "SKILL.md").read_text()
+
+    # explicit opt-in throws it away and re-seeds
+    forced = await _prepare_skill_edit_handler({"slug": "demo", "discard_existing": True}, ctx)
+    assert not forced.is_error, forced.content
+    assert "first body" in json.loads(forced.content)["skill_md"]
+
+
+async def test_prepare_skill_edit_reseeds_freely_when_the_draft_matches(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """An untouched draft is not work — re-seeding it costs nothing."""
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _prepare_skill_edit_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    _stage(env.staging, "demo", "first body")
+    op_id, digest, _, _ = await _propose(env, "demo")
+    await _confirm(env, op_id, digest)
+
+    ctx = HostExecContext(session_id=SESSION, user_id=USER)
+    assert not (await _prepare_skill_edit_handler({"slug": "demo"}, ctx)).is_error
+    assert not (await _prepare_skill_edit_handler({"slug": "demo"}, ctx)).is_error

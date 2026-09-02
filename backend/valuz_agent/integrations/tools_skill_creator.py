@@ -101,7 +101,9 @@ PREPARE_SKILL_EDIT_DESCRIPTION = (
     "(check with list_skills first). Also call it again to keep iterating "
     "after the user has saved — the staged copy is removed on save. Read-only "
     "and official skills cannot be edited in place; create a new skill under "
-    "a different slug instead."
+    "a different slug instead. Returns the staged path, the current version "
+    "and the skill's SKILL.md, so you can see what it says today without a "
+    "second read."
 )
 
 PREPARE_SKILL_EDIT_PARAMETERS: dict[str, object] = {
@@ -110,6 +112,15 @@ PREPARE_SKILL_EDIT_PARAMETERS: dict[str, object] = {
         "slug": {
             "type": "string",
             "description": "Slug of the library skill to improve (as listed by list_skills).",
+        },
+        "discard_existing": {
+            "type": "boolean",
+            "description": (
+                "Only when a draft for this slug is already staged and differs "
+                "from the library copy: true throws that draft away and starts "
+                "over from the library. Default false, which refuses rather "
+                "than silently discarding work."
+            ),
         },
     },
     "required": ["slug"],
@@ -319,7 +330,10 @@ async def _prepare_skill_edit_handler(args: dict[str, object], context: ExecCont
         return ToolResult(content="Error: `slug` is required.", is_error=True)
 
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.integrations.skills_filesystem import _default_user_skill_root
+    from valuz_agent.integrations.skills_filesystem import (
+        _default_user_skill_root,
+        _detect_manifest,
+    )
     from valuz_agent.modules.artifacts.service import get_head_revision
     from valuz_agent.modules.skills import staging
     from valuz_agent.modules.skills.datastore import SkillDatastore
@@ -365,12 +379,30 @@ async def _prepare_skill_edit_handler(args: dict[str, object], context: ExecCont
             version = head.version_no if head is not None else None
         skill_id = row.id
 
+    # Seeding is destructive (the copy replaces whatever is staged), and
+    # staging is the one place with no version history behind it. A draft
+    # that differs from the library is unsaved work, so refuse rather than
+    # discard it.
+    staged_dir = await staging.staging_dir_for_session(user_id, session_id) / slug
+    if _detect_manifest(staged_dir) is not None and not bool(args.get("discard_existing")):
+        if staging.hash_skill_directory(staged_dir) != staging.hash_skill_directory(library_dir):
+            return ToolResult(
+                content=(
+                    f"Error: './.skill-staging/{slug}/' already holds a draft that differs "
+                    f"from the saved skill. Re-seeding would throw it away. Either keep "
+                    f"editing that draft and call submit_skill, or call this again with "
+                    f"discard_existing=true to start over from the library copy."
+                ),
+                is_error=True,
+            )
+
     try:
         dest = await staging.prepare_optimize(user_id, session_id, library_dir, skill_id)
     except (FileNotFoundError, ValueError) as exc:
         return ToolResult(content=f"Error: {exc}", is_error=True)
 
     files, file_count, _total = staging.list_staged_files(dest)
+    manifest = _detect_manifest(dest)
     return ToolResult(
         content=json.dumps(
             {
@@ -383,15 +415,37 @@ async def _prepare_skill_edit_handler(args: dict[str, object], context: ExecCont
                 "next_version": (version or 0) + 1,
                 "file_count": file_count,
                 "files": [f.path for f in files if f.type == "file"],
+                # The point of the tool is that you edit what is really there
+                # rather than reconstructing it. Handing back the manifest
+                # closes that loop in one call.
+                "skill_md": _read_manifest_text(manifest),
                 "message": (
                     f"Copied '{slug}' into ./.skill-staging/{slug}/ (current v{version or '?'}). "
-                    f"Edit the files there — do not set `version:` in SKILL.md, the host "
-                    f"assigns it on save — then call submit_skill with change_kind='update'."
+                    f"Its SKILL.md is included below as `skill_md` — edit the staged files, "
+                    f"do not set `version:` in SKILL.md (the host assigns it on save), then "
+                    f"call submit_skill with change_kind='update'."
                 ),
             },
             ensure_ascii=False,
         )
     )
+
+
+#: Cap on the manifest body returned inline. A SKILL.md is prose; anything
+#: past this is not the summary the agent needs to start editing.
+_MANIFEST_INLINE_LIMIT = 32_000
+
+
+def _read_manifest_text(manifest: Path | None) -> str | None:
+    if manifest is None:
+        return None
+    try:
+        text = manifest.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if len(text) > _MANIFEST_INLINE_LIMIT:
+        return text[:_MANIFEST_INLINE_LIMIT] + "\n… (truncated; read the file for the rest)"
+    return text
 
 
 SUBMIT_SKILL_TOOL_DEF = ToolDef(

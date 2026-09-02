@@ -698,9 +698,12 @@ LIST_SKILLS_DESCRIPTION = (
     "List the skills already in the user's library (slug, name, description, "
     "scope, version, whether it is editable). Call this BEFORE creating a new "
     "skill so you can tell the user when a similar one already exists and let "
-    "them choose between improving it (prepare_skill_edit) and creating a new "
-    "one; also for binding existing skills by slug when proposing an agent. "
-    "Read-only."
+    "them choose between improving it and creating a new one; also for binding "
+    "existing skills by slug when proposing an agent. "
+    "This listing is metadata only — it does NOT give you a skill's contents "
+    "or its path. To modify one, call `prepare_skill_edit(slug=...)`: it puts "
+    "the library's current version in your staging directory so you edit the "
+    "real thing instead of rewriting it from memory. Read-only."
 )
 
 LIST_SKILLS_PARAMETERS: dict[str, object] = {"type": "object", "properties": {}}

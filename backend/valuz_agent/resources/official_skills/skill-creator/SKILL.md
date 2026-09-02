@@ -81,6 +81,13 @@ whether it is editable). Then:
   as derived from it. Edit **that** copy; never copy the library
   directory by hand — without the marker your save would be treated as
   a name collision.
+- **This is the ONLY way to edit an existing skill here**, and it
+  overrides any advice later in this document about copying an installed
+  skill path or staging in `/tmp/` — you do not have that path (the skill
+  is not loaded into your session), and `/tmp` is not a staging location
+  on this host. If you catch yourself about to re-write a skill from
+  memory because you cannot see its current contents, that is the signal
+  to call `prepare_skill_edit` instead.
 - Skills that are read-only / official cannot be edited in place;
   create a new one under a different slug instead.
 - Never write `version:` into the SKILL.md frontmatter yourself. The
@@ -296,7 +303,7 @@ Execute this task:
 
 **Baseline run** (same prompt, but the baseline depends on context):
 - **Creating a new skill**: no skill at all. Same prompt, no skill path, save to `without_skill/outputs/`.
-- **Improving an existing skill**: the old version. Before editing, snapshot the skill (`cp -r <skill-path> <workspace>/skill-snapshot/`), then point the baseline subagent at the snapshot. Save to `old_skill/outputs/`.
+- **Improving an existing skill**: the old version. On the Valuz host you do not have the installed skill's path, and `prepare_skill_edit` is what puts the current version in front of you — take the baseline snapshot by copying `./.skill-staging/<slug>/` (before you edit it) to `<workspace>/skill-snapshot/`, then point the baseline subagent at that. Save to `old_skill/outputs/`.
 
 Write an `eval_metadata.json` for each test case (assertions can be empty for now). Give each eval a descriptive name based on what it's testing — not just "eval-0". Use this name for the directory too. If this iteration uses new or modified eval prompts, create these files for each new eval directory — don't assume they carry over from previous iterations.
 
@@ -548,10 +555,19 @@ In Claude.ai, the core workflow is the same (draft → test → review → impro
 
 **Packaging**: The `package_skill.py` script works anywhere with Python and a filesystem. On Claude.ai, you can run it and the user can download the resulting `.skill` file.
 
-**Updating an existing skill**: The user might be asking you to update an existing skill, not create a new one. In this case:
+**Updating an existing skill**: The user might be asking you to update an existing skill, not create a new one.
+
+> **On the Valuz host, ignore the copy-to-`/tmp` advice below and use
+> `prepare_skill_edit(slug=...)`.** You do not have the installed skill's
+> path — it is not in your session's skills — and `/tmp` is explicitly not a
+> valid staging location here. `prepare_skill_edit` copies the library's
+> current version into `./.skill-staging/<slug>/` and marks it as derived
+> from that skill, which is what makes the user's save its next VERSION
+> rather than a name collision. See "Where to write the skill (Valuz host)".
+
 - **Preserve the original name.** Note the skill's directory name and `name` frontmatter field -- use them unchanged. E.g., if the installed skill is `research-helper`, output `research-helper.skill` (not `research-helper-v2`).
-- **Copy to a writeable location before editing.** The installed skill path may be read-only. Copy to `/tmp/skill-name/`, edit there, and package from the copy.
-- **If packaging manually, stage in `/tmp/` first**, then copy to the output directory -- direct writes may fail due to permissions.
+- (Other hosts) **Copy to a writeable location before editing.** The installed skill path may be read-only. Copy to `/tmp/skill-name/`, edit there, and package from the copy.
+- (Other hosts) **If packaging manually, stage in `/tmp/` first**, then copy to the output directory -- direct writes may fail due to permissions.
 
 ---
 

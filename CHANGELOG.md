@@ -74,6 +74,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indistinguishable from a card predating the operation record, so it fell
   back to a staging scan and rendered a failure as "waiting for the AI to
   write files".
+- **The skill-creator told the agent two incompatible things** — the host
+  section says "call `prepare_skill_edit`", while two upstream passages still
+  said to copy the installed skill path into `/tmp` and edit there. On this
+  host the agent has neither that path (the skill is not in its session) nor
+  `/tmp` as a staging location, so with both instructions present it wrote the
+  skill again from memory — observed on qa, right after it had listed the
+  library and seen the skill. Those passages now defer to the host rule.
+  `list_skills` says outright that it returns metadata only and points at
+  `prepare_skill_edit`, which now returns the skill's SKILL.md so the agent
+  can see what it says today without a second read, and refuses to re-seed
+  over a staged draft that differs from the library (`discard_existing: true`
+  to override) — staging is the one place with no version history behind it.
 - **A failing skill-lifecycle hook rolled back a save that had already
   touched disk** — a save writes the library directory (not transactional)
   and the version history (transactional), and the overlay's mirror-to-cloud
