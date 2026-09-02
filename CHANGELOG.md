@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Artifacts: `skill` kind and a bytes delivery form** — `ArtifactKind.SKILL`
+  labels an installable skill package, and `DeliveryRequest.content_bytes`
+  records opaque bytes (an archive, an image) that arrive as content rather
+  than as a file. Bytes are stored as a file snapshot only, never inline. This
+  is the artifacts-side groundwork for versioning skill-creator output; the
+  skills module owns the rest.
+
 ### Fixed
 
 - **Restoring a backup could silently empty every data directory** — the

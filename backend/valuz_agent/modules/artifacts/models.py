@@ -57,6 +57,12 @@ class ArtifactKind(StrEnum):
     SPREADSHEET = "spreadsheet"
     UI = "ui"
     MEDIA = "media"
+    # An installable agent skill package (SKILL.md + scripts + references),
+    # recorded as ONE archive per version by the skill library when the user
+    # saves a skill-creator result. Still just a label here — the skills
+    # module owns everything that makes a skill a skill; this module never
+    # branches on it (docs/design/skill-versioning in the commercial repo).
+    SKILL = "skill"
 
 
 #: Model-facing descriptions, kept beside the enum so the tool schema and the
@@ -67,6 +73,10 @@ ARTIFACT_KIND_HINTS: dict[ArtifactKind, str] = {
     ArtifactKind.SPREADSHEET: "tabular data — a model, dataset, comparison table",
     ArtifactKind.UI: "something to interact with or view — a page, dashboard, chart",
     ArtifactKind.MEDIA: "an image, video, or audio file",
+    ArtifactKind.SKILL: (
+        "an installable agent skill package; the skill library records these "
+        "when a skill is saved — do not use it for files you deliver yourself"
+    ),
     ArtifactKind.FILE: "anything else, or when unsure",
 }
 

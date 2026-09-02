@@ -87,7 +87,13 @@ class DeliveryRequest:
     #: every generation. ``file_name`` names it; the snapshot still lands on
     #: disk so the agent can ``Read`` the version it is asked to revise.
     content: str | None = None
-    #: Required with ``content``; ignored with ``abs_path`` (the basename wins).
+    #: The third form: bytes that are not text — an archive the skill library
+    #: packed, a rendered image. Same rules as ``content`` (a file name names
+    #: it, the snapshot lands on disk) except nothing rides inline on the
+    #: content row: the bytes are opaque to every reader but the file itself.
+    content_bytes: bytes | None = None
+    #: Required with ``content`` / ``content_bytes``; ignored with ``abs_path``
+    #: (the basename wins).
     file_name: str | None = None
     #: Label for the deliverable. Defaults to the file's basename.
     display_name: str | None = None
@@ -150,16 +156,21 @@ async def deliver_artifact(
             status=DeliveryStatus.INVALID,
             detail="artifact_id and as_new_artifact say opposite things",
         )
-    if (request.abs_path is None) == (request.content is None):
+    forms = sum(
+        1
+        for present in (request.abs_path, request.content, request.content_bytes)
+        if present is not None
+    )
+    if forms != 1:
         return DeliveryResult(
             status=DeliveryStatus.INVALID,
-            detail="a request carries exactly one of abs_path or content",
+            detail="a request carries exactly one of abs_path, content or content_bytes",
         )
 
     inline_bytes: bytes | None = None
     abs_path: Path | None = None
 
-    if request.content is not None:
+    if request.content is not None or request.content_bytes is not None:
         # Content form. There is no path to police: the bytes came from this
         # process, not from a location the caller could have pointed anywhere.
         # Identity is the file name at the scope root — the same key a file of
@@ -169,7 +180,11 @@ async def deliver_artifact(
             return DeliveryResult(
                 status=DeliveryStatus.INVALID, detail="content form needs a file_name"
             )
-        inline_bytes = request.content.encode("utf-8")
+        inline_bytes = (
+            request.content.encode("utf-8")
+            if request.content is not None
+            else request.content_bytes
+        )
         rel_path = request.file_name
         display_name = request.display_name or request.file_name
     else:
@@ -286,18 +301,20 @@ async def deliver_artifact(
 
         content = await ds.find_content_by_hash(scope.user_id, staged.content_hash)
         if content is None:
-            # Inline content is small and is what every reader actually wants
+            # Inline TEXT is small and is what every reader actually wants
             # (a generated page is rendered from the document, not opened as a
             # file), so it rides on the row as well as on disk — the snapshot
-            # exists so the AGENT can read the version it is revising.
+            # exists so the AGENT can read the version it is revising. Opaque
+            # bytes get the file treatment: nothing renders an archive from a
+            # column, and base64 on a text column would only bloat the row.
             content = await ds.create_content(
                 scope.user_id,
                 content_hash=staged.content_hash,
                 byte_size=staged.byte_size,
                 storage_key=str(staged.final),
-                content_inline=request.content if inline_bytes is not None else None,
+                content_inline=request.content,
                 storage_kind=(
-                    STORAGE_KIND_INLINE if inline_bytes is not None else STORAGE_KIND_FILE
+                    STORAGE_KIND_INLINE if request.content is not None else STORAGE_KIND_FILE
                 ),
             )
 
