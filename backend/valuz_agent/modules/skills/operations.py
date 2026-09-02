@@ -43,6 +43,7 @@ from valuz_agent.modules.operations.registry import (
     operation_registry,
 )
 from valuz_agent.modules.operations.schemas import OperationProposal
+from valuz_agent.modules.operations.service import proposal_hash
 from valuz_agent.modules.skills import staging, versioning
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.modules.skills.service import SkillLibraryService
@@ -192,7 +193,7 @@ def build_submission_proposal(
     target_refs: list[dict[str, Any]] = [{"type": "skill", "slug": sub.slug}]
     if sub.existing_skill_id:
         target_refs[0]["id"] = sub.existing_skill_id
-    return OperationProposal(
+    proposal = OperationProposal(
         operation_type=SKILL_SUBMIT_OPERATION,
         operation_version=SKILL_SUBMIT_VERSION,
         project_id=None,
@@ -205,15 +206,42 @@ def build_submission_proposal(
         expected_revisions={"staging_tree_hash": sub.tree_hash},
         risk_level="material",
         confirmation_policy="confirm",
-        idempotency_key=_idempotency_key(session_id, sub.slug, sub.tree_hash, idempotency_suffix),
+        # Placeholder — replaced below once the proposal it must follow exists.
+        idempotency_key="pending",
     )
+    return _with_derived_key(proposal, session_id, idempotency_suffix)
 
 
-def _idempotency_key(session_id: str, slug: str, tree_hash: str, suffix: str) -> str:
-    """Bounded to the column's 128 chars: the slug and the full tree hash
-    are folded into one digest, the session id stays readable."""
-    folded = hashlib.sha256(f"{slug}:{tree_hash}{suffix}".encode()).hexdigest()[:24]
-    return f"skill.submit:{session_id[:36]}:{folded}"
+def _with_derived_key(
+    proposal: OperationProposal, session_id: str, suffix: str
+) -> OperationProposal:
+    """Give the proposal an idempotency key derived from the proposal itself.
+
+    ``OperationService.propose`` refuses a second call that reuses a key under
+    a DIFFERENT request, and the request it compares is ``proposal_hash`` —
+    the whole proposal, ``input_payload`` and ``preview`` included. A key over
+    only ``(slug, staged bytes)`` therefore collides on exactly the flow this
+    design is built around:
+
+        submit (change_kind=create, conflict=unprepared_collision)
+        → prepare_skill_edit re-seeds the SAME bytes from the library
+        → submit (change_kind=update, conflict=same_source)
+
+    Same bytes, so the same key; different ``change_kind`` and summary, so a
+    different hash — ``operation_idempotency_conflict``, on the corrected
+    submission. Deriving the key FROM the hash makes "same request ⇒ same key"
+    an identity, so this operation type cannot collide.
+
+    ``proposal_hash`` does not read ``idempotency_key``, so there is no
+    circularity — the placeholder above never reaches the digest. The suffix
+    is what lets a re-submission after a terminal record mint a fresh one.
+    """
+    digest = proposal_hash(proposal)
+    if suffix:
+        digest = hashlib.sha256(f"{digest}{suffix}".encode()).hexdigest()
+    return proposal.model_copy(
+        update={"idempotency_key": f"skill.submit:{session_id[:36]}:{digest[:24]}"}
+    )
 
 
 async def propose_skill_submission(

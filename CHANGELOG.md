@@ -62,6 +62,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-submitting a skill after `prepare_skill_edit` failed with a conflict** —
+  `skill.submit` derived its idempotency key from the slug and the staged
+  bytes, while `OperationService` compares the whole proposal. The flow the
+  design is built around — hand-write a draft, submit, then let
+  `prepare_skill_edit` re-seed the same bytes and submit again as an update —
+  kept the key and changed the hash, so the *corrected* submission raised
+  `operation_idempotency_conflict`. The key is now derived from the proposal
+  hash, making "same request ⇒ same key" an identity. A failed submit also
+  returns the `{ok: false, ...}` envelope now: a bare error string was
+  indistinguishable from a card predating the operation record, so it fell
+  back to a staging scan and rendered a failure as "waiting for the AI to
+  write files".
+- **A failing skill-lifecycle hook rolled back a save that had already
+  touched disk** — a save writes the library directory (not transactional)
+  and the version history (transactional), and the overlay's mirror-to-cloud
+  hook runs after both inside the same savepoint. Its failure left the
+  directory on the new content while the history and `list_skills` reported
+  the previous version. A mirror cannot veto a save that already happened;
+  the hook's failure is now logged and the save stands.
 - **A skill file in any non-Latin script could not be previewed** — the skill
   detail viewer decided "binary" by the share of printable-ASCII characters,
   so a Chinese `SKILL.md` (most of them) scored near zero and rendered as

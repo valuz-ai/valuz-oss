@@ -104,16 +104,36 @@ def _manifest_defaults_to_library_enabled(manifest: Any) -> bool:
 
 
 async def _after_skill_saved_hook(db: Any, user_id: str, skill: SkillView, origin: str) -> None:
+    """Notify the overlay that a skill landed. Never fails the save.
+
+    A save writes two stores: the DB (index row, and — since versioning — the
+    version history) and the FILESYSTEM (the library directory). Only the
+    first is transactional, so an exception raised after the directory has
+    been replaced rolls the DB back and leaves the two disagreeing. Observed
+    on qa: the library held ``version: 2`` while the history and
+    ``list_skills`` still said v1, because this hook's cloud mirror hit a 409
+    and took the whole transaction down with it.
+
+    A mirror does not get to veto a save that already happened. The hook's
+    own retry path owns catching up; what must not happen is a local save
+    being half-undone by a remote one.
+    """
     if origin not in {"created", "imported"}:
         return
     from valuz_agent.ports.extensions import ext
 
-    await ext.skill_lifecycle.after_skill_saved(
-        db=db,
-        user_id=user_id,
-        skill=skill,
-        creation_origin=cast(Literal["created", "imported"], origin),
-    )
+    try:
+        await ext.skill_lifecycle.after_skill_saved(
+            db=db,
+            user_id=user_id,
+            skill=skill,
+            creation_origin=cast(Literal["created", "imported"], origin),
+        )
+    except Exception:  # noqa: BLE001 — see the docstring: a mirror cannot veto
+        logger.exception(
+            "skill lifecycle hook failed after saving %s; the save stands",
+            skill.slug or skill.path,
+        )
 
 
 async def _before_skill_delete_hook(db: Any, user_id: str, skill: SkillView) -> None:

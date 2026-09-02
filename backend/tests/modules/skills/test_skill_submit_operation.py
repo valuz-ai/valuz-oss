@@ -358,3 +358,135 @@ async def test_prepare_skill_edit_tool_seeds_staging_from_the_library(env, monke
         {"slug": "nope"}, HostExecContext(session_id=SESSION, user_id=USER)
     )
     assert missing.is_error and "list_skills" in missing.content
+
+
+# ── the key must follow the proposal, and failures must speak the envelope ──
+
+
+async def test_resubmitting_the_same_bytes_as_an_update_is_not_a_conflict(env) -> None:  # type: ignore[no-untyped-def]
+    """Regression: the flow this whole design is built around used to 409.
+
+    The agent hand-writes a draft and submits (``create``, judged
+    ``unprepared_collision``); the user does not confirm; the agent then does
+    the right thing — ``prepare_skill_edit`` re-seeds the SAME bytes from the
+    library — and submits again as ``update``. The staged tree is unchanged,
+    so a key over ``(slug, bytes)`` is identical, while ``proposal_hash``
+    covers ``change_kind`` and the summary and is not. ``propose`` then
+    raised ``operation_idempotency_conflict`` on the CORRECTED submission.
+    """
+    _stage(env.staging, "demo", "first")
+    op1, _, _, _ = await _propose(env, "demo", change_kind="create", summary="v1 draft")
+
+    # Same bytes, different intent — exactly what prepare_skill_edit produces.
+    op2, digest2, preview, state = await _propose(
+        env, "demo", change_kind="update", summary="now an edit of the library copy"
+    )
+
+    assert op2 != op1, "a different proposal must not reuse the first record"
+    assert state == "awaiting_confirmation"
+    assert preview["change_kind"] == "update"
+    # and it is still confirmable
+    confirmed, code, message, _ = await _confirm(env, op2, digest2)
+    assert (confirmed, code) == ("succeeded", None), message
+
+
+async def test_an_identical_proposal_still_replays_onto_one_record(env) -> None:  # type: ignore[no-untyped-def]
+    """The key follows the proposal, so idempotency still holds for a retry."""
+    _stage(env.staging, "demo", "first")
+    first = await _propose(env, "demo", change_kind="create", summary="same")
+    again = await _propose(env, "demo", change_kind="create", summary="same")
+
+    assert first[0] == again[0] and first[1] == again[1]
+
+
+async def test_a_failed_submit_returns_an_envelope_not_a_bare_error(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A failure must be distinguishable from a historic card.
+
+    The card falls back to a staging scan when the tool result carries no
+    operation — that is how cards from sessions predating the record still
+    render. A bare error string landed in the same branch, and because a save
+    empties staging the scan said "waiting for the AI to write files": a
+    failure shown as progress, before and after a reload alike.
+    """
+    import json
+
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _submit_skill_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    _stage(env.staging, "demo", "first")
+
+    async def _boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise ValueError("operation_idempotency_conflict")
+
+    monkeypatch.setattr("valuz_agent.modules.skills.operations.propose_skill_submission", _boom)
+    result = await _submit_skill_handler(
+        {"slug": "demo", "summary": "s", "change_kind": "update", "files_touched": []},
+        HostExecContext(session_id=SESSION, user_id=USER),
+    )
+
+    assert result.is_error
+    body = json.loads(result.content)
+    assert body["ok"] is False
+    assert body["action"] == "submit"
+    assert "operation_idempotency_conflict" in body["message"]
+
+
+async def test_the_not_staged_rejection_is_also_an_envelope(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import json
+
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _submit_skill_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    result = await _submit_skill_handler(
+        {"slug": "ghost", "summary": "s", "change_kind": "create", "files_touched": []},
+        HostExecContext(session_id=SESSION, user_id=USER),
+    )
+
+    assert result.is_error
+    body = json.loads(result.content)
+    assert body["ok"] is False and body["error_code"] == "skill_not_staged"
+    # still teaches the exact path
+    assert str(env.staging / "ghost") in body["message"]
+
+
+# ── a cloud mirror may not veto a save that already touched disk ──────
+
+
+async def test_a_failing_lifecycle_hook_does_not_undo_the_save(env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Regression: filesystem and database used to diverge.
+
+    A save writes the library directory (not transactional) and the version
+    history (transactional). The overlay's mirror-to-cloud hook runs after
+    both, inside the operation's savepoint — so its failure rolled the DB
+    back while the directory kept the new content. Observed on qa: library
+    ``version: 2``, history and ``list_skills`` still v1.
+    """
+    from valuz_agent.modules.skills import service as skills_service
+
+    _stage(env.staging, "demo", "first")
+    op_id, digest, _, _ = await _propose(env, "demo")
+
+    class _AngryMirror:
+        async def after_skill_saved(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("409 IDEMPOTENCY_KEY_REUSED")
+
+        async def after_bundled_skills_materialized(self, **kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        async def before_skill_delete(self, **kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    from valuz_agent.ports.extensions import ext
+
+    monkeypatch.setattr(ext, "skill_lifecycle", _AngryMirror(), raising=False)
+
+    state, code, message, result = await _confirm(env, op_id, digest)
+
+    assert (state, code) == ("succeeded", None), message
+    assert result["version_no"] == 1
+    # both stores moved together
+    assert (env.library / "demo" / "SKILL.md").is_file()
+    assert await _versions(env, "demo") == [1]
+    assert skills_service is not None  # import kept meaningful for the reader

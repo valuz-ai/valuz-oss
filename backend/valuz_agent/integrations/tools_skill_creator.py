@@ -152,12 +152,46 @@ def _session_id_of(context: ExecContext) -> str:
 
 
 _NO_SESSION = ToolResult(
-    content=(
-        "Error: session id is empty in ExecContext — cannot resolve the "
-        "staging location. Ask the user to retry the session."
+    content=json.dumps(
+        {
+            "ok": False,
+            "action": "submit",
+            "error_code": "no_session",
+            "message": (
+                "Error: session id is empty in ExecContext — cannot resolve "
+                "the staging location. Ask the user to retry the session."
+            ),
+        },
+        ensure_ascii=False,
     ),
     is_error=True,
 )
+
+
+def _submit_failed(error_code: str, message: str) -> ToolResult:
+    """A failed submission still speaks the envelope.
+
+    The card reads its state from the operation record and falls back to a
+    staging scan when the tool result carries none — which is how a HISTORIC
+    card (from a session that predates the record) still renders. A bare
+    error string is indistinguishable from that, so a failure fell into the
+    same branch, and since a save empties staging the scan concluded
+    "waiting for the AI to write files": a failure displayed as progress,
+    identically before and after a reload. ``ok: false`` is what lets the
+    client tell the two apart.
+    """
+    return ToolResult(
+        content=json.dumps(
+            {
+                "ok": False,
+                "action": "submit",
+                "error_code": error_code,
+                "message": message,
+            },
+            ensure_ascii=False,
+        ),
+        is_error=True,
+    )
 
 
 def _not_staged(slug: str, expected_dir: Path) -> ToolResult:
@@ -165,8 +199,9 @@ def _not_staged(slug: str, expected_dir: Path) -> ToolResult:
     its next turn can move the files and retry."""
     project_root = str(expected_dir.parent.parent)
     logger.warning("submit_skill rejected: slug=%s missing SKILL.md at %s", slug, expected_dir)
-    return ToolResult(
-        content=(
+    return _submit_failed(
+        "skill_not_staged",
+        (
             f"Error: did not find SKILL.md at the expected staging "
             f"path:\n\n  {expected_dir}/SKILL.md\n\n"
             f"Move every file for slug '{slug}' into "
@@ -178,7 +213,6 @@ def _not_staged(slug: str, expected_dir: Path) -> ToolResult:
             f"``.skill-staging/`` of the cwd so the host's "
             f"submission flow can find them."
         ),
-        is_error=True,
     )
 
 
@@ -203,7 +237,7 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
     if not session_id:
         return _NO_SESSION
     if not slug:
-        return ToolResult(content="Error: `slug` is required.", is_error=True)
+        return _submit_failed("slug_required", "Error: `slug` is required.")
 
     from valuz_agent.integrations.skills_filesystem import _detect_manifest
     from valuz_agent.modules.skills import staging
@@ -232,6 +266,12 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
             envelope = _operation(row)
     except LookupError as exc:
         return _not_staged(slug, Path(str(exc)))
+    except Exception as exc:  # noqa: BLE001 — the card must see WHY, not a blank
+        logger.exception("submit_skill: could not record the submission for %s", slug)
+        return _submit_failed(
+            "submit_failed",
+            f"Could not record the submission for '{slug}': {exc}",
+        )
 
     preview = envelope.get("preview") or {}
     conflict = str(preview.get("conflict_kind") or "none")
