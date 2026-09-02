@@ -952,6 +952,7 @@ class SessionService:
             from valuz_agent.adapters.capability_resolver import (
                 always_on_http_mcp_servers,
                 always_on_skill_paths,
+                merge_with_always_on,
                 resolve_skill_slugs_to_paths,
             )
 
@@ -963,7 +964,6 @@ class SessionService:
                 for m in await always_on_http_mcp_servers(session_id, owner_user_id=user_id)
                 if m.name not in existing_mcp_names
             ]
-            import os as _os
 
             own_skill_keys = {
                 (s.name if hasattr(s, "name") else str(s)) for s in (agent.skills or ())
@@ -976,10 +976,8 @@ class SessionService:
                 user_id=user_id,
                 purpose="runtime",
             )
-            session_skills = tuple(own_skill_paths) + tuple(
-                p
-                for p in always_on_skill_paths(user_id=user_id)
-                if _os.path.basename(p) not in own_skill_keys
+            session_skills = merge_with_always_on(
+                own_skill_paths, always_on_skill_paths(user_id=user_id)
             )
 
         valuz_meta: dict[str, object] = {

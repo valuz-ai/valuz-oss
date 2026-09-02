@@ -298,3 +298,138 @@ async def test_version_detail_lists_that_version_s_own_files(env) -> None:  # ty
     assert {f.path for f in v2.files} == {"SKILL.md", "scripts/new.sh"}
     assert v1.is_current is False and v2.is_current is True
     assert all(f.size > 0 for f in v2.files)
+
+
+async def test_card_preview_agrees_with_what_the_save_records(env) -> None:  # type: ignore[no-untyped-def]
+    """What the confirmation card promises must be what the save does.
+
+    The card takes its version from ``inspect_staged_submission`` ->
+    ``next_version_no(artifact_id)``, which needs the index row's
+    ``artifact_id``. The save resolves the lineage differently: it hands
+    ``artifact_id`` to ``deliver_artifact``, which falls back to finding the
+    artifact by archive name in the library scope. So the two can disagree —
+    the card offers "save v1" while the save records v3.
+    """
+    from valuz_agent.modules.skills.operations import inspect_staged_submission
+
+    _stage(env.staging, "demo", "first")
+    first, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
+    _stage(env.staging, "demo", "second")
+    await env.svc.confirm_submission(USER, "sess-2", "demo")
+
+    versions = await env.svc.list_versions(USER, first.id)
+    assert [v.version_no for v in versions.items] == [1, 2]
+
+    _stage(env.staging, "demo", "third")
+    sub = await inspect_staged_submission(env.db, USER, "sess-3", "demo")
+    assert sub.next_version == 3, (
+        f"card would promise v{sub.next_version}; history is at v{versions.items[-1].version_no}"
+    )
+
+
+async def test_card_preview_survives_a_lost_artifact_link(env) -> None:  # type: ignore[no-untyped-def]
+    """The link is bookkeeping, not the lineage.
+
+    ``valuz_skill_index.artifact_id`` can be absent for a skill that has
+    history: a row created by a rescan before versioning existed, a row whose
+    path was written in a different spelling than the lookup uses, a restore
+    from a backup. The save copes — ``deliver_artifact`` finds the lineage by
+    archive name. The card must resolve it the same way, or it promises a
+    version number the save will not use.
+    """
+    from valuz_agent.modules.skills.datastore import SkillDatastore
+    from valuz_agent.modules.skills.operations import inspect_staged_submission
+
+    _stage(env.staging, "demo", "first")
+    first, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
+    _stage(env.staging, "demo", "second")
+    await env.svc.confirm_submission(USER, "sess-2", "demo")
+
+    # Drop the link, keep the history.
+    row = await SkillDatastore(env.db).get_by_slug(USER, "demo")
+    assert row is not None and row.artifact_id
+    row.artifact_id = None
+    await SkillDatastore(env.db).update(row)
+
+    _stage(env.staging, "demo", "third")
+    sub = await inspect_staged_submission(env.db, USER, "sess-3", "demo")
+    assert sub.next_version == 3
+
+    skill, _, _ = await env.svc.confirm_submission(USER, "sess-3", "demo")
+    versions = await env.svc.list_versions(USER, skill.id)
+    assert [v.version_no for v in versions.items] == [1, 2, 3]
+    assert _manifest_version(env.library / "demo") == "3"
+    # and the link healed itself
+    healed = await SkillDatastore(env.db).get_by_slug(USER, "demo")
+    assert healed is not None and healed.artifact_id == first.artifact_id
+
+
+async def test_index_lookup_tolerates_a_symlinked_skills_root(env, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Why the link goes missing in the first place.
+
+    The scan stores ``str(skill_dir.resolve(strict=False))``. Callers that
+    build the path instead — ``user_skill_root(user_id) / slug``, the expanded
+    settings template, never resolved — hand in a different string as soon as
+    any component of the root is a symlink, and an exact-match lookup answers
+    "no such skill". That reads downstream as "no version history".
+    """
+    from valuz_agent.modules.skills.datastore import SkillDatastore
+
+    _stage(env.staging, "demo", "first")
+    await env.svc.confirm_submission(USER, SESSION, "demo")
+
+    link = tmp_path / "skills-via-link"
+    link.symlink_to(env.library, target_is_directory=True)
+    via_link = link / "demo"
+
+    ds = SkillDatastore(env.db)
+    assert await ds.get_by_source_path(USER, str(via_link)) is None  # the old lookup
+    row = await ds.get_by_skill_dir(USER, via_link)
+    assert row is not None and row.slug == "demo"
+    assert row.artifact_id
+
+
+async def test_a_skill_that_predates_versioning_is_not_renumbered_backwards(env) -> None:  # type: ignore[no-untyped-def]
+    """No recorded history, but the manifest already says ``version: 2``.
+
+    Every skill saved before versioning existed looks like this. Answering 1
+    would not just mislabel the card — the save stamps the number back into
+    the manifest, so the skill the user has been reading as v2 would become
+    v1 on its first recorded save.
+    """
+    from valuz_agent.modules.skills.operations import inspect_staged_submission
+
+    library_dir = env.library / "legacy"
+    library_dir.mkdir(parents=True)
+    (library_dir / "SKILL.md").write_text(
+        "---\nversion: 2\nname: legacy\ndescription: predates versioning\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    await env.svc.startup_scan(USER)
+
+    _stage(env.staging, "legacy", "improved")
+    sub = await inspect_staged_submission(env.db, USER, SESSION, "legacy")
+    assert sub.next_version == 3
+
+    skill, _, _ = await env.svc.confirm_submission(USER, SESSION, "legacy")
+    assert _manifest_version(env.library / "legacy") == "3"
+    versions = await env.svc.list_versions(USER, skill.id)
+    # v2 is the content that was already on disk, adopted under the number it
+    # already claimed rather than renamed v1; v3 is this save.
+    assert [v.version_no for v in versions.items] == [2, 3]
+    # the baseline is not attributed to this session; the save is
+    assert versions.items[0].source_session_id is None
+    assert versions.items[1].source_session_id == SESSION
+
+
+async def test_a_genuinely_new_skill_still_starts_at_v1(env) -> None:  # type: ignore[no-untyped-def]
+    """The manifest fallback must not invent a history for a new skill."""
+    from valuz_agent.modules.skills.operations import inspect_staged_submission
+
+    _stage(env.staging, "brand-new", "first")
+    sub = await inspect_staged_submission(env.db, USER, SESSION, "brand-new")
+    assert sub.next_version == 1
+    skill, _, _ = await env.svc.confirm_submission(USER, SESSION, "brand-new")
+    assert _manifest_version(env.library / "brand-new") == "1"
+    versions = await env.svc.list_versions(USER, skill.id)
+    assert [v.version_no for v in versions.items] == [1]

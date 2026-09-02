@@ -229,6 +229,7 @@ async def record_skill_version(
     *,
     artifact_id: str | None,
     source_session_id: str | None = None,
+    start_version_no: int | None = None,
 ) -> RecordedVersion:
     """Deliver one packed skill as the next revision of its lineage.
 
@@ -253,6 +254,7 @@ async def record_skill_version(
             kind=ArtifactKind.SKILL,
             mime_type="application/zip",
             artifact_id=artifact_id,
+            start_version_no=start_version_no,
         ),
         source_session_id=source_session_id,
     )
@@ -270,6 +272,65 @@ async def record_skill_version(
     )
 
 
+def manifest_version_of(skill_dir: Path | None) -> int | None:
+    """The ``version:`` a skill directory declares, if it declares one.
+
+    Only a positive integer counts — the field is free-form in the wild
+    (``1.2.0``, ``draft``), and anything we cannot read as a version number is
+    the same as not having one.
+    """
+    if skill_dir is None:
+        return None
+    from valuz_agent.integrations.skills_filesystem import _detect_manifest
+
+    manifest = _detect_manifest(skill_dir)
+    if manifest is None:
+        return None
+    try:
+        block, _body = split_frontmatter(manifest.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if not block:
+        return None
+    match = re.search(r"^version\s*:\s*(\d+)\s*$", block, flags=re.MULTILINE)
+    if match is None:
+        return None
+    value = int(match.group(1))
+    return value if value >= 1 else None
+
+
+async def resolve_artifact_id(
+    db: AsyncSession, user_id: str, slug: str, *, artifact_id: str | None
+) -> str | None:
+    """The skill's artifact lineage, resolved the way the SAVE resolves it.
+
+    ``valuz_skill_index.artifact_id`` is bookkeeping, not the lineage. It can
+    be absent for a skill that has history — a row a rescan created before
+    versioning existed, a row whose ``source_path`` is spelled differently
+    from the lookup that would set it, a restore from a backup — and treating
+    absent as "no history" is what let the confirmation card promise "save v1"
+    for a skill already at v2:
+
+    ``deliver_artifact`` never needed the link. Handed ``artifact_id=None`` it
+    finds the artifact by archive name in the library scope and appends to it,
+    so the SAVE was right while the PREVIEW was wrong, and the frontmatter
+    stamp — also derived from the link — was wrong with it. The same absence
+    made ``capture_baseline`` skip its "is this already the head" check and
+    mint a duplicate revision of unchanged content.
+
+    One lookup, used by everything, so those three can no longer disagree.
+    """
+    if artifact_id is not None:
+        return artifact_id
+    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+
+    name = archive_name(slug)
+    row = await ArtifactDatastore(db).find_by_keys(
+        library_scope(user_id), rel_path=name, display_name=name
+    )
+    return row.id if row is not None else None
+
+
 async def record_dir_version(
     db: AsyncSession,
     user_id: str,
@@ -278,6 +339,7 @@ async def record_dir_version(
     *,
     artifact_id: str | None,
     manifest_path: Path | None,
+    installed_dir: Path | None = None,
     source_session_id: str | None = None,
 ) -> RecordedVersion:
     """Record a skill directory as the next version — unless it holds exactly
@@ -296,6 +358,7 @@ async def record_dir_version(
     the panel actively invites, wrote a phantom version. Pack first, compare,
     and only stamp once there is something to stamp.
     """
+    artifact_id = await resolve_artifact_id(db, user_id, slug, artifact_id=artifact_id)
     archive = pack_skill_dir(skill_dir)
     if artifact_id is not None:
         head = await get_head_revision(db, user_id, artifact_id)
@@ -306,7 +369,9 @@ async def record_dir_version(
                 version_no=head.version_no,
                 recorded=False,
             )
-    next_no = await next_version_no(db, user_id, artifact_id)
+    next_no = await next_version_no(
+        db, user_id, artifact_id, slug=slug, installed_dir=installed_dir
+    )
     if manifest_path is not None:
         set_manifest_version(manifest_path, next_no)
         archive = pack_skill_dir(skill_dir)
@@ -333,19 +398,56 @@ async def capture_baseline(
     there was nothing on disk to protect."""
     if not library_dir.is_dir():
         return None
+    artifact_id = await resolve_artifact_id(db, user_id, slug, artifact_id=artifact_id)
     archive = pack_skill_dir(library_dir)
     if artifact_id is not None:
         head = await get_head_revision(db, user_id, artifact_id)
         if head is not None and head.content_hash == content_hash_of(archive):
             return None
-    return await record_skill_version(db, user_id, slug, archive, artifact_id=artifact_id)
+    return await record_skill_version(
+        db,
+        user_id,
+        slug,
+        archive,
+        artifact_id=artifact_id,
+        # Adopting content that predates the history: it already calls itself
+        # a version, so the lineage starts there rather than renaming it v1.
+        start_version_no=manifest_version_of(library_dir),
+    )
 
 
-async def next_version_no(db: AsyncSession, user_id: str, artifact_id: str | None) -> int:
-    if artifact_id is None:
-        return 1
-    head = await get_head_revision(db, user_id, artifact_id)
-    return (head.version_no + 1) if head is not None else 1
+async def next_version_no(
+    db: AsyncSession,
+    user_id: str,
+    artifact_id: str | None,
+    *,
+    slug: str | None = None,
+    installed_dir: Path | None = None,
+) -> int:
+    """The number the next save will carry — recorded history, then the
+    manifest, then 1.
+
+    Three sources, in order of authority:
+
+    1. **The artifact head.** The version history is the truth when it exists.
+       ``slug`` lets an unlinked index row still find it (see
+       :func:`resolve_artifact_id`).
+    2. **The installed copy's frontmatter ``version:``.** A skill that predates
+       versioning has no recorded history at all, but it does carry a version
+       the user has been looking at. Starting over at 1 there is not a cosmetic
+       slip: the save STAMPS this number back into the manifest, so a skill
+       sitting at ``version: 2`` would be renumbered BACKWARDS on its first
+       recorded save.
+    3. **1**, for something genuinely new.
+    """
+    if artifact_id is None and slug is not None:
+        artifact_id = await resolve_artifact_id(db, user_id, slug, artifact_id=None)
+    if artifact_id is not None:
+        head = await get_head_revision(db, user_id, artifact_id)
+        if head is not None:
+            return head.version_no + 1
+    declared = manifest_version_of(installed_dir)
+    return declared + 1 if declared is not None else 1
 
 
 #: Where the swap below stages its copies. A SUBDIRECTORY of the skills root,

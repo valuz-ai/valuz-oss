@@ -2219,7 +2219,7 @@ class SkillLibraryService:
         from valuz_agent.modules.skills import versioning
 
         db = self._ds.session
-        existing = await self._ds.get_by_source_path(user_id, str(library_dir))
+        existing = await self._ds.get_by_skill_dir(user_id, library_dir)
         artifact_id = getattr(existing, "artifact_id", None) if existing is not None else None
         baseline = await versioning.capture_baseline(
             db, user_id, slug, library_dir, artifact_id=artifact_id
@@ -2233,8 +2233,15 @@ class SkillLibraryService:
             staging_dir,
             artifact_id=artifact_id,
             manifest_path=_detect_manifest(staging_dir),
+            installed_dir=library_dir,
             source_session_id=source_session_id,
         )
+        if artifact_id is None and existing is not None:
+            # The lineage was found by name, not by the link. Write the link
+            # back so the next preview does not have to.
+            await self._ds.set_artifact_id_by_path(
+                user_id, existing.source_path, recorded.artifact_id
+            )
         await async_commit_with_retry(db, where="SkillLibraryService._record_staged_version")
         return recorded
 
@@ -2249,7 +2256,7 @@ class SkillLibraryService:
 
         db = self._ds.session
         slug = library_dir.name
-        existing = await self._ds.get_by_source_path(user_id, str(library_dir))
+        existing = await self._ds.get_by_skill_dir(user_id, library_dir)
         artifact_id = getattr(existing, "artifact_id", None) if existing is not None else None
         recorded = await versioning.record_dir_version(
             db,
@@ -2258,8 +2265,13 @@ class SkillLibraryService:
             library_dir,
             artifact_id=artifact_id,
             manifest_path=_detect_manifest(library_dir),
+            installed_dir=library_dir,
             source_session_id=source_session_id,
         )
+        if artifact_id is None and existing is not None:
+            await self._ds.set_artifact_id_by_path(
+                user_id, existing.source_path, recorded.artifact_id
+            )
         await async_commit_with_retry(db, where="SkillLibraryService._record_library_version")
         return recorded
 
