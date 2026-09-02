@@ -71,17 +71,25 @@ export const operationsApi = {
     });
   },
 
+  /** ``decision`` answers a choice the proposal left open — a
+   *  ``skill.submit`` whose slug collides with a library skill the draft was
+   *  not prepared from needs ``{mode: "new_version"}`` or
+   *  ``{mode: "rename", new_slug}``. It is not part of the proposal hash. */
   confirm(
     operationId: string,
     proposalHash: string,
     sessionId?: string | null,
+    decision?: Record<string, unknown> | null,
   ): Promise<OperationView> {
     return fetchJson(
       `/v1/operations/${encodeURIComponent(operationId)}/confirm`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ proposal_hash: proposalHash }),
+        body: JSON.stringify({
+          proposal_hash: proposalHash,
+          ...(decision ? { decision } : {}),
+        }),
         baseUrl: sessionBase(sessionId),
       },
     );

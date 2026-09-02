@@ -76,6 +76,10 @@ export interface SkillView {
    * "discovered".
    */
   creation_origin: SkillCreationOrigin;
+  /** Version lineage (the ``kind=skill`` artifact whose revisions are this
+   *  skill's saved versions), or null for a skill never saved through the
+   *  library. Drives the "versions" affordance on the detail page. */
+  artifact_id?: string | null;
 }
 
 /** Import provenance for a URL/GitHub-imported skill (mirrors the backend
@@ -578,6 +582,41 @@ export const skillsApi = {
     return result;
   },
 
+  // Versions ──────────────────────────────────────────────────────────
+
+  /** Saved versions of one skill, oldest first. A skill that was never
+   *  saved through the library has no lineage yet and returns an empty
+   *  list — not an error. */
+  listVersions(skillId: string): Promise<SkillVersionListResponse> {
+    return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/versions`);
+  },
+
+  /** One file out of an archived version, read straight from the archive. */
+  readVersionFile(
+    skillId: string,
+    revisionId: string,
+    path: string,
+  ): Promise<SkillVersionFileResponse> {
+    const qs = new URLSearchParams({ path });
+    return fetchJson(
+      `/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(revisionId)}/files?${qs}`,
+    );
+  },
+
+  /** Make the library copy equal to an earlier version. Recorded as a NEW
+   *  version on top of the history, never by rewriting it. */
+  async restoreVersion(
+    skillId: string,
+    revisionId: string,
+  ): Promise<SkillVersionRestoreResponse> {
+    const result = await fetchJson<SkillVersionRestoreResponse>(
+      `/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(revisionId)}/restore`,
+      { method: "POST" },
+    );
+    invalidateSkills();
+    return result;
+  },
+
   optimizeFromSkill(
     sessionId: string,
     sourceSkillId: string,
@@ -716,4 +755,40 @@ export interface StagingOptimizeResponse {
   session_id: string;
   slug: string;
   staging_path: string;
+}
+
+// Version types ───────────────────────────────────────────────────────
+
+export interface SkillVersionItem {
+  revision_id: string;
+  version_no: number;
+  created_at: number;
+  /** The session whose save produced this version, when known. */
+  source_session_id?: string | null;
+  /** ``"baseline"`` for content captured from the library directory right
+   *  before it was overwritten (it had never been saved through the
+   *  library); ``null`` for a regular save. */
+  created_by?: string | null;
+  byte_size: number;
+  content_hash: string;
+  is_current: boolean;
+}
+
+export interface SkillVersionListResponse {
+  skill_id: string;
+  artifact_id?: string | null;
+  items: SkillVersionItem[];
+}
+
+export interface SkillVersionFileResponse {
+  revision_id: string;
+  path: string;
+  content: string;
+  size: number;
+}
+
+export interface SkillVersionRestoreResponse {
+  skill: SkillView;
+  revision_id: string;
+  version_no: number;
 }

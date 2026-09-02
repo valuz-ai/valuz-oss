@@ -3,14 +3,20 @@
  * ``submit_skill`` tool. The agent has staged a draft skill; the user
  * decides whether to commit it to their library.
  *
- * Pure presentational — the page wires the actual API calls
- * (``skillsApi.confirmSubmission`` / ``dismissSubmission``) via the
- * ``onConfirm`` / ``onDismiss`` callbacks. State (pending → confirming
- * → confirmed | dismissed | error) is tracked by the parent so multiple
- * cards in the same conversation behave independently.
+ * Pure presentational — the page wires the actual API calls (the
+ * ``skill.submit`` operation's confirm / cancel) via ``onConfirm`` /
+ * ``onDismiss``. State is tracked by the parent so multiple cards in the
+ * same conversation behave independently; with the operation flow that
+ * state comes from the server, so it survives a page reload.
+ *
+ * When the staged slug collides with a library skill the draft was NOT
+ * prepared from, the card cannot save on its own: the user picks between
+ * "save as the next version of that skill" and "save under a new name",
+ * and the choice rides along with the confirmation.
  */
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Check,
   ChevronRight,
   FileText,
@@ -35,6 +41,21 @@ export interface SkillSubmissionFileNode {
   type: "file" | "directory";
   size?: number | null;
 }
+
+/** How the staged draft relates to the user's library. Mirrors the
+ *  backend's ``skill.submit`` preview. */
+export type SkillSubmissionConflict =
+  | "none"
+  | "same_source"
+  | "diverged"
+  | "unprepared_collision";
+
+/** The answer to a collision the card had to ask about. */
+export type SkillSubmissionDecision =
+  | { mode: "new_version" }
+  | { mode: "rename"; new_slug: string };
+
+const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
 function formatSize(bytes?: number | null): string | null {
   if (bytes == null) return null;
@@ -70,7 +91,15 @@ interface SkillSubmissionCardProps {
   /** Absolute path to the staging directory for this slug. Shown in
    * the awaiting-files state so the user (and AI) can debug. */
   stagingPath?: string;
-  onConfirm: () => void;
+  /** The version this save would create. Shown on the save button so the
+   * user knows whether they are adding v1 or v4. */
+  nextVersion?: number | null;
+  /** Set once the save landed — what the card reports afterwards. */
+  savedVersion?: number | null;
+  /** How the draft relates to the library. ``unprepared_collision`` makes
+   * the card ask before it can save. */
+  conflictKind?: SkillSubmissionConflict;
+  onConfirm: (decision?: SkillSubmissionDecision) => void;
   onDismiss: () => void;
 }
 
@@ -84,6 +113,9 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
   boundToProjectLabel,
   stagedFiles,
   stagingPath,
+  nextVersion,
+  savedVersion,
+  conflictKind = "none",
   onConfirm,
   onDismiss,
 }: SkillSubmissionCardProps) {
@@ -96,6 +128,22 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
   // keeps it disabled until the page resets state on retry.
   const canSave = state === "pending" && (stagedFiles?.length ?? 0) > 0;
   const [filesOpen, setFilesOpen] = useState(true);
+  // Collision: the draft's slug is taken by a library skill it was not
+  // prepared from, so saving means one of two different things and the
+  // user has to say which.
+  const needsDecision = conflictKind === "unprepared_collision";
+  const [mode, setMode] = useState<"new_version" | "rename">("new_version");
+  const [newSlug, setNewSlug] = useState(`${slug}-2`);
+  useEffect(() => {
+    setNewSlug(`${slug}-2`);
+  }, [slug]);
+  const renameInvalid = mode === "rename" && !SLUG_RE.test(newSlug.trim());
+  const blockedByDecision = needsDecision && renameInvalid;
+  const decision: SkillSubmissionDecision | undefined = !needsDecision
+    ? undefined
+    : mode === "rename"
+      ? { mode: "rename", new_slug: newSlug.trim() }
+      : { mode: "new_version" };
 
   return (
     <div
@@ -198,6 +246,64 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
             </ul>
           ) : null}
 
+          {needsDecision && !isTerminal && !isAwaiting ? (
+            <div className="mt-2 rounded-md border border-warning-border bg-warning-light px-2.5 py-2">
+              <p className="flex items-start gap-1.5 text-xs text-ink-body">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning-text" />
+                <span>{t("skill.collisionTitle", { slug })}</span>
+              </p>
+              <div className="mt-2 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-ink-body">
+                  <input
+                    type="radio"
+                    className="h-3 w-3"
+                    checked={mode === "new_version"}
+                    onChange={() => setMode("new_version")}
+                    disabled={isBusy}
+                  />
+                  <span>
+                    {t("skill.collisionKeepSlug", {
+                      version: String(nextVersion ?? ""),
+                    })}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-ink-body">
+                  <input
+                    type="radio"
+                    className="h-3 w-3"
+                    checked={mode === "rename"}
+                    onChange={() => setMode("rename")}
+                    disabled={isBusy}
+                  />
+                  <span>{t("skill.collisionRename")}</span>
+                </label>
+                {mode === "rename" ? (
+                  <div>
+                    <input
+                      type="text"
+                      value={newSlug}
+                      onChange={(event) => setNewSlug(event.target.value)}
+                      disabled={isBusy}
+                      spellCheck={false}
+                      className={cn(
+                        "h-7 w-full rounded-md border px-2 font-mono text-2xs",
+                        "bg-surface-base text-ink-body",
+                        renameInvalid
+                          ? "border-error-border"
+                          : "border-surface-border",
+                      )}
+                    />
+                    {renameInvalid ? (
+                      <p className="mt-1 text-2xs text-error">
+                        {t("skill.collisionSlugInvalid")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
           {isAwaiting ? (
             <div className="mt-2 space-y-1">
               <p className="text-xs text-ink-body">{t("skill.waitingForAI")}</p>
@@ -211,7 +317,9 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
           ) : null}
           {state === "confirmed" ? (
             <p className="mt-2 text-xs text-ink-body">
-              {t("skill.savedToLib")}
+              {savedVersion != null
+                ? t("skill.savedAsVersion", { version: String(savedVersion) })
+                : t("skill.savedToLib")}
               {boundToProjectLabel ? (
                 <span className="text-ink-meta">
                   {" "}
@@ -250,8 +358,8 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
           </button>
           <button
             type="button"
-            disabled={!canSave || isBusy}
-            onClick={onConfirm}
+            disabled={!canSave || isBusy || blockedByDecision}
+            onClick={() => onConfirm(decision)}
             className={cn(
               "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium",
               "bg-brand text-white hover:bg-brand-hover",
@@ -268,7 +376,9 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
             {state === "confirming" ? (
               <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
             ) : null}
-            {t("skill.saveToLib")}
+            {nextVersion != null && !needsDecision
+              ? t("skill.saveAsVersion", { version: String(nextVersion) })
+              : t("skill.saveToLib")}
           </button>
         </div>
       ) : null}

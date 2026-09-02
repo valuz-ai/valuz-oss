@@ -11,12 +11,30 @@
  * follow-up can call a skill-creator during a post-completion tweak, so the
  * card has to work there too — not just in ConversationPage.
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
-import { skillsApi, useTranslation } from "@valuz/core";
+import {
+  operationsApi,
+  parseOperationToolOutput,
+  skillsApi,
+  useTranslation,
+  type OperationView,
+} from "@valuz/core";
 import type { ConversationTurn } from "@valuz/shared";
-import { SkillSubmissionCard, type SkillSubmissionState } from "@valuz/ui";
+import {
+  SkillSubmissionCard,
+  type SkillSubmissionDecision,
+  type SkillSubmissionState,
+} from "@valuz/ui";
 import { toast } from "sonner";
+
+import { skillSubmissionView } from "../pages/conversation/skill-submission-view";
 
 type ToolLike = {
   id: string;
@@ -94,6 +112,90 @@ export function useSkillSubmissionCards({
   const [submissionStates, setSubmissionStates] = useState<
     Record<string, SubmissionEntry>
   >({});
+  // Operation flow: the card's state is the server's. Seeded from the tool
+  // result's snapshot, refreshed once per turn-list change so a reloaded
+  // page shows what actually happened rather than re-inferring it.
+  const [operationStates, setOperationStates] = useState<
+    Record<string, OperationView>
+  >({});
+  const [operationBusy, setOperationBusy] = useState<
+    Record<string, "confirm" | "cancel" | null>
+  >({});
+
+  const operationSig = useMemo(() => {
+    const ids: string[] = [];
+    for (const turn of turns) {
+      for (const block of turn.blocks) {
+        if (block.kind !== "tool") continue;
+        if (!isSubmitSkillName(block.tool.title)) continue;
+        const parsed = parseOperationToolOutput(block.tool.output);
+        if (parsed?.operation?.id) ids.push(parsed.operation.id);
+      }
+    }
+    return [...new Set(ids)].join(",");
+  }, [turns]);
+
+  useEffect(() => {
+    if (!sessionId || !operationSig) return;
+    let cancelled = false;
+    void operationsApi
+      .status(operationSig.split(",").filter(Boolean), sessionId)
+      .then((res) => {
+        if (!cancelled) {
+          setOperationStates((current) => ({ ...current, ...res.operations }));
+        }
+      })
+      .catch(() => {
+        // Non-fatal: the tool result still renders its persisted snapshot.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, operationSig]);
+
+  const runOperation = useCallback(
+    async (
+      operation: OperationView,
+      action: "confirm" | "cancel",
+      decision?: SkillSubmissionDecision,
+    ) => {
+      if (!sessionId) return;
+      setOperationBusy((current) => ({ ...current, [operation.id]: action }));
+      try {
+        const next =
+          action === "confirm"
+            ? await operationsApi.confirm(
+                operation.id,
+                operation.proposal_hash,
+                sessionId,
+                decision as Record<string, unknown> | undefined,
+              )
+            : await operationsApi.cancel(
+                operation.id,
+                operation.proposal_hash,
+                sessionId,
+              );
+        setOperationStates((current) => ({ ...current, [operation.id]: next }));
+        if (action === "confirm") {
+          if (next.state === "succeeded") {
+            toast.success(t("skill.savedToLib" as Parameters<typeof t>[0]));
+          } else if (next.error_message) {
+            toast.error(next.error_message);
+          }
+        }
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : t("common.saveFailed" as Parameters<typeof t>[0]),
+        );
+      } finally {
+        setOperationBusy((current) => ({ ...current, [operation.id]: null }));
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId],
+  );
 
   // Scan staging for every ``submit_skill`` tool_use we've seen, so the card
   // renders the real file tree (not just the agent's ``files_touched`` claim)
@@ -107,6 +209,8 @@ export function useSkillSubmissionCards({
       for (const block of turn.blocks) {
         if (block.kind !== "tool") continue;
         if (!isSubmitSkillName(block.tool.title)) continue;
+        // Operation-backed cards read their state from the server.
+        if (parseOperationToolOutput(block.tool.output)?.operation) continue;
         const { slug } = parseSubmitInput(block.tool.input);
         if (slug && slug !== "(unknown-slug)") {
           submitTools.push({ id: block.tool.id, slug });
@@ -244,6 +348,35 @@ export function useSkillSubmissionCards({
     (tool: ToolLike): ReactNode | null => {
       if (!isSubmitSkillName(tool.title)) return null;
       const { slug, summary, changeKind, filesTouched } = parseSubmitInput(tool.input);
+
+      const snapshot = parseOperationToolOutput(tool.output)?.operation;
+      if (snapshot) {
+        const operation = operationStates[snapshot.id] ?? snapshot;
+        const view = skillSubmissionView(
+          operation,
+          operationBusy[operation.id] ?? null,
+        );
+        return (
+          <SkillSubmissionCard
+            slug={view.slug || slug}
+            summary={view.summary ?? summary}
+            changeKind={view.changeKind ?? changeKind}
+            filesTouched={filesTouched}
+            state={view.state}
+            errorMessage={view.errorMessage}
+            stagedFiles={view.stagedFiles}
+            stagingPath={view.stagingPath}
+            nextVersion={view.nextVersion}
+            savedVersion={view.savedVersion}
+            conflictKind={view.conflictKind}
+            onConfirm={(decision) =>
+              void runOperation(operation, "confirm", decision)
+            }
+            onDismiss={() => void runOperation(operation, "cancel")}
+          />
+        );
+      }
+
       // Initial state is "awaiting_files"; the scan effect flips it to
       // "pending" once SKILL.md exists. User interactions take precedence.
       const entry = submissionStates[tool.id] || { state: "awaiting_files" as const };
@@ -265,7 +398,14 @@ export function useSkillSubmissionCards({
         />
       );
     },
-    [submissionStates, handleConfirm, handleDismiss],
+    [
+      submissionStates,
+      handleConfirm,
+      handleDismiss,
+      operationStates,
+      operationBusy,
+      runOperation,
+    ],
   );
 
   return { renderToolCall };

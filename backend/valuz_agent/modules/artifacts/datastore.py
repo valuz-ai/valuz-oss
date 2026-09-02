@@ -659,6 +659,20 @@ class ArtifactDatastore:
         ).scalars()
         return {row.artifact_id: row for row in rows}
 
+    async def get_artifacts(
+        self, user_id: str, artifact_ids: Sequence[str]
+    ) -> dict[str, ArtifactRow]:
+        """Load many artifacts at once, keyed by id. See ``get_contents``."""
+        ids = list(dict.fromkeys(artifact_ids))
+        if not ids:
+            return {}
+        rows = (
+            await self._db.execute(
+                select(ArtifactRow).where(ArtifactRow.user_id == user_id, ArtifactRow.id.in_(ids))
+            )
+        ).scalars()
+        return {row.id: row for row in rows}
+
     async def get_content(self, user_id: str, content_id: str) -> ArtifactContentRow | None:
         return (
             await self._db.execute(
@@ -756,7 +770,6 @@ class ArtifactDatastore:
         await self._db.flush()
         return row
 
-
     # ── Host bindings ───────────────────────────────────────────────────
     async def list_bindings_for_artifact(
         self, user_id: str, artifact_id: str
@@ -775,7 +788,6 @@ class ArtifactDatastore:
         return list((await self._db.execute(stmt)).scalars().all())
 
     async def get_binding(
-
         self, user_id: str, host_type: str, host_id: str, slot: str
     ) -> ArtifactBindingRow | None:
         return (
@@ -817,9 +829,7 @@ class ArtifactDatastore:
         await self._db.flush()
         return row
 
-    async def delete_binding(
-        self, user_id: str, host_type: str, host_id: str, slot: str
-    ) -> bool:
+    async def delete_binding(self, user_id: str, host_type: str, host_id: str, slot: str) -> bool:
         row = await self.get_binding(user_id, host_type, host_id, slot)
         if row is None:
             return False

@@ -18,9 +18,12 @@ import {
   BackLink,
   Input,
   MarkdownContent,
+  SkillVersionList,
+  type SkillVersionEntry,
 } from "@valuz/ui";
 import { skillsApi } from "@valuz/core";
 import type { SkillDetail } from "@valuz/core";
+import { t as _t } from "@valuz/shared/i18n";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { toast } from "sonner";
 import { useTranslation } from "@valuz/core";
@@ -143,6 +146,69 @@ export const SkillDetailPage = () => {
     );
     return () => setHeader(null);
   }, [skill, decodedId, navigate, setHeader]);
+
+  // Version history — present only for skills saved through the library
+  // (skill-creator confirm, staging sync). Everything else has no lineage
+  // yet and renders the empty state.
+  const [versions, setVersions] = useState<SkillVersionEntry[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  const loadVersions = useCallback(async () => {
+    if (!decodedId) return;
+    setVersionsLoading(true);
+    try {
+      const res = await skillsApi.listVersions(decodedId);
+      setVersions(
+        res.items.map((item) => ({
+          revisionId: item.revision_id,
+          versionNo: item.version_no,
+          createdAt: item.created_at,
+          byteSize: item.byte_size,
+          isCurrent: item.is_current,
+          createdBy: item.created_by ?? null,
+        })),
+      );
+    } catch {
+      // Non-fatal: an older backend has no versions endpoint, and a skill
+      // with no lineage is the same empty list.
+      setVersions([]);
+    } finally {
+      setVersionsLoading(false);
+    }
+  }, [decodedId]);
+
+  useEffect(() => {
+    void loadVersions();
+  }, [loadVersions]);
+
+  const handleRestoreVersion = useCallback(
+    async (revisionId: string) => {
+      if (!decodedId) return;
+      setRestoringId(revisionId);
+      try {
+        const res = await skillsApi.restoreVersion(decodedId, revisionId);
+        toast.success(
+          _t("skill.versionRestored" as Parameters<typeof _t>[0], {
+            version: String(res.version_no),
+          }),
+        );
+        await loadVersions();
+        // The library directory changed under the open editor — reload the
+        // file the user is looking at rather than leaving a stale buffer.
+        window.location.reload();
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : _t("skill.versionRestoreFailed" as Parameters<typeof _t>[0]),
+        );
+      } finally {
+        setRestoringId(null);
+      }
+    },
+    [decodedId, loadVersions],
+  );
 
   const handleSave = useCallback(async () => {
     if (!selectedFile || !decodedId) return;
@@ -372,6 +438,18 @@ export const SkillDetailPage = () => {
             </div>
           )}
         </div>
+
+        {/* Version history */}
+        {!skill?.protected ? (
+          <div className="border-b border-surface-border px-4 py-3">
+            <SkillVersionList
+              versions={versions}
+              loading={versionsLoading}
+              restoringId={restoringId}
+              onRestore={(revisionId) => void handleRestoreVersion(revisionId)}
+            />
+          </div>
+        ) : null}
 
         {/* File tree */}
         <div className="overflow-y-auto p-2">

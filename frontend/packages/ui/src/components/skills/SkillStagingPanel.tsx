@@ -1,4 +1,5 @@
 import {
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -43,8 +44,24 @@ export interface StagingPanelSlug {
   files?: StagingPanelFile[];
 }
 
+/** A skill this conversation already saved to the library — one entry per
+ *  skill, at the newest version this session produced. */
+export interface SavedSkillEntry {
+  artifactId: string;
+  /** Library slug, derived from the archive name (``<slug>.zip``). */
+  slug: string;
+  versionNo: number;
+  /** False once a later save (elsewhere) superseded this version. */
+  isCurrent: boolean;
+}
+
 export interface SkillStagingPanelProps {
   slugs: StagingPanelSlug[];
+  /** Saved through the library during this conversation. Staging is emptied
+   *  on save, so without this the panel goes blank the moment the user
+   *  accepts — and the work of the session disappears from the panel that
+   *  is supposed to show it. */
+  savedSkills?: SavedSkillEntry[];
   refreshing: boolean;
   syncing: boolean;
   onRefresh: () => void;
@@ -53,6 +70,9 @@ export interface SkillStagingPanelProps {
   ) => void;
   /** Resolves the UTF-8 contents of a file under a slug; used for preview. */
   onLoadFile?: (slug: string, path: string) => Promise<string>;
+  /** Open a saved skill in the library (its detail page shows every
+   *  version). Omit to render the saved list as plain text. */
+  onOpenSkill?: (slug: string) => void;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -92,6 +112,8 @@ export const SkillStagingPanel = ({
   onRefresh,
   onSync,
   onLoadFile,
+  savedSkills = [],
+  onOpenSkill,
 }: SkillStagingPanelProps) => {
   const { t } = useI18n();
   const [state, setState] = useState<Record<string, SlugRowState>>(() =>
@@ -188,6 +210,45 @@ export const SkillStagingPanel = ({
           />
         </button>
       </div>
+
+      {savedSkills.length > 0 ? (
+        <div className="border-b border-surface-border px-3 pb-2">
+          <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wider text-ink-label">
+            <Check className="h-3 w-3 text-success" />
+            {t("skill.sessionSavedTitle")}
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {savedSkills.map((saved) => (
+              <li
+                key={saved.artifactId}
+                className="flex items-center gap-1.5 text-2xs"
+              >
+                {onOpenSkill ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSkill(saved.slug)}
+                    className="min-w-0 truncate text-ink-body transition-colors hover:text-brand"
+                  >
+                    {saved.slug}
+                  </button>
+                ) : (
+                  <span className="min-w-0 truncate text-ink-body">
+                    {saved.slug}
+                  </span>
+                )}
+                <span className="shrink-0 font-mono text-ink-meta">
+                  v{saved.versionNo}
+                </span>
+                {!saved.isCurrent ? (
+                  <span className="shrink-0 text-ink-label">
+                    {t("skill.versionSuperseded")}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {slugs.length === 0 ? (

@@ -39,6 +39,7 @@ import {
   renderChatplanStatusPill,
   resolveGenUiHost,
 } from "./tool-card-helpers";
+import { skillSubmissionView } from "./skill-submission-view";
 import { useToolCallCardActions } from "./useToolCallCardActions";
 
 type ToolCallCardsParams = {
@@ -660,6 +661,44 @@ export function useToolCallCards({
       // effect above flips us to "pending" once SKILL.md actually
       // exists in the staging dir. Pre-existing state (after user
       // interactions) takes precedence.
+      // Operation flow: the tool result carries a ``skill.submit`` record,
+      // so the card's state is the server's — it survives a reload, and
+      // both the staged file list and the collision the user has to
+      // resolve come from the proposal the user is actually approving.
+      const submitResult = parseOperationToolOutput(tool.output);
+      const submitSnapshot = submitResult?.operation;
+      if (submitSnapshot) {
+        const operation = operationStates[submitSnapshot.id] ?? submitSnapshot;
+        const view = skillSubmissionView(
+          operation,
+          operationBusy[operation.id] ?? null,
+        );
+        return (
+          <SkillSubmissionCard
+            slug={view.slug || slug}
+            summary={view.summary ?? summary}
+            changeKind={view.changeKind ?? changeKind}
+            filesTouched={filesTouched}
+            state={view.state}
+            errorMessage={view.errorMessage}
+            stagedFiles={view.stagedFiles}
+            stagingPath={view.stagingPath}
+            nextVersion={view.nextVersion}
+            savedVersion={view.savedVersion}
+            conflictKind={view.conflictKind}
+            onConfirm={(decision) =>
+              void handleConfirmOperation(
+                operation,
+                decision as Record<string, unknown> | undefined,
+              )
+            }
+            onDismiss={() => void handleCancelOperation(operation)}
+          />
+        );
+      }
+
+      // Legacy flow (cards from sessions that predate the operation
+      // record): state is inferred from the staging scan.
       const entry = submissionStates[tool.id] || {
         state: "awaiting_files" as const,
       };
