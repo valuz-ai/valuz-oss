@@ -58,7 +58,11 @@ class OfficialSkillSource:
         return roots
 
     def list_skills(
-        self, ctx: RuntimeContext, *, compute_content_hash: bool = True
+        self,
+        ctx: RuntimeContext,
+        *,
+        compute_content_hash: bool = True,
+        slugs: set[str] | None = None,
     ) -> list[SkillManifest]:
         """List official skill manifests.
 
@@ -66,25 +70,41 @@ class OfficialSkillSource:
         each skill dir — slow on a network filesystem, needed only by the indexer).
         Display/catalog listing passes ``False`` and reads only each SKILL.md
         (cached). See ``FilesystemSkillSource.list_skills``.
+
+        ``slugs`` restricts the walk to named packages. The hash above is the
+        expensive part and it is only worth paying for packages that could have
+        changed; a caller that just landed a known set says so, which is what
+        keeps a release from re-reading every package once per owner.
         """
         if ctx.user_id is None:
             raise ValueError("user_id is required to list official skills")
 
         by_slug: dict[str, SkillManifest] = {}
+        wanted = set(slugs) if slugs is not None else None
         for root, shipped in self._roots(ctx.user_id):
             if not root.exists():
                 continue
             for manifest in self._list_root(
-                root, shipped=shipped, compute_content_hash=compute_content_hash
+                root,
+                shipped=shipped,
+                compute_content_hash=compute_content_hash,
+                slugs=wanted,
             ):
                 by_slug[manifest.slug] = manifest  # later root wins
         return [by_slug[slug] for slug in sorted(by_slug)]
 
     def _list_root(
-        self, official_dir: Path, *, shipped: bool, compute_content_hash: bool
+        self,
+        official_dir: Path,
+        *,
+        shipped: bool,
+        compute_content_hash: bool,
+        slugs: set[str] | None = None,
     ) -> list[SkillManifest]:
         manifests: list[SkillManifest] = []
         for skill_dir in sorted(p for p in official_dir.iterdir() if p.is_dir()):
+            if slugs is not None and skill_dir.name not in slugs:
+                continue
             manifest_path = _detect_manifest(skill_dir)
             if manifest_path is None:
                 continue

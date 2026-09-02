@@ -1,6 +1,7 @@
 """A skill scan must not run on the event loop.
 
-``startup_scan`` walks every skill root off disk. That is cheap on a laptop and
+``startup_scan`` and the two ``reindex_*`` entry points all walk skill roots
+off disk. That is cheap on a laptop and
 not on a cloud owner's network-mounted root, where a stat costs tens of
 milliseconds and a full scan runs for seconds. Run inline it stalls the whole
 process — which is how the runtime-control work WS stopped answering the
@@ -24,7 +25,7 @@ class SlowSource:
     def __init__(self) -> None:
         self.calls = 0
 
-    def list_skills(self, ctx, *, compute_content_hash=True):  # noqa: ANN001, ANN201
+    def list_skills(self, ctx, *, compute_content_hash=True, slugs=None):  # noqa: ANN001, ANN201
         self.calls += 1
         time.sleep(self.DELAY_S)
         return []
@@ -75,3 +76,109 @@ async def test_startup_scan_keeps_the_event_loop_responsive(monkeypatch) -> None
         f"event loop was unserviced for {worst * 1000:.0f}ms — the scan is "
         f"running inline instead of on a worker thread"
     )
+
+
+async def test_reindex_official_skills_keeps_the_event_loop_responsive(monkeypatch) -> None:
+    """The path a release takes, and the one that was still inline.
+
+    ``startup_scan`` was moved off the loop after the 1011 incident; the two
+    ``reindex_*`` entry points were written later and kept scanning inline.
+    That is the shape a RELEASE has: changing any bundled package re-lands it
+    for every owner, and every landing comes back through here — so the one
+    scan that still blocked ran once per owner, back to back, on the process
+    serving the runtime-control WS. Measured on qa 2026-09-02: the WS died on
+    keepalive, connector reconciliation never completed a cycle, and every
+    session spawn on the deployment answered 409 RESOURCE_REPLICA_NOT_READY.
+    """
+    import contextlib
+
+    from valuz_agent.integrations import skills_official
+    from valuz_agent.modules.skills import service as service_mod
+
+    source = SlowSource()
+    monkeypatch.setattr(skills_official, "OfficialSkillSource", lambda: source)
+
+    @contextlib.asynccontextmanager
+    async def uow(**_kwargs):  # noqa: ANN202
+        yield object()
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", uow)
+    monkeypatch.setattr(service_mod, "SkillDatastore", lambda db: object())
+
+    worst = 0.0
+    stop = False
+
+    async def ticker() -> None:
+        nonlocal worst
+        last = time.monotonic()
+        while not stop:
+            await asyncio.sleep(0.001)
+            now = time.monotonic()
+            worst = max(worst, now - last)
+            last = now
+
+    t = asyncio.create_task(ticker())
+    await asyncio.sleep(0.01)
+    try:
+        await service_mod.reindex_official_skills("owner-a")
+    finally:
+        stop = True
+        await t
+
+    assert source.calls == 1, "the reindex did not run"
+    assert worst < SlowSource.DELAY_S / 2, (
+        f"event loop was unserviced for {worst * 1000:.0f}ms — reindex_official_skills "
+        f"is scanning inline instead of on a worker thread"
+    )
+
+
+async def test_reindex_narrows_to_the_packages_a_landing_changed(monkeypatch, tmp_path) -> None:
+    """The hash is the cost; pay it only where content could have moved.
+
+    A release re-lands ONE package for every owner. Re-reading every package's
+    every file per owner is what turned that into minutes of degraded spawn,
+    so the landing names what it touched and the walk skips the rest.
+    """
+    import contextlib
+
+    from valuz_agent.infra.fs_registry import fs_registry
+    from valuz_agent.integrations import skills_official
+    from valuz_agent.modules.skills import service as service_mod
+
+    root = tmp_path / "official-skills"
+    for slug in ("moved", "untouched-a", "untouched-b"):
+        (root / slug).mkdir(parents=True)
+        (root / slug / "SKILL.md").write_text(
+            f"---\nname: {slug}\ndescription: d\n---\nbody\n", encoding="utf-8"
+        )
+
+    monkeypatch.setattr(fs_registry, "official_skill_root", lambda *, user_id: root)
+    monkeypatch.setattr(fs_registry, "system_skill_roots", lambda: ())
+
+    hashed: list[str] = []
+    real_hash = skills_official._compute_dir_hash
+
+    def spy(skill_dir):  # noqa: ANN001, ANN202
+        hashed.append(skill_dir.name)
+        return real_hash(skill_dir)
+
+    monkeypatch.setattr(skills_official, "_compute_dir_hash", spy)
+
+    @contextlib.asynccontextmanager
+    async def uow(**_kwargs):  # noqa: ANN202
+        yield object()
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", uow)
+    monkeypatch.setattr(service_mod, "SkillDatastore", lambda db: object())
+
+    async def noop_index(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        return 0
+
+    monkeypatch.setattr(service_mod, "_index_manifests", noop_index)
+
+    await service_mod.reindex_official_skills("owner-a", slugs={"moved"})
+    assert hashed == ["moved"]
+
+    hashed.clear()
+    await service_mod.reindex_official_skills("owner-a")
+    assert sorted(hashed) == ["moved", "untouched-a", "untouched-b"]
