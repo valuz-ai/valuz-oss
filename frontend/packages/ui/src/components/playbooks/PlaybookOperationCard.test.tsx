@@ -40,6 +40,9 @@ describe("PlaybookOperationCard", () => {
     expect(
       screen.getByRole("heading", { name: "半导体景气跟踪" }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole("dialog").classList.contains("sm:max-w-3xl"),
+    ).toBe(true);
     expect(screen.getByRole("heading", { name: "核心观点" })).toBeTruthy();
     expect(screen.getByRole("list")).toBeTruthy();
   });
