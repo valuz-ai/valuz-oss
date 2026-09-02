@@ -27,6 +27,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST …/versions/{rev}/restore` (restore = a new version on top of the
   history). `valuz_skill_index.artifact_id` links a skill folder to its
   lineage (migration 0044). Local backup now includes `skill-versions/`.
+- **skill-creator submissions are durable operations** — `submit_skill` now
+  proposes a `skill.submit` operation (staged file list, tree hash, how the
+  draft collides with the library, the version a save would create) and
+  returns the operation envelope; the review card confirms/cancels through
+  `/v1/operations/{id}`, so its state survives a refresh. Confirmation
+  refuses a draft edited after submission (`OPERATION_STALE`); a slug that
+  collides with a library skill the draft was not prepared from needs the
+  user's decision (`{"mode": "new_version"}` or `{"mode": "rename",
+  "new_slug"}`); cancel removes the staged draft. New `prepare_skill_edit`
+  tool seeds staging from a library skill so the save becomes its next
+  version; `list_skills` reports scope / version / editability; the
+  skill-creator SKILL.md now checks the library before writing. Operations
+  gained `decision` on confirm, an optional cancel hook, and run handlers
+  with commits deferred (`infra.db.defer_commits`). The legacy
+  `/v1/skills/submissions/*` endpoints are deprecated and kept one release.
 
 ### Fixed
 

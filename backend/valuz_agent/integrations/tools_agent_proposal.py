@@ -695,8 +695,11 @@ async def _update_agent_handler(args: dict[str, Any], context: ExecContext) -> T
 
 
 LIST_SKILLS_DESCRIPTION = (
-    "List the skills already in the user's library (slug, name, description), "
-    "so you can bind existing skills by slug when proposing an agent. "
+    "List the skills already in the user's library (slug, name, description, "
+    "scope, version, whether it is editable). Call this BEFORE creating a new "
+    "skill so you can tell the user when a similar one already exists and let "
+    "them choose between improving it (prepare_skill_edit) and creating a new "
+    "one; also for binding existing skills by slug when proposing an agent. "
     "Read-only."
 )
 
@@ -707,12 +710,35 @@ async def _list_skills_handler(args: dict[str, Any], context: ExecContext) -> To
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.skills.datastore import SkillDatastore
 
+    from valuz_agent.modules.artifacts.service import get_head_revision
+
     user_id = context.user_id
+    items: list[dict[str, Any]] = []
     async with async_unit_of_work(commit=False) as db:
         rows = await SkillDatastore(db).list_skills(user_id)
-    items = [
-        {"slug": r.slug, "name": r.name, "description": (r.description or "")[:200]} for r in rows
-    ]
+        for r in rows:
+            if getattr(r, "status", "available") != "available":
+                continue
+            version: int | None = None
+            artifact_id = getattr(r, "artifact_id", None)
+            if artifact_id:
+                head = await get_head_revision(db, user_id, artifact_id)
+                version = head.version_no if head is not None else None
+            items.append(
+                {
+                    "slug": r.slug,
+                    "name": r.name,
+                    "description": (r.description or "")[:200],
+                    "scope": r.scope,
+                    "version": version,
+                    "editable": not (
+                        bool(getattr(r, "readonly", False))
+                        or bool(getattr(r, "is_locked", False))
+                        or bool(getattr(r, "protected", False))
+                    ),
+                    "creation_origin": getattr(r, "creation_origin", None),
+                }
+            )
     return ToolResult(content=json.dumps({"ok": True, "skills": items}, ensure_ascii=False))
 
 

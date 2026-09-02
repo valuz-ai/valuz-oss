@@ -63,6 +63,31 @@ async def test_accepts_submission_when_skill_md_is_staged(
     staged.mkdir(parents=True)
     (staged / "SKILL.md").write_text("---\nname: my-skill\n---\n", encoding="utf-8")
     _patch_staging_resolver(monkeypatch, staging_base)
+    # The accept path proposes an operation, which needs the host tables.
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from valuz_agent.infra.config import settings
+    from valuz_agent.infra.database import Base
+    from valuz_agent.modules.artifacts import models as _a  # noqa: F401
+    from valuz_agent.modules.operations import models as _o  # noqa: F401
+    from valuz_agent.modules.skills import operations as _s  # noqa: F401
+
+    monkeypatch.setattr(settings, "user_skills_dir", tmp_path / "library")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'tool.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    @asynccontextmanager
+    async def _uow(commit: bool = True):  # type: ignore[no-untyped-def]
+        async with factory() as db:
+            yield db
+            if commit:
+                await db.commit()
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _uow)
 
     result = await _submit_skill_handler(
         dict(_ARGS), HostExecContext(session_id="s1", user_id="local-test-owner")
@@ -70,6 +95,8 @@ async def test_accepts_submission_when_skill_md_is_staged(
 
     assert not result.is_error
     assert "my-skill" in result.content
+    assert '"action": "submit"' in result.content
+    await engine.dispose()
 
 
 async def test_rejects_with_exact_staging_path_when_not_staged(

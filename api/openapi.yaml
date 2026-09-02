@@ -5124,6 +5124,16 @@ components:
       properties:
         proposal_hash: {type: string, minLength: 64, maxLength: 64}
         comment: {type: string, nullable: true}
+        decision:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: |
+            Parameters of the confirmation itself, for proposals that leave a
+            choice to the user. Passed to the operation handler as
+            `OperationContext.decision`; ignored on cancel. `skill.submit` with
+            `preview.conflict_kind = "unprepared_collision"` requires
+            `{"mode": "new_version"}` or `{"mode": "rename", "new_slug": "…"}`.
 
     Operation:
       type: object

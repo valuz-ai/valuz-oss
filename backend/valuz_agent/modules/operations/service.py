@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.facade.projects import ProjectLibrary
+from valuz_agent.infra.db import defer_commits
 from valuz_agent.modules.operations.models import (
     ConfirmationDecisionRow,
     OperationRecordRow,
@@ -124,6 +126,7 @@ class OperationService:
         *,
         expected_proposal_hash: str,
         comment: str | None = None,
+        decision: dict[str, Any] | None = None,
     ) -> OperationRecordRow:
         row = await self._get_for_update(user_id, operation_id)
         if row.proposal_hash != expected_proposal_hash:
@@ -150,12 +153,17 @@ class OperationService:
         try:
             # Roll back partial domain writes while preserving the outer
             # OperationRecord so a failed attempt remains durable and retryable.
-            async with self._db.begin_nested():
+            # ``defer_commits``: the handler may reuse domain code written for
+            # the request path, which commits as it goes. Inside this
+            # savepoint a commit would close the context; deferring turns each
+            # one into a flush, and the record's own commit lands all of it.
+            async with self._db.begin_nested(), defer_commits():
                 result = await registration.handler(
                     OperationContext(
                         db=self._db,
                         projects=self._projects,
                         user_id=user_id,
+                        decision=dict(decision or {}),
                     ),
                     row.input_payload,
                 )
@@ -213,6 +221,19 @@ class OperationService:
         )
         row.state = "cancelled"
         await self._db.flush()
+        registration = operation_registry.get(row.operation_type, row.operation_version)
+        if registration.cancel_handler is not None:
+            try:
+                await registration.cancel_handler(
+                    OperationContext(db=self._db, projects=self._projects, user_id=user_id),
+                    row.input_payload,
+                )
+            except Exception:  # noqa: BLE001 — cleanup must not undo the cancel
+                logger.warning(
+                    "operation cancel handler failed",
+                    extra={"operation_id": row.id, "operation_type": row.operation_type},
+                    exc_info=True,
+                )
         return row
 
     async def status(self, user_id: str, operation_ids: list[str]) -> list[OperationRecordRow]:

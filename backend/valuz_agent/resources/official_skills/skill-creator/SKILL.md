@@ -60,6 +60,33 @@ Proactively ask questions about edge cases, input/output formats, example files,
 
 Check available MCPs - if useful for research (searching docs, finding similar skills, looking up best practices), research in parallel via subagents if available, otherwise inline. Come prepared with context to reduce burden on the user.
 
+### Before writing: check the library first (Valuz host)
+
+Call the `list_skills` tool before you write anything. It lists every
+skill the user already has (slug, name, description, scope, version,
+whether it is editable). Then:
+
+- If a skill with the **same slug**, or one whose description clearly
+  covers the same job, already exists, **stop and ask the user** which
+  they want — do not decide for them:
+  1. **Improve the existing skill** (it becomes that skill's next
+     version, history kept), or
+  2. **Create a new, separate skill** under a different slug.
+  Use the runtime's structured question tool when you have one
+  (`AskUserQuestion` / `request_user_input`); otherwise ask in plain
+  text with the two options spelled out, and wait for the answer.
+- If the user chooses to improve it, call
+  `prepare_skill_edit(slug="<the slug>")`. It copies the library's
+  current version into `./.skill-staging/<slug>/` and marks the draft
+  as derived from it. Edit **that** copy; never copy the library
+  directory by hand — without the marker your save would be treated as
+  a name collision.
+- Skills that are read-only / official cannot be edited in place;
+  create a new one under a different slug instead.
+- Never write `version:` into the SKILL.md frontmatter yourself. The
+  host assigns it when the user saves (v1 for a new skill, current+1
+  for an improvement).
+
 ### Write the SKILL.md
 
 Based on the user interview, fill in these components:
@@ -126,11 +153,28 @@ submit_skill(
 
 **What happens after the call**:
 The user sees a card in chat with the skill name, summary, change kind,
-and the list of files. They can save it to their library or discard it.
-If they save:
-- All entries write the skill to `~/.agents/skills/{slug}/`.
+the list of files, and the version the save would create. They can save
+it to their library or discard it. If they save:
+- All entries write the skill to `~/.agents/skills/{slug}/` and record
+  it as a new **version** of that skill (the frontmatter `version:` is
+  set by the host to match).
 - A "project" entry also binds the new skill to the active project.
 - A "chat" or "skills_library" entry just adds it to the library.
+- If the slug collides with a library skill you did not prepare with
+  `prepare_skill_edit`, the card asks the user whether to save it as
+  that skill's next version or under a new name.
+
+**The submission is bound to the exact files you submitted.** Do not
+edit anything under `./.skill-staging/{slug}/` after calling
+`submit_skill` — the user's confirmation would be rejected as stale.
+If the user asks for changes, make them and call `submit_skill` again
+(a fresh card replaces the old one).
+
+**Iterating after a save.** Saving removes the staged copy. To keep
+improving the skill in the same conversation, call
+`prepare_skill_edit(slug=...)` again (you get the freshly saved version,
+with its new version number), edit, and submit; each save is the next
+version.
 
 You don't need to follow up with library writes yourself — the host
 applies all side effects on confirm. After calling `submit_skill`,
