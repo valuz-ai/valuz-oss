@@ -23,6 +23,8 @@ import {
   useStagedAttachments,
   type MemberWithAgent,
   resolveApiBase,
+  RESOURCE_REFRESH_EVENT,
+  type ResourceRefreshEvent,
 } from "@valuz/core";
 import { fileWritesInTurns, type TurnFileWrite } from "@valuz/shared";
 import {
@@ -1317,6 +1319,25 @@ export function useConversationOrchestration({
     }
     prevBusyRef.current = isBusy;
   }, [isBusy, refreshFileTree, refreshArtifacts]);
+
+  // Saving a skill is a USER action mid-turn (the confirmation card), not a
+  // turn boundary — so the turn-end refresh above never fires for it and the
+  // skill-creator panel's "saved this session" list stayed empty until a
+  // reload, right after a toast said the skill had been saved. The confirm
+  // path already publishes on the resource-refresh bus; subscribe to it.
+  useEffect(() => {
+    const onResourceRefresh = (event: Event) => {
+      const detail = (event as ResourceRefreshEvent).detail;
+      if (detail?.resourceType !== "skill") return;
+      void refreshArtifacts();
+      // Saving empties the staged slug; pull it rather than waiting for the
+      // panel's poll to notice.
+      void refreshStaging();
+    };
+    window.addEventListener(RESOURCE_REFRESH_EVENT, onResourceRefresh);
+    return () =>
+      window.removeEventListener(RESOURCE_REFRESH_EVENT, onResourceRefresh);
+  }, [refreshArtifacts, refreshStaging]);
 
   // Loading server-side attachments on session change + polling parse status
   // is owned by ``useSessionAttachments`` above.

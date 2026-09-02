@@ -2511,6 +2511,7 @@ I18nKey = Literal[
     "skill.stagingFileCount",
     "skill.stagingNew",
     "skill.stagingOriginalChanged",
+    "skill.stagingUntouched",
     "skill.stagingUpdate",
     "skill.startFailed",
     "skill.suggestion",

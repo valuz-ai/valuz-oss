@@ -153,22 +153,49 @@ async def test_second_save_is_v2_on_the_same_lineage(env) -> None:  # type: igno
 
 
 async def test_identical_resave_adds_no_version(env) -> None:  # type: ignore[no-untyped-def]
-    _stage(env.staging, "demo", "same")
-    first, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
-    # stage exactly the library content again (the host will stamp the same
-    # next version number it would have — but the bytes equal v1's only if the
-    # frontmatter version matches, so re-stage the LIBRARY copy verbatim)
+    """Saving content the head already holds mints nothing.
+
+    This is the exact shape ``prepare_skill_edit`` produces: it seeds staging
+    with a verbatim copy of the library, and the panel offers to save it the
+    moment it appears — before the agent has changed anything. Stamping the
+    frontmatter ``version:`` BEFORE packing used to defeat the head's
+    content-hash idempotency (the stamp is itself a byte change), so that
+    save recorded a version whose only difference from its predecessor was
+    the version line.
+    """
     import shutil
 
+    _stage(env.staging, "demo", "same")
+    first, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
     shutil.copytree(env.library / "demo", env.staging / "demo")
     versions_before = await env.svc.list_versions(USER, first.id)
-    # the staged copy carries version: 1; the host rewrites it to 2 → different
-    # bytes → a real v2. That is correct: a save is a save. What must NOT
-    # happen is a phantom version from a pure replay of the same archive,
-    # which the artifacts head idempotency covers (see test_artifact_content_delivery).
+
     await env.svc.confirm_submission(USER, SESSION, "demo")
+
     versions_after = await env.svc.list_versions(USER, first.id)
-    assert len(versions_after.items) == len(versions_before.items) + 1
+    assert [v.version_no for v in versions_after.items] == [
+        v.version_no for v in versions_before.items
+    ]
+    # and the manifest was not stamped forward either
+    assert _manifest_version(env.library / "demo") == "1"
+
+
+async def test_a_real_edit_after_an_untouched_resave_is_still_the_next_version(env) -> None:  # type: ignore[no-untyped-def]
+    """The no-op above must not cost the lineage a number."""
+    import shutil
+
+    _stage(env.staging, "demo", "first")
+    first, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
+    shutil.copytree(env.library / "demo", env.staging / "demo")
+    await env.svc.confirm_submission(USER, SESSION, "demo")  # no-op
+
+    _stage(env.staging, "demo", "actually edited")
+    edited, _, _ = await env.svc.confirm_submission(USER, "sess-2", "demo")
+
+    assert edited.artifact_id == first.artifact_id
+    versions = await env.svc.list_versions(USER, edited.id)
+    assert [v.version_no for v in versions.items] == [1, 2]
+    assert _manifest_version(env.library / "demo") == "2"
 
 
 async def test_hand_edited_library_is_captured_as_baseline_before_overwrite(env) -> None:  # type: ignore[no-untyped-def]

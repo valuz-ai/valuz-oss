@@ -21,6 +21,43 @@ const buildSlug = (overrides: Partial<StagingPanelSlug>): StagingPanelSlug => ({
 });
 
 describe("SkillStagingPanel", () => {
+  it("should not offer to save a draft nobody has edited yet", () => {
+    // ``prepare_skill_edit`` seeds staging with a verbatim copy of the
+    // library and the scan polls, so the draft appears mid-turn — before the
+    // agent has changed anything. Saving it then writes the library's own
+    // content back onto itself.
+    const onSync = vi.fn();
+    const slug = buildSlug({ conflictKind: "same_source", untouched: true });
+    render(<SkillStagingPanel {...baseProps} slugs={[slug]} onSync={onSync} />);
+
+    const checkbox = screen.getByRole("checkbox", { name: "weekly-report" });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    expect((checkbox as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText("尚未修改")).toBeTruthy();
+    // The button counts what pressing it would send, so it reads zero.
+    fireEvent.click(screen.getByText(/同步 0 个到技能库/));
+    expect(onSync).not.toHaveBeenCalled();
+  });
+
+  it("should still offer to save the other drafts alongside an untouched one", () => {
+    const onSync = vi.fn();
+    render(
+      <SkillStagingPanel
+        {...baseProps}
+        slugs={[
+          buildSlug({ conflictKind: "same_source", untouched: true }),
+          buildSlug({ slug: "daily-brief", name: "daily-brief" }),
+        ]}
+        onSync={onSync}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(/同步 1 个到技能库/));
+    expect(onSync).toHaveBeenCalledWith([
+      { slug: "daily-brief", strategy: "overwrite" },
+    ]);
+  });
+
   it("should show the empty state when no slugs have been generated", () => {
     render(<SkillStagingPanel {...baseProps} slugs={[]} />);
     expect(screen.getByText("还没有生成的技能。")).toBeTruthy();

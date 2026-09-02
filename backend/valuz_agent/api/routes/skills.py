@@ -328,6 +328,7 @@ def _slug_view_to_model(view) -> StagingSlugViewModel:  # type: ignore[no-untype
         suggested_new_slug=view.suggested_new_slug,
         source_skill_id=view.source_skill_id,
         version=view.version,
+        untouched=getattr(view, "untouched", False),
     )
 
 

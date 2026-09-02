@@ -7490,6 +7490,14 @@ components:
           nullable: true
           minimum: 1
           description: Parsed from SKILL.md frontmatter `version:`.
+        untouched:
+          type: boolean
+          default: false
+          description: >-
+            The draft is still byte-for-byte the copy `prepare_skill_edit`
+            seeded from the library, so there is nothing to save yet. The
+            staging panel polls, which means a seeded draft appears while the
+            agent is still working on it.
 
     SkillVersionItem:
       type: object

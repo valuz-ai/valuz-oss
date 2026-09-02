@@ -132,6 +132,42 @@ async def test_scan_reports_same_source_when_meta_hash_matches(
     assert s.conflict_kind == "same_source"
     assert s.suggested_strategy == "overwrite"
     assert s.source_skill_id == "user:weekly-report"
+    # It differs from the library, so there is something to save.
+    assert s.untouched is False
+
+
+async def test_scan_marks_a_pristine_prepare_seed_untouched(
+    staging_root: Path, tmp_path: Path
+) -> None:
+    """A ``prepare_skill_edit`` seed nobody has edited yet.
+
+    The panel polls, so a seeded draft appears mid-turn while the agent is
+    still working. Saving it then writes the library's own content back onto
+    itself, which the panel should not be inviting.
+    """
+    user_skills = tmp_path / "user-skills"
+    session_dir = await staging.staging_dir_for_session("local-test-owner", "sess-seed", mkdir=True)
+    _write_skill(user_skills / "weekly-report", name="weekly-report", description="Original.")
+
+    seeded = await prepare_optimize(
+        "local-test-owner",
+        "sess-seed",
+        user_skills / "weekly-report",
+        "user:weekly-report",
+    )
+    del session_dir
+
+    s = (await scan_staging("local-test-owner", "sess-seed")).slugs[0]
+    assert s.conflict_kind == "same_source"
+    assert s.untouched is True
+
+    # The first real edit clears it.
+    (seeded / "SKILL.md").write_text(
+        (seeded / "SKILL.md").read_text(encoding="utf-8") + "\nnow with a change\n",
+        encoding="utf-8",
+    )
+    s = (await scan_staging("local-test-owner", "sess-seed")).slugs[0]
+    assert s.untouched is False
 
 
 async def test_sync_slug_overwrite_writes_to_user_skill_root(

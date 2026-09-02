@@ -134,6 +134,7 @@ export function useContextPanel({
             suggestedNewSlug: s.suggested_new_slug,
             sourceSkillId: s.source_skill_id,
             version: s.version,
+            untouched: s.untouched ?? false,
             files: s.files?.map((f) => ({
               path: f.path,
               type: f.type,

@@ -438,6 +438,9 @@ class StagingSlugViewModel(BaseModel):
     suggested_new_slug: str | None = None
     source_skill_id: str | None = None
     version: int | None = None
+    #: Still byte-identical to what ``prepare_skill_edit`` seeded — nothing
+    #: has been edited yet, so there is nothing to save.
+    untouched: bool = False
 
 
 class StagingScanResponse(BaseModel):

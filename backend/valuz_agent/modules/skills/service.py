@@ -2178,10 +2178,8 @@ class SkillLibraryService:
             await versioning.capture_baseline(
                 db, user_id, slug, library_dir, artifact_id=artifact_id
             )
-            next_no = await versioning.next_version_no(db, user_id, artifact_id)
-            versioning.set_manifest_version(manifest, next_no)
-            recorded = await versioning.record_skill_version(
-                db, user_id, slug, versioning.pack_skill_dir(scratch), artifact_id=artifact_id
+            recorded = await versioning.record_dir_version(
+                db, user_id, slug, scratch, artifact_id=artifact_id, manifest_path=manifest
             )
             await async_commit_with_retry(db, where="SkillLibraryService.restore_version")
             versioning.replace_library_dir(scratch, library_dir)
@@ -2211,10 +2209,12 @@ class SkillLibraryService:
         source_session_id: str | None,
     ) -> RecordedVersion:
         """The save pipeline's history step, run BEFORE the library directory
-        is overwritten: baseline capture of what is there, frontmatter
-        ``version:`` of the staged copy set to the next number, staged copy
-        packed and recorded as the new head. Committed here: the caller's
-        later filesystem writes are not in this unit of work."""
+        is overwritten: baseline capture of what is there, then the staged copy
+        recorded as the new head (``record_dir_version`` — which stamps the
+        frontmatter ``version:`` only when the content actually differs from
+        the head, so a save that changes nothing mints nothing). Committed
+        here: the caller's later filesystem writes are not in this unit of
+        work."""
         from valuz_agent.infra.db import async_commit_with_retry
         from valuz_agent.modules.skills import versioning
 
@@ -2226,16 +2226,13 @@ class SkillLibraryService:
         )
         if baseline is not None:
             artifact_id = baseline.artifact_id
-        next_no = await versioning.next_version_no(db, user_id, artifact_id)
-        manifest = _detect_manifest(staging_dir)
-        if manifest is not None:
-            versioning.set_manifest_version(manifest, next_no)
-        recorded = await versioning.record_skill_version(
+        recorded = await versioning.record_dir_version(
             db,
             user_id,
             slug,
-            versioning.pack_skill_dir(staging_dir),
+            staging_dir,
             artifact_id=artifact_id,
+            manifest_path=_detect_manifest(staging_dir),
             source_session_id=source_session_id,
         )
         await async_commit_with_retry(db, where="SkillLibraryService._record_staged_version")
@@ -2245,8 +2242,8 @@ class SkillLibraryService:
         self, user_id: str, library_dir: Path, *, source_session_id: str | None
     ) -> RecordedVersion:
         """History step for paths that land the directory first (the staging
-        panel's sync): stamp the next version into the library copy's
-        frontmatter and record it."""
+        panel's sync): record the library copy, stamping the next version into
+        its frontmatter only if it differs from the head."""
         from valuz_agent.infra.db import async_commit_with_retry
         from valuz_agent.modules.skills import versioning
 
@@ -2254,16 +2251,13 @@ class SkillLibraryService:
         slug = library_dir.name
         existing = await self._ds.get_by_source_path(user_id, str(library_dir))
         artifact_id = getattr(existing, "artifact_id", None) if existing is not None else None
-        next_no = await versioning.next_version_no(db, user_id, artifact_id)
-        manifest = _detect_manifest(library_dir)
-        if manifest is not None:
-            versioning.set_manifest_version(manifest, next_no)
-        recorded = await versioning.record_skill_version(
+        recorded = await versioning.record_dir_version(
             db,
             user_id,
             slug,
-            versioning.pack_skill_dir(library_dir),
+            library_dir,
             artifact_id=artifact_id,
+            manifest_path=_detect_manifest(library_dir),
             source_session_id=source_session_id,
         )
         await async_commit_with_retry(db, where="SkillLibraryService._record_library_version")

@@ -125,3 +125,37 @@ def test_set_manifest_version(tmp_path: Path, raw: str, expected_head: str) -> N
 def test_content_hash_matches_the_artifacts_spelling() -> None:
     assert versioning.content_hash_of(b"abc").startswith("sha256:")
     assert len(versioning.content_hash_of(b"abc")) == len("sha256:") + 64
+
+
+def test_swap_leaves_nothing_the_library_scan_would_index(tmp_path: Path) -> None:
+    """A crash mid-swap must not mint a phantom skill.
+
+    ``skills_filesystem.list_skills`` enumerates every child directory of the
+    skills root and indexes the ones holding a ``SKILL.md``, taking the slug
+    from the directory name. The swap's temp copies are therefore only safe
+    somewhere the scan does not look — the copy step is a whole directory over
+    a network mount in the cloud deployment, so leaving them next to the skill
+    is a real window, not a theoretical one.
+    """
+    from valuz_agent.integrations.skills_filesystem import _detect_manifest
+
+    library_root = tmp_path / "skills"
+    dest = _skill(library_root / "demo")
+    src = _skill(tmp_path / "staged", body="the new body")
+
+    versioning.replace_library_dir(src, dest)
+
+    # Simulate the crash: the swap's own leftovers, left behind mid-flight.
+    swap_root = library_root / versioning._SWAP_DIRNAME
+    assert swap_root.is_dir()
+    _skill(swap_root / "demo.new", body="half-written")
+    _skill(swap_root / "demo.old")
+
+    # What the scan would enumerate: children of the root holding a SKILL.md.
+    indexed = sorted(
+        child.name
+        for child in library_root.iterdir()
+        if child.is_dir() and _detect_manifest(child) is not None
+    )
+    assert indexed == ["demo"]
+    assert (dest / "SKILL.md").read_text(encoding="utf-8").endswith("the new body\n")
