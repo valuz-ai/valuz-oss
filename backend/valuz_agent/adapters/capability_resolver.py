@@ -310,10 +310,13 @@ async def resolve_session_capabilities(
     #      that doc search is available. For chat sessions the MCP
     #      tools return empty results (no KB bindings → empty scope)
     #      which is a normal answer the agent already handles.
-    for absolute in always_on_skill_paths(user_id=user_id):
-        if absolute not in seen:
-            seen.add(absolute)
-            skill_paths.append(absolute)
+    # Same rule as every other session-build path (``merge_with_always_on``):
+    # the shipped package wins a slug collision. Before this, a same-slug copy
+    # from the user library collected in 1b stayed in the list beside the
+    # baseline entry, and which one the session ran was left to the kernel
+    # materializer's last-write-wins — correct only by accident of ordering.
+    skill_paths = list(merge_with_always_on(skill_paths, always_on_skill_paths(user_id=user_id)))
+    seen = set(skill_paths)
     logger.info(
         "Auto-injecting always-on baseline skills for project %s (kind=%s)",
         project_id,
@@ -390,7 +393,20 @@ def merge_with_always_on(
     import os as _os
 
     baseline_names = {_os.path.basename(p) for p in baseline_paths}
-    kept = [p for p in own_paths if _os.path.basename(p) not in baseline_names]
+    kept: list[str] = []
+    for path in own_paths:
+        if _os.path.basename(path) in baseline_names and path not in baseline_paths:
+            # Loud, not silent: the entry is the user's, and if it was a
+            # deliberate edit of a bundled package this is the only trace of
+            # why the session did not pick it up.
+            logger.info(
+                "session skills: same-slug copy shadowed by the shipped package, dropped: %s",
+                path,
+            )
+            continue
+        if _os.path.basename(path) in baseline_names:
+            continue
+        kept.append(path)
     return tuple(kept) + tuple(baseline_paths)
 
 
@@ -713,7 +729,13 @@ async def resolve_skill_slugs_to_paths(
     managed_root = fs_registry.user_skill_root(user_id)
 
     def _is_managed_or_project(path: str) -> bool:
-        roots: list[Path] = [managed_root]
+        # The official root is as managed as the user root — the host lands
+        # bundled packages there itself. Listing it here means a shipped
+        # package's eligibility does not depend on the external-discovery
+        # policy happening to be permissive: the OSS default accepts
+        # everything, but a host that installs ``CatalogOnlyUntilClaimed``
+        # would otherwise refuse its own bundled packages.
+        roots: list[Path] = [managed_root, fs_registry.official_skill_root(user_id=user_id)]
         if project_root:
             roots.append(Path(project_root).expanduser())
         for root in roots:

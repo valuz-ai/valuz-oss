@@ -2236,7 +2236,7 @@ class SkillLibraryService:
             installed_dir=library_dir,
             source_session_id=source_session_id,
         )
-        if artifact_id is None and existing is not None:
+        if existing is not None and getattr(existing, "artifact_id", None) != recorded.artifact_id:
             # The lineage was found by name, not by the link. Write the link
             # back so the next preview does not have to.
             await self._ds.set_artifact_id_by_path(
@@ -2268,7 +2268,7 @@ class SkillLibraryService:
             installed_dir=library_dir,
             source_session_id=source_session_id,
         )
-        if artifact_id is None and existing is not None:
+        if existing is not None and getattr(existing, "artifact_id", None) != recorded.artifact_id:
             await self._ds.set_artifact_id_by_path(
                 user_id, existing.source_path, recorded.artifact_id
             )

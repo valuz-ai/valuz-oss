@@ -165,17 +165,17 @@ def test_chat_project_auto_includes_user_library_skills(tmp_path: Path) -> None:
 
 
 def test_extra_skill_id_resolves_manifest_id_by_slug(tmp_path: Path) -> None:
-    skill_dir = _make_skill_dir(tmp_path, "skill-creator")
+    skill_dir = _make_skill_dir(tmp_path, "bundled-demo")
     project = _FakeProject(id="ws-project", kind="project", root_path=str(tmp_path))
     row = SimpleNamespace(source_path=str(skill_dir.resolve(strict=False)))
 
     caps = asyncio.run(
         resolve_session_capabilities(
             projects=_FakeProjectDatastore(project),
-            skills=_FakeSkillDatastore(rows_by_slug={"skill-creator": row}),
+            skills=_FakeSkillDatastore(rows_by_slug={"bundled-demo": row}),
             project_id="ws-project",
             user_id=USER,
-            extra_skill_ids=["official:skill-creator"],
+            extra_skill_ids=["official:bundled-demo"],
         )
     )
 
@@ -279,7 +279,7 @@ def test_chat_project_includes_bundled_official_skill_without_entitlement(
 ) -> None:
     """Bundled official skills (origin_label=='Built-in') ship with the
     client and are always available — even without ``official_entitled``."""
-    skill_dir = _make_skill_dir(tmp_path, "skill-creator")
+    skill_dir = _make_skill_dir(tmp_path, "bundled-demo")
     project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     bundled = SkillManifest(

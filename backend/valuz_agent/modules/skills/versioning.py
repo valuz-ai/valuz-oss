@@ -276,8 +276,8 @@ def manifest_version_of(skill_dir: Path | None) -> int | None:
     """The ``version:`` a skill directory declares, if it declares one.
 
     Only a positive integer counts — the field is free-form in the wild
-    (``1.2.0``, ``draft``), and anything we cannot read as a version number is
-    the same as not having one.
+    (``1.2.0``, ``draft``), and anything that does not coerce to one is the
+    same as not having one.
     """
     if skill_dir is None:
         return None
@@ -286,17 +286,20 @@ def manifest_version_of(skill_dir: Path | None) -> int | None:
     manifest = _detect_manifest(skill_dir)
     if manifest is None:
         return None
+    from valuz_agent.infra.frontmatter import parse_frontmatter_mapping
+    from valuz_agent.integrations.skills_filesystem import _coerce_version
+
     try:
         block, _body = split_frontmatter(manifest.read_text(encoding="utf-8"))
     except OSError:
         return None
-    if not block:
+    mapping = parse_frontmatter_mapping(block) if block else None
+    if not mapping:
         return None
-    match = re.search(r"^version\s*:\s*(\d+)\s*$", block, flags=re.MULTILINE)
-    if match is None:
-        return None
-    value = int(match.group(1))
-    return value if value >= 1 else None
+    # The same coercion the scan applies when it indexes the manifest, so the
+    # number the card shows and the number the catalog shows cannot disagree
+    # (``version: "2"`` and ``version: 2`` are the same declaration).
+    return _coerce_version(mapping.get("version"))
 
 
 async def resolve_artifact_id(

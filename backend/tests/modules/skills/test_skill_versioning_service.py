@@ -433,3 +433,24 @@ async def test_a_genuinely_new_skill_still_starts_at_v1(env) -> None:  # type: i
     assert _manifest_version(env.library / "brand-new") == "1"
     versions = await env.svc.list_versions(USER, skill.id)
     assert [v.version_no for v in versions.items] == [1]
+
+
+async def test_manifest_version_reads_the_same_declaration_the_scan_does(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """``version: "2"`` and ``version: 2`` are one declaration; a regex over
+    the raw block only saw the unquoted one and fell back to 1 for the other
+    — which is the renumber-backwards bug again, one spelling over."""
+    from valuz_agent.modules.skills import versioning
+
+    for raw, expected in (
+        ("version: 2", 2),
+        ('version: "2"', 2),
+        ("version: '3'", 3),
+        ("version: 1.2.0", None),
+        ("version: draft", None),
+        ("version: 0", None),
+        ("name: x", None),
+    ):
+        d = tmp_path / raw.replace(" ", "_").replace(":", "").replace('"', "q").replace("'", "s")
+        d.mkdir()
+        (d / "SKILL.md").write_text(f"---\n{raw}\nname: demo\ndescription: d\n---\nbody\n")
+        assert versioning.manifest_version_of(d) == expected, raw

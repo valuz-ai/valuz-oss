@@ -965,9 +965,6 @@ class SessionService:
                 if m.name not in existing_mcp_names
             ]
 
-            own_skill_keys = {
-                (s.name if hasattr(s, "name") else str(s)) for s in (agent.skills or ())
-            }
             # ``runtime``: this list becomes ``Session.skills``. A protected
             # package is withheld from disclosure, not from execution.
             own_skill_paths = await resolve_skill_slugs_to_paths(
