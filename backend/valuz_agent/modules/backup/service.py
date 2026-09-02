@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import sqlite3
 import threading
@@ -94,6 +95,151 @@ def _version_info(manifest: mf.BackupManifest, vdir: Path) -> BackupVersionInfo:
     )
 
 
+# ── coverage ────────────────────────────────────────────────────────
+#
+# What a backup contains is decided HERE and nowhere else, and every entry
+# is resolved through ``FsRegistry`` — the registry is the one place that
+# knows where user data lives, so a new data directory registered there is
+# either picked up below or has to be added to ``EXCLUDED_DATA_DIR_ENTRIES``
+# with a reason. ``tests/modules/backup/test_backup_plan.py`` enumerates the
+# registry and fails on anything that is in neither list; that tripwire is
+# how the coverage stays honest (the original hardcoded four-name tuple
+# silently missed a month of new directories).
+
+#: Top-level entries under ``data_dir`` that a backup deliberately skips.
+#: Each carries the reason so the exclusion is a decision, not an oversight.
+EXCLUDED_DATA_DIR_ENTRIES: dict[str, str] = {
+    "secrets": "plaintext credentials — never leaves the machine (design §0 #3)",
+    "browser-chrome": "isolated Chrome profile; regenerable, may hold session cookies",
+    "memory-review": "scratch cwd for memory-review sessions; regenerable",
+    "generative-ui": "scratch cwd for generative-UI sessions; regenerable",
+    "skill-creator": "legacy per-session skill staging; transient",
+    "ptc": "generated PTC code-face skills; rebuilt on codegen-version mismatch",
+    "official-skills": (
+        "bundled/marketplace-provisioned packages re-landed at boot; may hold "
+        "sealed (DRM) blobs that must not be exported through the backup file API"
+    ),
+    "backup-restore-pending.json": "restore pointer; consumed at boot",
+    "backup-restore-result.json": "restore report; consumed by the settings UI",
+    # Primary DBs are snapshotted via VACUUM INTO, not walked as files.
+    settings.db_filename: "primary host DB — snapshotted as db/valuz.db",
+    settings.kernel_db_filename: "kernel DB — snapshotted as db/kernel.db",
+}
+
+#: Runtime state the kernel keeps NEXT TO ``kernel.db`` (``boot/kernel.py``
+#: sets the env; deployments may override it). Included because the
+#: sessions in ``kernel.db`` reference it: a DeepAgents session without its
+#: langgraph checkpoint cannot be continued after a restore.
+DEEPAGENTS_CHECKPOINT_DB_NAME = "deepagents_checkpoints.db"
+DEEPAGENTS_CHECKPOINT_ROOT_NAME = "deepagents-checkpoints"
+DSH_STATE_DIR_NAME = "dsh-state"
+
+
+def _runtime_state_paths(kernel_db: Path | None) -> tuple[Path | None, list[tuple[str, Path]]]:
+    """``(checkpoint sqlite, [(rel, dir), ...])`` for the kernel-adjacent
+    runtime state. Reads the env the boot step exported (so a deployment
+    override is honoured) and falls back to the boot step's own defaults."""
+    base = kernel_db.parent if kernel_db is not None else None
+
+    def _env_or(name: str, default: Path | None) -> Path | None:
+        raw = os.environ.get(name)
+        if raw:
+            return Path(raw).expanduser()
+        return default
+
+    ckpt_db = _env_or(
+        "DEEPAGENTS_CHECKPOINT_DB", base / DEEPAGENTS_CHECKPOINT_DB_NAME if base else None
+    )
+    dirs: list[tuple[str, Path]] = []
+    ckpt_root = _env_or(
+        "DEEPAGENTS_CHECKPOINT_ROOT", base / DEEPAGENTS_CHECKPOINT_ROOT_NAME if base else None
+    )
+    if ckpt_root is not None:
+        dirs.append((DEEPAGENTS_CHECKPOINT_ROOT_NAME, ckpt_root))
+    dsh = _env_or("VALUZ_DSH_STATE_DIR", base / DSH_STATE_DIR_NAME if base else None)
+    if dsh is not None:
+        dirs.append((DSH_STATE_DIR_NAME, dsh))
+    return ckpt_db, dirs
+
+
+def build_sources(
+    user_id: str,
+    scope: BackupScope,
+    *,
+    external_projects: list[tuple[str, Path]],
+    kb_kinds: list[str],
+    kernel_db: Path | None,
+) -> tuple[list[backup_engine.SourceSpec], list[backup_engine.SourceSpec]]:
+    """Resolve the file sources of a backup: ``(sources, extra_dbs)``.
+
+    Pure with respect to the DB — the caller passes what needs a query
+    (external project roots, the KB kinds this owner has) so the coverage
+    can be unit-tested against a temp data dir. Only sources that exist are
+    returned; the manifest records what was actually captured.
+    """
+    data_dir = fs_registry.data_dir(user_id)
+    sources: list[backup_engine.SourceSpec] = []
+    seen: set[Path] = set()
+
+    def _add(rel: str, src: Path) -> None:
+        key = src.resolve() if src.exists() else src
+        if key in seen:
+            return
+        seen.add(key)
+        if src.exists():
+            sources.append(backup_engine.SourceSpec(rel=rel, src=src))
+
+    # Always-on application data. Every path comes from the registry.
+    _add("docs", fs_registry.docs_root(user_id))
+    _add("memories", fs_registry.memory_dir(user_id, "global"))
+    _add("attachments", fs_registry.attachments_root(user_id))
+    _add("plugins", fs_registry.plugins_root(user_id))
+    _add("plugins-data", fs_registry.plugins_data_root(user_id))
+    _add("installation.json", fs_registry.installation_file(user_id))
+
+    # Managed KB roots: the default root plus one per KB class this owner
+    # actually has (a host that installs a root resolver routes classes to
+    # distinct directories; OSS resolves them all to the same one, and the
+    # dedup above folds that back to a single source).
+    _add("kb", fs_registry.kb_root(user_id))
+    for kind in sorted(set(kb_kinds)):
+        try:
+            root = fs_registry.kb_root(user_id, kind)
+        except (ValueError, OSError):
+            # A class the resolver refuses to scope to an owner (org-owned
+            # content) is not this user's to back up.
+            continue
+        rel = f"kb-{kind}"
+        try:
+            rel = root.relative_to(data_dir).as_posix()
+        except ValueError:
+            pass
+        _add(rel, root)
+
+    # Kernel-adjacent runtime state (see the constants above).
+    ckpt_db, runtime_dirs = _runtime_state_paths(kernel_db)
+    for rel, path in runtime_dirs:
+        _add(rel, path)
+    extra_dbs: list[backup_engine.SourceSpec] = []
+    if ckpt_db is not None and ckpt_db.exists():
+        extra_dbs.append(backup_engine.SourceSpec(rel=DEEPAGENTS_CHECKPOINT_DB_NAME, src=ckpt_db))
+
+    # User-tunable scope.
+    if scope.user_skills:
+        _add("user-skills", fs_registry.user_skill_root(user_id))
+    projects_root = fs_registry.project_root(user_id)
+    if scope.managed_projects:
+        _add("projects", projects_root)
+    if scope.external_projects:
+        for project_id, root in external_projects:
+            # managed-root children are already covered by "projects"
+            if not root.is_dir() or backup_engine._is_within(root, projects_root):
+                continue
+            _add(f"projects-external/{project_id}", root)
+
+    return sources, extra_dbs
+
+
 class BackupService:
     def __init__(self) -> None:
         self._run_lock = threading.Lock()
@@ -107,9 +253,7 @@ class BackupService:
             return False, "external_database"
         if settings.kernel_mode != "inprocess":
             return False, "remote_kernel"
-        if settings.kernel_database_url and not settings.kernel_database_url.startswith(
-            "sqlite"
-        ):
+        if settings.kernel_database_url and not settings.kernel_database_url.startswith("sqlite"):
             return False, "external_kernel_database"
         return True, None
 
@@ -231,38 +375,26 @@ class BackupService:
             await prefs.get_backup_retention(db, user_id=user_id) or {}
         )
 
-        data_dir = fs_registry.data_dir(user_id)
-        sources: list[backup_engine.SourceSpec] = []
-        for sub in ("docs", "memories", "attachments", "kb"):
-            src = data_dir / sub
-            if src.exists():
-                sources.append(backup_engine.SourceSpec(rel=sub, src=src))
-        installation = data_dir / settings.installation_filename
-        if installation.exists():
-            sources.append(backup_engine.SourceSpec(rel="installation.json", src=installation))
-        if scope.user_skills:
-            skills_root = fs_registry.user_skill_root(user_id)
-            if skills_root.exists():
-                sources.append(backup_engine.SourceSpec(rel="user-skills", src=skills_root))
-        if scope.managed_projects:
-            projects_root = fs_registry.project_root(user_id)
-            if projects_root.exists():
-                sources.append(backup_engine.SourceSpec(rel="projects", src=projects_root))
+        external_projects: list[tuple[str, Path]] = []
         if scope.external_projects:
             from valuz_agent.modules.projects.service import project_root_paths
 
-            projects_root = fs_registry.project_root(user_id)
             for project_id, proj_kind, root_path in await project_root_paths(user_id):
-                if proj_kind != "project" or not root_path:
-                    continue
-                root = Path(root_path).expanduser()
-                # managed-root children are already covered by "projects"
-                if not root.is_dir() or backup_engine._is_within(root, projects_root):
-                    continue
-                sources.append(
-                    backup_engine.SourceSpec(rel=f"projects-external/{project_id}", src=root)
-                )
+                if proj_kind == "project" and root_path:
+                    external_projects.append((project_id, Path(root_path).expanduser()))
 
+        from valuz_agent.modules.docs.service import owner_kb_kinds
+
+        kb_kinds = await owner_kb_kinds(user_id)
+
+        kernel_db = sqlite_path_from_url(kernel_db_url())
+        sources, extra_dbs = build_sources(
+            user_id,
+            scope,
+            external_projects=external_projects,
+            kb_kinds=kb_kinds,
+            kernel_db=kernel_db,
+        )
         return backup_engine.BackupPlan(
             user_id=user_id,
             destination=destination,
@@ -270,10 +402,11 @@ class BackupService:
             scope=scope,
             retention=retention,
             host_db=sqlite_path_from_url(db_url()),
-            kernel_db=sqlite_path_from_url(kernel_db_url()),
+            kernel_db=kernel_db,
             sources=sources,
             app_version=_app_version(),
             exclude_roots=[destination],
+            extra_dbs=extra_dbs,
         )
 
     async def start_manual_run(self, user_id: str) -> BackupRunResponse:
