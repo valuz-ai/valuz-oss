@@ -18,6 +18,7 @@ from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.i18n import get_locale, get_request_locale, parse_accept_language
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.integrations.mcp_http import mcp_request_headers
 from valuz_agent.modules.connectors.catalog import load_catalog
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
@@ -27,7 +28,7 @@ from valuz_agent.modules.connectors.service import (
     ConnectorView,
     CredEntry,
     CredView,
-    build_overrides,
+    build_request_overrides,
     merge_params_into_url,
 )
 from valuz_agent.ports.extensions import ext
@@ -348,7 +349,9 @@ async def _probe_oauth_tool_count(row: ConnectorRow) -> int | None:
 
     from mcp.client.session import ClientSession
 
-    headers = {"Authorization": f"Bearer {access_token}"}
+    headers, params = build_request_overrides(row)
+    headers["Authorization"] = f"Bearer {access_token}"
+    url = merge_params_into_url(url, params)
 
     async def _try(transport: str) -> int:
         if transport == "sse":
@@ -1161,7 +1164,7 @@ def _catalog_field_specs(slug: str | None) -> list[CatalogFieldSpec] | None:
         return None
     # `target` is derived from which schema the field is declared in —
     # never authored per-entry. The service-layer CatalogFieldSpec still
-    # carries it (manifest / build_overrides are keyed on target).
+    # carries it (manifest / build_request_overrides are keyed on target).
     specs = [
         CatalogFieldSpec(
             key=f["key"],
@@ -1561,13 +1564,13 @@ async def _probe_connector(
     # Same injection truth as the runtime resolver (Acceptance #8).
     row2 = await svc._ds.get_by_id(user_id, connector_id)
     if row2 is None:
-        ov_headers: dict[str, str] = {}
+        ov_headers = mcp_request_headers()
         ov_params: dict[str, str] = {}
     else:
-        ov_headers, ov_params = build_overrides(row2)
+        ov_headers, ov_params = build_request_overrides(row2)
 
     if view.auth_type == "oauth":
-        # OAuth layers on AFTER build_overrides — mirrors the resolver.
+        # OAuth layers on AFTER build_request_overrides — mirrors the resolver.
         token_json = row2.oauth_token_json if row2 is not None else None
         if token_json:
             try:

@@ -33,6 +33,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.integrations.mcp_http import mcp_request_headers
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
 from valuz_agent.ports.runtime_resource import ManagedMutationResult
@@ -769,6 +770,18 @@ def build_overrides(
         name: e["value"] for name, e in _parse_cred_entries(row.params_json).items()
     }
     return headers, params
+
+
+def build_request_overrides(
+    row: ConnectorRow,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Build the complete outbound MCP headers and query parameters.
+
+    User-configured values remain authoritative; Valuz supplies only transport
+    defaults that are absent from the connector definition.
+    """
+    headers, params = build_overrides(row)
+    return mcp_request_headers(headers), params
 
 
 def merge_params_into_url(url: str, params: dict[str, str]) -> str:

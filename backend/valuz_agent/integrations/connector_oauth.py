@@ -47,13 +47,12 @@ from mcp.shared.auth_utils import check_resource_allowed, resource_url_from_serv
 from mcp.types import LATEST_PROTOCOL_VERSION
 from pydantic import BaseModel, Field, ValidationError
 
+from valuz_agent.integrations.mcp_http import MCP_USER_AGENT
+
 if TYPE_CHECKING:
     from valuz_agent.modules.connectors.models import ConnectorRow
 
 logger = logging.getLogger(__name__)
-
-_OAUTH_USER_AGENT = "Valuz/1.0"
-
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -108,7 +107,7 @@ async def _send(client: httpx.AsyncClient, request: httpx.Request) -> httpx.Resp
     # broker gateways (notably IBKR's Akamai edge) reject the bare httpx
     # fingerprint while accepting the same standards-compliant request with a
     # client User-Agent.
-    request.headers.setdefault("User-Agent", _OAUTH_USER_AGENT)
+    request.headers.setdefault("User-Agent", MCP_USER_AGENT)
     request.headers.setdefault("Accept", "application/json")
     return await client.send(request)
 
@@ -126,7 +125,7 @@ class OAuthDiscoverHelper:
         self._client = httpx.AsyncClient(
             timeout=30,
             http2=True,
-            headers={"User-Agent": _OAUTH_USER_AGENT, "Accept": "application/json"},
+            headers={"User-Agent": MCP_USER_AGENT, "Accept": "application/json"},
         )
 
     async def close(self) -> None:
@@ -368,7 +367,7 @@ class McpOauthHelper:
         self._client = httpx.AsyncClient(
             timeout=30,
             http2=True,
-            headers={"User-Agent": _OAUTH_USER_AGENT, "Accept": "application/json"},
+            headers={"User-Agent": MCP_USER_AGENT, "Accept": "application/json"},
         )
 
     async def close(self) -> None:

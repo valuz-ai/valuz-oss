@@ -24,6 +24,7 @@ from valuz_agent.modules.connectors.service import (
     ConnectorService,
     CredEntry,
     build_overrides,
+    build_request_overrides,
     merge_params_into_url,
 )
 
@@ -208,7 +209,7 @@ async def test_should_inject_identically_via_resolver_and_build_overrides(svc):
         params=[CredEntry(key="region", secret=False, value="us")],
     )
     row = await _row(svc, v.id)
-    exp_headers, exp_params = build_overrides(row)
+    exp_headers, exp_params = build_request_overrides(row)
     exp_url = merge_params_into_url(row.url, exp_params)
 
     # ``none`` auth → the resolver never touches OAuth, so ``connectors`` is unused.

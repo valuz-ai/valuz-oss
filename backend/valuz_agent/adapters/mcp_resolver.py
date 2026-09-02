@@ -31,7 +31,7 @@ from app.schemas import (
 # Side-effect import — surfaces ``src.core...`` on sys.path.
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
-from valuz_agent.modules.connectors.service import build_overrides, merge_params_into_url
+from valuz_agent.modules.connectors.service import build_request_overrides, merge_params_into_url
 from valuz_agent.ports.extensions import ext
 
 logger = logging.getLogger(__name__)
@@ -160,10 +160,10 @@ async def _resolve_connector_slug(
 async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpServerConfig] | None:
     # Single injection truth shared with the probe (Acceptance #8 — probe
     # and runtime must produce byte-identical headers/params).
-    headers, params = build_overrides(row)
+    headers, params = build_request_overrides(row)
 
     if row.auth_type == "oauth":
-        # OAuth layers on AFTER build_overrides — it needs a live token.
+        # OAuth layers on AFTER build_request_overrides — it needs a live token.
         token_json = row.oauth_token_json
         if not token_json:
             logger.info("mcp resolver: connector %s oauth token not found", row.slug)
