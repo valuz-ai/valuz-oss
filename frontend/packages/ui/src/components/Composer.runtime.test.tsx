@@ -19,14 +19,15 @@ const sampleRuntimes: RuntimeSelectorItem[] = [
 ];
 
 describe("Composer mode guidance", () => {
-  it("keeps the chat and task explanation tooltip readable at a fixed width", async () => {
+  it("lets the chat and task explanation tooltip hug its wrapped content", async () => {
     const user = userEvent.setup();
     render(<Composer mode="chat" onModeChange={vi.fn()} />);
 
     await user.hover(screen.getByRole("button", { name: "对话" }));
 
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.classList.contains("w-60")).toBe(true);
+    expect(tooltip.classList.contains("max-w-52")).toBe(true);
+    expect(tooltip.classList.contains("w-60")).toBe(false);
     expect(tooltip.classList.contains("whitespace-normal")).toBe(true);
     expect(tooltip.classList.contains("break-words")).toBe(true);
     expect(tooltip.classList.contains("text-left")).toBe(true);
