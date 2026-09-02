@@ -83,3 +83,6 @@ are independently addressable under the existing Citation protocol.
 This metadata does not alter the Citation trust boundary: the immutable result
 snapshot and Evidence registry remain private to Valuz, and the model never
 receives provider-side validation claims as trusted facts.
+
+Server-wide usage guidance returned during MCP initialization follows a
+separate trust path. See [Trusted MCP Server Instructions](mcp-server-instructions.md).
