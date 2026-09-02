@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained `decision` on confirm, an optional cancel hook, and run handlers
   with commits deferred (`infra.db.defer_commits`). The legacy
   `/v1/skills/submissions/*` endpoints are deprecated and kept one release.
+- **Skill panel proportions** — the skill-creator panel's "saved in this
+  conversation" list is a real section (rows with a version badge, one click
+  to the skill) instead of a strip of fine print, and its empty state no
+  longer says "nothing generated yet" directly under the skills that session
+  just saved — saving empties staging, so that is exactly when the two
+  contradicted each other. The detail page's version list reads at the same
+  scale as the rest of that sidebar.
 - **Skill versions in the UI** — the review card now renders from the
   `skill.submit` record, so a reloaded page shows "saved as v2" or
   "discarded" instead of falling back to "waiting for files"; it names the
@@ -55,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A skill file in any non-Latin script could not be previewed** — the skill
+  detail viewer decided "binary" by the share of printable-ASCII characters,
+  so a Chinese `SKILL.md` (most of them) scored near zero and rendered as
+  `[Binary file - cannot preview]`. The backend already decodes tolerantly and
+  always returns a string, so the test is now the density of replacement and
+  control characters, i.e. whether the decode produced text.
 - **Skill-creator required an agent** — the composer lets a conversation run
   agentless on a picked runtime + model, but the skill-creator launcher
   refused to start without an agent and forwarded only provider/model, so a

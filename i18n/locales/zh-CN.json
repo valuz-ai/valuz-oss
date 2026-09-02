@@ -2157,6 +2157,8 @@
     "sessionSavedTitle": "本次会话已入库",
     "skip": "跳过",
     "source": "源码",
+    "stagingClearedHint": "本次会话的技能已入库。继续描述要改的地方，AI 会写到 staging，再确认一次就是新版本。",
+    "stagingClearedTitle": "暂存区已清空",
     "stagingFileCount": "staging 文件 (",
     "stagingNew": "新建",
     "stagingOriginalChanged": "原技能已变化",
