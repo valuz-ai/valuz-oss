@@ -771,9 +771,15 @@ async def project_skills_catalog(
 
 
 # ── versions (docs/design/skill-versioning) ───────────────────────────
+#
+# NOTE: this router carries no prefix — every path below is written in
+# full, like every other route in this file. A relative path here mounts at
+# the application root instead (``/{skill_id}/versions``), which answers 401
+# rather than 404 and so looks alive from the outside while the documented
+# path is missing. ``test_skill_version_routes.py`` pins the mounted paths.
 
 
-@router.get("/{skill_id}/versions", response_model=SkillVersionListResponse)
+@router.get("/v1/skills/{skill_id}/versions", response_model=SkillVersionListResponse)
 async def list_skill_versions(
     skill_id: str,
     svc: SkillLibraryService = Depends(get_skill_service),
@@ -785,7 +791,7 @@ async def list_skill_versions(
 
 
 @router.get(
-    "/{skill_id}/versions/{revision_id}/files",
+    "/v1/skills/{skill_id}/versions/{revision_id}/files",
     response_model=SkillVersionFileResponse,
 )
 async def read_skill_version_file(
@@ -800,7 +806,7 @@ async def read_skill_version_file(
 
 
 @router.post(
-    "/{skill_id}/versions/{revision_id}/restore",
+    "/v1/skills/{skill_id}/versions/{revision_id}/restore",
     response_model=SkillVersionRestoreResponse,
 )
 async def restore_skill_version(
