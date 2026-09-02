@@ -56,6 +56,8 @@ from valuz_agent.modules.skills.models import (
     SkillOrigin,
     SkillsCatalog,
     SkillUpdateRequest,
+    SkillVersionDetail,
+    SkillVersionFileNode,
     SkillVersionFileResponse,
     SkillVersionItem,
     SkillVersionListResponse,
@@ -104,16 +106,36 @@ def _manifest_defaults_to_library_enabled(manifest: Any) -> bool:
 
 
 async def _after_skill_saved_hook(db: Any, user_id: str, skill: SkillView, origin: str) -> None:
+    """Notify the overlay that a skill landed. Never fails the save.
+
+    A save writes two stores: the DB (index row, and — since versioning — the
+    version history) and the FILESYSTEM (the library directory). Only the
+    first is transactional, so an exception raised after the directory has
+    been replaced rolls the DB back and leaves the two disagreeing. Observed
+    on qa: the library held ``version: 2`` while the history and
+    ``list_skills`` still said v1, because this hook's cloud mirror hit a 409
+    and took the whole transaction down with it.
+
+    A mirror does not get to veto a save that already happened. The hook's
+    own retry path owns catching up; what must not happen is a local save
+    being half-undone by a remote one.
+    """
     if origin not in {"created", "imported"}:
         return
     from valuz_agent.ports.extensions import ext
 
-    await ext.skill_lifecycle.after_skill_saved(
-        db=db,
-        user_id=user_id,
-        skill=skill,
-        creation_origin=cast(Literal["created", "imported"], origin),
-    )
+    try:
+        await ext.skill_lifecycle.after_skill_saved(
+            db=db,
+            user_id=user_id,
+            skill=skill,
+            creation_origin=cast(Literal["created", "imported"], origin),
+        )
+    except Exception:  # noqa: BLE001 — see the docstring: a mirror cannot veto
+        logger.exception(
+            "skill lifecycle hook failed after saving %s; the save stands",
+            skill.slug or skill.path,
+        )
 
 
 async def _before_skill_delete_hook(db: Any, user_id: str, skill: SkillView) -> None:
@@ -2071,6 +2093,33 @@ class SkillLibraryService:
 
             raise InvalidSkill(f"version {revision.version_no} archive is missing on disk")
         return skill, row, revision, Path(revision.abs_path).read_bytes()
+
+    async def get_version_detail(
+        self, user_id: str, skill_id: str, revision_id: str
+    ) -> SkillVersionDetail:
+        """One version plus the files it contains, read from the archive."""
+        from valuz_agent.modules.artifacts.service import get_head_revision
+        from valuz_agent.modules.skills import versioning
+
+        skill, row, revision, archive = await self._version_archive(user_id, skill_id, revision_id)
+        del skill
+        head = await get_head_revision(
+            self._ds.session, user_id, getattr(row, "artifact_id", "") or ""
+        )
+        return SkillVersionDetail(
+            revision_id=revision.id,
+            version_no=revision.version_no,
+            created_at=revision.created_at,
+            source_session_id=revision.source_session_id,
+            created_by=revision.created_by,
+            byte_size=len(archive),
+            content_hash=revision.content_hash,
+            is_current=head is not None and head.id == revision.id,
+            files=[
+                SkillVersionFileNode(path=path, size=size)
+                for path, size in sorted(versioning.list_archive_members(archive))
+            ],
+        )
 
     async def read_version_file(
         self, user_id: str, skill_id: str, revision_id: str, path: str

@@ -524,6 +524,22 @@ class SkillVersionListResponse(BaseModel):
     items: list[SkillVersionItem] = Field(default_factory=list)
 
 
+class SkillVersionFileNode(BaseModel):
+    path: str
+    size: int
+
+
+class SkillVersionDetail(SkillVersionItem):
+    """One version, with the file list read out of its archive.
+
+    A version is a snapshot of a whole directory, and which files it holds is
+    part of what changed — a viewer that reused the CURRENT skill's tree would
+    silently mis-describe every version where a file was added or removed.
+    """
+
+    files: list[SkillVersionFileNode] = Field(default_factory=list)
+
+
 class SkillVersionFileResponse(BaseModel):
     revision_id: str
     path: str

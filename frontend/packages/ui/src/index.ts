@@ -115,6 +115,7 @@ export * from "./components/skills/SkillDetailPanel";
 export * from "./components/skills/SkillLinkImport";
 export * from "./components/skills/SkillStagingPanel";
 export * from "./components/skills/SkillVersionList";
+export * from "./components/common/UnifiedDiffView";
 export * from "./components/skill/SkillSubmissionCard";
 export * from "./components/agent/AgentProposalCard";
 export * from "./components/automation/AutomationToolCard";

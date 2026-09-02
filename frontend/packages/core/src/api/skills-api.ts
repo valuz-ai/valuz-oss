@@ -591,6 +591,14 @@ export const skillsApi = {
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/versions`);
   },
 
+  /** One version and the files it holds. Read from the archive: which files
+   *  a version contains is part of what changed between versions. */
+  getVersion(skillId: string, revisionId: string): Promise<SkillVersionDetail> {
+    return fetchJson(
+      `/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(revisionId)}`,
+    );
+  },
+
   /** One file out of an archived version, read straight from the archive. */
   readVersionFile(
     skillId: string,
@@ -775,6 +783,15 @@ export interface SkillVersionItem {
   byte_size: number;
   content_hash: string;
   is_current: boolean;
+}
+
+export interface SkillVersionFileNode {
+  path: string;
+  size: number;
+}
+
+export interface SkillVersionDetail extends SkillVersionItem {
+  files: SkillVersionFileNode[];
 }
 
 export interface SkillVersionListResponse {

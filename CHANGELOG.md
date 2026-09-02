@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained `decision` on confirm, an optional cancel hook, and run handlers
   with commits deferred (`infra.db.defer_commits`). The legacy
   `/v1/skills/submissions/*` endpoints are deprecated and kept one release.
+- **Skill versions became a view, not a footnote** — the version list hung
+  off the detail page's metadata sidebar, where it sat at a different scale to
+  everything around it and could only be read, never opened. The page now has
+  Files / Versions tabs (the convention every other detail page follows), and
+  the versions tab shows the selected version's own files with the same
+  tree-and-viewer shape as the files tab, plus a compare toggle that renders
+  the difference with the conversation's diff visuals. Restore moved from a
+  per-row icon to an explicit action that says what it will do. New
+  `GET /v1/skills/{id}/versions/{revision_id}` returns a version's file list —
+  which files a version holds is part of what changed, so reusing the current
+  tree would mis-describe every version where a file was added or removed.
 - **Skill panel proportions** — the skill-creator panel's "saved in this
   conversation" list is a real section (rows with a version badge, one click
   to the skill) instead of a strip of fine print, and its empty state no
@@ -62,6 +73,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-submitting a skill after `prepare_skill_edit` failed with a conflict** —
+  `skill.submit` derived its idempotency key from the slug and the staged
+  bytes, while `OperationService` compares the whole proposal. The flow the
+  design is built around — hand-write a draft, submit, then let
+  `prepare_skill_edit` re-seed the same bytes and submit again as an update —
+  kept the key and changed the hash, so the *corrected* submission raised
+  `operation_idempotency_conflict`. The key is now derived from the proposal
+  hash, making "same request ⇒ same key" an identity. A failed submit also
+  returns the `{ok: false, ...}` envelope now: a bare error string was
+  indistinguishable from a card predating the operation record, so it fell
+  back to a staging scan and rendered a failure as "waiting for the AI to
+  write files".
+- **The skill-creator told the agent two incompatible things** — the host
+  section says "call `prepare_skill_edit`", while two upstream passages still
+  said to copy the installed skill path into `/tmp` and edit there. On this
+  host the agent has neither that path (the skill is not in its session) nor
+  `/tmp` as a staging location, so with both instructions present it wrote the
+  skill again from memory — observed on qa, right after it had listed the
+  library and seen the skill. Those passages now defer to the host rule.
+  `list_skills` says outright that it returns metadata only and points at
+  `prepare_skill_edit`, which now returns the skill's SKILL.md so the agent
+  can see what it says today without a second read, and refuses to re-seed
+  over a staged draft that differs from the library (`discard_existing: true`
+  to override) — staging is the one place with no version history behind it.
+- **A failing skill-lifecycle hook rolled back a save that had already
+  touched disk** — a save writes the library directory (not transactional)
+  and the version history (transactional), and the overlay's mirror-to-cloud
+  hook runs after both inside the same savepoint. Its failure left the
+  directory on the new content while the history and `list_skills` reported
+  the previous version. A mirror cannot veto a save that already happened;
+  the hook's failure is now logged and the save stands.
 - **A skill file in any non-Latin script could not be previewed** — the skill
   detail viewer decided "binary" by the share of printable-ASCII characters,
   so a Chinese `SKILL.md` (most of them) scored near zero and rendered as

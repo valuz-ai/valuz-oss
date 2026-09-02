@@ -2723,6 +2723,37 @@ paths:
         "404":
           description: Skill not found
 
+  /v1/skills/{skill_id}/versions/{revision_id}:
+    get:
+      summary: One saved version, with the files it holds
+      description: |
+        The file list is read from that version's archive, not from the
+        skill's current directory: which files a version contains is part of
+        what changed between versions, so reusing the current tree would
+        mis-describe every version where a file was added or removed.
+      operationId: getSkillVersion
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: revision_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Version detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillVersionDetail"
+        "403":
+          description: Protected package
+        "404":
+          description: Skill or version not found
+
   /v1/skills/{skill_id}/versions/{revision_id}/files:
     get:
       summary: Read one file out of an archived skill version
@@ -7492,6 +7523,25 @@ components:
         is_current:
           type: boolean
           default: false
+
+    SkillVersionFileNode:
+      type: object
+      required: [path, size]
+      properties:
+        path:
+          type: string
+        size:
+          type: integer
+
+    SkillVersionDetail:
+      allOf:
+        - $ref: "#/components/schemas/SkillVersionItem"
+        - type: object
+          properties:
+            files:
+              type: array
+              items:
+                $ref: "#/components/schemas/SkillVersionFileNode"
 
     SkillVersionListResponse:
       type: object
