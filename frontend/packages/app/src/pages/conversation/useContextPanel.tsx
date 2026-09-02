@@ -140,6 +140,18 @@ export function useContextPanel({
               size: f.size ?? null,
             })),
           }))}
+          savedSkills={sessionArtifacts
+            .filter((a) => a.kind === "skill")
+            .map((a) => ({
+              artifactId: a.artifact_id,
+              // The archive is named after the slug (``<slug>.zip``).
+              slug: a.file_name.replace(/\.zip$/i, ""),
+              versionNo: a.version_no,
+              isCurrent: a.is_current,
+            }))}
+          onOpenSkill={(slug) =>
+            navigate(`/skills/${encodeURIComponent(`user:${slug}`)}`)
+          }
           refreshing={stagingRefreshing}
           syncing={stagingSyncing}
           onRefresh={() => void refreshStaging()}
@@ -182,15 +194,21 @@ export function useContextPanel({
         "parsing" | "ready" | "failed" | "native" | undefined,
     }));
     // Agent-delivered artifacts → the curated "生成文件" panel section.
-    const generatedFiles = sessionArtifacts.map((a) => ({
-      id: a.id,
-      name: a.file_name,
-      size: formatFileSize(a.file_size),
-      path: a.file_path,
-      versionNo: a.version_no,
-      isCurrent: a.is_current,
-      artifactId: a.artifact_id,
-    }));
+    // ``skill`` rows are excluded: a saved skill is a version of a library
+    // entry the product recorded on the user's behalf (an archive named
+    // ``<slug>.zip``), not a file this conversation produced. The skill
+    // itself is in the skill library, with its own version history.
+    const generatedFiles = sessionArtifacts
+      .filter((a) => a.kind !== "skill")
+      .map((a) => ({
+        id: a.id,
+        name: a.file_name,
+        size: formatFileSize(a.file_size),
+        path: a.file_path,
+        versionNo: a.version_no,
+        isCurrent: a.is_current,
+        artifactId: a.artifact_id,
+      }));
 
     // Fetched only when a version badge is expanded — most deliverables' history
     // is never opened, so loading every one alongside the list would be traffic

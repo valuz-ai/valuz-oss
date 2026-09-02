@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained `decision` on confirm, an optional cancel hook, and run handlers
   with commits deferred (`infra.db.defer_commits`). The legacy
   `/v1/skills/submissions/*` endpoints are deprecated and kept one release.
+- **Skill versions in the UI** — the review card now renders from the
+  `skill.submit` record, so a reloaded page shows "saved as v2" or
+  "discarded" instead of falling back to "waiting for files"; it names the
+  version a save would create, and when the slug collides with a library
+  skill the draft was not prepared from it asks the user to pick between
+  saving as that skill's next version and saving under a new name. The
+  skill detail page gains a version list with restore, the skill-creator
+  panel lists what this conversation already saved, and saved-skill
+  archives no longer appear in a session's generated files (session
+  artifacts now carry `kind`).
 
 ### Fixed
 

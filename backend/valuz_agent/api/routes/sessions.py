@@ -14,7 +14,11 @@ from valuz_agent.api.deps import get_current_user_id, get_session_service
 from valuz_agent.infra.db import get_async_session
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
-from valuz_agent.modules.artifacts.models import ArtifactContentRow, ArtifactRevisionRow
+from valuz_agent.modules.artifacts.models import (
+    ArtifactContentRow,
+    ArtifactKind,
+    ArtifactRevisionRow,
+)
 from valuz_agent.modules.files.uri import build_valuz_file_uri
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.dto import (
@@ -1434,6 +1438,10 @@ class ArtifactItem(BaseModel):
     artifact_id: str
     version_no: int
     is_current: bool
+    #: ``ArtifactKind``. A client that lists "what this conversation
+    #: produced" filters on it: a ``skill`` row is a version of a library
+    #: entry the product recorded, not a file the user asked for.
+    kind: str = ArtifactKind.FILE.value
 
 
 class ArtifactListResponse(BaseModel):
@@ -1446,6 +1454,7 @@ def _artifact_item(
     *,
     session_id: str,
     is_current: bool,
+    kind: str = ArtifactKind.FILE.value,
 ) -> ArtifactItem:
     path = revision.abs_path or ""
     return ArtifactItem(
@@ -1460,6 +1469,7 @@ def _artifact_item(
         artifact_id=revision.artifact_id,
         version_no=revision.version_no,
         is_current=is_current,
+        kind=kind,
     )
 
 
@@ -1496,6 +1506,10 @@ async def list_artifacts(
     # this on every turn end.
     heads = await ds.get_heads(user_id, [rev.artifact_id for rev in ordered])
     contents = await ds.get_contents(user_id, [rev.content_id for rev in ordered])
+    # ``kind`` rides along so a client can tell a deliverable the user asked
+    # for from one the product records on its behalf — a saved skill is a
+    # version of a library entry, not a file this conversation produced.
+    artifacts = await ds.get_artifacts(user_id, [rev.artifact_id for rev in ordered])
 
     return ArtifactListResponse(
         items=[
@@ -1506,6 +1520,11 @@ async def list_artifacts(
                 is_current=(
                     (head := heads.get(revision.artifact_id)) is not None
                     and head.revision_id == revision.id
+                ),
+                kind=(
+                    artifact.kind
+                    if (artifact := artifacts.get(revision.artifact_id)) is not None
+                    else ArtifactKind.FILE.value
                 ),
             )
             for revision in ordered

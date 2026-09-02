@@ -63,11 +63,13 @@ export async function confirmAutomationProposalAndNotify(
 export async function confirmOperationAndNotify(
   sessionId: string,
   operation: OperationView,
+  decision?: Record<string, unknown> | null,
 ): Promise<OperationView> {
   const result = await operationsApi.confirm(
     operation.id,
     operation.proposal_hash,
     sessionId,
+    decision,
   );
   if (result.state !== "succeeded") return result;
 
@@ -371,7 +373,10 @@ export function useToolCallCardActions({
   }, []);
 
   const handleConfirmOperation = useCallback(
-    async (operation: OperationView) => {
+    async (
+      operation: OperationView,
+      decision?: Record<string, unknown> | null,
+    ) => {
       const sid = selectedSessionIdRef.current;
       if (!sid) return;
       setOperationBusy((current) => ({
@@ -379,18 +384,20 @@ export function useToolCallCardActions({
         [operation.id]: "confirm",
       }));
       try {
-        const next = await confirmOperationAndNotify(sid, operation);
+        const next = await confirmOperationAndNotify(sid, operation, decision);
         setOperationStates((current) => ({
           ...current,
           [operation.id]: next,
         }));
         if (next.state === "succeeded") {
           toast.success(
-            t(
-              next.preview.change === "delete"
-                ? "playbook.operation.deleted"
-                : "playbook.operation.succeeded",
-            ),
+            next.operation_type === "skill.submit"
+              ? t("skill.savedToLib")
+              : t(
+                  next.preview.change === "delete"
+                    ? "playbook.operation.deleted"
+                    : "playbook.operation.succeeded",
+                ),
           );
         } else if (next.error_message) {
           toast.error(next.error_message);
@@ -589,7 +596,14 @@ export function useToolCallCardActions({
     for (const turn of turns) {
       for (const block of turn.blocks) {
         if (block.kind !== "tool") continue;
-        if (!isToolNamed(block.tool.title || "", "playbook")) continue;
+        // Every tool that proposes an operation, not just playbooks:
+        // ``submit_skill`` does too, and its card is the reason the state
+        // has to come from the server (both confirm and dismiss delete the
+        // staging dir the old card inferred its state from).
+        const name = block.tool.title || "";
+        if (!isToolNamed(name, "playbook") && !isToolNamed(name, "submit_skill")) {
+          continue;
+        }
         const result = parseOperationToolOutput(block.tool.output);
         if (result?.operation?.id) ids.push(result.operation.id);
       }
@@ -638,6 +652,9 @@ export function useToolCallCardActions({
         if (!isToolNamed(name, "submit_skill")) {
           continue;
         }
+        // Operation-backed cards read their state from the server; only
+        // legacy cards (no operation in the tool result) need the scan.
+        if (parseOperationToolOutput(t.output)?.operation) continue;
         let slug = "";
         if (t.input) {
           try {

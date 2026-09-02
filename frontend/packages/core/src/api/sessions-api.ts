@@ -479,6 +479,10 @@ export interface SessionArtifactItem {
    * version is not mistaken for the deliverable.
    */
   is_current: boolean;
+  /** Artifact kind. ``"skill"`` rows are versions of a library skill the
+   *  product recorded on the user's behalf, not files this conversation
+   *  produced — the generated-files panel filters them out. */
+  kind?: string;
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
