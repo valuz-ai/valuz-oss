@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Skill-creator required an agent** — the composer lets a conversation run
+  agentless on a picked runtime + model, but the skill-creator launcher
+  refused to start without an agent and forwarded only provider/model, so a
+  chosen runtime was dropped. It now follows the composer: a named agent is
+  bound, an explicit brain runs agentless on exactly that brain, and only a
+  launch that chose nothing falls back to the default assistant. The
+  capability rides the always-on baseline, so an agentless session authors
+  skills fine.
 - **Skill version endpoints mounted at the application root** — `routes/skills.py`
   carries no router prefix (every path is written in full), so the three
   version routes' relative paths landed on `/{skill_id}/versions` instead of

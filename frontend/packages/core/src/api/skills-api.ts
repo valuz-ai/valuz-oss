@@ -662,6 +662,9 @@ export interface SkillCreateStartRequest {
   /** Runtime explicitly picked by the user. Defaults to whatever the
    *  session-service derives from the provider when omitted. */
   runtime_id?: string | null;
+  /** Reasoning effort picked in the composer. Carried for the same reason
+   *  as ``runtime_id``: an agentless launch has no agent to inherit it. */
+  effort?: string | null;
 }
 
 export interface SkillCreateStartResponse {

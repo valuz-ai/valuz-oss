@@ -25,7 +25,6 @@ import {
 } from "@valuz/core";
 import { supportsPlanMode, type ConversationTurn } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
-import type { I18nKey } from "@valuz/shared";
 import { resolveBrainOverride } from "../conversation-brain-override";
 import { setLastTempAgent } from "../../lib/last-temp-agent";
 import {
@@ -227,14 +226,11 @@ export function useConversationSend({
       // session. Project conversations keep passing their real project id.
       const isChat =
         sessionProjectId === "chat-default" || activeProject?.kind === "chat";
-      // 09-assistant §2.1/§2.2: every session binds to an agent — project
-      // conversations to the chosen 派驻 member, 临时对话 to the picked "我的"
-      // agent. Skill-creator must bind an agent; a normal conversation may be
-      // agentless (the create below sends ``agent_slug: undefined`` → backend
-      // chat path).
-      if (isSkillCreatorMode && !selectedAgentSlug) {
-        throw new Error("No agent selected.");
-      }
+      // 09-assistant §2.1/§2.2: a project conversation binds the chosen 派驻
+      // member; a 临时对话 may be agentless (a quick chat on the picked
+      // runtime + model). Skill-creator follows the same rule — its
+      // capability rides the always-on baseline, not the agent — so there is
+      // no agent gate here.
       // The bound agent OWNS the brain — provider/model/runtime/effort in this
       // create are ADR-006 overrides that beat it, so they travel only when the
       // user actually picked one here. See ``conversation-brain-override.ts``
@@ -258,9 +254,10 @@ export function useConversationSend({
             skillKindParam === "project" && skillProjectParam
               ? { kind: "project", project_id: skillProjectParam }
               : { kind: skillKindParam === "chat" ? "chat" : "skills_library" },
-          agent_slug: selectedAgentSlug,
-          provider_id: brainOverride.provider_id,
-          model_id: brainOverride.model_id,
+          agent_slug: selectedAgentSlug ?? undefined,
+          // The whole brain, not just provider/model: an agentless launch
+          // has nothing else to take its runtime and effort from.
+          ...brainOverride,
         });
         created = await sessionsApi.get(start.session_id);
       } else {
@@ -544,13 +541,6 @@ export function useConversationSend({
     // Re-entrancy guard on the derived ``isBusy`` (not raw ``sending``): a
     // stuck ``sending`` on a reconciled-idle session must not swallow the send.
     if (!source || isBusy) return;
-    // Skill-creator binds an agent (its create flow needs one) — nudge if none.
-    // A normal new 临时对话 may now be agentless (a quick chat on the default
-    // model), so it sends without an agent pick.
-    if (!selectedSession && !selectedAgentSlug && isSkillCreatorMode) {
-      toast.error(_t("conversation.selectAgentFirst" as I18nKey));
-      return;
-    }
     revealPanelOnSessionChangeRef.current = true;
     panelSetCollapsed(false);
     // ``draft`` already contains any inline ``/slug`` tokens because
