@@ -31,6 +31,8 @@ describe("Composer mode guidance", () => {
     expect(tooltip.classList.contains("whitespace-normal")).toBe(true);
     expect(tooltip.classList.contains("break-words")).toBe(true);
     expect(tooltip.classList.contains("text-left")).toBe(true);
+    expect(tooltip.classList.contains("text-wrap")).toBe(true);
+    expect(tooltip.classList.contains("text-balance")).toBe(false);
   });
 });
 
