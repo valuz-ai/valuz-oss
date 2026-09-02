@@ -1760,7 +1760,12 @@ export const Composer = ({
                             </span>
                           </button>
                         </TooltipTrigger>
-                        <TooltipContent side="bottom">{tip}</TooltipContent>
+                        <TooltipContent
+                          side="bottom"
+                          className="w-60 whitespace-normal break-words text-left"
+                        >
+                          {tip}
+                        </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   );
