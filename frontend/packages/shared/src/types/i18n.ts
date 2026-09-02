@@ -2505,6 +2505,7 @@ export type KnownI18nKey =
   | "skill.stagingFileCount"
   | "skill.stagingNew"
   | "skill.stagingOriginalChanged"
+  | "skill.stagingUntouched"
   | "skill.stagingUpdate"
   | "skill.startFailed"
   | "skill.suggestion"

@@ -2163,6 +2163,7 @@
     "stagingFileCount": "staging 文件 (",
     "stagingNew": "新建",
     "stagingOriginalChanged": "原技能已变化",
+    "stagingUntouched": "尚未修改",
     "stagingUpdate": "更新原技能",
     "startFailed": "启动失败: {error}",
     "suggestion": "建议:",

@@ -74,6 +74,10 @@ class StagingSlugView:
     suggested_new_slug: str | None = None
     source_skill_id: str | None = None  # if this slug originated from "optimize"
     version: int | None = None  # parsed from SKILL.md frontmatter `version:`
+    #: This draft is still byte-for-byte the copy ``prepare_skill_edit`` seeded
+    #: — the agent has not edited anything yet. Saving it would record the
+    #: library's current content back onto itself.
+    untouched: bool = False
 
 
 @dataclass
@@ -343,6 +347,16 @@ async def scan_staging(user_id: str, session_id: str) -> StagingScanResult:
         name, description, version = _read_manifest_meta(entry)
         meta = read_staging_meta(entry)
 
+        # A ``prepare_skill_edit`` seed nobody has edited yet. The panel polls
+        # every few seconds, so the draft shows up the instant it is seeded —
+        # mid-turn, while the agent is still working — and offering to save it
+        # then means saving the library's own content back onto itself.
+        untouched = bool(
+            meta
+            and meta.source_content_hash
+            and hash_skill_directory(entry) == meta.source_content_hash
+        )
+
         target = user_skill_root / entry.name
         if not target.exists():
             kind: ConflictKind = "none"
@@ -372,6 +386,7 @@ async def scan_staging(user_id: str, session_id: str) -> StagingScanResult:
                 suggested_new_slug=new_slug,
                 source_skill_id=meta.source_skill_id if meta else None,
                 version=version,
+                untouched=untouched,
             )
         )
 

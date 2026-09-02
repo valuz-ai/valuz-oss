@@ -270,6 +270,56 @@ async def record_skill_version(
     )
 
 
+async def record_dir_version(
+    db: AsyncSession,
+    user_id: str,
+    slug: str,
+    skill_dir: Path,
+    *,
+    artifact_id: str | None,
+    manifest_path: Path | None,
+    source_session_id: str | None = None,
+) -> RecordedVersion:
+    """Record a skill directory as the next version — unless it holds exactly
+    what the head already holds, in which case no version is minted.
+
+    The head's content-hash idempotency is supposed to absorb a re-save of
+    unchanged content (see :func:`pack_skill_dir`), and stamping the
+    frontmatter ``version:`` FIRST defeated it: the stamp is itself a byte
+    change, so an untouched directory packed to a hash the head could never
+    match and every no-op save minted a version whose only difference from
+    its predecessor was the version line.
+
+    That is not hypothetical. ``prepare_skill_edit`` seeds staging with a
+    verbatim copy of the library, and the panel offers to sync it the moment
+    it appears — so confirming before the agent has changed anything, which
+    the panel actively invites, wrote a phantom version. Pack first, compare,
+    and only stamp once there is something to stamp.
+    """
+    archive = pack_skill_dir(skill_dir)
+    if artifact_id is not None:
+        head = await get_head_revision(db, user_id, artifact_id)
+        if head is not None and head.content_hash == content_hash_of(archive):
+            return RecordedVersion(
+                artifact_id=artifact_id,
+                revision_id=head.id,
+                version_no=head.version_no,
+                recorded=False,
+            )
+    next_no = await next_version_no(db, user_id, artifact_id)
+    if manifest_path is not None:
+        set_manifest_version(manifest_path, next_no)
+        archive = pack_skill_dir(skill_dir)
+    return await record_skill_version(
+        db,
+        user_id,
+        slug,
+        archive,
+        artifact_id=artifact_id,
+        source_session_id=source_session_id,
+    )
+
+
 async def capture_baseline(
     db: AsyncSession,
     user_id: str,
@@ -298,15 +348,30 @@ async def next_version_no(db: AsyncSession, user_id: str, artifact_id: str | Non
     return (head.version_no + 1) if head is not None else 1
 
 
+#: Where the swap below stages its copies. A SUBDIRECTORY of the skills root,
+#: not siblings of the skill directories: the library scan enumerates every
+#: child of the root and indexes the ones holding a ``SKILL.md``
+#: (``skills_filesystem.list_skills``), so a temp copy left next to the skill
+#: — the copy step is a whole directory across a network mount in the cloud
+#: deployment, so a crash there is a real window — would be indexed as a skill
+#: of its own, named after the temp suffix, and then materialized into every
+#: session and packed for sandboxes. This directory has no ``SKILL.md`` at its
+#: top level, so the scan skips it and whatever is inside stays invisible.
+_SWAP_DIRNAME = ".versioning"
+
+
 def replace_library_dir(src: Path, dest: Path) -> None:
     """Materialize-then-swap ``src`` over ``dest`` so a failed copy never
     leaves the library directory half-written. ``src`` is consumed."""
-    tmp_new = dest.parent / (dest.name + ".versioning-new")
-    tmp_old = dest.parent / (dest.name + ".versioning-old")
+    swap_root = dest.parent / _SWAP_DIRNAME
+    tmp_new = swap_root / (dest.name + ".new")
+    tmp_old = swap_root / (dest.name + ".old")
+    # This slug's own leftovers only: a concurrent save of a DIFFERENT skill
+    # has its copy in flight in here too.
     for leftover in (tmp_new, tmp_old):
         if leftover.is_dir():
             shutil.rmtree(leftover, ignore_errors=True)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    swap_root.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, tmp_new, ignore=shutil.ignore_patterns(STAGING_META_FILENAME))
     if dest.exists():
         dest.rename(tmp_old)

@@ -2163,6 +2163,7 @@
     "stagingFileCount": "Staging files (",
     "stagingNew": "New",
     "stagingOriginalChanged": "Original changed",
+    "stagingUntouched": "Not edited yet",
     "stagingUpdate": "Update original",
     "startFailed": "Start failed: {error}",
     "suggestion": "Suggestion:",

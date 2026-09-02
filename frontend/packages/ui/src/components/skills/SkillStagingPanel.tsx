@@ -43,6 +43,11 @@ export interface StagingPanelSlug {
   sourceSkillId?: string | null;
   version?: number | null;
   files?: StagingPanelFile[];
+  /** Still byte-for-byte the copy ``prepare_skill_edit`` seeded from the
+   *  library. The scan polls, so a draft appears the instant it is seeded —
+   *  mid-turn, before the agent has changed anything — and saving it then
+   *  writes the library's own content back onto itself. */
+  untouched?: boolean;
 }
 
 /** A skill this conversation already saved to the library — one entry per
@@ -101,7 +106,7 @@ interface SlugRowState {
 }
 
 const defaultRowState = (s: StagingPanelSlug): SlugRowState => ({
-  selected: true,
+  selected: !s.untouched,
   strategy: s.suggestedStrategy,
   newSlug: s.suggestedNewSlug ?? `${s.slug}-v2`,
 });
@@ -165,13 +170,16 @@ export const SkillStagingPanel = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slugs.map((s) => s.slug).join("|")]);
 
-  const selectedCount = Object.values(state).filter((r) => r.selected).length;
+  // Count what ``handleSync`` would actually send, not raw checkbox state:
+  // an untouched seed is never sent, so counting it would put a number on the
+  // button that does not match what pressing it does.
+  const syncable = slugs.filter((s) => !s.untouched && state[s.slug]?.selected);
+  const selectedCount = syncable.length;
 
   const handleSync = () => {
-    const items = slugs
-      .filter((s) => state[s.slug]?.selected)
+    const items = syncable
       .map((s) => {
-        const r = state[s.slug];
+        const r = state[s.slug] ?? defaultRowState(s);
         if (r.strategy === "fork") {
           return {
             slug: s.slug,
@@ -292,16 +300,19 @@ export const SkillStagingPanel = ({
                   key={s.slug}
                   className={cn(
                     "rounded-md border p-2 transition",
-                    row.selected
+                    row.selected && !s.untouched
                       ? "border-brand/40 bg-brand/5"
                       : "border-surface-border bg-card",
+                    s.untouched && "opacity-70",
                   )}
                 >
                   <label className="flex items-start gap-2">
                     <input
                       type="checkbox"
                       className="mt-0.5"
-                      checked={row.selected}
+                      checked={row.selected && !s.untouched}
+                      disabled={s.untouched}
+                      aria-label={s.name}
                       onChange={(e) =>
                         setState((prev) => ({
                           ...prev,
@@ -331,6 +342,11 @@ export const SkillStagingPanel = ({
                           <span className="flex items-center gap-0.5 text-2xs text-ink-meta">
                             <GitFork className="h-2.5 w-2.5" />
                             {t("skill.optimize")}
+                          </span>
+                        )}
+                        {s.untouched && (
+                          <span className="inline-flex h-5 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-2xs text-ink-meta">
+                            {t("skill.stagingUntouched")}
                           </span>
                         )}
                       </div>

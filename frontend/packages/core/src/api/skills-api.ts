@@ -729,6 +729,9 @@ export interface StagingSlugView {
   suggested_new_slug?: string | null;
   source_skill_id?: string | null;
   version?: number | null;
+  /** Still byte-identical to what ``prepare_skill_edit`` seeded — the agent
+   *  has not edited anything yet, so there is nothing to save. */
+  untouched?: boolean;
 }
 
 export interface StagingScanResponse {
