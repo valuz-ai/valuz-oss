@@ -101,8 +101,11 @@ EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 class ModelSettings:
     """Optional per-session sampling / limit / reasoning knobs.
 
-    ``temperature`` and ``max_tokens`` are persisted and round-tripped
-    but not currently consumed by runtimes. ``effort`` is the live
+    ``temperature`` is persisted and round-tripped but not currently
+    consumed by runtimes. ``max_tokens`` is the declared output cap:
+    ``DeepAgentsRuntime`` always sends ``max(32k, declared)`` on every
+    protocol (see ``MODEL_MAX_TOKENS``); ``DeepSeekHarnessRuntime``
+    forwards the declared value as-is. ``effort`` is the live
     reasoning-budget lever — each runtime threads it through to its
     SDK's native control:
 

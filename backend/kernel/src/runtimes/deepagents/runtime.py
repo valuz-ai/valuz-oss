@@ -42,6 +42,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 from deepagents import SubAgent, create_deep_agent
@@ -1877,13 +1878,10 @@ class DeepAgentsRuntime:
                 # Does not disturb the max_tokens default fill below — that
                 # reads the bundled registry directly, not ``self.profile``.
                 kwargs["profile"] = profile
-            # Unset max_tokens lets ChatAnthropic default from its profile
-            # registry, which bottoms out at 4096 for model names it doesn't
-            # know (gateway aliases, compatible third-party models) — pass an
-            # explicit cap for those so long answers don't truncate.
-            max_tokens = _resolve_anthropic_max_tokens(self.model)
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
+            # Always send the cap: left unset, ChatAnthropic fills it from
+            # its profile registry, which bottoms out at 4096 for names it
+            # doesn't know (gateway aliases, compatible third-party models).
+            kwargs["max_tokens"] = _resolve_max_tokens(session.model_settings)
             return _ValuzChatAnthropic(**kwargs)
 
         if protocol == "gemini":
@@ -1906,6 +1904,7 @@ class DeepAgentsRuntime:
                 gemini_kwargs["thinking_level"] = _map_effort_for_gemini(effort)
             if profile is not None:
                 gemini_kwargs["profile"] = profile
+            gemini_kwargs["max_output_tokens"] = _resolve_max_tokens(session.model_settings)
             return ChatGoogleGenerativeAI(**gemini_kwargs)
 
         # openai_completion path (default for any non-anthropic /
@@ -1913,6 +1912,7 @@ class DeepAgentsRuntime:
         # ``none|minimal|low|medium|high|xhigh`` — the harness ``max``
         # maps down to ``xhigh``.
         from langchain_openai import ChatOpenAI
+        from langchain_openai.chat_models.base import BaseChatOpenAI
 
         # TODO: remove this DeepSeek workaround once
         # https://github.com/langchain-ai/langchain/pull/37065 ships and
@@ -1967,7 +1967,19 @@ class DeepAgentsRuntime:
             openai_kwargs["reasoning_effort"] = _map_effort_for_openai(effort)
         if profile is not None:
             openai_kwargs["profile"] = profile
-        return ChatOpenAI(**openai_kwargs)
+        # Always send the cap — left unset, the provider's server-side
+        # default applies (8192 on DeepSeek) (#1131). ``ChatOpenAI`` puts it
+        # on the wire as ``max_completion_tokens``, the name OpenAI's
+        # reasoning models require but DeepSeek and most OpenAI-compatible
+        # providers silently ignore; ``BaseChatOpenAI`` — langchain's own
+        # answer for such providers — still sends ``max_tokens``.
+        openai_kwargs["max_tokens"] = _resolve_max_tokens(session.model_settings)
+        client_cls = (
+            ChatOpenAI
+            if _is_openai_family(self.model, self.model_provider.base_url)
+            else BaseChatOpenAI
+        )
+        return client_cls(**openai_kwargs)
 
     async def _open_checkpointer(self) -> Any:
         """Open the checkpointer once per runtime instance (cached until close()).
@@ -2324,45 +2336,44 @@ def _map_effort_for_gemini(effort: str) -> str:
     return "medium"
 
 
-# Explicit ``max_tokens`` for anthropic-protocol models langchain's profile
-# registry doesn't know. 32k is Claude Code's own default output cap: valid
-# for every current Claude model and battle-tested against the
-# anthropic-compatible gateways where unknown names actually occur.
-_ANTHROPIC_UNKNOWN_MODEL_MAX_TOKENS = 32_000
+# Explicit output cap sent with every model request, on every protocol. 32k
+# is the industry-wide default (Claude Code, opencode) and every current
+# mainstream model accepts it. Left unset, each backend falls to a floor far
+# below what the model can emit — ChatAnthropic's 4096 for names its profile
+# registry doesn't know, the provider's server-side default on the OpenAI
+# path (8192 on DeepSeek) — and a long final answer truncates mid-sentence
+# while the turn still ends as a clean ``end_turn`` (#1131). A declared
+# ``ModelSettings.max_tokens`` can only raise it.
+MODEL_MAX_TOKENS = 32_000
+
+_OPENAI_FIRST_PARTY_HOST = "api.openai.com"
+# OpenAI's own model families, optionally behind a ``vendor/`` gateway
+# prefix: gpt-*, o1/o3/o4…, chatgpt-*. ``gpt-oss-*`` is open-weight and
+# served by third parties, which read the legacy field.
+_OPENAI_MODEL_RE = re.compile(r"^(?:[^/]+/)?(?:gpt-(?!oss)|o\d|chatgpt-)", re.IGNORECASE)
 
 
-def _resolve_anthropic_max_tokens(model: str) -> int | None:
-    """Resolve an explicit ``max_tokens`` for ``ChatAnthropic``, or ``None``.
+def _resolve_max_tokens(model_settings: ModelSettings | None) -> int:
+    """The output cap to send: ``MODEL_MAX_TOKENS``, or a larger declared one."""
+    declared = model_settings.max_tokens if model_settings is not None else None
+    return max(MODEL_MAX_TOKENS, declared or 0)
 
-    ``ChatAnthropic`` fills an unset ``max_tokens`` from a bundled per-model
-    profile registry keyed by EXACT model name; any name it doesn't know —
-    gateway aliases like ``openrouter/claude-sonnet-4-5`` or
-    anthropic-compatible third-party models — silently falls back to 4096,
-    which truncates long answers with ``stop_reason: max_tokens``.
 
-    Returns ``None`` on a registry hit (ChatAnthropic's own per-model default
-    is correct — e.g. 64k for sonnet-4-x, 128k for opus-4-6+). On a miss,
-    retries with a leading ``vendor/`` gateway prefix stripped and forwards
-    that profile's cap; otherwise returns the safe fallback above.
+def _is_openai_family(model: str, base_url: str | None) -> bool:
+    """True when the OpenAI path should build ``ChatOpenAI`` (not the base).
+
+    ``ChatOpenAI`` sends the cap as ``max_completion_tokens``, which OpenAI's
+    reasoning models require and most OpenAI-compatible providers ignore;
+    ``BaseChatOpenAI`` sends ``max_tokens``, which everyone else reads. So
+    ``ChatOpenAI`` is for the first-party host (or no host = the SDK's
+    first-party default) and OpenAI's own model families wherever they are
+    served; every other model is built on ``BaseChatOpenAI``.
     """
-    try:
-        from langchain_anthropic.chat_models import _get_default_model_profile
-    except ImportError:
-        # Private helper moved in a langchain-anthropic upgrade: we can no
-        # longer tell known names from unknown, so degrade to pre-workaround
-        # behavior (knowns stay correct, unknowns fall back to langchain's
-        # 4096). test_deepagents_max_tokens pins the import so the upgrade
-        # PR revisits this instead of shipping the regression silently.
-        return None
-
-    if _get_default_model_profile(model).get("max_output_tokens") is not None:
-        return None
-    tail = model.rsplit("/", 1)[-1]
-    if tail != model:
-        cap = _get_default_model_profile(tail).get("max_output_tokens")
-        if cap is not None:
-            return int(cap)
-    return _ANTHROPIC_UNKNOWN_MODEL_MAX_TOKENS
+    if base_url is None:
+        return True
+    if (urlparse(base_url).hostname or "").lower() == _OPENAI_FIRST_PARTY_HOST:
+        return True
+    return _OPENAI_MODEL_RE.match(model) is not None
 
 
 def _extract_full_text(output: Any) -> str:

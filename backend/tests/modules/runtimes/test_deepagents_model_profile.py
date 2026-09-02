@@ -66,7 +66,7 @@ def test_known_model_without_declaration_keeps_registry_profile() -> None:
 
 
 def test_declared_profile_does_not_break_max_tokens_workaround() -> None:
-    # The alias max_tokens workaround (``_resolve_anthropic_max_tokens``)
+    # The alias max_tokens workaround (``_resolve_max_tokens``)
     # reads the bundled registry directly — an explicit profile kwarg must
     # not regress unknown-alias output caps back to langchain's 4096 floor.
     chat = _client(protocol="anthropic", model="valuz-pro-anthropic", max_input_tokens=200_000)
