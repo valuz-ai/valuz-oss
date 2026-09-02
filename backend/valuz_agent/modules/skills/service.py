@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -344,13 +345,20 @@ async def _index_manifests(
     return count
 
 
-async def reindex_official_skills(user_id: str) -> int:
+async def reindex_official_skills(user_id: str, *, slugs: set[str] | None = None) -> int:
     """Index the on-disk official skills into ``valuz_skill_index`` (own session).
 
     Self-contained so the agent-pack import path can call it right after a
     team's official / template skills land on disk — otherwise those skills are
     only indexed by the next boot scan, and an agent that references them can't
     resolve them in between ("Unknown skill"). Upsert only; returns the count.
+
+    ``slugs`` narrows the pass to the packages a caller just changed. Without
+    it, every call re-reads EVERY file of EVERY package for the content hash.
+    The indexer's change detection needs that hash — but only for packages that
+    could have changed, and a landing knows exactly which ones those are. A
+    release is what makes the difference matter: one package moves, and the
+    full pass otherwise runs once per owner over all of them.
     """
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.integrations.skills_official import OfficialSkillSource
@@ -371,7 +379,9 @@ async def reindex_official_skills(user_id: str) -> int:
     # It bites hardest exactly where it is least affordable: a release that
     # changes any bundled package re-lands it for EVERY owner, and every one
     # of those landings comes back through here.
-    manifests = await asyncio.to_thread(OfficialSkillSource().list_skills, ctx)
+    manifests = await asyncio.to_thread(
+        functools.partial(OfficialSkillSource().list_skills, ctx, slugs=slugs)
+    )
     async with _scan_lock:
         async with async_unit_of_work(commit=True) as db:
             ds = SkillDatastore(db)
