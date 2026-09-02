@@ -358,16 +358,25 @@ async def reindex_official_skills(user_id: str) -> int:
 
     ctx = RuntimeContext(user_id=user_id)
     count = 0
+    # OFF THE EVENT LOOP. ``list_skills`` walks every official package and,
+    # with the content hash the indexer needs, reads every file in each one:
+    # measured 21-28s for 20 packages on a network mount. Run inline it stalls
+    # the whole process — which is how the runtime-control work WS stopped
+    # answering the control plane's keepalive and was closed with 1011
+    # mid-reconcile, leaving ``connectors_reconciled_version`` behind desired
+    # and every session spawn on the deployment answering 409
+    # RESOURCE_REPLICA_NOT_READY. ``startup_scan`` has wrapped its scans since
+    # that incident; these two were written later and did not.
+    #
+    # It bites hardest exactly where it is least affordable: a release that
+    # changes any bundled package re-lands it for EVERY owner, and every one
+    # of those landings comes back through here.
+    manifests = await asyncio.to_thread(OfficialSkillSource().list_skills, ctx)
     async with _scan_lock:
         async with async_unit_of_work(commit=True) as db:
             ds = SkillDatastore(db)
             count = await _index_manifests(
-                user_id,
-                db,
-                ds,
-                OfficialSkillSource().list_skills(ctx),
-                scope="official",
-                label="reindex_official_skills",
+                user_id, db, ds, manifests, scope="official", label="reindex_official_skills"
             )
     return count
 
@@ -390,16 +399,14 @@ async def reindex_user_skills(user_id: str) -> int:
 
     ctx = RuntimeContext(user_id=user_id)
     count = 0
+    # Off the event loop, for the reason spelled out in
+    # ``reindex_official_skills``.
+    manifests = await asyncio.to_thread(FilesystemSkillSource().list_skills, ctx)
     async with _scan_lock:
         async with async_unit_of_work(commit=True) as db:
             ds = SkillDatastore(db)
             count = await _index_manifests(
-                user_id,
-                db,
-                ds,
-                FilesystemSkillSource().list_skills(ctx),
-                scope="user",
-                label="reindex_user_skills",
+                user_id, db, ds, manifests, scope="user", label="reindex_user_skills"
             )
     return count
 
