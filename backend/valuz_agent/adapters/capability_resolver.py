@@ -21,6 +21,7 @@ Currently covered:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -309,10 +310,13 @@ async def resolve_session_capabilities(
     #      that doc search is available. For chat sessions the MCP
     #      tools return empty results (no KB bindings → empty scope)
     #      which is a normal answer the agent already handles.
-    for absolute in always_on_skill_paths(user_id=user_id):
-        if absolute not in seen:
-            seen.add(absolute)
-            skill_paths.append(absolute)
+    # Same rule as every other session-build path (``merge_with_always_on``):
+    # the shipped package wins a slug collision. Before this, a same-slug copy
+    # from the user library collected in 1b stayed in the list beside the
+    # baseline entry, and which one the session ran was left to the kernel
+    # materializer's last-write-wins — correct only by accident of ordering.
+    skill_paths = list(merge_with_always_on(skill_paths, always_on_skill_paths(user_id=user_id)))
+    seen = set(skill_paths)
     logger.info(
         "Auto-injecting always-on baseline skills for project %s (kind=%s)",
         project_id,
@@ -360,6 +364,50 @@ async def resolve_session_capabilities(
         mcp_servers=tuple(mcp_configs_list),
         skill_resolution_warnings=tuple(warnings),
     )
+
+
+def merge_with_always_on(
+    own_paths: Sequence[str], baseline_paths: Sequence[str]
+) -> tuple[str, ...]:
+    """The session's skill list: the agent's own packages plus the always-on
+    baseline, with the BASELINE winning a slug collision.
+
+    The dedupe used to run the other way — a baseline path was dropped when the
+    agent's own list already carried that slug — which reads as harmless
+    de-duplication and is not. These packages are not ordinary content: their
+    instructions are coupled to tools the host serves (``prepare_skill_edit``
+    and ``submit_skill`` in ``skill-creator``, ``doc_search`` in
+    ``valuz-project-docs``, the ``chrome-devtools`` CLI in ``browser``), so
+    they have to track the release that serves those tools.
+
+    A same-slug copy in the user's writable library therefore shadowed the
+    shipped one, and because that copy is a snapshot taken whenever it landed,
+    it silently pinned the session to an older contract: measured on prod, 20
+    of 20 owners with such a copy were running a ``skill-creator`` that
+    predates ``prepare_skill_edit`` and so could never enter the edit flow at
+    all. The shipped package wins; the user copy is dropped from the list
+    rather than materialized alongside it (same basename, and the kernel
+    materializer is last-write-wins — leaving both in would make the outcome
+    depend on ordering).
+    """
+    import os as _os
+
+    baseline_names = {_os.path.basename(p) for p in baseline_paths}
+    kept: list[str] = []
+    for path in own_paths:
+        if _os.path.basename(path) in baseline_names and path not in baseline_paths:
+            # Loud, not silent: the entry is the user's, and if it was a
+            # deliberate edit of a bundled package this is the only trace of
+            # why the session did not pick it up.
+            logger.info(
+                "session skills: same-slug copy shadowed by the shipped package, dropped: %s",
+                path,
+            )
+            continue
+        if _os.path.basename(path) in baseline_names:
+            continue
+        kept.append(path)
+    return tuple(kept) + tuple(baseline_paths)
 
 
 def always_on_skill_paths(*, user_id: str) -> list[str]:
@@ -641,7 +689,21 @@ async def resolve_skill_slugs_to_paths(
     protected_slugs: set[str] = set()
     protected_paths: set[str] = set()
     async with async_unit_of_work(commit=False) as db:
-        for row in await SkillDatastore(db).list_skills(user_id):
+        # ``setdefault`` means first-row-wins, so without an order the copy a
+        # slug resolves to is whatever the datastore happens to return first.
+        # A slug can legitimately exist in two scopes at once — the managed
+        # official root holds the shipped package, the writable user library
+        # can hold a same-slug copy — and picking arbitrarily between them is
+        # how a session came to run a ``skill-creator`` older than the release
+        # serving its tools. Rank the scopes: the OFFICIAL copy is the one
+        # under content-hash convergence and therefore the one that tracks the
+        # release; a same-slug copy in the writable library is a snapshot of
+        # whenever it landed. Sorting is stable, so nothing else moves.
+        rows = sorted(
+            await SkillDatastore(db).list_skills(user_id),
+            key=lambda r: 0 if getattr(r, "scope", "") == "official" else 1,
+        )
+        for row in rows:
             if row.slug and row.source_path:
                 by_slug.setdefault(row.slug, row.source_path)
             if getattr(row, "protected", False):
@@ -667,7 +729,13 @@ async def resolve_skill_slugs_to_paths(
     managed_root = fs_registry.user_skill_root(user_id)
 
     def _is_managed_or_project(path: str) -> bool:
-        roots: list[Path] = [managed_root]
+        # The official root is as managed as the user root — the host lands
+        # bundled packages there itself. Listing it here means a shipped
+        # package's eligibility does not depend on the external-discovery
+        # policy happening to be permissive: the OSS default accepts
+        # everything, but a host that installs ``CatalogOnlyUntilClaimed``
+        # would otherwise refuse its own bundled packages.
+        roots: list[Path] = [managed_root, fs_registry.official_skill_root(user_id=user_id)]
         if project_root:
             roots.append(Path(project_root).expanduser())
         for root in roots:

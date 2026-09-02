@@ -99,6 +99,13 @@ class DeliveryRequest:
     file_name: str | None = None
     #: Label for the deliverable. Defaults to the file's basename.
     display_name: str | None = None
+    #: Where a NEWLY created lineage starts counting. Ignored once the
+    #: deliverable has a head — the head stays the only source of the next
+    #: number. This exists for content that arrives already carrying a version
+    #: of its own: a skill written before the version history existed declares
+    #: ``version: 2`` in its manifest, and adopting it as "v1" would renumber
+    #: it backwards the first time it is recorded.
+    start_version_no: int | None = None
     #: What the deliverable IS. Never inferred — an extension says how a file is
     #: encoded, not what it is for.
     kind: ArtifactKind = ArtifactKind.FILE
@@ -250,7 +257,9 @@ async def deliver_artifact(
         # delivery that beat us may have recorded these very bytes.
         current = await ds.get_head_with_revision(scope.user_id, artifact.id)
         head, head_revision = current if current is not None else (None, None)
-        version_no = (head.version_no + 1) if head is not None else 1
+        version_no = (
+            (head.version_no + 1) if head is not None else max(1, request.start_version_no or 1)
+        )
 
         try:
             # Copied inside the loop because the destination carries the version
@@ -324,6 +333,7 @@ async def deliver_artifact(
             scope.user_id,
             artifact.id,
             expected_head_revision_id=head.revision_id if head is not None else None,
+            start_version_no=request.start_version_no,
             content=content,
             file_name=display_name,
             abs_path=str(staged.final),

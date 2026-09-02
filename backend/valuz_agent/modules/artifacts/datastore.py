@@ -399,6 +399,7 @@ class ArtifactDatastore:
         artifact_id: str,
         *,
         expected_head_revision_id: str | None,
+        start_version_no: int | None = None,
         content: ArtifactContentRow,
         file_name: str,
         abs_path: str | None,
@@ -434,7 +435,10 @@ class ArtifactDatastore:
         if current != expected_head_revision_id:
             return None
 
-        version_no = (head.version_no + 1) if head is not None else 1
+        # A lineage adopted from content that already declares a version starts
+        # there — see ``DeliveryRequest.start_version_no``. Only ever consulted
+        # when there is no head; once one exists it is the sole authority.
+        version_no = (head.version_no + 1) if head is not None else max(1, start_version_no or 1)
         revision_id = _short_id(10)
 
         if head is None:

@@ -90,6 +90,28 @@ class SkillDatastore:
             .first()
         )
 
+    async def get_by_skill_dir(self, user_id: str, skill_dir: Path) -> SkillIndexRow | None:
+        """``get_by_source_path`` for a directory whose spelling may differ.
+
+        Rows are written from the SCAN, which stores
+        ``str(skill_dir.resolve(strict=False))``. Callers that build the path
+        instead — ``user_skill_root(user_id) / slug``, which is the expanded
+        settings template and is never resolved — hand in a different string
+        whenever any component of the root is a symlink, and the exact-match
+        lookup then silently answers "no such skill". Downstream that reads as
+        "this skill has no version history", which is how the confirmation
+        card came to offer "save v1" for a skill already at v2.
+
+        Try the resolved spelling first (what the scan writes), then the raw
+        one, so a row written under an older convention still matches.
+        """
+        resolved = str(skill_dir.resolve(strict=False))
+        row = await self.get_by_source_path(user_id, resolved)
+        if row is not None:
+            return row
+        raw = str(skill_dir)
+        return None if raw == resolved else await self.get_by_source_path(user_id, raw)
+
     async def get_by_source_path(self, user_id: str, source_path: str) -> SkillIndexRow | None:
         """The row for one on-disk skill directory — the business identity.
 

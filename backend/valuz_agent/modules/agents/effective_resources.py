@@ -177,8 +177,18 @@ class EffectiveResourceResolver:
             resolved = str(Path(raw_path).resolve(strict=False))
             if resolved in listed:
                 continue
-            listed.add(resolved)
             slug = Path(resolved).name
+            # Deduping by PATH alone let a same-slug copy from the user's
+            # writable library sit here beside the shipped package, and the
+            # session build then picked the user copy. These packages are
+            # coupled to host tools and must track the release, so the shipped
+            # one replaces any same-slug entry (see
+            # ``capability_resolver.merge_with_always_on``).
+            shadowed = [i for i, item in enumerate(skills) if item.slug == slug]
+            for index in reversed(shadowed):
+                dropped = skills.pop(index)
+                listed.discard(dropped.runtime_ref or "")
+            listed.add(resolved)
             skills.append(
                 EffectiveResource(
                     id=f"always-on:{slug}",

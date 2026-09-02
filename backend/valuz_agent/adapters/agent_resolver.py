@@ -41,6 +41,7 @@ from src.core import AgentConfig
 from valuz_agent.adapters.capability_resolver import (
     always_on_http_mcp_servers,
     always_on_skill_paths,
+    merge_with_always_on,
     resolve_skill_slugs_to_paths,
 )
 from valuz_agent.adapters.system_prompt_builder import (
@@ -1078,10 +1079,7 @@ async def build_member_session(
         )
     )
     baseline_skill_names = [os.path.basename(p) for p in baseline_skill_paths]
-    extra_skill_paths = tuple(
-        p for p in baseline_skill_paths if os.path.basename(p) not in set(own_skill_names)
-    )
-    session_skills = tuple(own_skill_paths) + extra_skill_paths
+    session_skills = merge_with_always_on(own_skill_paths, baseline_skill_paths)
 
     # v2.1 skill scoping: under the shared project cwd, all claude_agent members
     # materialise skills into the same ``.claude/skills/`` (union). Instead of

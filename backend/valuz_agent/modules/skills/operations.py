@@ -134,9 +134,15 @@ async def inspect_staged_submission(
     else:
         conflict = CONFLICT_UNPREPARED_COLLISION
 
-    row = await SkillDatastore(db).get_by_source_path(user_id, str(library_dir))
+    row = await SkillDatastore(db).get_by_skill_dir(user_id, library_dir)
     artifact_id = getattr(row, "artifact_id", None) if row is not None else None
-    next_version = await versioning.next_version_no(db, user_id, artifact_id)
+    # ``slug`` so an index row with no ``artifact_id`` still finds its lineage
+    # — the save does (``deliver_artifact`` looks the artifact up by archive
+    # name), and a card that promised a version the save would not use is the
+    # bug this closes.
+    next_version = await versioning.next_version_no(
+        db, user_id, artifact_id, slug=slug, installed_dir=library_dir
+    )
 
     return StagedSubmission(
         slug=slug,
