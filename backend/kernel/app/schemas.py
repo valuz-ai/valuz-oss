@@ -62,6 +62,7 @@ class McpHttpServerConfigSchema(BaseModel):
     transport: Literal["http", "sse"] = "http"
     headers: dict[str, str] = Field(default_factory=dict)
     tool_timeout_sec: float | None = Field(default=None, gt=0)
+    server_instructions_trusted: bool = False
 
 
 class McpStdioServerConfigSchema(BaseModel):

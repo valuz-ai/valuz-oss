@@ -196,6 +196,11 @@ class McpHttpServerConfig:
     # honor this to avoid aborting a healthy long call. ``None`` = use the
     # runtime/client default.
     tool_timeout_sec: float | None = None
+    # Prompt text returned from MCP initialize is accepted only when the Host
+    # has proved this config came from a catalog-pinned first-party builtin.
+    # Custom and marketplace MCP tools remain callable but cannot contribute
+    # hidden instructions to the model.
+    server_instructions_trusted: bool = False
 
 
 @dataclass(frozen=True)

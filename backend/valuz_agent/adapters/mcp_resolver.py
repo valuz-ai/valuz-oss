@@ -52,6 +52,41 @@ def _connector_tool_timeout_sec(url: str) -> float | None:
     )
 
 
+def _trusted_builtin_server_instructions(row: Any) -> bool:
+    """Trust only an immutable first-party catalog identity and endpoint.
+
+    ``connector_type`` is part of the public create payload, so it is only a
+    presentation/protection flag—not proof by itself.  The packaged/edition
+    catalog is Host-controlled input; both its explicit builtin marker and its
+    endpoint must match before the trust bit crosses into the kernel.
+    """
+
+    if getattr(row, "connector_type", None) != "builtin":
+        return False
+    slug = getattr(row, "slug", None)
+    actual_url = getattr(row, "url", None)
+    if not isinstance(slug, str) or not isinstance(actual_url, str):
+        return False
+
+    from valuz_agent.modules.connectors.catalog import load_catalog
+
+    for entry in load_catalog():
+        if not isinstance(entry, dict):
+            continue
+        members = entry.get("connectors")
+        candidates = members if isinstance(members, list) else [entry]
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("slug") != slug or candidate.get("builtin") is not True:
+                continue
+            expected_url = candidate.get("url")
+            if not isinstance(expected_url, str):
+                return False
+            return actual_url.rstrip("/") == expected_url.rstrip("/")
+    return False
+
+
 async def _ensure_fresh_oauth_token(
     row: Any, connectors: ConnectorDatastore, token_json: str
 ) -> str:
@@ -151,6 +186,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
         return None
 
     tool_timeout_sec = _connector_tool_timeout_sec(url)
+    server_instructions_trusted = _trusted_builtin_server_instructions(row)
 
     if "{module}" in url:
         modules: list[str] = []
@@ -170,6 +206,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
                 transport=transport,  # type: ignore[arg-type]
                 headers=dict(headers),
                 tool_timeout_sec=tool_timeout_sec,
+                server_instructions_trusted=server_instructions_trusted,
             )
             for module in modules
         ]
@@ -181,6 +218,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
             transport=transport,  # type: ignore[arg-type]
             headers=dict(headers),
             tool_timeout_sec=tool_timeout_sec,
+            server_instructions_trusted=server_instructions_trusted,
         )
     ]
 

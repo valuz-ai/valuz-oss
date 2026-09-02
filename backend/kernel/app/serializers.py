@@ -46,6 +46,7 @@ def mcp_to_schema(
         transport=cfg.transport,
         headers=dict(cfg.headers),
         tool_timeout_sec=cfg.tool_timeout_sec,
+        server_instructions_trusted=cfg.server_instructions_trusted,
     )
 
 

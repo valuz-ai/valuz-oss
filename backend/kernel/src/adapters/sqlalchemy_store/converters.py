@@ -380,6 +380,8 @@ def mcp_to_dict(cfg: McpServerConfig) -> dict[str, Any]:
     }
     if cfg.tool_timeout_sec is not None:
         out["tool_timeout_sec"] = cfg.tool_timeout_sec
+    if cfg.server_instructions_trusted:
+        out["server_instructions_trusted"] = True
     return out
 
 
@@ -413,6 +415,7 @@ def dict_to_mcp(data: dict[str, Any]) -> McpServerConfig:
         transport=transport,
         headers=headers,
         tool_timeout_sec=tool_timeout_sec,
+        server_instructions_trusted=data.get("server_instructions_trusted") is True,
     )
 
 

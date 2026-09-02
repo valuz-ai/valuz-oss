@@ -159,6 +159,18 @@ async def create_session(
     validate_skills(body.skills)
     mcp_configs = validate_mcp_servers(body.mcp_servers)
 
+    # Server Instructions are prompt text, so only Host-verified first-party
+    # configs may contribute them.  Freeze once at creation so every runtime
+    # receives the same prompt and later server drift cannot rewrite a session.
+    from src.core.mcp_server_instructions import (
+        append_trusted_mcp_server_instructions,
+    )
+
+    instructions = await append_trusted_mcp_server_instructions(
+        body.instructions,
+        mcp_configs,
+    )
+
     session = Session(
         id=body.id or str(uuid.uuid4()),
         user_id=owner,
@@ -168,7 +180,7 @@ async def create_session(
         model=body.model,
         model_provider=provider,
         model_settings=settings,
-        instructions=body.instructions,
+        instructions=instructions,
         skills=tuple(body.skills),
         mcp_servers=tuple(mcp_configs),
         permission_mode=permission_mode,

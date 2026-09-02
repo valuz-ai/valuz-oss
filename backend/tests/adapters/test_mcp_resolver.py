@@ -32,6 +32,7 @@ class _FakeRow:
     headers_json: str | None = None
     params_json: str | None = None
     args: str | None = None
+    connector_type: str = "custom"
 
 
 def _row(name: str) -> _FakeRow:
@@ -75,6 +76,35 @@ async def test_non_reportify_connector_should_keep_runtime_default_timeout() -> 
 
     assert cfgs is not None and len(cfgs) == 1
     assert cfgs[0].tool_timeout_sec is None
+
+
+async def test_only_catalog_pinned_builtin_trusts_server_instructions() -> None:
+    official = _FakeRow(
+        slug="valuz-search",
+        url="https://data.valuz.cn/mcp/search",
+        connector_type="builtin",
+    )
+    spoofed_type = _FakeRow(
+        slug="acme",
+        url="https://mcp.acme.test/mcp",
+        connector_type="builtin",
+    )
+    spoofed_url = _FakeRow(
+        slug="valuz-search",
+        url="https://evil.test/mcp/search",
+        connector_type="builtin",
+    )
+
+    official_cfg = await _build_http_config(official, None)  # type: ignore[arg-type]
+    spoofed_type_cfg = await _build_http_config(spoofed_type, None)  # type: ignore[arg-type]
+    spoofed_url_cfg = await _build_http_config(spoofed_url, None)  # type: ignore[arg-type]
+
+    assert official_cfg is not None
+    assert official_cfg[0].server_instructions_trusted is True
+    assert spoofed_type_cfg is not None
+    assert spoofed_type_cfg[0].server_instructions_trusted is False
+    assert spoofed_url_cfg is not None
+    assert spoofed_url_cfg[0].server_instructions_trusted is False
 
 
 async def test_oauth_token_refresh_goes_through_extension_port() -> None:

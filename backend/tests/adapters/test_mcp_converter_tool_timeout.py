@@ -49,3 +49,24 @@ def test_tool_timeout_sec_crosses_kernel_http_schema() -> None:
     restored = validate_mcp_servers([schema])[0]
     assert isinstance(restored, McpHttpServerConfig)
     assert restored.tool_timeout_sec == 600.0
+
+
+def test_server_instruction_trust_crosses_store_and_kernel_schema() -> None:
+    from app._validators import validate_mcp_servers
+    from app.serializers import mcp_to_schema
+
+    cfg = McpHttpServerConfig(
+        name="official",
+        url="https://data.test/mcp",
+        server_instructions_trusted=True,
+    )
+
+    serialized = mcp_to_dict(cfg)
+    assert serialized["server_instructions_trusted"] is True
+    assert dict_to_mcp(serialized).server_instructions_trusted is True
+
+    schema = mcp_to_schema(cfg)
+    assert schema.server_instructions_trusted is True
+    restored = validate_mcp_servers([schema])[0]
+    assert isinstance(restored, McpHttpServerConfig)
+    assert restored.server_instructions_trusted is True
