@@ -65,9 +65,7 @@ async def _deliver(session_factory, cwd: Path, **kwargs):  # type: ignore[no-unt
 
 
 async def test_should_record_a_deliverable_from_content(session_factory, cwd) -> None:
-    result = await _deliver(
-        session_factory, cwd, content=DOC, file_name="desk.a2ui.jsonl"
-    )
+    result = await _deliver(session_factory, cwd, content=DOC, file_name="desk.a2ui.jsonl")
 
     assert result.status is DeliveryStatus.RECORDED
 
@@ -84,9 +82,7 @@ async def test_should_write_a_snapshot_the_agent_can_read(session_factory, cwd) 
 
 
 async def test_should_keep_the_document_on_the_content_row(session_factory, cwd) -> None:
-    result = await _deliver(
-        session_factory, cwd, content=DOC, file_name="desk.a2ui.jsonl"
-    )
+    result = await _deliver(session_factory, cwd, content=DOC, file_name="desk.a2ui.jsonl")
 
     async with session_factory() as db:
         revision = await ArtifactDatastore(db).get_revision(SCOPE.user_id, result.revision_id)
@@ -99,12 +95,8 @@ async def test_regenerating_appends_to_the_same_deliverable(session_factory, cwd
     # "Generate the next version of this page" must land on the existing
     # lineage, not start a second one — that is what the version switcher and
     # the binding's parent chain are built on.
-    first = await _deliver(
-        session_factory, cwd, content=DOC, file_name="desk.a2ui.jsonl"
-    )
-    second = await _deliver(
-        session_factory, cwd, content=DOC + "\n ", file_name="desk.a2ui.jsonl"
-    )
+    first = await _deliver(session_factory, cwd, content=DOC, file_name="desk.a2ui.jsonl")
+    second = await _deliver(session_factory, cwd, content=DOC + "\n ", file_name="desk.a2ui.jsonl")
 
     assert second.artifact_id == first.artifact_id
     assert second.version_no == 2
@@ -152,3 +144,59 @@ async def test_path_form_still_stores_by_file(session_factory, cwd) -> None:
         content = await ArtifactDatastore(db).get_content(SCOPE.user_id, revision.content_id)
     assert content.storage_kind == STORAGE_KIND_FILE
     assert content.content_inline is None
+
+
+# ── bytes form: an archive or image that is not text ───────────────────
+
+ARCHIVE = b"PK\x03\x04" + bytes(range(256)) * 4
+
+
+async def test_should_record_a_deliverable_from_bytes(session_factory, cwd) -> None:
+    result = await _deliver(session_factory, cwd, content_bytes=ARCHIVE, file_name="pkg.zip")
+
+    assert result.status is DeliveryStatus.RECORDED
+    snapshot = cwd / ".artifact" / result.artifact_id / "v1" / "pkg.zip"
+    assert snapshot.read_bytes() == ARCHIVE
+
+
+async def test_bytes_are_stored_as_a_file_never_inline(session_factory, cwd) -> None:
+    # Opaque bytes have no reader that wants them on the row.
+    result = await _deliver(session_factory, cwd, content_bytes=ARCHIVE, file_name="pkg.zip")
+
+    async with session_factory() as db:
+        ds = ArtifactDatastore(db)
+        revisions = await ds.list_revisions(SCOPE.user_id, result.artifact_id)
+        content = await ds.find_content_by_hash(SCOPE.user_id, revisions[0].content_hash)
+    assert content is not None
+    assert content.storage_kind == STORAGE_KIND_FILE
+    assert content.content_inline is None
+    assert content.byte_size == len(ARCHIVE)
+
+
+async def test_identical_bytes_are_not_a_new_version(session_factory, cwd) -> None:
+    first = await _deliver(session_factory, cwd, content_bytes=ARCHIVE, file_name="pkg.zip")
+    again = await _deliver(session_factory, cwd, content_bytes=ARCHIVE, file_name="pkg.zip")
+
+    assert again.status is DeliveryStatus.UNCHANGED
+    assert again.revision_id == first.revision_id
+
+
+async def test_changed_bytes_append_to_the_same_deliverable(session_factory, cwd) -> None:
+    first = await _deliver(session_factory, cwd, content_bytes=ARCHIVE, file_name="pkg.zip")
+    second = await _deliver(session_factory, cwd, content_bytes=ARCHIVE + b"!", file_name="pkg.zip")
+
+    assert second.status is DeliveryStatus.RECORDED
+    assert second.artifact_id == first.artifact_id
+    assert second.version_no == 2
+
+
+async def test_bytes_and_text_at_once_is_rejected(session_factory, cwd) -> None:
+    result = await _deliver(session_factory, cwd, content=DOC, content_bytes=ARCHIVE, file_name="x")
+
+    assert result.status is DeliveryStatus.INVALID
+
+
+async def test_bytes_without_a_file_name_is_rejected(session_factory, cwd) -> None:
+    result = await _deliver(session_factory, cwd, content_bytes=ARCHIVE)
+
+    assert result.status is DeliveryStatus.INVALID
