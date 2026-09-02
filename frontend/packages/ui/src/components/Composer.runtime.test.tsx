@@ -1,6 +1,5 @@
 /** @vitest-environment jsdom */
 import { fireEvent, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { MAX_SESSION_ATTACHMENTS } from "@valuz/shared";
@@ -17,24 +16,6 @@ const sampleRuntimes: RuntimeSelectorItem[] = [
     unavailableReason: "binary missing",
   },
 ];
-
-describe("Composer mode guidance", () => {
-  it("lets the chat and task explanation tooltip hug its wrapped content", async () => {
-    const user = userEvent.setup();
-    render(<Composer mode="chat" onModeChange={vi.fn()} />);
-
-    await user.hover(screen.getByRole("button", { name: "对话" }));
-
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.classList.contains("max-w-48")).toBe(true);
-    expect(tooltip.classList.contains("w-60")).toBe(false);
-    expect(tooltip.classList.contains("whitespace-normal")).toBe(true);
-    expect(tooltip.classList.contains("break-words")).toBe(true);
-    expect(tooltip.classList.contains("text-left")).toBe(true);
-    expect(tooltip.classList.contains("text-wrap")).toBe(true);
-    expect(tooltip.classList.contains("text-balance")).toBe(false);
-  });
-});
 
 describe("Composer runtime selector (REP-107)", () => {
   it("keeps provider selection hints on the option rows, not the collapsed trigger", () => {

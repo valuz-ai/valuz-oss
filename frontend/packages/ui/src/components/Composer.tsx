@@ -1760,13 +1760,7 @@ export const Composer = ({
                             </span>
                           </button>
                         </TooltipTrigger>
-                        <TooltipContent
-                          side="bottom"
-                          sideOffset={4}
-                          className="max-w-48 whitespace-normal break-words text-left text-wrap"
-                        >
-                          {tip}
-                        </TooltipContent>
+                        <TooltipContent side="bottom">{tip}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   );
