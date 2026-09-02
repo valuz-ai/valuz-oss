@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { IconBox } from "../common/IconBox";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 
@@ -212,50 +213,75 @@ export const SkillStagingPanel = ({
       </div>
 
       {savedSkills.length > 0 ? (
-        <div className="border-b border-surface-border px-3 pb-2">
-          <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wider text-ink-label">
-            <Check className="h-3 w-3 text-success" />
-            {t("skill.sessionSavedTitle")}
+        <div className="border-b border-surface-border px-3 pb-3">
+          <div className="flex items-center gap-1.5 pb-1.5">
+            <IconBox size="sm" variant="default">
+              <Check className="h-3.5 w-3.5 text-success" />
+            </IconBox>
+            <span className="text-xs font-medium text-ink-heading">
+              {t("skill.sessionSavedTitle")}
+            </span>
+            <span className="inline-flex h-5 items-center rounded-sm bg-surface-soft px-1.5 text-2xs text-ink-meta">
+              {savedSkills.length}
+            </span>
           </div>
-          <ul className="mt-1 space-y-0.5">
-            {savedSkills.map((saved) => (
-              <li
-                key={saved.artifactId}
-                className="flex items-center gap-1.5 text-2xs"
-              >
-                {onOpenSkill ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenSkill(saved.slug)}
-                    className="min-w-0 truncate text-ink-body transition-colors hover:text-brand"
+          <ul className="space-y-1">
+            {savedSkills.map((saved) => {
+              const Row = onOpenSkill ? "button" : "div";
+              return (
+                <li key={saved.artifactId}>
+                  <Row
+                    {...(onOpenSkill
+                      ? {
+                          type: "button" as const,
+                          onClick: () => onOpenSkill(saved.slug),
+                        }
+                      : {})}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md border border-surface-border",
+                      "bg-card px-2 py-1.5 text-left",
+                      onOpenSkill && "card-interactive",
+                    )}
                   >
-                    {saved.slug}
-                  </button>
-                ) : (
-                  <span className="min-w-0 truncate text-ink-body">
-                    {saved.slug}
-                  </span>
-                )}
-                <span className="shrink-0 font-mono text-ink-meta">
-                  v{saved.versionNo}
-                </span>
-                {!saved.isCurrent ? (
-                  <span className="shrink-0 text-ink-label">
-                    {t("skill.versionSuperseded")}
-                  </span>
-                ) : null}
-              </li>
-            ))}
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-ink-label" />
+                    <span className="min-w-0 flex-1 truncate text-xs text-ink-body">
+                      {saved.slug}
+                    </span>
+                    <span className="shrink-0 rounded-sm bg-surface-soft px-1.5 py-0.5 font-mono text-2xs text-ink-meta">
+                      v{saved.versionNo}
+                    </span>
+                    {!saved.isCurrent ? (
+                      <span className="shrink-0 text-2xs text-ink-label">
+                        {t("skill.versionSuperseded")}
+                      </span>
+                    ) : null}
+                  </Row>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
 
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {slugs.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-ink-meta">
-            <FolderTree className="h-8 w-8" />
-            <p className="text-xs">{t("skill.noGenerated")}</p>
-            <p className="text-2xs">{t("skill.noGeneratedHint")}</p>
+          // Saving empties staging, so the "nothing here yet" copy would
+          // contradict the list of skills this very session just saved,
+          // sitting right above it.
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-ink-meta">
+            <IconBox size="xl" variant="muted">
+              <FolderTree className="h-5 w-5" />
+            </IconBox>
+            <p className="text-sm text-ink-body">
+              {savedSkills.length > 0
+                ? t("skill.stagingClearedTitle")
+                : t("skill.noGenerated")}
+            </p>
+            <p className="text-xs leading-relaxed">
+              {savedSkills.length > 0
+                ? t("skill.stagingClearedHint")
+                : t("skill.noGeneratedHint")}
+            </p>
           </div>
         ) : (
           <ul className="space-y-2">

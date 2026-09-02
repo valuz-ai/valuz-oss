@@ -2505,6 +2505,8 @@ I18nKey = Literal[
     "skill.sessionSavedTitle",
     "skill.skip",
     "skill.source",
+    "skill.stagingClearedHint",
+    "skill.stagingClearedTitle",
     "skill.stagingFileCount",
     "skill.stagingNew",
     "skill.stagingOriginalChanged",

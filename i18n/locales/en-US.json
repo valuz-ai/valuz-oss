@@ -2157,6 +2157,8 @@
     "sessionSavedTitle": "Saved in this conversation",
     "skip": "Skip",
     "source": "Source",
+    "stagingClearedHint": "This conversation's skills are saved. Describe what to change and the AI writes a new draft here — confirming it again makes the next version.",
+    "stagingClearedTitle": "Staging is empty",
     "stagingFileCount": "Staging files (",
     "stagingNew": "New",
     "stagingOriginalChanged": "Original changed",

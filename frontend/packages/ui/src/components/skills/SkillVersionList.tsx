@@ -67,28 +67,30 @@ export const SkillVersionList = memo(function SkillVersionList({
   const ordered = [...versions].sort((a, b) => b.versionNo - a.versionNo);
 
   return (
-    <div className={cn("text-2xs", className)}>
+    <div className={cn("text-xs", className)}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-2xs uppercase tracking-wider text-ink-label transition-colors hover:text-ink-body"
+        className="flex w-full items-center gap-1.5 text-xs font-medium text-ink-heading transition-colors hover:text-brand"
       >
-        <History className="h-3 w-3" />
+        <History className="h-3.5 w-3.5 text-ink-label" />
         {t("skill.versionsTitle")}
         {versions.length > 0 ? (
-          <span className="text-ink-meta">({versions.length})</span>
+          <span className="inline-flex h-5 items-center rounded-sm bg-surface-soft px-1.5 text-2xs text-ink-meta">
+            {versions.length}
+          </span>
         ) : null}
       </button>
 
       {open ? (
         loading ? (
-          <div className="mt-2 flex items-center gap-1.5 text-ink-meta">
+          <div className="mt-2 flex items-center gap-1.5 text-2xs text-ink-meta">
             <Loader2 className="h-3 w-3 animate-spin" />
             {t("common.loading")}
           </div>
         ) : ordered.length === 0 ? (
-          <p className="mt-2 leading-relaxed text-ink-meta">
+          <p className="mt-2 text-2xs leading-relaxed text-ink-meta">
             {t("skill.versionsEmpty")}
           </p>
         ) : (
@@ -99,8 +101,10 @@ export const SkillVersionList = memo(function SkillVersionList({
                 <li
                   key={version.revisionId}
                   className={cn(
-                    "flex items-center gap-2 rounded-md px-1.5 py-1",
-                    version.isCurrent ? "bg-brand-light" : "hover:bg-surface-2",
+                    "flex items-center gap-2 rounded-md border px-2 py-1.5",
+                    version.isCurrent
+                      ? "border-brand/40 bg-brand-light"
+                      : "border-transparent hover:border-surface-border hover:bg-surface-2",
                   )}
                 >
                   <span
@@ -111,17 +115,17 @@ export const SkillVersionList = memo(function SkillVersionList({
                   >
                     v{version.versionNo}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-ink-meta">
+                  <span className="min-w-0 flex-1 truncate text-2xs text-ink-meta">
                     {formatWhen(version.createdAt)}
                     {version.createdBy === "baseline"
                       ? ` · ${t("skill.versionBaseline")}`
                       : ""}
                   </span>
-                  <span className="shrink-0 text-ink-label">
+                  <span className="shrink-0 text-2xs text-ink-label">
                     {formatSize(version.byteSize)}
                   </span>
                   {version.isCurrent ? (
-                    <span className="shrink-0 text-brand">
+                    <span className="shrink-0 text-2xs text-brand">
                       {t("skill.versionCurrent")}
                     </span>
                   ) : onRestore ? (
@@ -131,7 +135,7 @@ export const SkillVersionList = memo(function SkillVersionList({
                       onClick={() => onRestore(version.revisionId)}
                       title={t("skill.versionRestore")}
                       className={cn(
-                        "inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5",
+                        "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-2xs",
                         "text-ink-meta transition-colors hover:bg-surface-muted hover:text-ink-heading",
                         "disabled:cursor-not-allowed disabled:opacity-50",
                       )}

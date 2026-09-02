@@ -22,6 +22,7 @@ import {
   type SkillVersionEntry,
 } from "@valuz/ui";
 import { skillsApi } from "@valuz/core";
+import { isBinaryContent } from "./skill-file-preview";
 import type { SkillDetail } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
 import { useProjectOutlet } from "@valuz/app/layout";
@@ -34,15 +35,6 @@ type TreeNode = {
   type: "file" | "directory";
   children?: TreeNode[];
 };
-
-function isBinaryContent(content: string): boolean {
-  // Heuristic: if content has null bytes or very few printable characters relative to length, treat as binary
-  if (content.includes("\x00")) return true;
-  const printable = content
-    .split("")
-    .filter((c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) < 127).length;
-  return content.length > 0 && printable / content.length < 0.7;
-}
 
 function findFirstFile(nodes: TreeNode[]): TreeNode | null {
   for (const n of nodes) {
