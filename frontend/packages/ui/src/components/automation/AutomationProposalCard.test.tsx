@@ -66,6 +66,9 @@ describe("AutomationProposalCard", () => {
     expect(
       screen.getByRole("heading", { name: "每日市场跟踪" }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole("dialog").classList.contains("sm:max-w-3xl"),
+    ).toBe(true);
     expect(screen.getByRole("heading", { name: "市场概览" })).toBeTruthy();
     expect(screen.getByRole("list")).toBeTruthy();
   });

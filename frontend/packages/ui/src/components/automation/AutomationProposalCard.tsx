@@ -249,7 +249,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
 
       {promptTemplate ? (
         <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-          <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+          <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
             <DialogHeader className="border-b border-surface-border px-5 pb-4 pt-5 pr-12">
               <DialogTitle>{name || t("automation.proposalUnnamed")}</DialogTitle>
               <DialogDescription>{t("automation.promptLabel")}</DialogDescription>

@@ -232,7 +232,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
 
       {content ? (
         <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-          <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+          <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
             <DialogHeader className="border-b border-surface-border px-5 pb-4 pt-5 pr-12">
               <DialogTitle>{name}</DialogTitle>
               <DialogDescription>{t("playbook.promptLabel")}</DialogDescription>
