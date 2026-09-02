@@ -36,6 +36,7 @@ from valuz_agent.modules.connectors.service import (
     ConnectorService,
     CredEntry,
     build_overrides,
+    build_request_overrides,
 )
 
 
@@ -206,5 +207,6 @@ async def test_should_support_catalog_nonauth_secret_header_plus_custom_secret(s
         "X-Custom": "custom-secret",
     }
     # Resolver parity (Acceptance #8) on the same row.
+    request_headers, _ = build_request_overrides(row)
     cfgs = await _build_http_config(row, svc._ds)
-    assert cfgs is not None and dict(cfgs[0].headers) == headers
+    assert cfgs is not None and dict(cfgs[0].headers) == request_headers

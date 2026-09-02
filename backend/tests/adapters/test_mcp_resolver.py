@@ -48,17 +48,33 @@ async def _headers(row: _FakeRow) -> dict[str, str]:
 
 async def test_should_prefix_bearer_when_secret_header_is_authorization() -> None:
     headers = await _headers(_row("Authorization"))
-    assert headers == {"Authorization": "Bearer sk-123"}
+    assert headers == {
+        "Authorization": "Bearer sk-123",
+        "User-Agent": "Valuz/1.0",
+    }
 
 
 async def test_should_send_raw_secret_when_header_is_custom() -> None:
     headers = await _headers(_row("X-API-Key"))
-    assert headers == {"X-API-Key": "sk-123"}
+    assert headers["X-API-Key"] == "sk-123"
+
+
+async def test_should_add_valuz_user_agent_to_runtime_connector_config() -> None:
+    headers = await _headers(_row("X-API-Key"))
+    assert headers["User-Agent"] == "Valuz/1.0"
+
+
+async def test_should_preserve_custom_user_agent_in_runtime_connector_config() -> None:
+    headers = await _headers(_row("user-agent"))
+    assert headers == {"user-agent": "sk-123"}
 
 
 async def test_should_treat_authorization_case_insensitively() -> None:
     headers = await _headers(_row("authorization"))
-    assert headers == {"authorization": "Bearer sk-123"}
+    assert headers == {
+        "authorization": "Bearer sk-123",
+        "User-Agent": "Valuz/1.0",
+    }
 
 
 async def test_reportify_connectors_should_use_shared_600_second_timeout() -> None:
@@ -128,7 +144,10 @@ async def test_oauth_token_refresh_goes_through_extension_port() -> None:
         ext.connector_oauth_refresh = old
 
     assert cfgs is not None
-    assert dict(cfgs[0].headers) == {"Authorization": "Bearer fresh-token"}
+    assert dict(cfgs[0].headers) == {
+        "Authorization": "Bearer fresh-token",
+        "User-Agent": "Valuz/1.0",
+    }
     assert calls == [
         {
             "row": "c1",
