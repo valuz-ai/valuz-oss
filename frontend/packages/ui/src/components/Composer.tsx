@@ -1762,7 +1762,7 @@ export const Composer = ({
                         </TooltipTrigger>
                         <TooltipContent
                           side="bottom"
-                          className="max-w-52 whitespace-normal break-words text-left"
+                          className="max-w-52 whitespace-normal break-words text-left text-wrap"
                         >
                           {tip}
                         </TooltipContent>
