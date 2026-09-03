@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { MAX_SESSION_ATTACHMENTS } from "@valuz/shared";
@@ -282,7 +283,9 @@ describe("Composer ``/`` picker decoupled from the toolbar skill button", () => 
     // showSkillSlash defaults to showSkillButton, so hiding the button still
     // disables the inline picker for callers that never opt in.
     const onSend = vi.fn();
-    render(<Composer onSend={onSend} skills={SKILLS} showSkillButton={false} />);
+    render(
+      <Composer onSend={onSend} skills={SKILLS} showSkillButton={false} />,
+    );
     const editor = screen.getByRole("textbox");
 
     typeSlashToken(editor, "/deep");
@@ -366,9 +369,8 @@ describe("Composer local attachment inputs", () => {
     const { container } = render(
       <Composer uploadOnAttach onLocalUpload={onLocalUpload} />,
     );
-    const input = container.querySelector<HTMLInputElement>(
-      "input[type='file']",
-    );
+    const input =
+      container.querySelector<HTMLInputElement>("input[type='file']");
 
     expect(input).not.toBeNull();
     fireEvent.change(input!, { target: { files: [file] } });
@@ -389,5 +391,28 @@ describe("Composer local attachment inputs", () => {
     });
 
     expect(onFileDrop).toHaveBeenCalledWith([file]);
+  });
+});
+
+describe("Composer mode guidance", () => {
+  it("should wrap the chat/task explanation inside a narrow tooltip when hovered", async () => {
+    const user = userEvent.setup();
+    render(<Composer mode="chat" onModeChange={vi.fn()} />);
+
+    await user.hover(screen.getByRole("button", { name: "对话" }));
+
+    // Radix puts ``role="tooltip"`` on the visually hidden a11y copy; the
+    // styled box is its ``tooltip-content`` ancestor.
+    const tooltip = (await screen.findByRole("tooltip")).closest(
+      '[data-slot="tooltip-content"]',
+    );
+    expect(tooltip).not.toBeNull();
+    // Capped width so the tip breaks onto a second line under the toggle.
+    expect(tooltip!.classList.contains("max-w-64")).toBe(true);
+    expect(tooltip!.classList.contains("whitespace-normal")).toBe(true);
+    expect(tooltip!.classList.contains("text-left")).toBe(true);
+    // Plain wrapping, not the base tooltip's balanced line breaking.
+    expect(tooltip!.classList.contains("text-wrap")).toBe(true);
+    expect(tooltip!.classList.contains("text-balance")).toBe(false);
   });
 });

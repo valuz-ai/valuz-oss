@@ -30,7 +30,9 @@ function TooltipTrigger({
 
 function TooltipContent({
   className,
-  sideOffset = 0,
+  // A small gap between the tip and its trigger; 0 sits flush against the
+  // icon. Matches the offset the other popovers in this package use.
+  sideOffset = 6,
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
