@@ -28,6 +28,7 @@ it to ``/kernel`` (ADR-013; the kernel's own upstream default is ``/api`` — se
 | set_mode                 | POST   {KERNEL_API_PREFIX}/v1/sessions/{id}/mode             |
 | finalize_session         | POST   {KERNEL_API_PREFIX}/v1/sessions/{id}/finalize          |
 | append_event             | POST   {KERNEL_API_PREFIX}/v1/sessions/{id}/events            |
+| record_unstarted_turn    | POST   {KERNEL_API_PREFIX}/v1/sessions/{id}/unstarted-turn    |
 | emit_live_event          | POST   {KERNEL_API_PREFIX}/v1/sessions/{id}/events?live_only=true|
 | get_events               | GET    {KERNEL_API_PREFIX}/v1/sessions/{id}/events[?after_seq=]|
 | get_events_window        | GET    {KERNEL_API_PREFIX}/v1/sessions/{id}/events/window     |
@@ -74,6 +75,7 @@ from app.schemas import (  # noqa: E402
     ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
+    RecordUnstartedTurnRequest,
     SessionData,
     SetSessionModeRequest,
     SubmitActionRequest,
@@ -219,6 +221,10 @@ class KernelClient(Protocol):
     ) -> SessionData: ...
 
     async def append_event(self, user_id: str, session_id: str, event: EventPayload) -> bool: ...
+
+    async def record_unstarted_turn(
+        self, user_id: str, session_id: str, req: RecordUnstartedTurnRequest
+    ) -> str: ...
 
     async def emit_live_event(
         self, user_id: str, session_id: str, type: str, data: dict[str, Any]
@@ -493,6 +499,17 @@ class InProcessKernelClient:
         except HTTPException as exc:
             _raise_mapped(exc)
         return bool(result["data"].persisted)
+
+    async def record_unstarted_turn(
+        self, user_id: str, session_id: str, req: RecordUnstartedTurnRequest
+    ) -> str:
+        from app.routes.messages import record_unstarted_turn
+
+        try:
+            result = await record_unstarted_turn(session_id, req, self._store(), user_id)
+        except HTTPException as exc:
+            _raise_mapped(exc)
+        return str(result["data"].message_id)
 
     async def emit_live_event(
         self, user_id: str, session_id: str, type: str, data: dict[str, Any]
@@ -1148,6 +1165,14 @@ async def finalize_session(
 async def append_event(user_id: str, session_id: str, event: EventPayload) -> bool:
     return await (await _control_kernel(user_id, session_id)).append_event(
         user_id, session_id, event
+    )
+
+
+async def record_unstarted_turn(
+    user_id: str, session_id: str, req: RecordUnstartedTurnRequest
+) -> str:
+    return await (await _control_kernel(user_id, session_id)).record_unstarted_turn(
+        user_id, session_id, req
     )
 
 

@@ -266,6 +266,35 @@ class AppendEventResponse(BaseModel):
     error: ApiError | None = None
 
 
+class RecordUnstartedTurnRequest(BaseModel):
+    """A turn that died before the kernel accepted it
+    (``POST /sessions/{id}/unstarted-turn``).
+
+    The upstream's pre-flight (sandbox allocation, overlay runtime context)
+    can fail before ``run_turn`` is ever entered, so the kernel never opened
+    the turn's event bracket. The upstream records the user's message here so
+    the failure has a turn of its own to attach to.
+
+    This deliberately does NOT reuse ``POST /sessions/{id}/events``: that
+    route anchors onto the session's most recent message, which for a turn
+    that never started is the PREVIOUS turn's — the two turns then collide on
+    one ``message_id`` and clients that key a turn by it render the second
+    inside the first.
+    """
+
+    message: str
+    attachments: list[AttachmentSchema] = Field(default_factory=list)
+
+
+class RecordUnstartedTurnData(BaseModel):
+    message_id: str
+
+
+class RecordUnstartedTurnResponse(BaseModel):
+    data: RecordUnstartedTurnData
+    error: ApiError | None = None
+
+
 class FinalizeSessionRequest(BaseModel):
     """Terminal/idle state flip for out-of-band supervisors
     (``POST /sessions/{id}/finalize``).

@@ -304,22 +304,26 @@ async def run_session_to_idle(
             # the user's own bubble) and the optimistic bubble is never retired
             # (the "starting runtime" header counts up forever). Ordering matters
             # — the event is anchored on append, so it has to land first.
+            #
+            # This MUST mint a new Message. ``append_event`` anchors onto the
+            # session's most recent message, which for a turn that never started
+            # is the PREVIOUS turn's: both turns end up sharing one
+            # ``message_id``, the client keys a turn by it, and the second turn
+            # renders inside the first. ``record_unstarted_turn`` opens its own
+            # anchor, which the ``finalize`` below then attaches the failure to.
             if isinstance(exc, kernel_client.TurnNotStartedError):
                 try:
-                    from app.schemas import EventPayload
+                    from app.schemas import AttachmentSchema, RecordUnstartedTurnRequest
 
-                    await kernel_client.append_event(
+                    await kernel_client.record_unstarted_turn(
                         user_id,
                         session_id,
-                        EventPayload(
-                            type="user_message",
-                            data={
-                                "message": content,
-                                "attachments": [
-                                    {"source_path": source, "parsed_path": parsed}
-                                    for source, parsed in attachment_specs
-                                ],
-                            },
+                        RecordUnstartedTurnRequest(
+                            message=content,
+                            attachments=[
+                                AttachmentSchema(source_path=source, parsed_path=parsed)
+                                for source, parsed in attachment_specs
+                            ],
                         ),
                     )
                 except Exception:  # noqa: BLE001 — best effort; never mask the real failure
