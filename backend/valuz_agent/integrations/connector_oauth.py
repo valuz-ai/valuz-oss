@@ -30,7 +30,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
@@ -74,6 +74,59 @@ class OauthMetadata(BaseModel):
     grant_types_supported: list[str] = ["authorization_code", "refresh_token"]
     code_challenge_methods_supported: list[str] = ["plain", "S256"]
     token_endpoint_auth_methods_supported: list[str] | None = None
+    # The authorization server accepts an HTTPS URL as ``client_id`` and
+    # fetches the client's metadata from it (OAuth Client ID Metadata
+    # Documents, MCP authorization spec). Servers advertising this typically
+    # have no ``registration_endpoint`` at all.
+    client_id_metadata_document_supported: bool = False
+
+
+def client_id_from_metadata_document(
+    oauth_meta: OauthMetadata, metadata_url: str | None
+) -> str | None:
+    """The client_id to use under Client ID Metadata Documents, or ``None``.
+
+    Only when the authorization server advertises support AND this
+    deployment has a publicly hosted metadata document configured. The URL
+    must be ``https`` with a path component (the spec forbids a bare origin).
+    """
+    if not metadata_url or not oauth_meta.client_id_metadata_document_supported:
+        return None
+    parsed = urlparse(metadata_url)
+    if parsed.scheme != "https" or parsed.path in ("", "/") or parsed.fragment:
+        return None
+    return metadata_url
+
+
+def build_client_metadata_document(
+    *,
+    client_id: str,
+    client_name: str,
+    redirect_uris: list[str],
+    client_uri: str | None = None,
+) -> dict[str, Any]:
+    """The OAuth Client ID Metadata Document this deployment publishes.
+
+    ``client_id`` MUST equal the URL the document is served from; the
+    authorization server validates the ``redirect_uri`` of every
+    authorization request against ``redirect_uris``. Public PKCE client, no
+    client secret.
+    """
+    uris: list[str] = []
+    for uri in redirect_uris:
+        if uri and uri not in uris:
+            uris.append(uri)
+    doc: dict[str, Any] = {
+        "client_id": client_id,
+        "client_name": client_name,
+        "redirect_uris": uris,
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+    if client_uri:
+        doc["client_uri"] = client_uri
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +206,9 @@ class OAuthDiscoverHelper:
         }
         if origin_meta.registration_endpoint:
             values["registration_endpoint"] = str(origin_meta.registration_endpoint)
+        values["client_id_metadata_document_supported"] = bool(
+            getattr(origin_meta, "client_id_metadata_document_supported", False)
+        )
         if protected_resource:
             if protected_resource.resource:
                 values["resource"] = str(protected_resource.resource)
