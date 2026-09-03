@@ -703,19 +703,29 @@ const createTurnsBuilder = () => {
           metaEvents.length = 0;
         }
         currentTurn = {
-          // ``envelope.seq`` is 0 for live SSE frames that haven't been
-          // persisted yet (the kernel's broadcast sink emits them with
-          // ``seq=0`` before the DB id is assigned). Two unpersisted
-          // user-message frames in the same render — the broadcast +
-          // its later DB-replay copy — would both produce ``turn-0`` and
-          // collide on the React key, so the virtualizer would reuse
-          // the same DOM node for two distinct turns. Prefer the stable
-          // ``message_id`` (UUID) when available, then the store-independent
-          // ``event_uid`` (a bare seq can collide across the history/live
-          // seq spaces), and only then ``envelope.seq``.
-          id: payload.message_id
-            ? `turn-${payload.message_id}`
-            : `turn-${envelope.event_uid ?? envelope.seq}`,
+          // A turn is identified by its ``user_message`` EVENT, not by the
+          // Message it may or may not belong to. ``event_uid`` is minted by
+          // the kernel on persist and stamped onto the live broadcast of the
+          // same event, so it is stable across the live → persisted
+          // transition AND unique per event — the two properties a React /
+          // virtualizer key needs.
+          //
+          // ``message_id`` has the first property but not the second. A turn
+          // that fails before the kernel accepts it (sandbox allocation,
+          // credentials) never gets a Message; the recovery write can only
+          // anchor its ``user_message`` onto the session's latest message —
+          // the PREVIOUS turn's — so two turns arrived sharing one
+          // ``message_id``. Keyed on that, the virtualizer gave both turns
+          // one size slot and painted the second inside the first.
+          //
+          // ``envelope.seq`` is last: it is 0 on live frames, and a bare seq
+          // can collide across the history/live seq spaces.
+          id: envelope.event_uid
+            ? `turn-${envelope.event_uid}`
+            : payload.message_id
+              ? `turn-${payload.message_id}`
+              : `turn-${envelope.seq}`,
+          messageId: payload.message_id || null,
           userMessageSeq: envelope.seq,
           userText,
           blocks: [],

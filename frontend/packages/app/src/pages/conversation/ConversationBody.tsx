@@ -89,7 +89,9 @@ type ConversationBodyProps = {
    *  (rendered only while the session is still in plan mode). */
   selectedSessionMode?: "default" | "plan" | "goal";
   /** Optimistic mode update after the approve PATCH lands. */
-  setSelectedSessionMode?: Dispatch<SetStateAction<"default" | "plan" | "goal">>;
+  setSelectedSessionMode?: Dispatch<
+    SetStateAction<"default" | "plan" | "goal">
+  >;
   /** Send path for the auto "start executing" turn after plan approval. */
   performSend?: (overrideText?: string) => Promise<void>;
 };
@@ -287,7 +289,9 @@ export function ConversationBody({
                     // fold it in so memoized rows re-render when the
                     // button appears/disables (same contract as the fork
                     // spinner above).
-                    planActionable ? `plan:${lastPlanTurnId}:${planApproving}` : "",
+                    planActionable
+                      ? `plan:${lastPlanTurnId}:${planApproving}`
+                      : "",
                   ]
                     .filter(Boolean)
                     .join("|") || null
@@ -302,13 +306,18 @@ export function ConversationBody({
                     !turn.cancelled &&
                     !turn.interrupted &&
                     turn.forkAnchor !== false &&
-                    turn.id.startsWith("turn-") ? (
+                    // Fork addresses a Message, so it needs one of this
+                    // turn's own. A turn that failed before producing
+                    // anything (pre-flight: sandbox, credentials) never
+                    // got one — whatever ``messageId`` it carries was
+                    // borrowed from the neighbouring turn by the recovery
+                    // write, so forking "from here" would fork from there.
+                    turn.messageId &&
+                    !(turn.failedMessage && turn.blocks.length === 0) ? (
                       <button
                         type="button"
                         disabled={forkInFlight}
-                        onClick={() =>
-                          onForkFromTurn(turn.id.slice("turn-".length))
-                        }
+                        onClick={() => onForkFromTurn(turn.messageId!)}
                         title={t(
                           "conversation.forkFromHere" as Parameters<
                             typeof t
@@ -316,8 +325,7 @@ export function ConversationBody({
                         )}
                         className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted disabled:cursor-default disabled:opacity-60"
                       >
-                        {forkInFlight &&
-                        forkingMessageId === turn.id.slice("turn-".length) ? (
+                        {forkInFlight && forkingMessageId === turn.messageId ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
                           <ForkIcon className="h-3.5 w-3.5" />
@@ -361,7 +369,11 @@ export function ConversationBody({
                       ) : (
                         <CheckCircle2 className="mr-1.5 h-3 w-3" />
                       )}
-                      {t("conversation.planApproveAndRun" as Parameters<typeof t>[0])}
+                      {t(
+                        "conversation.planApproveAndRun" as Parameters<
+                          typeof t
+                        >[0],
+                      )}
                     </Button>
                   ) : null
                 }
