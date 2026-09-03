@@ -379,10 +379,20 @@ async def reindex_official_skills(user_id: str, *, slugs: set[str] | None = None
     # It bites hardest exactly where it is least affordable: a release that
     # changes any bundled package re-lands it for EVERY owner, and every one
     # of those landings comes back through here.
-    manifests = await asyncio.to_thread(
-        functools.partial(OfficialSkillSource().list_skills, ctx, slugs=slugs)
-    )
+    #
+    # INSIDE the lock, though. This is a read-modify-write: the snapshot taken
+    # here is what gets written below, so taking it outside would let a pass
+    # that read early win the write over a pass that read late — the index
+    # left holding a superseded hash while the newer landing is on disk. The
+    # lock's contract (see ``startup_scan``) is that an acquirer commits
+    # before releasing so the next one sees fresh rows; that is only worth
+    # anything if the disk snapshot is taken under the same lock. The cost is
+    # affordable precisely because of ``slugs``: a landing names the one
+    # package it moved instead of re-reading all twenty.
     async with _scan_lock:
+        manifests = await asyncio.to_thread(
+            functools.partial(OfficialSkillSource().list_skills, ctx, slugs=slugs)
+        )
         async with async_unit_of_work(commit=True) as db:
             ds = SkillDatastore(db)
             count = await _index_manifests(
@@ -409,10 +419,13 @@ async def reindex_user_skills(user_id: str) -> int:
 
     ctx = RuntimeContext(user_id=user_id)
     count = 0
-    # Off the event loop, for the reason spelled out in
-    # ``reindex_official_skills``.
-    manifests = await asyncio.to_thread(FilesystemSkillSource().list_skills, ctx)
+    # Off the event loop, and under the lock, for both reasons spelled out in
+    # ``reindex_official_skills``. No ``slugs`` narrowing here — the user tree
+    # has no landing to name what moved — so this one does hold the lock for
+    # the length of a full walk. That is what it did before the walk was moved
+    # off the loop, and a correct index is worth more than the concurrency.
     async with _scan_lock:
+        manifests = await asyncio.to_thread(FilesystemSkillSource().list_skills, ctx)
         async with async_unit_of_work(commit=True) as db:
             ds = SkillDatastore(db)
             count = await _index_manifests(

@@ -182,3 +182,67 @@ async def test_reindex_narrows_to_the_packages_a_landing_changed(monkeypatch, tm
     hashed.clear()
     await service_mod.reindex_official_skills("owner-a")
     assert sorted(hashed) == ["moved", "untouched-a", "untouched-b"]
+
+
+async def test_the_disk_snapshot_is_taken_under_the_scan_lock(monkeypatch, tmp_path) -> None:
+    """Off the event loop, yes — but not out of the lock.
+
+    Indexing is a read-modify-write: the snapshot taken from disk is what gets
+    written. Take it outside ``_scan_lock`` and a pass that read early can win
+    the write over a pass that read late, leaving the index on a superseded
+    content hash while the newer landing sits on disk — and ``startup_scan``,
+    which still reads inside the lock, cannot repair what it never saw move.
+    Moving the walk to a worker thread is what made it easy to also move it out
+    of the lock; this pins the half that must not move.
+    """
+    import contextlib
+
+    from valuz_agent.infra.fs_registry import fs_registry
+    from valuz_agent.modules.skills import service as service_mod
+
+    root = tmp_path / "official-skills"
+    (root / "moved").mkdir(parents=True)
+    (root / "moved" / "SKILL.md").write_text(
+        "---\nname: moved\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(fs_registry, "official_skill_root", lambda *, user_id: root)
+    monkeypatch.setattr(fs_registry, "system_skill_roots", lambda: ())
+    monkeypatch.setattr(fs_registry, "user_skill_root", lambda *, user_id: root)
+
+    @contextlib.asynccontextmanager
+    async def uow(**_kwargs):  # noqa: ANN202
+        yield object()
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", uow)
+    monkeypatch.setattr(service_mod, "SkillDatastore", lambda db: object())
+
+    async def noop_index(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        return 0
+
+    monkeypatch.setattr(service_mod, "_index_manifests", noop_index)
+
+    locked_while_reading: list[bool] = []
+
+    def watch(source_cls):  # noqa: ANN001, ANN202
+        real = source_cls.list_skills
+
+        def spy(self, ctx, **kwargs):  # noqa: ANN001, ANN003, ANN202
+            locked_while_reading.append(service_mod._scan_lock.locked())
+            return real(self, ctx, **kwargs)
+
+        return spy
+
+    from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
+    from valuz_agent.integrations.skills_official import OfficialSkillSource
+
+    monkeypatch.setattr(OfficialSkillSource, "list_skills", watch(OfficialSkillSource))
+    monkeypatch.setattr(FilesystemSkillSource, "list_skills", watch(FilesystemSkillSource))
+
+    await service_mod.reindex_official_skills("owner-a", slugs={"moved"})
+    await service_mod.reindex_user_skills("owner-a")
+
+    assert locked_while_reading == [True, True], (
+        "a reindex read the skill tree without holding _scan_lock — a slower pass "
+        "can now overwrite a newer one's rows with an older content hash"
+    )
+    assert not service_mod._scan_lock.locked(), "the lock was not released"
