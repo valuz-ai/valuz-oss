@@ -117,6 +117,50 @@ class Settings(BaseSettings):
     # the launcher pins a custom port.
     backend_base_url: str = "http://127.0.0.1:8000"
 
+    # ── OAuth client identity for MCP connectors ─────────────────────
+    # Authorization servers that support OAuth *Client ID Metadata Documents*
+    # (MCP authorization spec; e.g. Binance Agent OS) accept an HTTPS URL as
+    # ``client_id`` and fetch the client's metadata from it instead of
+    # requiring dynamic registration or a pre-registered client. Point this
+    # at a PUBLICLY reachable copy of the document this backend serves at
+    # ``GET /v1/connectors/oauth/client-metadata`` (the value must equal that
+    # document's ``client_id`` exactly). Unset → such servers still need a
+    # registration endpoint or ``credentials.client_id``. Override with
+    # ``VALUZ_OAUTH_CLIENT_METADATA_URL``.
+    oauth_client_metadata_url: str | None = None
+    # Extra ``redirect_uris`` to list in the served document besides this
+    # backend's own ``{backend_base_url}/v1/connectors/oauth/callback`` — the
+    # public copy must cover every deployment whose callbacks it vouches for
+    # (desktop loopback, web). JSON list or comma-separated
+    # (``VALUZ_OAUTH_CLIENT_METADATA_REDIRECT_URIS``).
+    oauth_client_metadata_redirect_uris: Annotated[list[str], NoDecode] = []
+    oauth_client_name: str = "Valuz"
+    oauth_client_uri: str | None = None
+
+    @field_validator("oauth_client_metadata_redirect_uris", mode="before")
+    @classmethod
+    def _normalize_redirect_uris(cls, v: object) -> list[str]:
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            text = v.strip()
+            if text.startswith("["):
+                import json as _json
+
+                items: Iterable[object] = _json.loads(text)
+            else:
+                items = text.split(",")
+        elif isinstance(v, Iterable):
+            items = v
+        else:
+            items = (v,)
+        out: list[str] = []
+        for item in items:
+            uri = str(item).strip()
+            if uri and uri not in out:
+                out.append(uri)
+        return out
+
     # ── Global API prefix ────────────────────────────────────────────
     # Optional base path(s) prepended to the whole public HTTP surface — the
     # host's own routers, the overlay's ``module_registry`` routes, and the

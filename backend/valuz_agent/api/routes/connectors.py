@@ -9,8 +9,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,10 @@ from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.i18n import get_locale, get_request_locale, parse_accept_language
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.integrations.connector_oauth import (
+    build_client_metadata_document,
+    client_id_from_metadata_document,
+)
 from valuz_agent.integrations.mcp_http import mcp_request_headers
 from valuz_agent.modules.connectors.catalog import load_catalog
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
@@ -593,11 +597,24 @@ async def create_connector(
         client_secret: str | None = None
         client_info_json: str | None = None
 
-        # Resolve a client_id by sequential fallback: DCR → supplied → saved.
-        # If all three miss, a Client ID is REQUIRED — refuse the create
+        # Resolve a client_id: Client ID Metadata Document (when the server
+        # supports it and this deployment publishes one) → DCR → supplied →
+        # saved. If all miss, a Client ID is REQUIRED — refuse the create
         # loudly with 422 instead of silently proceeding as a public PKCE
         # client (which fails at most servers and used to mask the gap).
-        if oauth_meta.registration_endpoint:
+        cimd_client_id = client_id_from_metadata_document(
+            oauth_meta, _settings.oauth_client_metadata_url
+        )
+        if cimd_client_id:
+            client_id = cimd_client_id
+            client_secret = None
+            client_info_json = json.dumps(
+                {"client_id": client_id, "client_id_metadata_document": True}
+            )
+            helper.client_id = client_id
+            helper.client_secret = None
+
+        if client_id is None and oauth_meta.registration_endpoint:
             try:
                 client_info = await helper.register_client([redirect_uri])
                 client_id = client_info.client_id
@@ -631,6 +648,14 @@ async def create_connector(
                     "client_id was supplied or previously saved. Provide "
                     "credentials.client_id (and credentials.client_secret if "
                     "applicable)."
+                    + (
+                        " This server accepts OAuth Client ID Metadata Documents: "
+                        "publish this backend's /v1/connectors/oauth/client-metadata "
+                        "at a public HTTPS URL and set VALUZ_OAUTH_CLIENT_METADATA_URL "
+                        "to it."
+                        if oauth_meta.client_id_metadata_document_supported
+                        else ""
+                    )
                 ),
             )
 
@@ -932,6 +957,30 @@ async def list_recommended(
 # ---------------------------------------------------------------------------
 # OAuth install flow
 # ---------------------------------------------------------------------------
+
+
+@router.get("/oauth/client-metadata")
+async def oauth_client_metadata(request: Request) -> JSONResponse:
+    """This deployment's OAuth Client ID Metadata Document (public, no auth).
+
+    Authorization servers that support Client ID Metadata Documents fetch it
+    from the URL used as ``client_id`` (``settings.oauth_client_metadata_url``)
+    and validate the authorization request's ``redirect_uri`` against
+    ``redirect_uris``. It therefore lists this backend's own callback plus
+    every extra callback configured for the deployments the public copy
+    vouches for. Unauthenticated: the authorization server is the reader.
+    """
+    from valuz_agent.infra.config import settings as _settings
+
+    own_callback = f"{_settings.backend_base_url}/v1/connectors/oauth/callback"
+    client_id = _settings.oauth_client_metadata_url or str(request.url).split("?", 1)[0]
+    doc = build_client_metadata_document(
+        client_id=client_id,
+        client_name=_settings.oauth_client_name,
+        client_uri=_settings.oauth_client_uri,
+        redirect_uris=[own_callback, *_settings.oauth_client_metadata_redirect_uris],
+    )
+    return JSONResponse(doc, headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.get("/oauth/callback", response_class=HTMLResponse)
