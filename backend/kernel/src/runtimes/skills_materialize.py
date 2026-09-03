@@ -197,7 +197,40 @@ def _spec_entry_name(src: str) -> str | None:
     return None
 
 
+def _expand_skill_roots(skills: list[str]) -> list[str]:
+    """Replace a skills ROOT with the skill directories it holds.
+
+    A source is one skill (``<dir>/SKILL.md``). Callers sometimes pass the
+    directory that *contains* skills instead (``/harbor/skills``); linked
+    as-is it lands at ``<skills_root>/skills/<name>/SKILL.md``, one level
+    deeper than every consumer looks — deepagents and Codex list only the
+    immediate children of the skills root, so such a skill never reaches
+    the system prompt. Expanding the root keeps the paths honest. A
+    directory with neither its own SKILL.md nor skill children is left
+    alone (linked as before).
+    """
+    expanded: list[str] = []
+    for src in skills:
+        if os.path.isdir(src) and not os.path.isfile(os.path.join(src, "SKILL.md")):
+            children = sorted(
+                os.path.join(src, name)
+                for name in os.listdir(src)
+                if os.path.isfile(os.path.join(src, name, "SKILL.md"))
+            )
+            if children:
+                logger.info(
+                    "skills: %s is a skills root; materializing its %d skill(s) directly",
+                    src,
+                    len(children),
+                )
+                expanded.extend(children)
+                continue
+        expanded.append(src)
+    return expanded
+
+
 def _materialize(plan: _Plan, skills: list[str]) -> str:
+    skills = _expand_skill_roots(skills)
     os.makedirs(plan.skills_root, exist_ok=True)
 
     previous = _read_manifest(plan.manifest_path)
