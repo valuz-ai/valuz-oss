@@ -28,6 +28,17 @@ Of course, you should always be flexible and if the user is like "I don't need t
 
 Then after the skill is done (but again, the order is flexible), you can also run the skill description improver, which we have a whole separate script for, to optimize the triggering of the skill.
 
+Two things about this host are worth knowing before you write a single file,
+because getting them wrong is silent rather than loud:
+
+- **You write into `./.skill-staging/{slug}/` and nowhere else.** Not `/tmp`,
+  not the installed skill's directory — you do not have that path.
+- **The user saves it, not you.** You call `submit_skill`; a card appears; they
+  accept. Until they do, nothing has been saved.
+
+Both are spelled out under "Where to write the skill (Valuz host)". Read that
+section before the first write, not after the first failure.
+
 Cool? Cool.
 
 ## Communicating with the user
