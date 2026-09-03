@@ -1763,9 +1763,12 @@ export const Composer = ({
                         {/* Narrow enough to sit under the toggle; the tip
                             wraps onto a second line instead of running the
                             width of the composer. ``text-wrap`` overrides the
-                            base ``text-balance`` so lines break naturally. */}
+                            base ``text-balance`` so lines break naturally.
+                            ``sideOffset`` lifts it off the icon (the base
+                            tooltip sits flush at 0). */}
                         <TooltipContent
                           side="bottom"
+                          sideOffset={6}
                           className="max-w-64 whitespace-normal text-left text-wrap"
                         >
                           {tip}
@@ -1793,7 +1796,7 @@ export const Composer = ({
                       </button>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">
+                  <TooltipContent side="bottom" sideOffset={6}>
                     {t("conversation.composerPlusTooltip")}
                   </TooltipContent>
                 </Tooltip>
