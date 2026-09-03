@@ -114,7 +114,17 @@ export interface ConversationTokenUsage {
 }
 
 export interface ConversationTurn {
+  /** Render identity — unique per turn by construction, and stable across
+   * the live → persisted transition. Derived from the ``user_message``
+   * EVENT (its ``event_uid``), never from the Message: a turn that failed
+   * before the kernel accepted it has no Message of its own, so anything
+   * message-derived is either absent or borrowed from a neighbour. Use
+   * ``messageId`` when you actually need the Message. */
   id: string;
+  /** The kernel Message this turn's user input was recorded under, or
+   * ``null`` when the event carried none. Callers that address a Message
+   * (fork-from-here) read this; nothing should parse it out of ``id``. */
+  messageId?: string | null;
   /** Seq of the user_message event this turn was built from. ``0`` for
    * live broadcast frames not yet persisted to the events DB; the
    * persisted copy arrives later with a real seq. The dedup logic in
