@@ -1760,7 +1760,16 @@ export const Composer = ({
                             </span>
                           </button>
                         </TooltipTrigger>
-                        <TooltipContent side="bottom">{tip}</TooltipContent>
+                        {/* Narrow enough to sit under the toggle; the tip
+                            wraps onto a second line instead of running the
+                            width of the composer. ``text-wrap`` overrides the
+                            base ``text-balance`` so lines break naturally. */}
+                        <TooltipContent
+                          side="bottom"
+                          className="max-w-64 whitespace-normal text-left text-wrap"
+                        >
+                          {tip}
+                        </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   );
