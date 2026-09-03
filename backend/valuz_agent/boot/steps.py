@@ -401,7 +401,9 @@ async def init_kernel(app: FastAPI) -> None:
     # submit_skill. The lead gate stays enforced inside each handler.
     from valuz_agent.integrations.toolkit_mcp_server import install_toolkit_toolsets
     from valuz_agent.integrations.tools_agent_proposal import build_agent_proposal_tool_defs
+    from valuz_agent.integrations.tools_plugin import build_plugin_tool_defs
     from valuz_agent.integrations.tools_skill_creator import build_submit_skill_tool_defs
+    from valuz_agent.integrations.tools_skill_library import build_skill_library_tool_defs
     from valuz_agent.modules.browser import service as browser_service
     from valuz_agent.modules.browser.tools import build_browser_tool_defs
     from valuz_agent.modules.citations.calculation_tool import (
@@ -409,7 +411,10 @@ async def init_kernel(app: FastAPI) -> None:
     )
     from valuz_agent.modules.genui.tools import build_generative_ui_tool_defs
     from valuz_agent.modules.memory.tools import build_memory_tool_defs
-    from valuz_agent.modules.projects.tools import build_project_instructions_tool_defs
+    from valuz_agent.modules.projects.tools import (
+        build_project_instructions_tool_defs,
+        build_project_tool_defs,
+    )
     from valuz_agent.modules.sessions.artifacts_tool import build_deliver_artifacts_tool_defs
     from valuz_agent.modules.tasks.orchestrator import task_orchestrator
     from valuz_agent.modules.tasks.tools.declarations import (
@@ -427,6 +432,10 @@ async def init_kernel(app: FastAPI) -> None:
         + build_project_instructions_tool_defs()
         + build_submit_skill_tool_defs()
         + build_agent_proposal_tool_defs()
+        # Entity management (agent/UI parity): projects, skill library, plugins.
+        + build_project_tool_defs()
+        + build_skill_library_tool_defs()
+        + build_plugin_tool_defs()
         + build_deliver_artifacts_tool_defs()
         + build_citation_calculation_tool_defs()
         + build_generative_ui_tool_defs()
