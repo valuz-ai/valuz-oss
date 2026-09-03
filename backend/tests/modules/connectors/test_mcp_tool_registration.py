@@ -14,7 +14,19 @@ import asyncio
 
 import valuz_agent.integrations.connectors_mcp_server as m
 
-_EXPECTED = {"create_mcp", "list_connected_mcp", "list_recommended_mcp"}
+_EXPECTED = {
+    "create_mcp",
+    "list_connected_mcp",
+    "list_recommended_mcp",
+    # Management tools — the Connectors page operations, for the agent.
+    "list_mcp",
+    "get_mcp",
+    "update_mcp",
+    "delete_mcp",
+    "enable_mcp",
+    "disable_mcp",
+    "test_mcp",
+}
 
 
 def _registered_tool_names() -> set[str]:
