@@ -52,6 +52,7 @@ from typing import Any
 # the kernel package fails to resolve when this module is imported during
 # app startup.
 import valuz_agent.boot.kernel  # noqa: F401
+from valuz_agent.integrations.tools_entity_common import dump
 
 from src.core.tools import ExecContext, ToolDef, ToolResult
 
@@ -1010,6 +1011,217 @@ def _err(message: str) -> ToolResult:
     return ToolResult(content=message, is_error=True)
 
 
+# ---------------------------------------------------------------------------
+# Library management — the Agents page's remaining operations (delete, copy,
+# undeploy, inspect), so the agent can finish them in the conversation
+# (agent/UI parity). Rules mirror api/routes/agents.py.
+# ---------------------------------------------------------------------------
+
+GET_AGENT_TOOL_NAME = "get_agent"
+GET_AGENT_DESCRIPTION = (
+    "Inspect one library agent: its definition, where it is deployed, and the "
+    "resources it effectively gets (skills, connectors, knowledge bases). Use "
+    "before update_agent / delete_agent."
+)
+GET_AGENT_PARAMETERS: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "agent_slug": {"type": "string", "description": "Library agent slug (from list_agents)."}
+    },
+    "required": ["agent_slug"],
+}
+
+COPY_AGENT_TOOL_NAME = "copy_agent"
+COPY_AGENT_DESCRIPTION = (
+    "Duplicate a library agent as a new, independent agent (the Agents page's "
+    "copy). Optional `name` / `slug` for the copy; defaults derive from the "
+    "source. The copy is NOT deployed anywhere — use deploy_agent afterwards."
+)
+COPY_AGENT_PARAMETERS: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "agent_slug": {"type": "string", "description": "Slug of the agent to copy."},
+        "name": {"type": "string", "description": "Display name for the copy (optional)."},
+        "slug": {"type": "string", "description": "Slug for the copy (optional)."},
+    },
+    "required": ["agent_slug"],
+}
+
+DELETE_AGENT_TOOL_NAME = "delete_agent"
+DELETE_AGENT_DESCRIPTION = (
+    "Delete a library agent permanently (the Agents page's delete). Refused "
+    "while it is still deployed in any project unless `cascade` is true, which "
+    "first removes every deployment. Protected built-in agents cannot be "
+    "deleted. Irreversible — confirm with the user first."
+)
+DELETE_AGENT_PARAMETERS: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "agent_slug": {"type": "string", "description": "Slug of the agent to delete."},
+        "cascade": {
+            "type": "boolean",
+            "description": "Also remove the agent from every project it is deployed in.",
+        },
+    },
+    "required": ["agent_slug"],
+}
+
+UNDEPLOY_AGENT_TOOL_NAME = "undeploy_agent"
+UNDEPLOY_AGENT_DESCRIPTION = (
+    "Remove an agent from THIS project's team (the project page's remove "
+    "member). `agent_slug` is the project-local member handle (see "
+    "list_project_members). The library agent itself is kept. If it was the "
+    "default lead, the default is cleared."
+)
+UNDEPLOY_AGENT_PARAMETERS: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "agent_slug": {"type": "string", "description": "Member handle in THIS project."}
+    },
+    "required": ["agent_slug"],
+}
+
+
+async def _get_agent_handler(args: dict[str, Any], context: ExecContext) -> ToolResult:
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.agents.service import AgentNotFoundError, AgentService
+
+    slug = str(args.get("agent_slug") or "").strip()
+    if not slug:
+        return _err("get_agent: 'agent_slug' is required")
+    user_id = context.user_id
+    try:
+        async with async_unit_of_work(commit=False) as db:
+            svc = AgentService(db)
+            row = await svc.get_agent(user_id, slug)
+            deployments = await svc.list_deployments(user_id, slug)
+            resources = await svc.resolve_effective_resources(user_id, slug)
+    except AgentNotFoundError:
+        return _err(f"get_agent: agent '{slug}' not found")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_agent failed")
+        return _err(f"get_agent failed: {exc}")
+    return ToolResult(
+        content=json.dumps(
+            {
+                "ok": True,
+                "agent": dump(row),
+                "deployments": dump(deployments),
+                "effective_resources": resources.to_api()
+                if hasattr(resources, "to_api")
+                else dump(resources),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+async def _copy_agent_handler(args: dict[str, Any], context: ExecContext) -> ToolResult:
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.agents.service import (
+        AgentNotFoundError,
+        AgentService,
+        InvalidAgentSlugError,
+    )
+
+    slug = str(args.get("agent_slug") or "").strip()
+    if not slug:
+        return _err("copy_agent: 'agent_slug' is required")
+    name = str(args.get("name") or "").strip() or None
+    new_slug = str(args.get("slug") or "").strip() or None
+    user_id = context.user_id
+    try:
+        async with async_unit_of_work() as db:
+            row = await AgentService(db).copy_agent(user_id, slug, name=name, new_slug=new_slug)
+    except AgentNotFoundError:
+        return _err(f"copy_agent: agent '{slug}' not found")
+    except InvalidAgentSlugError as exc:
+        return _err(f"copy_agent: {exc}")
+    except ValueError as exc:
+        return _err(f"copy_agent: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("copy_agent failed")
+        return _err(f"copy_agent failed: {exc}")
+    return ToolResult(
+        content=json.dumps(
+            {
+                "ok": True,
+                "agent": dump(row),
+                "next_step": "The copy is in the library only; deploy_agent adds it to a project.",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+async def _delete_agent_handler(args: dict[str, Any], context: ExecContext) -> ToolResult:
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.agents.service import (
+        AgentNotDeletableError,
+        AgentNotFoundError,
+        AgentService,
+        AgentStillDeployedError,
+    )
+
+    slug = str(args.get("agent_slug") or "").strip()
+    if not slug:
+        return _err("delete_agent: 'agent_slug' is required")
+    cascade = bool(args.get("cascade", False))
+    user_id = context.user_id
+    try:
+        async with async_unit_of_work() as db:
+            await AgentService(db).delete_agent(user_id, slug, cascade=cascade)
+    except AgentNotFoundError:
+        return _err(f"delete_agent: agent '{slug}' not found")
+    except AgentStillDeployedError as exc:
+        return _err(
+            f"delete_agent: '{slug}' is still deployed ({exc}); pass cascade=true to remove "
+            "it from every project first, after confirming with the user"
+        )
+    except AgentNotDeletableError as exc:
+        return _err(f"delete_agent: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("delete_agent failed")
+        return _err(f"delete_agent failed: {exc}")
+    return ToolResult(
+        content=json.dumps({"ok": True, "deleted": slug, "cascade": cascade}, ensure_ascii=False)
+    )
+
+
+async def _undeploy_agent_handler(args: dict[str, Any], context: ExecContext) -> ToolResult:
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.agents.service import AgentService, MemberNotFoundError
+    from valuz_agent.modules.projects.service import clear_default_lead_if
+
+    slug = str(args.get("agent_slug") or "").strip()
+    if not slug:
+        return _err("undeploy_agent: 'agent_slug' is required")
+    project_id = await _resolve_project_id(context.session_id, context.user_id)
+    if not project_id:
+        return _err(
+            "undeploy_agent: this session has no project — members can only be removed "
+            "inside a project conversation"
+        )
+    user_id = context.user_id
+    try:
+        async with async_unit_of_work() as db:
+            await AgentService(db).delete_member(user_id, project_id, slug)
+        try:
+            await clear_default_lead_if(user_id, project_id, slug)
+        except Exception:  # noqa: BLE001 — best effort, like the route
+            logger.warning("undeploy_agent: clearing default lead failed", exc_info=True)
+    except MemberNotFoundError:
+        return _err(f"undeploy_agent: '{slug}' is not a member of this project")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("undeploy_agent failed")
+        return _err(f"undeploy_agent failed: {exc}")
+    return ToolResult(
+        content=json.dumps(
+            {"ok": True, "undeployed": slug, "project_id": project_id}, ensure_ascii=False
+        )
+    )
+
+
 def build_agent_proposal_tool_defs() -> tuple[ToolDef, ...]:
     """Return the agent-creation toolset for the host toolkit MCP:
     propose_agent (create new, with confirm card) + update_agent (edit an
@@ -1063,6 +1275,34 @@ def build_agent_proposal_tool_defs() -> tuple[ToolDef, ...]:
             description=DEPLOY_AGENT_DESCRIPTION,
             parameters=DEPLOY_AGENT_PARAMETERS,
             handler=_deploy_agent_handler,
+            read_only=False,
+        ),
+        ToolDef(
+            name=GET_AGENT_TOOL_NAME,
+            description=GET_AGENT_DESCRIPTION,
+            parameters=GET_AGENT_PARAMETERS,
+            handler=_get_agent_handler,
+            read_only=True,
+        ),
+        ToolDef(
+            name=COPY_AGENT_TOOL_NAME,
+            description=COPY_AGENT_DESCRIPTION,
+            parameters=COPY_AGENT_PARAMETERS,
+            handler=_copy_agent_handler,
+            read_only=False,
+        ),
+        ToolDef(
+            name=DELETE_AGENT_TOOL_NAME,
+            description=DELETE_AGENT_DESCRIPTION,
+            parameters=DELETE_AGENT_PARAMETERS,
+            handler=_delete_agent_handler,
+            read_only=False,
+        ),
+        ToolDef(
+            name=UNDEPLOY_AGENT_TOOL_NAME,
+            description=UNDEPLOY_AGENT_DESCRIPTION,
+            parameters=UNDEPLOY_AGENT_PARAMETERS,
+            handler=_undeploy_agent_handler,
             read_only=False,
         ),
     )
