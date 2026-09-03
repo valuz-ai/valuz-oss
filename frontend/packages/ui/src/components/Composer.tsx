@@ -2098,7 +2098,7 @@ export const Composer = ({
                     <TooltipProvider delayDuration={150}>
                       <Tooltip>
                         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-                        <TooltipContent side="top">
+                        <TooltipContent side="top" sideOffset={6}>
                           {t("conversation.permissionLockedHint")}
                         </TooltipContent>
                       </Tooltip>
@@ -2169,7 +2169,7 @@ export const Composer = ({
                                 <TooltipTrigger asChild>
                                   <span className="block">{button}</span>
                                 </TooltipTrigger>
-                                <TooltipContent side="right">
+                                <TooltipContent side="right" sideOffset={6}>
                                   {t("conversation.runtimeNoAutoReview")}
                                 </TooltipContent>
                               </Tooltip>
@@ -2203,7 +2203,7 @@ export const Composer = ({
                       <X className="block h-3 w-3 shrink-0" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="top">
+                  <TooltipContent side="top" sideOffset={6}>
                     {t("composer.planChipTooltip" as Parameters<typeof t>[0])}
                   </TooltipContent>
                 </Tooltip>
@@ -2235,7 +2235,7 @@ export const Composer = ({
                       </span>
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="top">
+                  <TooltipContent side="top" sideOffset={6}>
                     {worktree.enabled
                       ? t("conversation.worktreeToggleOnHint")
                       : t("conversation.worktreeToggleOffHint")}
@@ -3036,7 +3036,7 @@ export const Composer = ({
                           <TooltipTrigger asChild>
                             <span className="inline-flex">{trigger}</span>
                           </TooltipTrigger>
-                          <TooltipContent side="top">
+                          <TooltipContent side="top" sideOffset={6}>
                             {t("conversation.runtimeLocked")}
                           </TooltipContent>
                         </Tooltip>
@@ -3094,7 +3094,7 @@ export const Composer = ({
                               <TooltipTrigger asChild>
                                 <span className="block">{button}</span>
                               </TooltipTrigger>
-                              <TooltipContent side="left">
+                              <TooltipContent side="left" sideOffset={6}>
                                 {rt.unavailableReason}
                               </TooltipContent>
                             </Tooltip>
@@ -3156,7 +3156,7 @@ export const Composer = ({
                           <TooltipTrigger asChild>
                             <span className="inline-flex">{trigger}</span>
                           </TooltipTrigger>
-                          <TooltipContent side="top">
+                          <TooltipContent side="top" sideOffset={6}>
                             {t("conversation.modelLocked")}
                           </TooltipContent>
                         </Tooltip>
