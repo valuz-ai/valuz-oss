@@ -1,7 +1,10 @@
-"""In-process MCP server exposing the ``create_mcp`` tool.
+"""In-process MCP server exposing the connector tools.
 
-Lets the agent create a connector on behalf of the user during a session.
-After creation the user must go to the Connectors page to authorize/connect.
+``create_mcp`` lets the agent create a connector on behalf of the user during
+a session; ``list_mcp`` / ``get_mcp`` / ``update_mcp`` / ``delete_mcp`` /
+``enable_mcp`` / ``disable_mcp`` / ``test_mcp`` cover the operations of the
+Connectors page, so an existing connector can be fixed, switched or removed
+from the conversation. OAuth authorization still happens in the browser.
 
 Wire shape::
 
@@ -16,8 +19,8 @@ Wire shape::
 from __future__ import annotations
 
 import json
-import shlex
 import logging
+import shlex
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -328,6 +331,325 @@ def _as_env(raw: dict[str, str] | str | None) -> dict[str, str] | None:
     return {str(k): str(v) for k, v in data.items()}
 
 
+def _cred_list(raw: str | None) -> list[Any]:
+    """Accept either a flat ``{name: value}`` object (all plaintext —
+    agent-ergonomic) or a ``[{key, secret?, value}]`` list (per-entry
+    secret). Translated here to the connector object-list contract."""
+    from valuz_agent.api.routes.connectors import HeaderParam
+
+    if not raw:
+        return []
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        return [HeaderParam(key=str(k), secret=False, value=str(v)) for k, v in data.items()]
+    out: list[Any] = []
+    for it in data or []:
+        if isinstance(it, dict) and it.get("key"):
+            out.append(
+                HeaderParam(
+                    key=str(it["key"]),
+                    secret=bool(it.get("secret", False)),
+                    value=it.get("value"),
+                )
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Managing existing connectors — the same operations the Connectors page
+# offers (edit / delete / enable / disable / test), so the agent can finish
+# the job in the conversation instead of sending the user to Settings. The
+# owner is resolved from the MCP session; ``connector_id`` comes from
+# ``list_mcp`` or ``create_mcp``.
+# ---------------------------------------------------------------------------
+
+_LOCKED_RECOMMENDED_STDIO = (
+    "Recommended stdio connector: only ``env`` can be edited; command/args/"
+    "identity fields are managed by the catalog entry."
+)
+
+_UPDATE_DESCRIPTION = """Edit an existing MCP connector (same rules as the Connectors page).
+
+Call get_mcp first: it returns the current configuration, env included, so
+you change only what the user asked for. Every parameter is optional; an
+omitted parameter is left untouched.
+
+- display_name / description / url / auth_type: identity and endpoint.
+- command / args / working_dir: stdio launch. args is an ARRAY of strings.
+- env: an OBJECT of string values ({"API_KEY": "abc"}); it REPLACES the
+  connector's env, so pass the full set the user wants to keep.
+- headers / params: JSON, {"Name":"value"} or [{"key","secret","value"}].
+
+A recommended stdio connector (installed by slug) is catalog-owned: only
+``env`` can be changed. Changing connection parameters re-tests the
+connector; the result is returned under ``probe``.
+
+Returns JSON with ok, connector (the updated configuration) and probe."""
+
+
+def _creds_json(items: list[Any] | None) -> list[dict[str, Any]]:
+    """``[{key, secret, value}]`` — a secret value is never returned."""
+    return [
+        {"key": c.key, "secret": bool(c.secret), "value": None if c.secret else c.value}
+        for c in items or []
+    ]
+
+
+def _view_json(view: Any) -> dict[str, Any]:
+    """The editable configuration of a connector, env included, so an edit
+    can start from the current state. Secret values are masked."""
+    return {
+        "id": view.id,
+        "slug": view.slug,
+        "display_name": view.display_name,
+        "description": view.description,
+        "connector_type": view.connector_type,
+        "transport": view.transport,
+        "url": view.url,
+        "auth_type": view.auth_type,
+        "command": view.command,
+        "args": list(view.args or []),
+        "working_dir": view.working_dir,
+        "env": _creds_json(view.env),
+        "headers": _creds_json(view.headers),
+        "params": _creds_json(view.params),
+        "enabled": view.enabled,
+        "status": view.status,
+        "tool_count": view.tool_count,
+        "error_message": view.error_message,
+    }
+
+
+def _error(message: str, **extra: Any) -> str:
+    return json.dumps({"ok": False, "error": message, **extra}, ensure_ascii=False)
+
+
+@_mcp.tool(
+    description=(
+        "List every MCP connector the user has, whatever its status, with id, "
+        "transport, enabled flag and status. Use it to find the connector_id for "
+        "get_mcp / update_mcp / delete_mcp / enable_mcp / disable_mcp / test_mcp."
+    )
+)
+async def list_mcp() -> str:
+    """Return a JSON list of all connectors."""
+    try:
+        from valuz_agent.infra.db import async_unit_of_work
+
+        async with async_unit_of_work(commit=False) as db:
+            svc = _make_connector_service(db)
+            user_id = _current_user_id()
+            connectors = [
+                {
+                    "id": v.id,
+                    "slug": v.slug,
+                    "display_name": v.display_name,
+                    "connector_type": v.connector_type,
+                    "transport": v.transport,
+                    "enabled": v.enabled,
+                    "status": v.status,
+                    "error_message": v.error_message,
+                }
+                for v in await svc.list_connectors(user_id)
+            ]
+        return json.dumps({"ok": True, "connectors": connectors}, ensure_ascii=False)
+    except Exception as exc:
+        logger.exception("list_mcp failed")
+        return _error(str(exc))
+
+
+@_mcp.tool(
+    description=(
+        "Show one connector's current configuration — url, command, args, "
+        "working_dir, env, headers, params (secret values masked), enabled flag "
+        "and status. Call it before update_mcp."
+    )
+)
+async def get_mcp(connector_id: str) -> str:
+    """Return the connector's editable configuration as JSON."""
+    try:
+        from valuz_agent.infra.db import async_unit_of_work
+
+        async with async_unit_of_work(commit=False) as db:
+            svc = _make_connector_service(db)
+            view = await svc.get_connector(_current_user_id(), connector_id)
+        if view is None:
+            return _error("Connector not found")
+        return json.dumps({"ok": True, "connector": _view_json(view)}, ensure_ascii=False)
+    except Exception as exc:
+        logger.exception("get_mcp failed")
+        return _error(str(exc))
+
+
+@_mcp.tool(description=_UPDATE_DESCRIPTION)
+async def update_mcp(
+    connector_id: str,
+    display_name: str | None = None,
+    description: str | None = None,
+    url: str | None = None,
+    auth_type: AuthType | None = None,
+    command: str | None = None,
+    args: list[str] | None = None,
+    working_dir: str | None = None,
+    env: dict[str, str] | None = None,
+    headers: str | None = None,  # JSON: {name:value} OR [{key,secret,value}]
+    params: str | None = None,  # JSON: {name:value} OR [{key,secret,value}]
+) -> str:
+    """Update a connector and return the new configuration (plus a probe)."""
+    try:
+        from valuz_agent.api.routes.connectors import (
+            _catalog_field_specs,
+            _probe_connector,
+            _to_cred_entries,
+        )
+        from valuz_agent.infra.db import async_unit_of_work
+
+        parsed_args = _as_args(args)
+        parsed_env = _as_env(env)
+        parsed_headers = _cred_list(headers) if headers else None
+        parsed_params = _cred_list(params) if params else None
+
+        async with async_unit_of_work() as db:
+            svc = _make_connector_service(db)
+            user_id = _current_user_id()
+            existing = await svc.get_connector(user_id, connector_id)
+            if existing is None:
+                return _error("Connector not found")
+            # Mirrors the PATCH route: a recommended stdio connector is
+            # catalog-owned, only its env (user runtime parameters) is mutable.
+            if existing.connector_type == "recommended" and existing.transport == "stdio":
+                locked = (
+                    display_name,
+                    description,
+                    url,
+                    auth_type,
+                    parsed_headers,
+                    parsed_params,
+                    command,
+                    parsed_args,
+                    working_dir,
+                )
+                if any(v is not None for v in locked):
+                    return _error(_LOCKED_RECOMMENDED_STDIO)
+            view = await svc.update_connector(
+                user_id,
+                connector_id,
+                display_name=display_name,
+                description=description,
+                url=url,
+                auth_type=auth_type,
+                headers=_to_cred_entries(parsed_headers),
+                params=_to_cred_entries(parsed_params),
+                catalog_fields=_catalog_field_specs(existing.slug),
+                command=command,
+                args=parsed_args,
+                working_dir=working_dir,
+                env=parsed_env,
+            )
+            if view is None:
+                return _error("Connector not found")
+            probe: dict[str, Any] | None = None
+            if view.status == "connecting":
+                # Connection parameters changed: re-test now (the page does
+                # this in the background) so the agent can report the result.
+                probe = (await _probe_connector(view.id, svc, user_id)).model_dump()
+                view = await svc.get_connector(user_id, connector_id) or view
+        return json.dumps(
+            {"ok": True, "connector": _view_json(view), "probe": probe}, ensure_ascii=False
+        )
+    except Exception as exc:
+        logger.exception("update_mcp failed")
+        return _error(str(exc))
+
+
+@_mcp.tool(
+    description=(
+        "Delete a custom or recommended MCP connector (its credentials go with "
+        "it). Builtin connectors cannot be deleted — use disable_mcp for those."
+    )
+)
+async def delete_mcp(connector_id: str) -> str:
+    """Delete a connector."""
+    try:
+        from valuz_agent.infra.db import async_unit_of_work
+
+        async with async_unit_of_work() as db:
+            svc = _make_connector_service(db)
+            ok = await svc.delete_connector(_current_user_id(), connector_id)
+        if not ok:
+            return _error(
+                "Connector not found or cannot be deleted (builtin connectors can only be disabled)"
+            )
+        return json.dumps({"ok": True, "connector_id": connector_id})
+    except Exception as exc:
+        logger.exception("delete_mcp failed")
+        return _error(str(exc))
+
+
+async def _set_enabled(connector_id: str, *, enabled: bool) -> str:
+    from valuz_agent.infra.db import async_unit_of_work
+
+    async with async_unit_of_work() as db:
+        svc = _make_connector_service(db)
+        view = await svc.set_enabled(_current_user_id(), connector_id, enabled=enabled)
+    if view is None:
+        return _error("Connector not found")
+    return json.dumps({"ok": True, "connector": _view_json(view)}, ensure_ascii=False)
+
+
+@_mcp.tool(
+    description=(
+        "Enable (connect) an MCP connector so its tools are available to agents "
+        "— the 'connect' switch on the Connectors page."
+    )
+)
+async def enable_mcp(connector_id: str) -> str:
+    """Enable a connector."""
+    try:
+        return await _set_enabled(connector_id, enabled=True)
+    except Exception as exc:
+        logger.exception("enable_mcp failed")
+        return _error(str(exc))
+
+
+@_mcp.tool(
+    description=(
+        "Disable (disconnect) an MCP connector without deleting it or its "
+        "credentials — the 'disconnect' switch on the Connectors page. This is "
+        "also how a builtin connector is turned off."
+    )
+)
+async def disable_mcp(connector_id: str) -> str:
+    """Disable a connector."""
+    try:
+        return await _set_enabled(connector_id, enabled=False)
+    except Exception as exc:
+        logger.exception("disable_mcp failed")
+        return _error(str(exc))
+
+
+@_mcp.tool(
+    description=(
+        "Test an MCP connector now (the 'Test' button on the Connectors page): "
+        "connects, lists its tools and records the result. Returns ok, "
+        "tool_count, tools and error."
+    )
+)
+async def test_mcp(connector_id: str) -> str:
+    """Probe a connector and persist the outcome."""
+    try:
+        from valuz_agent.api.routes.connectors import _probe_connector
+        from valuz_agent.infra.db import async_unit_of_work
+
+        async with async_unit_of_work() as db:
+            svc = _make_connector_service(db)
+            result = await _probe_connector(connector_id, svc, _current_user_id())
+        return json.dumps({"connector_id": connector_id, **result.model_dump()}, ensure_ascii=False)
+    except Exception as exc:
+        logger.exception("test_mcp failed")
+        return _error(str(exc))
+
+
 async def _invoke(
     *,
     display_name: str | None,
@@ -356,27 +678,6 @@ async def _invoke(
         create_connector,
     )
     from valuz_agent.infra.db import async_unit_of_work
-
-    def _cred_list(raw: str | None) -> list[HeaderParam]:
-        """Accept either a flat ``{name: value}`` object (all plaintext —
-        agent-ergonomic) or a ``[{key, secret?, value}]`` list (per-entry
-        secret). Translated here to the connector object-list contract."""
-        if not raw:
-            return []
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return [HeaderParam(key=str(k), secret=False, value=str(v)) for k, v in data.items()]
-        out: list[HeaderParam] = []
-        for it in data or []:
-            if isinstance(it, dict) and it.get("key"):
-                out.append(
-                    HeaderParam(
-                        key=str(it["key"]),
-                        secret=bool(it.get("secret", False)),
-                        value=it.get("value"),
-                    )
-                )
-        return out
 
     # ``bearer_token`` is translated below into an explicit secret entry —
     # an Authorization header for custom connectors, or the recommended
