@@ -27,6 +27,7 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "set_mode": ("POST", "/kernel/v1/sessions/{session_id}/mode"),
     "finalize_session": ("POST", "/kernel/v1/sessions/{session_id}/finalize"),
     "append_event": ("POST", "/kernel/v1/sessions/{session_id}/events"),
+    "record_unstarted_turn": ("POST", "/kernel/v1/sessions/{session_id}/unstarted-turn"),
     "emit_live_event": ("POST", "/kernel/v1/sessions/{session_id}/events"),  # ?live_only=true
     "get_events": ("GET", "/kernel/v1/sessions/{session_id}/events"),
     "get_events_window": ("GET", "/kernel/v1/sessions/{session_id}/events/window"),

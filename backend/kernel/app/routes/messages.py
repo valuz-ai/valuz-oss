@@ -19,12 +19,15 @@ from app.schemas import (
     MessageData,
     MessageListResponse,
     MessageResponse,
+    RecordUnstartedTurnData,
+    RecordUnstartedTurnRequest,
+    RecordUnstartedTurnResponse,
     StopReasonSchema,
     TodoItem,
     UserMessageSchema,
 )
 from fastapi import APIRouter, Depends, HTTPException, Query
-from src.core import Event, Message, StorePort, UserMessage
+from src.core import Attachment, Event, Message, StorePort, UserMessage
 from src.core.types import now_ms
 
 router = APIRouter(tags=["messages"])
@@ -192,6 +195,77 @@ async def import_canonical_message(
             create_bus=True,
         )
     return {"data": _message_to_data(imported)}
+
+
+@router.post(
+    f"{KERNEL_API_PREFIX}/v1/sessions/{{session_id}}/unstarted-turn",
+    status_code=201,
+    response_model=RecordUnstartedTurnResponse,
+)
+async def record_unstarted_turn(
+    session_id: str,
+    body: RecordUnstartedTurnRequest,
+    store: StoreDep,
+    owner: OwnerDep,
+) -> dict[str, Any]:
+    """Open a turn for user input the kernel never got to run.
+
+    The upstream's pre-flight (sandbox allocation, overlay runtime context)
+    runs before ``run_turn``, so a failure there leaves the kernel with no
+    Message and no event bracket — and the client, which rebuilds the
+    transcript purely from events, with a failure that has no turn to attach
+    to. This mints the missing anchor: a fresh ``errored`` Message plus the
+    ``user_message`` event that opens it.
+
+    A fresh Message is the whole point. ``POST /sessions/{id}/events`` anchors
+    onto the session's most recent message, which here is the PREVIOUS turn's
+    — both turns then share one ``message_id``, and a client that keys a turn
+    by it collapses them into one.
+
+    The subsequent ``finalize`` writes its ``error_event`` onto the session's
+    most recent message, which is now this one, so the failure lands in the
+    turn it belongs to without the caller passing an id.
+    """
+    session = await store.load_session(owner, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    timestamp = now_ms()
+    attachments = [
+        {"source_path": a.source_path, "parsed_path": a.parsed_path} for a in body.attachments
+    ]
+    message = Message(
+        id=str(uuid.uuid4()),
+        session_id=session_id,
+        user_message=UserMessage(
+            text=body.message,
+            attachments=tuple(
+                Attachment(source_path=a.source_path, parsed_path=a.parsed_path)
+                for a in body.attachments
+            ),
+        ),
+        started_at=timestamp,
+        ended_at=timestamp,
+        status="errored",
+        total_turns=0,
+    )
+    await store.save_message(owner, message)
+    await store.append_event(
+        owner,
+        session_id,
+        message.id,
+        Event(
+            type="user_message",
+            data={
+                "message": body.message,
+                "attachments": attachments,
+                "message_id": message.id,
+            },
+            timestamp=timestamp,
+        ),
+        request_id=str(uuid.uuid4()),
+    )
+    return {"data": RecordUnstartedTurnData(message_id=message.id)}
 
 
 @router.get(
