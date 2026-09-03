@@ -14,14 +14,6 @@ unassembleable: with no user message the failure has nothing to attach to (it
 renders above the user's own bubble) and the optimistic bubble is never retired
 (the startup header counts up forever). The driver now writes the missing
 ``user_message`` itself, before the failure is recorded.
-
-It writes it through ``record_unstarted_turn``, which mints a fresh Message.
-The first cut used ``append_event``, whose contract is "anchor onto the
-session's most recent message" — for a turn that never started that is the
-PREVIOUS turn's message, so both turns came back carrying one ``message_id``.
-Clients key a turn by ``message_id``, so the second turn's bubble and its error
-card rendered INSIDE the first turn, splitting the first turn's own answer
-around them. See ``test_kernel_unstarted_turn_route.py`` for the anchor itself.
 """
 
 from __future__ import annotations
@@ -67,16 +59,11 @@ def _drive(monkeypatch: pytest.MonkeyPatch, raise_exc: BaseException) -> list[An
 
     monkeypatch.setattr(turn_driver.kernel_client, "run_turn", _raising_run_turn)
 
-    recorded: list[Any] = []
-    monkeypatch.setattr(
-        turn_driver.kernel_client,
-        "record_unstarted_turn",
-        _as_async(lambda _u, _s, req: recorded.append(req)),
-    )
+    appended: list[Any] = []
     monkeypatch.setattr(
         turn_driver.kernel_client,
         "append_event",
-        _as_async(lambda *a, **k: pytest.fail("the unstarted turn must not reuse append_event")),
+        _as_async(lambda _u, _s, event: appended.append(event)),
     )
     monkeypatch.setattr(
         turn_driver.kernel_client, "emit_live_event", _as_async(lambda *a, **k: None)
@@ -84,18 +71,19 @@ def _drive(monkeypatch: pytest.MonkeyPatch, raise_exc: BaseException) -> list[An
     monkeypatch.setattr(run_orch, "_finalize_session", _as_async(lambda *a, **k: None))
 
     asyncio.run(turn_driver.run_session_to_idle("sess-1", "你好", _Bus(), user_id=LOCAL_USER_ID))
-    return recorded
+    return appended
 
 
 def test_records_the_user_message_when_the_turn_never_started(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recorded = _drive(monkeypatch, TurnNotStartedError("502: execution capability returned 403"))
+    appended = _drive(monkeypatch, TurnNotStartedError("502: execution capability returned 403"))
 
-    assert len(recorded) == 1
+    assert len(appended) == 1
+    assert appended[0].type == "user_message"
     # The text has to be the user's, verbatim — it is what anchors the failure
     # in the transcript and what the client matches its optimistic bubble against.
-    assert recorded[0].message == "你好"
+    assert appended[0].data["message"] == "你好"
 
 
 def test_does_not_double_write_when_the_kernel_owned_the_turn(

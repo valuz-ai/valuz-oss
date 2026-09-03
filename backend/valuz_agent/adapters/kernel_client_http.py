@@ -41,7 +41,6 @@ from app.schemas import (  # noqa: E402
     ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
-    RecordUnstartedTurnRequest,
     SessionData,
     SubmitActionRequest,
     UpdateSessionRequest,
@@ -279,17 +278,6 @@ class HttpKernelClient:
             owner=user_id,
         )
         return bool(result["data"]["persisted"])
-
-    async def record_unstarted_turn(
-        self, user_id: str, session_id: str, req: RecordUnstartedTurnRequest
-    ) -> str:
-        result = await self._request(
-            "POST",
-            f"{self._prefix}/v1/sessions/{session_id}/unstarted-turn",
-            json_body=req.model_dump(mode="json"),
-            owner=user_id,
-        )
-        return str(result["data"]["message_id"])
 
     async def emit_live_event(
         self, user_id: str, session_id: str, type: str, data: dict[str, Any]
