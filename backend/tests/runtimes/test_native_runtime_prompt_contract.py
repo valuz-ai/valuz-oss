@@ -564,6 +564,7 @@ async def test_deepagents_subagents_receive_only_the_minimal_citation_protocol(
         "InvalidToolCallPairMiddleware",
         "WindowsPathVirtualizerMiddleware",
         "CitationEvidenceCompactionMiddleware",
+        "SkillInstructionsMiddleware",
     ]
     main_compaction = next(
         item

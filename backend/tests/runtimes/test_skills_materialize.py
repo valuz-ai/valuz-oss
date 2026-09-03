@@ -423,3 +423,50 @@ def test_portable_frontmatter_names_are_still_honoured(tmp_path: Path) -> None:
         assert sm._is_portable_segment(declared), declared
     for declared in ("trailing-space ", "nul", "a/b", "a\\b", ".", ".."):
         assert not sm._is_portable_segment(declared), declared
+
+
+# -- Skills root expansion (#1148) ------------------------------------------
+
+
+def test_skills_root_is_expanded_into_its_skill_dirs(tmp_path: Path) -> None:
+    """A source that is a directory OF skills (no SKILL.md of its own) is
+    materialized as its skill dirs, not as one nested ``<root>/<name>`` entry
+    that deepagents' and Codex's immediate-children discovery never sees."""
+    root = tmp_path / "sources" / "skills"
+    for name in ("beta", "alpha"):
+        (root / name).mkdir(parents=True)
+        (root / name / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+    (root / "README.md").write_text("not a skill\n", encoding="utf-8")
+    (root / "notes").mkdir()  # a child without SKILL.md is not a skill
+
+    materialized = Path(sm.prepare_deepagents_skills(str(tmp_path / "cwd"), [str(root)]))
+
+    assert sorted(p.name for p in materialized.iterdir() if not p.name.startswith(".")) == [
+        "alpha",
+        "beta",
+    ]
+    assert (materialized / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "# alpha\n"
+    assert not (materialized / "skills").exists()
+    manifest = _manifest(tmp_path / "cwd", sm.AGENTS_MANIFEST)
+    assert [entry["name"] for entry in manifest["managed"]] == ["alpha", "beta"]
+
+
+def test_skill_dir_with_nested_skill_is_not_expanded(tmp_path: Path) -> None:
+    """A real skill (has SKILL.md) stays one entry even if it nests another."""
+    src = Path(_make_skill(tmp_path, "outer"))
+    (src / "inner").mkdir()
+    (src / "inner" / "SKILL.md").write_text("# inner\n", encoding="utf-8")
+
+    materialized = Path(sm.prepare_deepagents_skills(str(tmp_path / "cwd"), [str(src)]))
+
+    assert (materialized / "outer" / "SKILL.md").is_file()
+    assert not (materialized / "inner").exists()
+
+
+def test_dir_with_no_skills_is_linked_as_before(tmp_path: Path) -> None:
+    src = tmp_path / "sources" / "empty"
+    src.mkdir(parents=True)
+
+    materialized = Path(sm.prepare_deepagents_skills(str(tmp_path / "cwd"), [str(src)]))
+
+    assert (materialized / "empty").is_symlink()

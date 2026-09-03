@@ -1613,3 +1613,135 @@ def _request_prefers_chinese(request: Any) -> bool:
             continue
         return any("\u4e00" <= char <= "\u9fff" for char in content)
     return False
+
+
+# --- Skill instructions ---------------------------------------------------------
+
+# Inline budget for mounted skills' SKILL.md bodies. A body over the per-skill
+# cap is cut there with a pointer to the file; once the total is spent the
+# remaining skills stay list-only (deepagents' own list still names them).
+SKILL_INSTRUCTIONS_PER_SKILL_CHARS = 12_000
+SKILL_INSTRUCTIONS_TOTAL_CHARS = 36_000
+
+_SKILL_INSTRUCTIONS_HEADER = (
+    "## Mounted Skill Instructions\n"
+    "\n"
+    "The full instructions of the skills below are already loaded. Before starting a "
+    "task, check whether it matches any of these skills and follow the matching "
+    "skill's instructions step by step — they are the authority on how that work is "
+    "done and delivered. Do not re-read these SKILL.md files; use the paths shown only "
+    "to locate the supporting files a skill points to."
+)
+
+_SKILL_INSTRUCTIONS_OVERFLOW = (
+    "The following mounted skills are too large to include inline. Before starting a "
+    "task that matches one of them, read its SKILL.md with "
+    "`read_file(path, limit=1000)` and follow it:"
+)
+
+_SKILL_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*\n", re.DOTALL)
+
+
+def _append_system_text(system_message: SystemMessage | None, text: str) -> SystemMessage:
+    if system_message is None:
+        return SystemMessage(content=text)
+    if isinstance(system_message.content, str):
+        content: Any = f"{system_message.content}\n\n{text}"
+    else:
+        content = [*system_message.content, {"type": "text", "text": f"\n\n{text}"}]
+    return system_message.model_copy(update={"content": content})
+
+
+class SkillInstructionsMiddleware(AgentMiddleware):
+    """Inject mounted skills' SKILL.md bodies into the system prompt.
+
+    deepagents' ``SkillsMiddleware`` lists mounted skills (name + description +
+    path) and leaves reading the file to the model — a step that, measured on
+    real tasks, never happens (0/13 across two models, #1148), while the same
+    skill is followed item by item when its body is in context (5/5). So this
+    does what the runtimes that work do: it loads the bodies once per graph
+    from ``skills_metadata`` (populated by ``SkillsMiddleware.before_agent``,
+    which runs earlier in the stack) and appends them to every model request's
+    system message, within a size budget.
+    """
+
+    def __init__(
+        self,
+        backend: Any,
+        *,
+        per_skill_chars: int = SKILL_INSTRUCTIONS_PER_SKILL_CHARS,
+        total_chars: int = SKILL_INSTRUCTIONS_TOTAL_CHARS,
+    ) -> None:
+        self._backend = backend
+        self._per_skill_chars = per_skill_chars
+        self._total_chars = total_chars
+        # ``None`` = not loaded yet; ``""`` = loaded, nothing to inject.
+        self._block: str | None = None
+
+    def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        if self._block is None:
+            skills = list(state.get("skills_metadata") or [])
+            if skills:
+                responses = self._backend.download_files([skill["path"] for skill in skills])
+                self._block = self._compose(skills, responses)
+        return None
+
+    async def abefore_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        if self._block is None:
+            skills = list(state.get("skills_metadata") or [])
+            if skills:
+                responses = await self._backend.adownload_files([skill["path"] for skill in skills])
+                self._block = self._compose(skills, responses)
+        return None
+
+    def _compose(self, skills: list[Mapping[str, Any]], responses: list[Any]) -> str:
+        sections: list[str] = []
+        overflow: list[str] = []
+        budget = self._total_chars
+        for skill, response in zip(skills, responses, strict=True):
+            name, path = skill["name"], skill["path"]
+            if getattr(response, "error", None) or getattr(response, "content", None) is None:
+                logger.warning(
+                    "skill instructions: cannot load %s (%s); leaving it list-only",
+                    path,
+                    getattr(response, "error", None) or "no content",
+                )
+                continue
+            try:
+                body = response.content.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning("skill instructions: %s is not UTF-8; leaving it list-only", path)
+                continue
+            body = _SKILL_FRONTMATTER_RE.sub("", body, count=1).strip()
+            if len(body) > self._per_skill_chars:
+                body = (
+                    body[: self._per_skill_chars].rstrip()
+                    + f"\n\n[... truncated — read `{path}` for the rest]"
+                )
+            if len(body) > budget:
+                overflow.append(f"- **{name}**: `{path}`")
+                continue
+            budget -= len(body)
+            sections.append(f'<skill name="{name}" path="{path}">\n{body}\n</skill>')
+        parts: list[str] = []
+        if sections:
+            parts.append(_SKILL_INSTRUCTIONS_HEADER)
+            parts.extend(sections)
+        if overflow:
+            parts.append(_SKILL_INSTRUCTIONS_OVERFLOW + "\n" + "\n".join(overflow))
+        return "\n\n".join(parts)
+
+    def _inject(self, request: ModelRequest) -> ModelRequest:
+        if not self._block:
+            return request
+        return request.override(
+            system_message=_append_system_text(request.system_message, self._block)
+        )
+
+    def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:
+        return handler(self._inject(request))
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
+    ) -> Any:
+        return await handler(self._inject(request))

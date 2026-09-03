@@ -85,6 +85,7 @@ from src.runtimes.deepagents.approval_bridge import (
 from src.runtimes.deepagents.middleware import (
     CitationEvidenceCompactionMiddleware,
     InvalidToolCallPairMiddleware,
+    SkillInstructionsMiddleware,
     ToolErrorTolerantMiddleware,
     WindowsPathVirtualizerMiddleware,
     citation_artifact_content,
@@ -1697,6 +1698,7 @@ class DeepAgentsRuntime:
                 else ""
             ),
             skill_roots=skill_roots,
+            backend=backend,
         )
         t_ckpt = time.monotonic()
         await self._open_checkpointer()
@@ -1745,6 +1747,11 @@ class DeepAgentsRuntime:
             graph_kwargs["system_prompt"] = session.instructions
         if skill_roots:
             graph_kwargs["skills"] = skill_roots
+            # deepagents lists mounted skills and leaves reading them to the
+            # model — a step that measured as never happening (#1148). Inject
+            # the bodies instead; user middleware runs after the base stack's
+            # ``SkillsMiddleware``, so ``skills_metadata`` is already loaded.
+            graph_kwargs["middleware"].append(SkillInstructionsMiddleware(backend))
         # Only pass ``interrupt_on`` when ``default`` actually has tools to
         # gate — empty dict + ``full_access`` are equivalent (middleware
         # treats no-entry as auto-approve), and omitting the kwarg keeps
@@ -2215,6 +2222,7 @@ class DeepAgentsRuntime:
         *,
         citation_protocol: str = "",
         skill_roots: list[str] | None = None,
+        backend: Any = None,
     ) -> list[SubAgent]:
         subagents: list[SubAgent] = []
         for sub_def in self.config.callable_agents:
@@ -2222,6 +2230,7 @@ class DeepAgentsRuntime:
                 self._to_subagent(
                     sub_def,
                     citation_protocol=citation_protocol,
+                    backend=backend,
                 )
             )
         if citation_protocol and not any(
@@ -2250,6 +2259,7 @@ class DeepAgentsRuntime:
             }
             if skill_roots:
                 general_purpose["skills"] = list(skill_roots)
+                general_purpose["middleware"].append(SkillInstructionsMiddleware(backend))
             subagents.insert(0, general_purpose)
         return subagents
 
@@ -2258,6 +2268,7 @@ class DeepAgentsRuntime:
         sub_def: SubAgentDef,
         *,
         citation_protocol: str = "",
+        backend: Any = None,
     ) -> SubAgent:
         sub_tools: list[StructuredTool] = []
         if sub_def.tools:
@@ -2293,6 +2304,7 @@ class DeepAgentsRuntime:
             entry["model"] = sub_def.model
         if sub_def.skills:
             entry["skills"] = list(sub_def.skills)
+            entry["middleware"].append(SkillInstructionsMiddleware(backend))
         return entry
 
     # -- Usage --
