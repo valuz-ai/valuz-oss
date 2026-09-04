@@ -93,6 +93,10 @@ _EXPLICIT_VISUAL_REQUEST_RE = re.compile(
     r"|(?:画|绘|绘制|做|出|加|换|来|给|要|用|生成)(?:一)?[个张幅]?图(?!片|标)"
     r"|(?:做|画|生成|创建|制作|设计|构建|搭建|来|给)(?:一)?[个张套]?"
     r"[^，。！？\n]{0,24}(?:界面|页面)"
+    # Editing a home page is explicit UI intent too. Keep the authoring verb:
+    # merely reading a company's homepage must not authorize UI generation.
+    r"|(?:生成|创建|设计|构建|更新|修改|调整|写入|放到)[^，。！？\n]{0,24}(?:首页|主页|页面|界面)"
+    r"|\b(?:build|create|make|update|edit|modify|add|put)\b[^.!?\n]{0,60}\bhome\s?page\b"
     r"|(?:做|生成|创建|制作|设计|构建|加)(?:一)?[个张]?[^，。！？\n]{0,16}"
     r"(?:研究卡(?:片)?|信息卡(?:片)?|指标卡(?:片)?|KPI\s*卡(?:片)?|组件)"
     r"|交互(?:式)?(?:界面|图)|生成式\s*UI"
