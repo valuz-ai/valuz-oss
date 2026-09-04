@@ -22,7 +22,7 @@ import {
 import type { ApprovalCardSubject, ApprovalResolvedDecision } from "@valuz/ui";
 import { t as _t } from "@valuz/shared/i18n";
 import type { I18nKey } from "@valuz/shared";
-import { shouldRefreshConversationHistory } from "../conversation-loading";
+import { shouldPrepareConversationRuntime, shouldRefreshConversationHistory } from "../conversation-loading";
 import { NEW_SESSION_ID, sessionDetailToListItem } from "./session-events";
 
 // Initial load fetches the latest ``TURN_PAGE_SIZE`` turns through the
@@ -615,7 +615,11 @@ export function useConversationHistory({
           // Start the external model client while the user is reading or
           // typing. A concurrent Send joins the same runtime prepare lock, so
           // this cannot create a duplicate Codex process.
-          if (!isPromotedNewSession && sessionDetail.status !== "running") {
+          if (shouldPrepareConversationRuntime({
+            name: sessionDetail.name,
+            status: sessionDetail.status,
+            promotedWithLiveStream: isPromotedNewSession,
+          })) {
             void sessionsApi.prepare(sessionDetail.id).catch(() => {
               // Preparation is an optimization only. The normal Send path
               // remains the authoritative place to surface runtime failures.

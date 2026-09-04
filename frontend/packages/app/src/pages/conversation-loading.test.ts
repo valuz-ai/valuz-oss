@@ -4,6 +4,7 @@ import {
   deriveTurnActive,
   isTerminalSessionStatus,
   shouldApplySessionStatus,
+  shouldPrepareConversationRuntime,
   shouldRefreshConversationHistory,
   shouldShowNoModelEmptyState,
 } from "./conversation-loading";
@@ -16,6 +17,18 @@ const sessionEvent = (
 ): SessionEventDTO => ({
   seq,
   event: { event_type: eventType, payload },
+});
+
+describe("shouldPrepareConversationRuntime", () => {
+  it.each([null, undefined, "", "   "])("does not warm a newly created untitled chat (%s)", (name) => {
+    expect(shouldPrepareConversationRuntime({name, status: "idle", promotedWithLiveStream: false})).toBe(false);
+  });
+
+  it("warms an existing named chat but never duplicates an active or promoted runtime", () => {
+    expect(shouldPrepareConversationRuntime({name: "Research", status: "idle", promotedWithLiveStream: false})).toBe(true);
+    expect(shouldPrepareConversationRuntime({name: "Research", status: "running", promotedWithLiveStream: false})).toBe(false);
+    expect(shouldPrepareConversationRuntime({name: "Research", status: "idle", promotedWithLiveStream: true})).toBe(false);
+  });
 });
 
 describe("derivePostRunVerificationActive", () => {
