@@ -111,6 +111,21 @@ export const shouldRefreshConversationHistory = ({
 }): boolean =>
   !promotedWithLiveStream && hydratedSessionId !== sessionId;
 
+/** New embedded chats can be selected before Send persists their first title.
+ * Do not warm a runtime with incomplete session metadata; Send remains the
+ * authoritative initialization path for those sessions.
+ */
+export const shouldPrepareConversationRuntime = ({
+  name,
+  status,
+  promotedWithLiveStream,
+}: {
+  name: string | null | undefined;
+  status: string | null | undefined;
+  promotedWithLiveStream: boolean;
+}): boolean =>
+  !promotedWithLiveStream && status !== "running" && Boolean(name?.trim());
+
 /**
  * Derive the transient host-side Citation / Audit / Task Coverage window from
  * persisted lifecycle events. Reading the event sequence instead of a timer
