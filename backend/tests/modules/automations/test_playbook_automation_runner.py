@@ -218,8 +218,12 @@ async def test_playbook_session_creation_releases_sqlite_writer(tmp_path, outcom
     )
     maker = async_sessionmaker(engine, expire_on_commit=False)
     tables = [
-        AutomationRow, AutomationRunRow, PlaybookDefinitionRow,
-        PlaybookVersionRow, PlaybookRunRow, ProjectSessionRow,
+        AutomationRow,
+        AutomationRunRow,
+        PlaybookDefinitionRow,
+        PlaybookVersionRow,
+        PlaybookRunRow,
+        ProjectSessionRow,
     ]
     async with engine.begin() as connection:
         for model in tables:
@@ -240,13 +244,24 @@ async def test_playbook_session_creation_releases_sqlite_writer(tmp_path, outcom
         async with uow() as db:
             db.add(AutomationRow(**vars(_automation()), agent_kind="project_member"))
             db.add(AutomationRunRow(**vars(_automation_run()), trigger_type="manual"))
-            db.add(PlaybookDefinitionRow(
-                id="pb-1", user_id="u1", name="Review", current_version=2,
-            ))
-            db.add(PlaybookVersionRow(
-                id="version-1", user_id="u1", definition_id="pb-1", version=1,
-                content="Pinned review", goal="Pinned review",
-            ))
+            db.add(
+                PlaybookDefinitionRow(
+                    id="pb-1",
+                    user_id="u1",
+                    name="Review",
+                    current_version=2,
+                )
+            )
+            db.add(
+                PlaybookVersionRow(
+                    id="version-1",
+                    user_id="u1",
+                    definition_id="pb-1",
+                    version=1,
+                    content="Pinned review",
+                    goal="Pinned review",
+                )
+            )
 
         async def create_session(**kwargs):
             assert kwargs["user_id"] == "u1"
@@ -255,7 +270,10 @@ async def test_playbook_session_creation_releases_sqlite_writer(tmp_path, outcom
             # This is the same facade called by SessionService, not an in-memory
             # stand-in for the independent writer that deadlocked production.
             await project_index.record(
-                kwargs["project_id"], "session-1", origin="automation", user_id="u1",
+                kwargs["project_id"],
+                "session-1",
+                origin="automation",
+                user_id="u1",
             )
             return SimpleNamespace(id="session-1")
 
