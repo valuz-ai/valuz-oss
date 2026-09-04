@@ -100,6 +100,7 @@ export const AutomationDetailPage = () => {
   const [runs, setRuns] = useState<AutomationRunItem[]>([]);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
   const [editMembers, setEditMembers] = useState<MemberWithAgent[] | null>(
     null,
   );
@@ -174,12 +175,16 @@ export const AutomationDetailPage = () => {
   };
 
   const handleRunNow = async () => {
+    if (!detail || detail.status !== "enabled" || runBusy) return;
+    setRunBusy(true);
     try {
       await automationsApi.runNow(automationId);
       toast.success(t(k("automation.runQueued")));
       void refreshRuns();
     } catch (error) {
       toast.error(t(k("automation.runFailed"), { error: String(error) }));
+    } finally {
+      setRunBusy(false);
     }
   };
 
@@ -276,7 +281,7 @@ export const AutomationDetailPage = () => {
         : pillStatus === "failed"
           ? t(k("automation.execStatusErr"))
           : pillStatus === "running"
-            ? t(k("automation.execStatusPending"))
+            ? t(k(eff === "queued" ? "automation.execStatusPending" : "cron.running"))
             : pillStatus === "paused"
               ? t(k("cron.paused"))
               : t(k("automation.execStatusSkip"));
@@ -364,6 +369,7 @@ export const AutomationDetailPage = () => {
             <Button
               variant="outline"
               size="icon-sm"
+              aria-label={t(k("common.edit"))}
               onClick={() => setEditOpen(true)}
             >
               <FilePenLine className="h-4 w-4" />
@@ -372,11 +378,12 @@ export const AutomationDetailPage = () => {
               variant="outline"
               size="icon-sm"
               className="text-destructive hover:text-destructive"
+              aria-label={t(k("common.delete"))}
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
-            <Button size="sm" onClick={() => void handleRunNow()}>
+            <Button size="sm" disabled={detail.status !== "enabled" || runBusy} onClick={() => void handleRunNow()}>
               <Play className="h-3.5 w-3.5" />
               {t(k("cron.runNow"))}
             </Button>
