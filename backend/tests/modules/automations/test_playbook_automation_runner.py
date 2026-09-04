@@ -194,3 +194,113 @@ async def test_shutdown_stops_linked_playbook_run() -> None:
     assert playbook_run.status == "stopped"
     assert playbook_run.error_code == "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
     assert playbook_run.completed_at == 42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "session_failure", "lease_lost"])
+async def test_playbook_session_creation_releases_sqlite_writer(tmp_path, outcome) -> None:
+    """Session creation indexes its project using a separate real DB session."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from valuz_agent.modules.automations.models import AutomationRow, AutomationRunRow
+    from valuz_agent.modules.playbooks.models import (
+        PlaybookDefinitionRow,
+        PlaybookRunRow,
+        PlaybookVersionRow,
+    )
+    from valuz_agent.modules.sessions import project_index
+    from valuz_agent.modules.sessions.models import ProjectSessionRow
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'automation.db'}",
+        connect_args={"timeout": 0.05},
+    )
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    tables = [
+        AutomationRow, AutomationRunRow, PlaybookDefinitionRow,
+        PlaybookVersionRow, PlaybookRunRow, ProjectSessionRow,
+    ]
+    async with engine.begin() as connection:
+        for model in tables:
+            await connection.run_sync(model.__table__.create)
+
+    @asynccontextmanager
+    async def uow(*, commit=True):
+        async with maker() as db:
+            try:
+                yield db
+                if commit:
+                    await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+
+    try:
+        async with uow() as db:
+            db.add(AutomationRow(**vars(_automation()), agent_kind="project_member"))
+            db.add(AutomationRunRow(**vars(_automation_run()), trigger_type="manual"))
+            db.add(PlaybookDefinitionRow(
+                id="pb-1", user_id="u1", name="Review", current_version=2,
+            ))
+            db.add(PlaybookVersionRow(
+                id="version-1", user_id="u1", definition_id="pb-1", version=1,
+                content="Pinned review", goal="Pinned review",
+            ))
+
+        async def create_session(**kwargs):
+            assert kwargs["user_id"] == "u1"
+            if outcome == "session_failure":
+                raise ValueError("executor unavailable")
+            # This is the same facade called by SessionService, not an in-memory
+            # stand-in for the independent writer that deadlocked production.
+            await project_index.record(
+                kwargs["project_id"], "session-1", origin="automation", user_id="u1",
+            )
+            return SimpleNamespace(id="session-1")
+
+        session_svc = Mock()
+        session_svc.create_session = AsyncMock(side_effect=create_session)
+        session_svc.send_message_sync = AsyncMock(return_value=SimpleNamespace(events=[]))
+        lease = Mock()
+        lease.is_current = AsyncMock(return_value=outcome != "lease_lost")
+        runner = InProcessAutomationRunner()
+        runner._triggers = Mock()
+        runner._triggers._default_tz = "UTC"
+        runner._triggers.next_fire_at = Mock(return_value=None)
+        with (
+            patch("valuz_agent.infra.db.async_unit_of_work", uow),
+            patch.object(project_index, "async_unit_of_work", uow),
+            patch.object(runner, "_resolve_project_name", return_value="Semis"),
+            patch.object(runner, "_build_session_service", return_value=session_svc),
+        ):
+            await runner._execute_run("u1", "auto-1", "run-1", lease=lease, detach_chat=False)
+
+        async with uow(commit=False) as db:
+            run = await db.get(AutomationRunRow, "run-1")
+            playbook_runs = list((await db.scalars(select(PlaybookRunRow))).all())
+            indexes = list((await db.scalars(select(ProjectSessionRow))).all())
+            if outcome == "lease_lost":
+                session_svc.create_session.assert_not_awaited()
+                assert run.status == "queued"
+                assert run.playbook_run_id is None
+                assert playbook_runs == []
+                assert indexes == []
+            else:
+                expected = "success" if outcome == "success" else "failed"
+                assert run.status == expected, run.error_message
+                assert len(playbook_runs) == 1
+                linked = playbook_runs[0]
+                assert run.playbook_run_id == linked.id
+                assert linked.user_id == "u1"
+                assert linked.definition_version == 1
+                assert linked.status == ("completed" if outcome == "success" else "failed")
+                if outcome == "success":
+                    assert run.session_id == linked.session_id == indexes[0].session_id
+                    assert indexes[0].project_id == "execution-project"
+                    session_svc.send_message_sync.assert_awaited_once()
+                else:
+                    assert run.error_code == linked.error_code == "ValueError"
+                    session_svc.send_message_sync.assert_not_awaited()
+    finally:
+        await engine.dispose()

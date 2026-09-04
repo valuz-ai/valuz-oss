@@ -495,9 +495,19 @@ class InProcessAutomationRunner:
                         checkpoint={"automation_run_status": "running"},
                         started_at=started_at,
                     )
+                    if not await execution_lease.is_current():
+                        logger.warning("Run %s lost execution lease before preparation", run_id)
+                        return
                     playbooks.add(playbook_run)
                     await playbooks.flush()
                     run.playbook_run_id = playbook_run.id
+                    # Session creation and task kickoff write through their own
+                    # units of work. Commit the prepared run and its back-link
+                    # together before awaiting either, otherwise SQLite's writer
+                    # lock is held by the very caller the inner writer awaits.
+                    # Keep the Automation queued until startup succeeds; shutdown
+                    # recovery can reconcile this durable linked pair meanwhile.
+                    await ds.replace_run(run)
                     rendered_prompt = _compose_playbook_prompt(
                         definition=definition,
                         version=version,
