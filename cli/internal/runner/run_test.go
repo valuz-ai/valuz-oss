@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
+	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
+	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/output"
 )
 
 // fakeBackend serves the endpoints the runner touches and streams a
@@ -203,6 +205,73 @@ func TestRunActionRequiredTriggersInterrupt(t *testing.T) {
 	if interruptCount.Load() == 0 {
 		t.Fatal("action_required must best-effort interrupt the backend")
 	}
+}
+
+// fakeBackendAuthFailure serves a backend where the SSE stream returns
+// 401 — the credential was rejected server-side. All control endpoints
+// succeed so the failure is isolated to the stream path.
+func fakeBackendAuthFailure(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/system/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{"projects": []map[string]string{
+			{"id": "proj-1", "root_path": "/workspace"},
+		}})
+	})
+	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{"id": "sess-1", "project_id": "proj-1", "status": "created", "runtime_provider": "deepagents", "permission_mode": "default"})
+	})
+	mux.HandleFunc("/v1/sessions/sess-1/messages", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{"id": "sess-1", "status": "running"})
+	})
+	mux.HandleFunc("/v1/sessions/sess-1/events/stream", func(w http.ResponseWriter, r *http.Request) {
+		// The stream is the only authenticated surface here; reject it.
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	return httptest.NewServer(mux)
+}
+
+// TestRunSSEAuthClassifiesExit6 pins the SSE 401/403 → auth_error
+// mapping: an auth failure on the stream must surface as exit 6 (KindAuth),
+// never as the protocol/recovery internal error (exit 5), and must not
+// trigger a reconnect.
+func TestRunSSEAuthClassifiesExit6(t *testing.T) {
+	srv := fakeBackendAuthFailure(t)
+	defer srv.Close()
+
+	res, err := newRunner(srv).Run(context.Background(), Options{
+		ProjectID: "proj-1",
+		Prompt:    "hi",
+		RunID:     "run-auth",
+	})
+	if err == nil {
+		t.Fatalf("Run: want auth error, got nil")
+	}
+	if k := errs.KindOf(err); k != errs.KindAuth {
+		t.Fatalf("kind = %q, want auth", k)
+	}
+	// The run.end terminal line must carry the auth_error status so a
+	// JSONL consumer still gets the exactly-once terminal document.
+	var buf bytes.Buffer
+	sink, serr := output.NewSink("jsonl", &buf, "")
+	if serr != nil {
+		t.Fatalf("NewSink: %v", serr)
+	}
+	if _, err := newRunner(srv).Run(context.Background(), Options{
+		ProjectID: "proj-1",
+		Prompt:    "hi",
+		RunID:     "run-auth-sink",
+		EventSink: sink,
+	}); err == nil {
+		t.Fatal("Run with sink: want auth error")
+	}
+	if !bytes.Contains(buf.Bytes(), []byte(`"status":"auth_error"`)) {
+		t.Fatalf("run.end lacks auth_error: %s", buf.String())
+	}
+	_ = res
 }
 
 func TestRunRequiresPromptOrUsageError(t *testing.T) {

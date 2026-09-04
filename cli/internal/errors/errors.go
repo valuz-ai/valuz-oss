@@ -123,26 +123,30 @@ func Redact(s string) string {
 	return redactValue(s)
 }
 
+// redactPatterns are compiled once: Redact runs on the streaming hot
+// path (every JSONL event, every human delta) and must not recompile.
+//
+//  1. "key=value" / "key: value" forms, swallowing an optional
+//     "Bearer " prefix right after the separator so the opaque token
+//     is masked together with the scheme keyword:
+//     Authorization: Bearer sk-9f...   ->   Authorization: [REDACTED]
+//     token = abc123                   ->   token = [REDACTED]
+//  2. "Bearer <token>" space form (when not after a separator).
+//  3. bare JWT-ish tokens (three dot-separated segments; segments
+//     must not contain dots so a long first segment cannot swallow
+//     the whole token), plus base64 padding.
+var redactPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b((?:bearer|token|api[_-]?key|authorization|secret|password|credential)\s*[:=]\s*)(?:bearer\s+)?[A-Za-z0-9._\-\/+]{6,}={0,2}`),
+	// Case-sensitive: the canonical HTTP header form is "Bearer".
+	// A lowercase "the bearer sovereign..." sentence must not be
+	// collateral damage.
+	regexp.MustCompile(`\bBearer\s+[A-Za-z0-9._\-\/+]{6,}={0,2}\b`),
+	regexp.MustCompile(`\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{3,}(?:={0,2})?\b`),
+}
+
 func redactValue(s string) string {
-	// 1. "key=value" / "key: value" forms, swallowing an optional
-	//    "Bearer " prefix right after the separator so the opaque token
-	//    is masked together with the scheme keyword:
-	//      Authorization: Bearer sk-9f...   ->  Authorization: [REDACTED]
-	//      token = abc123                   ->  token = [REDACTED]
-	// 2. "Bearer <token>" space form (when not after a separator).
-	// 3. bare JWT-ish tokens (three dot-separated segments; segments
-	//    must not contain dots so a long first segment cannot swallow
-	//    the whole token), plus base64 padding.
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\b((?:bearer|token|api[_-]?key|authorization|secret|password|credential)\s*[:=]\s*)(?:bearer\s+)?[A-Za-z0-9._\-\/+]{6,}={0,2}`),
-		// Case-sensitive: the canonical HTTP header form is "Bearer".
-		// A lowercase "the bearer sovereign..." sentence must not be
-		// collateral damage.
-		regexp.MustCompile(`\bBearer\s+[A-Za-z0-9._\-\/+]{6,}={0,2}\b`),
-		regexp.MustCompile(`\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{3,}(?:={0,2})?\b`),
-	}
 	out := s
-	for _, re := range patterns {
+	for _, re := range redactPatterns {
 		out = re.ReplaceAllString(out, "${1}[REDACTED]")
 	}
 	return out

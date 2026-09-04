@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
@@ -40,5 +39,3 @@ func idOrQuick(client *backend.ControlClient, ctx context.Context, id, cwd strin
 	}
 	return "chat-default", nil
 }
-
-var _ = fmt.Sprintf

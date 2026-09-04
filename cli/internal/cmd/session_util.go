@@ -147,7 +147,11 @@ func resolveBearer(opts *RootOptions) (string, error) {
 	client := auth.NewClient(cloudURL)
 	renewed, err := client.Refresh(pair.RefreshToken)
 	if err != nil {
-		return "", err
+		// The refresh target is the control plane, not the execution
+		// backend — an unreachable control plane must not masquerade as
+		// a dead backend (different URL, different fix).
+		return "", errs.Wrap(errs.KindOf(err), err,
+			"token refresh failed: control plane unreachable at %s (check VALUZ_CLOUD_URL / --cloud-url, or log in again)", cloudURL)
 	}
 	if err := store.Save(renewed); err != nil {
 		return "", err

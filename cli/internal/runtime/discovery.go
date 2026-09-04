@@ -58,7 +58,7 @@ type Paths struct {
 //     Windows NSIS layout) -> ModeBundle
 //  2. If VALUZ_REPO_ROOT is set, or the current cwd / the CLI's
 //     parents look like the repo -> ModeDev
-//  3. Otherwise -> error (ModeStandalone TODO)
+//  3. Otherwise -> error (standalone installs pass VALUZ_REPO_ROOT)
 func Discover() (*Paths, error) {
 	exe, _ := os.Executable()
 	if bundleRoot := detectBundleRoot(exe); bundleRoot != "" {

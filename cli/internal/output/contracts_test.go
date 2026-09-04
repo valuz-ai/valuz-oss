@@ -138,11 +138,11 @@ func TestSinkTrajectoryMirror(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	fileData, err := readFile(path)
+	fileData, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read trajectory: %v", err)
 	}
-	if fileData != buf.String() {
+	if string(fileData) != buf.String() {
 		t.Fatal("trajectory file does not mirror stdout")
 	}
 }
@@ -176,13 +176,6 @@ func TestRedactPolicy(t *testing.T) {
 		t.Fatalf("data not truncated: %v", out)
 	}
 }
-
-func readFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	return string(data), err
-}
-
-// keep os import minimal for tests
 
 // TestRunEndGolden asserts the exact run.end line shape (design §6.2),
 // catching field renames or ordering drift the "fields exist" assertion

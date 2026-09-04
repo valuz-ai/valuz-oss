@@ -34,12 +34,19 @@ func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show runtime service status",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts, err := Options(cmd)
+			if err != nil {
+				return err
+			}
 			bp := backendPort()
-			fmt.Printf("backend  :%-5d  %-22s  pid=%s\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "backend  :%-5d  %-22s  pid=%s\n",
 				bp, checkHTTP(bp, "/v1/projects"), listeningPID(bp))
-			fmt.Printf("frontend :%-5d  %-22s  pid=%s\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "frontend :%-5d  %-22s  pid=%s\n",
 				frontendPort, "(no probe)", listeningPID(frontendPort))
+			if opts.BackendURL != fmt.Sprintf("http://127.0.0.1:%d", bp) {
+				fmt.Fprintf(cmd.OutOrStdout(), "resolved :      %-22s  (backend-url/env/profile override)\n", opts.BackendURL)
+			}
 			return nil
 		},
 	}

@@ -26,7 +26,7 @@ func newLogsCmd() *cobra.Command {
 		Short:     "Tail runtime service logs",
 		ValidArgs: []string{"backend", "frontend", "launch"},
 		Args:      cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			target := "backend"
 			if len(args) == 1 {
 				target = args[0]
@@ -44,10 +44,10 @@ func newLogsCmd() *cobra.Command {
 				tailArgs = append(tailArgs, "-f")
 			}
 			tailArgs = append(tailArgs, file)
-			cmd := exec.Command("tail", tailArgs...)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			return cmd.Run()
+			proc := exec.Command("tail", tailArgs...)
+			proc.Stdout = cmd.OutOrStdout()
+			proc.Stderr = cmd.ErrOrStderr()
+			return proc.Run()
 		},
 	}
 	c.Flags().BoolVarP(&follow, "follow", "f", true, "Follow output (set --follow=false to disable)")

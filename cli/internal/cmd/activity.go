@@ -22,6 +22,9 @@ func newActivityCmd() *cobra.Command {
 		Use:   "activity",
 		Short: "Show activity overview (running / finished runs)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkOutputFormat(output); err != nil {
+				return err
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err

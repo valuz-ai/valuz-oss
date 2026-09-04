@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 )
 
 // Sink renders RunEvents as JSONL lines, and the terminal RunResult as a
@@ -28,8 +30,16 @@ type Sink struct {
 	endWritten bool
 }
 
-// NewSink builds a sink. trajectory is optional.
+// NewSink builds a sink. trajectory is optional. format must be one of
+// "", "human", "json", "jsonl"; anything else is a usage error — an
+// unknown protocol must fail loudly instead of silently producing no
+// output (an eval consumer would misread an empty stdout as success).
 func NewSink(format string, out io.Writer, trajectory string) (*Sink, error) {
+	switch format {
+	case "", "human", "json", "jsonl":
+	default:
+		return nil, errs.New(errs.KindUsage, "unsupported --output %q (want human|json|jsonl)", format)
+	}
 	s := &Sink{
 		Format:         format,
 		TrajectoryPath: trajectory,

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/backend"
+	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/version"
 )
 
@@ -43,4 +44,15 @@ func printJSONOutput(out io.Writer, output string, v any) bool {
 	}
 	fmt.Fprintln(out, string(raw))
 	return true
+}
+
+// checkOutputFormat rejects unknown --output values on list/detail
+// commands (human|json), matching the run path's strict validation.
+func checkOutputFormat(output string) error {
+	switch output {
+	case "", "human", "json":
+		return nil
+	default:
+		return errs.New(errs.KindUsage, "unsupported --output %q (want human|json)", output)
+	}
 }

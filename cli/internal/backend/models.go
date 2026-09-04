@@ -80,6 +80,23 @@ type SessionDetail struct {
 	ModelID        *string `json:"locked_model_id"`
 }
 
+// SessionHistoryItem mirrors one row of GET /v1/sessions/{id}/events.
+type SessionHistoryItem struct {
+	Seq   int64 `json:"seq"`
+	Event struct {
+		EventType string            `json:"event_type"`
+		Payload   map[string]string `json:"payload"`
+	} `json:"event"`
+	Timestamp *int64  `json:"timestamp"`
+	EventUID  *string `json:"event_uid"`
+}
+
+// SessionHistory mirrors GET /v1/sessions/{id}/events.
+type SessionHistory struct {
+	SessionID string               `json:"session_id"`
+	Items     []SessionHistoryItem `json:"items"`
+}
+
 // ── Task DTOs (mirrors of /v1/tasks) ────────────────────────────────
 
 // KickoffTaskRequest mirrors POST /v1/projects/{id}/tasks.

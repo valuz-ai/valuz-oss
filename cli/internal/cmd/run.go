@@ -48,6 +48,9 @@ func newRunCmd() *cobra.Command {
 			"Connect-only: requires a running backend (--backend-url or VALUZ_BACKEND_BASE_URL).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if projectID != "" && cwd != "" {
+				return errs.New(errs.KindUsage, "--project and --cwd are mutually exclusive")
+			}
 			opts, err := Options(cmd)
 			if err != nil {
 				return err
@@ -72,7 +75,7 @@ func newRunCmd() *cobra.Command {
 			runID := newRunID()
 			sink, err := output.NewSink(outputFormat, cmd.OutOrStdout(), trajectory)
 			if err != nil {
-				return errs.Wrap(errs.KindUsage, err, "init output sink")
+				return err
 			}
 			defer sink.Close()
 
@@ -160,7 +163,7 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&promptFile, "prompt-file", "", "read the prompt from a file")
 	f.BoolVar(&promptStdin, "prompt-stdin", false, "read the prompt from stdin")
 	f.StringVar(&modelID, "model", "", "model id")
-	f.StringVar(&providerID, "provider", "", "provider id")
+	f.StringVar(&providerID, "provider", "", "provider id (backend id, not name; see `valuz model list`)")
 	f.StringVar(&runtimeID, "runtime", "", "runtime: claude_agent|codex|deepagents|deepseek_harness")
 	f.StringVar(&permissionMode, "permission-mode", "", "default|auto_review|full_access (default: default)")
 	f.DurationVar(&timeout, "timeout", 0, "wall-clock limit (e.g. 5m); 0 = unlimited")
@@ -253,15 +256,6 @@ func resolvePrompt(prompt, file string, stdin bool, cmd *cobra.Command) (string,
 		return string(data), nil
 	}
 	return prompt, nil
-}
-
-// bearerToken returns the resolved bearer credential from the global
-// options (VALUZ_BACKEND_TOKEN env or --token-file).
-func bearerToken(opts *RootOptions) string {
-	if opts == nil {
-		return ""
-	}
-	return opts.Token
 }
 
 func newRunID() string {
