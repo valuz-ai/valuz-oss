@@ -29,6 +29,14 @@ export interface ConversationViewProps {
   /** Seeds for a session that doesn't exist yet. ``page`` variant ignores
    *  this (its own agent/project pickers own that choice). */
   createDefaults?: { agentSlug?: string; projectId?: string };
+  /** Pin quick chats minted by this view to one execution target (an
+   *  ``ExecutionTarget.id`` such as ``"cloud"``). The location bar shows the
+   *  pinned target as a locked chip instead of offering a choice. Hosts whose
+   *  state lives on exactly one backend (an edition's cloud-only research
+   *  panels) use this so their conversations are created where that state
+   *  is. Project conversations keep following their project's origin.
+   *  Ignored on single-target builds. */
+  executionTargetId?: string | null;
   /** Fired the moment a ``panel``-variant draft is minted into a real
    *  session, so the embedding host can persist the id. Unused by ``page``
    *  (the URL is the persistence). */
@@ -107,6 +115,7 @@ function useOrchestration(
     directoryFieldMode,
     hostRef: props.hostRef,
     createDefaults: props.createDefaults,
+    executionTargetId: props.executionTargetId,
     prefillDraft: props.prefillDraft,
     onPrefillConsumed: props.onPrefillConsumed,
   });
@@ -337,6 +346,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               execBarLocked={core.execBarLocked}
               sessionExecOrigin={core.sessionExecOrigin}
               execTargetId={core.execTargetId}
+              execTargetPinned={props.executionTargetId != null}
               setExecTargetId={core.setExecTargetId}
               setSelectedProviderId={core.setSelectedProviderId}
               setSelectedModelId={core.setSelectedModelId}
@@ -497,6 +507,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
         execBarLocked={core.execBarLocked}
         sessionExecOrigin={core.sessionExecOrigin}
         execTargetId={core.execTargetId}
+              execTargetPinned={props.executionTargetId != null}
         setExecTargetId={core.setExecTargetId}
         setSelectedProviderId={core.setSelectedProviderId}
         setSelectedModelId={core.setSelectedModelId}

@@ -101,6 +101,8 @@ export interface ConversationOrchestrationParams {
    *  the ``page`` variant always starts from an unbound draft and lets the
    *  picker UI choose). */
   createDefaults?: { agentSlug?: string; projectId?: string };
+  /** See ``ConversationViewProps.executionTargetId``. */
+  executionTargetId?: string | null;
   /** Panel-variant "starter" affordance: fill the composer draft with this
    *  text, then call ``onPrefillConsumed``. ``page`` variant never passes
    *  this. */
@@ -146,6 +148,7 @@ export function useConversationOrchestration({
   directoryFieldMode,
   hostRef,
   createDefaults,
+  executionTargetId,
   prefillDraft,
   onPrefillConsumed,
 }: ConversationOrchestrationParams) {
@@ -411,14 +414,22 @@ export function useConversationOrchestration({
   // project conversations don't get a choice, they follow the project's
   // origin. See docs (commercial): execution-location-per-entity.
   const executionTargets = useExecutionTargets();
-  const [execTargetId, setExecTargetId] = useState<string | null>(null);
+  const [execTargetId, setExecTargetId] = useState<string | null>(
+    executionTargetId ?? null,
+  );
+  // A host that pins the target owns the choice for the life of the view —
+  // re-pin whenever it changes so a stale pick can never win.
+  useEffect(() => {
+    if (executionTargetId != null) setExecTargetId(executionTargetId);
+  }, [executionTargetId]);
   const resolveExecTarget = useCallback(() => {
     if (executionTargets.length === 0) return undefined;
+    const wanted = executionTargetId ?? execTargetId;
     return (
-      executionTargets.find((target) => target.id === execTargetId) ??
+      executionTargets.find((target) => target.id === wanted) ??
       getDefaultExecutionTarget()
     );
-  }, [executionTargets, execTargetId]);
+  }, [executionTargets, execTargetId, executionTargetId]);
   const isNewSession = id === NEW_SESSION_ID;
   // Local mirror of ``answers`` captured at submit time. Keyed by
   // ``tool_use_id`` (== renderer's ``tool.id``). Lets the renderer
