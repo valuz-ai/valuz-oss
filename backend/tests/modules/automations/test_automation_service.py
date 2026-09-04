@@ -403,6 +403,29 @@ class TestRunNowRuntimePort:
         ]
 
 
+    async def test_should_run_now_while_paused_without_resuming(
+        self,
+        service: AutomationService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pausing stops the schedule only; an explicit run still enqueues and
+        the automation stays paused (workbench cards rely on this)."""
+        detail = await service.create(
+            _project_payload(trigger=ManualTrigger()),
+            user_id=TEST_USER_ID,
+        )
+        await service.pause(detail.automation_id, user_id=TEST_USER_ID)
+        runtime = CapturingAutomationRuntime()
+        monkeypatch.setattr(ext, "automation_runtime", runtime)
+
+        accepted = await service.run_now(detail.automation_id, user_id=TEST_USER_ID)
+
+        assert [command.run_id for command in runtime.commands] == [accepted.run_id]
+        after = await service.get_automation_detail(detail.automation_id, user_id=TEST_USER_ID)
+        assert after.status == "paused"
+        assert after.next_run_at is None
+
+
 # ── Resolution: project + project_member ────────────────────────────
 
 
