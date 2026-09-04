@@ -68,6 +68,8 @@ type ComposerPaneProps = {
   selectedAgentSlug: string | null;
   execBarLocked: ComposerConfig["execBarLocked"];
   sessionExecOrigin: ComposerConfig["sessionExecOrigin"];
+  /** The view pinned its execution target: show it, never offer a choice. */
+  execTargetPinned?: boolean;
   execTargetId: string | null;
   setExecTargetId: Dispatch<SetStateAction<string | null>>;
   /** Staged files belong to the backend they were uploaded to — see the
@@ -171,6 +173,7 @@ export function ComposerPane({
   selectedAgentSlug,
   execBarLocked,
   sessionExecOrigin,
+  execTargetPinned = false,
   execTargetId,
   setExecTargetId,
   setSelectedProviderId,
@@ -411,8 +414,11 @@ export function ComposerPane({
           // ``null`` maps back to the sentinel. Frozen once a session exists.
           footerBar={
             <ExecutionLocationBar
-              locked={execBarLocked}
-              lockedOriginId={sessionExecOrigin}
+              locked={execBarLocked || execTargetPinned}
+              lockedOriginId={
+                sessionExecOrigin ??
+                (execTargetPinned ? (execTargetId ?? undefined) : undefined)
+              }
               targetId={execTargetId}
               onTargetChange={(tid) => {
                 // Attachment ids are backend-local in exactly the way the
