@@ -329,11 +329,26 @@ async def test_handler_rejects_dashboard_when_user_only_asked_for_a_list(monkeyp
         "请生成一个紧凑的大宗商品行情页面",
         "请生成 AMD 的研究监控页面",
         "Create an English research workspace with two live modules",
+        "结合我的关注和已有工作区，整理最近真正影响投资判断的重要变化，并更新首页。",
+        "把刚才的结论写入个人首页",
+        "更新当前页面的研究摘要",
+        "Update the homepage with these findings",
+        "Add these findings to my home page",
     ],
 )
 def test_visual_intent_accepts_named_generated_pages(prompt):
     messages = [SimpleNamespace(user_message=SimpleNamespace(text=prompt))]
     assert t._requested_visual_output(messages) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "研究这家公司首页的信息并用文字总结",
+    "总结报告首页的风险提示",
+    "Read the homepage and summarize the company in text",
+])
+def test_visual_intent_does_not_treat_reading_a_homepage_as_ui_authoring(prompt):
+    messages = [SimpleNamespace(user_message=SimpleNamespace(text=prompt))]
+    assert t._requested_visual_output(messages) is False
 
 
 async def test_handler_passes_data_into_prompt(monkeypatch, patched):
