@@ -73,6 +73,7 @@ class _RecordingRuntime:
         called_tool_input: dict[str, object] | None = None,
         called_tool_external: bool | None = None,
         tool_result_is_error: bool = False,
+        extra_tool_names: tuple[str, ...] = (),
     ) -> None:
         self.sink = sink
         self.fail_continuation = fail_continuation
@@ -92,6 +93,7 @@ class _RecordingRuntime:
         self.called_tool_input = called_tool_input
         self.called_tool_external = called_tool_external
         self.tool_result_is_error = tool_result_is_error
+        self.extra_tool_names = extra_tool_names
         self.prompts: list[UserMessage] = []
         self.coverage_tools: list[ToolDef] = []
         self.session_object_ids: list[int] = []
@@ -150,6 +152,27 @@ class _RecordingRuntime:
                             "id": tool_use_id,
                             "content": "ok",
                             "is_error": self.tool_result_is_error,
+                        },
+                    )
+                )
+            for index, name in enumerate(self.extra_tool_names):
+                await self.sink.emit(
+                    Event(
+                        type="tool_use",
+                        data={
+                            "id": f"extra-{index}",
+                            "name": name,
+                            "input": {},
+                        },
+                    )
+                )
+                await self.sink.emit(
+                    Event(
+                        type="tool_result",
+                        data={
+                            "id": f"extra-{index}",
+                            "content": "ok",
+                            "is_error": False,
                         },
                     )
                 )
@@ -554,6 +577,11 @@ async def test_namespaced_generate_ui_skips_post_run_checks_for_that_turn(
         ("mcp__valuz_playbooks__playbook", {"action": "update"}),
         ("valuz-playbooks/playbook", {"action": "delete"}),
         ("mcp__valuz_finance__domain_operation", {"action": "propose"}),
+        ("mcp__valuz_finance__domain_operation", {"action": "workbench_change"}),
+        (
+            "valuz_finance/domain_operation",
+            {"action": "workbench_library", "input_payload": {"command": "adopt"}},
+        ),
     ],
 )
 async def test_confirmation_card_operation_skips_post_run_checks_for_that_turn(
@@ -600,9 +628,18 @@ async def test_confirmation_card_operation_skips_post_run_checks_for_that_turn(
     )
 
 
+@pytest.mark.parametrize(
+    "tool_input",
+    [
+        {"action": "list"},
+        {"action": "workbench_inspect"},
+        {"action": "workbench_library", "input_payload": {"command": "list"}},
+    ],
+)
 async def test_read_only_resource_tool_still_runs_post_run_checks(
     tmp_path,
     monkeypatch,
+    tool_input,
 ) -> None:
     session = _session(
         tmp_path,
@@ -616,8 +653,8 @@ async def test_read_only_resource_tool_still_runs_post_run_checks(
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
         runtime = _RecordingRuntime(
             args[2],
-            called_tool_name="mcp__valuz_automations__automation",
-            called_tool_input={"action": "list"},
+            called_tool_name="mcp__valuz_finance__domain_operation",
+            called_tool_input=tool_input,
         )
         runtimes.append(runtime)
         return runtime
@@ -631,6 +668,73 @@ async def test_read_only_resource_tool_still_runs_post_run_checks(
     )
 
     assert len(runtimes[0].prompts) == 2
+
+
+@pytest.mark.parametrize("coverage", [True, False])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "automation_output",
+        "valuz_finance/automation_output",
+        "mcp__valuz_finance__automation_output",
+    ],
+)
+async def test_output_receipts_alone_skip_post_run_checks(tmp_path, monkeypatch, coverage, name):
+    session = _session(
+        tmp_path, task_coverage_enabled=coverage, citation_enabled=True, verification_enabled=True
+    )
+    store = _FakeStore(session)
+    runtimes = []
+
+    def create_runtime(*args, **kwargs):
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name=name,
+            extra_tool_names=(name,) * 3,
+            primary_text="Four output slots were saved.",
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1", session.id, UserMessage(text="Save the prepared outputs.")
+    )
+    assert len(runtimes[0].prompts) == 1
+    assert not {"task_coverage", "citation_bundle", "claim_audits"}.intersection(message.metadata)
+    assert not any(
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+
+
+@pytest.mark.parametrize("reverse", [True, False])
+async def test_output_receipts_do_not_exempt_actual_research(tmp_path, monkeypatch, reverse):
+    session = _session(
+        tmp_path, task_coverage_enabled=True, citation_enabled=True, verification_enabled=True
+    )
+    store = _FakeStore(session)
+    runtimes = []
+    names = ["mcp__valuz_docs__document_search", "mcp__valuz_finance__automation_output"]
+    if reverse:
+        names.reverse()
+
+    def create_runtime(*args, **kwargs):
+        runtime = _RecordingRuntime(
+            args[2], called_tool_name=names[0], extra_tool_names=(names[1],)
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+    await SessionOrchestrator(store).run_turn(
+        "owner-1", session.id, UserMessage(text="Research and publish findings.")
+    )
+    assert len(runtimes[0].prompts) == 2
+    assert any(
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
 
 
 async def test_failed_generate_ui_also_skips_post_run_checks_for_that_turn(

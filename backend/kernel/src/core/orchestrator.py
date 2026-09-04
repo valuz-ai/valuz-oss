@@ -136,8 +136,8 @@ _CONFIRMATION_CARD_ACTIONS: dict[str, frozenset[str]] = {
             "delete",
         }
     ),
-    # Finance exposes every entity mutation through one proposal action.
-    "domain_operation": frozenset({"propose"}),
+    # Editor changes also return a pending, user-confirmed draft card.
+    "domain_operation": frozenset({"propose", "workbench_change"}),
 }
 
 
@@ -167,6 +167,10 @@ def _structural_output_kind(data: dict[str, Any], tool_name: str) -> str | None:
     action = raw_input.get("action")
     if not isinstance(action, str):
         return None
+    if _matches_tool_name(tool_name, "domain_operation") and action == "workbench_library":
+        payload = raw_input.get("input_payload")
+        if isinstance(payload, dict) and payload.get("command") == "adopt":
+            return "domain_operation.workbench_library.adopt"
     for canonical_name, actions in _CONFIRMATION_CARD_ACTIONS.items():
         if _matches_tool_name(tool_name, canonical_name) and action in actions:
             return f"{canonical_name}.{action}"
@@ -627,6 +631,7 @@ class _MessageObserverSink:
 
         self._tool_names: dict[str, str] = {}
         self._structural_output_kinds: set[str] = set()
+        self._received_citation_evidence = False
         self._external_tool_called = False
         self._evidence_registry = EvidenceRegistry(
             allowed_document_ids=allowed_document_ids,
@@ -705,6 +710,7 @@ class _MessageObserverSink:
             return
 
         if event.type == "citation_evidence":
+            self._received_citation_evidence = True
             self._register_private_evidence(event)
             return
 
@@ -743,6 +749,12 @@ class _MessageObserverSink:
             event = self._register_and_redact_tool_result(event)
 
         elif event.type == "session_idle":
+            # A receipt-only output turn has no research prose to verify.
+            # Decide at idle, not at the first output call: a later search or
+            # data read must retain the ordinary research checks.
+            if self._only_output_receipts():
+                self._structural_output_kinds.add("automation_output.receipts")
+                self.skip_post_run_verification_for_structural_output()
             # Citation verification and Task Coverage are useful only after
             # the primary turn brought external information into the answer.
             # A session may expose host tools through MCP as an implementation
@@ -1077,7 +1089,16 @@ class _MessageObserverSink:
     def requested_structural_output(self) -> bool:
         """Whether this turn requested A2UI or a product confirmation card."""
 
-        return bool(self._structural_output_kinds)
+        return bool(self._structural_output_kinds) or self._only_output_receipts()
+
+    def _only_output_receipts(self) -> bool:
+        return (
+            bool(self._tool_names)
+            and not self._received_citation_evidence
+            and all(
+                _matches_tool_name(name, "automation_output") for name in self._tool_names.values()
+            )
+        )
 
     def structural_output_kinds(self) -> tuple[str, ...]:
         return tuple(sorted(self._structural_output_kinds))
