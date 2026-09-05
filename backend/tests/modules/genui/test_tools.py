@@ -1409,3 +1409,48 @@ async def test_handler_retries_when_generation_raises(monkeypatch, patched, capl
     assert json.loads(res.content)["content"] == "Chart"
     assert calls == 2
     assert "generate_ui: generation attempt 1/2 failed" in caplog.text
+
+
+def test_planned_refs_reach_every_redeclaration_of_a_component_id(monkeypatch):
+    """Compilers stream cumulative ``updateComponents`` messages; the renderer
+    keeps the last declaration of an id, so a later bare re-declaration must
+    carry the same data refs and bindings as the first."""
+    monkeypatch.setattr(t, "component_property_names", lambda name: ("title", "items", "source"))
+    document = "\n".join(
+        (
+            '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":['
+            '{"id":"root","component":"Stack","children":["watch"]},'
+            '{"id":"watch","component":"WatchlistTable","title":"Watch"}]}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":['
+            '{"id":"root","component":"Stack","children":["watch","other"]},'
+            '{"id":"watch","component":"WatchlistTable","title":"Watch"},'
+            '{"id":"other","component":"TextContent","text":"x"}]}}',
+        )
+    )
+    completed = t._ensure_planned_component_data_refs(
+        document,
+        ({
+            "component": "WatchlistTable",
+            "params": {},
+            "inputs": ({
+                "key": "main",
+                "source": "finance.following.companies",
+                "params": {},
+                "shape": "FinanceWatchlistData",
+                "bindings": {"items": "items", "source": "source"},
+                "refresh_interval": 60,
+            },),
+        },),
+    )
+    declarations = [
+        component
+        for line in str(completed).splitlines()
+        for component in (json.loads(line).get("updateComponents") or {}).get("components", ())
+        if component.get("id") == "watch"
+    ]
+    assert len(declarations) == 2
+    for declaration in declarations:
+        assert declaration["dataRefs"]["main"]["source"] == "finance.following.companies"
+        assert declaration["items"] == {"path": "/data/watch/main/items"}
+        assert declaration["source"] == {"path": "/data/watch/main/source"}

@@ -615,17 +615,24 @@ def _ensure_planned_component_data_refs(
         )
         component_id = str(component["id"])
         claimed_ids.add(component_id)
-        component["dataRefs"] = expected_refs
         declared = frozenset(component_property_names(target))
-        for prop, value in dict(plan.get("fixed_props") or {}).items():
-            if prop in declared:
-                component[prop] = value
-        for input_contract in (plan.get("inputs") or ()):
-            input_key = str(input_contract.get("key") or "")
-            data_prefix = f"/data/{component_id}/{input_key}"
-            for prop, field in dict(input_contract.get("bindings") or {}).items():
+        # A compiler streams a page as several cumulative ``updateComponents``
+        # messages that re-declare earlier ids; the renderer keeps the LAST
+        # declaration of an id, so every occurrence must carry the same data
+        # metadata or the card is left waiting for data it never asked for.
+        for occurrence in components:
+            if occurrence.get("id") != component_id or occurrence.get("component") != target:
+                continue
+            occurrence["dataRefs"] = expected_refs
+            for prop, value in dict(plan.get("fixed_props") or {}).items():
                 if prop in declared:
-                    component[prop] = {"path": f"{data_prefix}/{field}"}
+                    occurrence[prop] = value
+            for input_contract in (plan.get("inputs") or ()):
+                input_key = str(input_contract.get("key") or "")
+                data_prefix = f"/data/{component_id}/{input_key}"
+                for prop, field in dict(input_contract.get("bindings") or {}).items():
+                    if prop in declared:
+                        occurrence[prop] = {"path": f"{data_prefix}/{field}"}
     return "\n".join(
         json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         for message in messages
