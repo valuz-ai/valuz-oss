@@ -51,7 +51,6 @@ from valuz_agent.modules.automations.errors import (
     AutomationAlreadyRunning,
     AutomationNameEmpty,
     AutomationNotFound,
-    AutomationPaused,
     AutomationPlaybookNotFound,
     AutomationPlaybookTaskUnsupported,
     AutomationPlaybookVersionNotFound,
@@ -1217,6 +1216,10 @@ class AutomationService:
 
         Both share the same enqueue path; only the recorded provenance differs.
 
+        Allowed while the automation is paused: pausing stops the schedule,
+        not explicit runs (workbench cards re-run their paused companion
+        automation this way).
+
         Single-flight: refuses to enqueue while the most recent run is
         still queued or running. The runner's in-memory ``_active_ids``
         guards against the cron-triggered path; this DB-side check guards
@@ -1226,8 +1229,10 @@ class AutomationService:
         row = await self._ds.get_automation_for_update(user_id, automation_id)
         if row is None:
             raise AutomationNotFound()
-        if row.status != "enabled":
-            raise AutomationPaused()
+        # ``paused`` only suspends the schedule. An explicit "run now" — a
+        # human clicking a workbench card or an agent invoking the tool — is
+        # the opposite of the tick loop, so it runs regardless; the row stays
+        # paused and ``next_run_at`` stays empty afterwards.
 
         existing = await self._ds.active_run(user_id, automation_id)
         if existing is not None:
