@@ -140,6 +140,7 @@ async def test_completer_builds_ephemeral_session_and_returns_text(patched):
         "bare_completion": True,
         "valuz": {
             "ephemeral_generative_ui": True,
+            "name": "Generative UI",
             "citation_enabled": False,
             "citation_verification_enabled": False,
             "task_coverage_enabled": False,
@@ -349,3 +350,41 @@ async def test_continuation_stops_at_the_budget(tmp_path, monkeypatch):
     # 1 initial + budget continuations, no more.
     assert len(cap["prompts"]) == r._GENERATION_MAX_CONTINUATIONS + 1
     assert _SEC1 in out  # the complete prefix survived
+
+
+def test_runtime_context_marker_keys_keep_the_kernel_session_path(monkeypatch):
+    """A gateway channel's api_key is an opaque marker the kernel fills per
+    turn; sending it as a static key yields 401 at the gateway."""
+    from types import SimpleNamespace
+
+    from src.core.runtime_context import runtime_context_marker
+
+    marker = SimpleNamespace(
+        api_key=runtime_context_marker("commercial.execution"),
+        base_url="https://gw",
+        api_protocol="anthropic",
+    )
+    static = SimpleNamespace(api_key="sk-real-key", base_url="https://gw", api_protocol="anthropic")
+    assert r._needs_kernel_session(runtime_provider="deepagents", mp=marker) is True
+    assert r._needs_kernel_session(runtime_provider="deepagents", mp=static) is False
+    assert r._needs_kernel_session(runtime_provider="claude_agent", mp=None) is True
+    assert r._is_runtime_context_marker("__runtime_context:commercial.execution__") is True
+    assert r._is_runtime_context_marker("__runtime_context:bad:key__") is False
+
+
+async def test_ephemeral_session_borrows_the_calling_sessions_name(monkeypatch):
+    from types import SimpleNamespace
+
+    async def get_session(user_id, session_id):
+        assert (user_id, session_id) == ("u1", "s1")
+        return SimpleNamespace(metadata={"valuz": {"name": "英伟达研究"}})
+
+    monkeypatch.setattr(r.kernel_client, "get_session", get_session)
+    assert await r._ephemeral_session_name("u1", "s1") == "英伟达研究"
+    assert await r._ephemeral_session_name("u1", None) == "Generative UI"
+
+    async def missing(user_id, session_id):
+        return SimpleNamespace(metadata={"valuz": {}})
+
+    monkeypatch.setattr(r.kernel_client, "get_session", missing)
+    assert await r._ephemeral_session_name("u1", "s1") == "Generative UI"

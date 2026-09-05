@@ -354,3 +354,49 @@ def test_extractor_keeps_root_seed_when_it_is_the_data_payload() -> None:
         json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         for message in messages
     )
+
+
+def test_param_grammar_ignores_prose_around_the_braces_and_pipes_inside_prose(monkeypatch) -> None:
+    """The edition writes ``{symbol: exact prefixed stock|index|fund|crypto symbol,
+    rangeDays?: 2-3650}; daily bars`` — the first name must not keep the brace,
+    the range must survive the trailing brace, and a format description that
+    merely contains ``|`` is not an enum."""
+    notes = (
+        'COMPONENT_DATA_CONTRACT {"component":"PriceVolumeChart",'
+        '"params":"{symbol: exact prefixed stock|index|fund|crypto symbol, '
+        'rangeDays?: 2-3650}; daily bars; legacy aliases readable",'
+        '"inputs":[{"key":"main","source":"finance.market.kline","shape":"FinanceTimeSeriesData",'
+        '"bindings":{"data":"data"},"paramMap":{"symbol":"symbol"},"refreshInterval":300}]}\n'
+        'COMPONENT_DATA_CONTRACT {"component":"MarketOverview",'
+        '"params":"{spx?: canonical index symbol, '
+        'commodity?: oil|gold|gas|silver|platinum}; latest snapshots",'
+        '"inputs":[{"key":"spx","source":"finance.market.index","shape":"FinanceMetricData",'
+        '"bindings":{"spxMetrics":"metrics"},"paramMap":{"symbol":"spx"},"refreshInterval":60}]}'
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.genui.protocol.edition_catalog_text", lambda *a, **k: notes
+    )
+
+    contracts = registered_component_data_contracts()
+
+    price = contracts["PriceVolumeChart"]
+    assert set(price["param_specs"]) == {"symbol", "rangeDays"}
+    assert price["required_params"] == ("symbol",)
+    assert "enum" not in price["param_specs"]["symbol"]
+    assert (
+        price["param_specs"]["symbol"]["description"]
+        == "exact prefixed stock|index|fund|crypto symbol"
+    )
+    assert price["param_specs"]["rangeDays"] == {
+        "required": False,
+        "description": "2-3650",
+        "kind": "number",
+        "minimum": 2.0,
+        "maximum": 3650.0,
+    }
+    market = contracts["MarketOverview"]
+    assert set(market["param_specs"]) == {"spx", "commodity"}
+    assert "enum" not in market["param_specs"]["spx"]
+    assert market["param_specs"]["commodity"]["enum"] == (
+        "oil", "gold", "gas", "silver", "platinum",
+    )

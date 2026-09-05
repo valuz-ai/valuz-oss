@@ -73,6 +73,29 @@ def _uses_official_cli_auth(*, runtime_provider: Any, mp: Any) -> bool:
     return mp is None and str(runtime_provider) in {"claude_agent", "codex"}
 
 
+def _is_runtime_context_marker(value: Any) -> bool:
+    """True when a provider key is an opaque runtime-context marker that only
+    the kernel fills in (per turn, from the overlay's turn context)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        from src.core.runtime_context import _marker_key  # type: ignore[attr-defined]
+
+        return _marker_key(value) is not None
+    except Exception:  # noqa: BLE001 — kernel not importable: fall back to the wire shape
+        return value.startswith("__runtime_context:") and value.endswith("__")
+
+
+def _needs_kernel_session(*, runtime_provider: Any, mp: Any) -> bool:
+    """The direct one-shot completion needs a static key in hand. Official CLI
+    channels authenticate out-of-band, and gateway channels carry a marker the
+    kernel materializes right before each turn — both must keep the kernel
+    session path, or the placeholder itself is sent as the credential."""
+    if _uses_official_cli_auth(runtime_provider=runtime_provider, mp=mp):
+        return True
+    return _is_runtime_context_marker(getattr(mp, "api_key", None))
+
+
 def _is_deepseek_anthropic_channel(*, model: str, mp: Any) -> bool:
     base_url = str(getattr(mp, "base_url", "") or "").lower()
     return "deepseek" in base_url or model.lower().startswith("deepseek-")
@@ -122,6 +145,23 @@ def _make_progress_heartbeat(
     return heartbeat
 
 
+async def _ephemeral_session_name(user_id: str, calling_session_id: str | None) -> str:
+    fallback = "Generative UI"
+    if not calling_session_id:
+        return fallback
+    try:
+        source = await kernel_client.get_session(user_id, calling_session_id)
+    except Exception:  # noqa: BLE001 — the name is a label, never a blocker
+        logger.debug(
+            "generate_ui: calling session %s unreadable", calling_session_id, exc_info=True
+        )
+        return fallback
+    metadata = getattr(source, "metadata", None) or {}
+    valuz = metadata.get("valuz") if isinstance(metadata, dict) else None
+    name = str(valuz.get("name") or "").strip() if isinstance(valuz, dict) else ""
+    return name or fallback
+
+
 def _make_completer(
     *,
     user_id: str,
@@ -147,7 +187,7 @@ def _make_completer(
     returns the full text as the canonical ToolResult. When either is None,
     behaves as the synchronous (non-streaming) version."""
 
-    if not _uses_official_cli_auth(runtime_provider=runtime_provider, mp=mp):
+    if not _needs_kernel_session(runtime_provider=runtime_provider, mp=mp):
         return _make_direct_llm_completer(
             user_id=user_id,
             model=model,
@@ -244,6 +284,11 @@ def _make_completer(
             "bare_completion": True,
             "valuz": {
                 "ephemeral_generative_ui": True,
+                # Sessions carry their display name here (``sessions.service``);
+                # overlays label the turn's billing scope with it and refuse a
+                # session without one. Borrow the calling session's name so the
+                # compile shows up under the conversation that asked for it.
+                "name": await _ephemeral_session_name(user_id, calling_session_id),
                 "citation_enabled": False,
                 "citation_verification_enabled": False,
                 "task_coverage_enabled": False,
