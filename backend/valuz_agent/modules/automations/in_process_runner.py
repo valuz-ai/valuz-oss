@@ -39,11 +39,33 @@ from valuz_agent.ports.automation_runtime import (
     AutomationExecutionLease,
     NoopAutomationExecutionLease,
 )
+from valuz_agent.ports.capability_policy import TaskCheckConfig
 
 logger = logging.getLogger(__name__)
 
 TICK_INTERVAL = 30
 TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
+
+
+def _automation_check_config(
+    row: AutomationRow, run: AutomationRunRow, playbook_run: Any | None = None,
+) -> TaskCheckConfig:
+    """Pass owned run identity, not prompt text or host-based exemptions."""
+    return TaskCheckConfig(
+        operation="automation.execute",
+        origin="automation",
+        run_id=run.id,
+        automation_id=row.id,
+        playbook_definition_id=(playbook_run.definition_id if playbook_run is not None else None),
+        playbook_run_id=getattr(run, "playbook_run_id", None),
+        configuration={
+            "action_kind": row.action_kind,
+            "trigger_type": run.trigger_type,
+            "playbook_version": (
+                playbook_run.definition_version if playbook_run is not None else None
+            ),
+        },
+    )
 
 
 def _compose_playbook_prompt(
@@ -384,7 +406,7 @@ class InProcessAutomationRunner:
         # carries ``(session_id, rendered_prompt)`` out of the worker's unit of
         # work; the spawn happens only AFTER the ``running`` status is committed
         # (below, outside the ``async with``).
-        handoff_args: tuple[str, str] | None = None
+        handoff_args: tuple[str, str, TaskCheckConfig] | None = None
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
             playbooks = PlaybookDatastore(db)
@@ -537,6 +559,7 @@ class InProcessAutomationRunner:
                         rendered_prompt=rendered_prompt,
                         user_id=user_id,
                         lease=execution_lease,
+                        task_check_config=_automation_check_config(row, run, playbook_run),
                     )
                     return
 
@@ -615,7 +638,9 @@ class InProcessAutomationRunner:
                 # ``(session_id, rendered_prompt)`` out so the worker spawns the
                 # turn AFTER this unit of work commits the ``running`` status
                 # (the background task re-reads a consistent, committed row).
-                handoff_args = (session.id, rendered_prompt)
+                handoff_args = (
+                    session.id, rendered_prompt, _automation_check_config(row, run, playbook_run)
+                )
             finally:
                 # The background task owns the single-flight release for a
                 # handed-off chat turn; only clear it here for the inline paths
@@ -624,7 +649,7 @@ class InProcessAutomationRunner:
                     self._active_ids.pop(automation_id, None)
 
         if handoff_args is not None:
-            session_id, prompt = handoff_args
+            session_id, prompt, check_config = handoff_args
             finish = self._finish_chat_run(
                 user_id=user_id,
                 automation_id=automation_id,
@@ -632,6 +657,7 @@ class InProcessAutomationRunner:
                 session_id=session_id,
                 rendered_prompt=prompt,
                 lease=execution_lease,
+                task_check_config=check_config,
             )
             if detach_chat:
                 asyncio.create_task(finish)
@@ -647,6 +673,7 @@ class InProcessAutomationRunner:
         session_id: str,
         rendered_prompt: str,
         lease: AutomationExecutionLease | None = None,
+        task_check_config: TaskCheckConfig | None = None,
     ) -> None:
         """Run the chat turn and finalize the run OFF the serial worker.
 
@@ -677,10 +704,22 @@ class InProcessAutomationRunner:
                     return
                 session_svc = self._build_session_service(db)
                 try:
+                    pinned_playbook = (
+                        await playbooks.get_run(user_id, run.playbook_run_id)
+                        if getattr(run, "playbook_run_id", None) else None
+                    )
                     result = await session_svc.send_message_sync(
                         session_id,
                         rendered_prompt,
                         user_id=user_id,
+                        task_check_config=task_check_config or _automation_check_config(
+                            row, run, pinned_playbook
+                        ).model_copy(update={"configuration": {
+                            "action_kind": "chat", "trigger_type": run.trigger_type,
+                            "playbook_version": (
+                                pinned_playbook.definition_version if pinned_playbook else None
+                            ),
+                        }}),
                     )
                     # ``send_message_sync`` returns normally even when the
                     # turn errored mid-stream — provider 401s, kernel SDK
@@ -791,6 +830,7 @@ class InProcessAutomationRunner:
         rendered_prompt: str,
         user_id: str | None = None,
         lease: AutomationExecutionLease | None = None,
+        task_check_config: TaskCheckConfig | None = None,
     ) -> None:
         if user_id is None:
             raise ValueError("user_id is required")
@@ -836,6 +876,7 @@ class InProcessAutomationRunner:
                 # and the reverse "what did this automation spawn?" is queryable.
                 trigger_type="automation",
                 trigger_automation_id=automation_id,
+                task_check_config=task_check_config or _automation_check_config(row, run),
                 # When an AGENT invoked this run, carry its session so the spawned
                 # task also chains back to the originating task (transitive
                 # task→automation→task nesting in the task tree).

@@ -1,38 +1,70 @@
-"""Host-scoped capability policy.
+"""Trusted per-task policy for OPTIONAL post-run checks.
 
-Per-turn capabilities (citation, verification, task coverage) normally
-converge from the user's global preferences. Some product surfaces want a
-different answer for every conversation they host — an edition's workbench
-panel may switch task-coverage continuations off for its own conversations
-without touching the user's global setting.
-
-Editions register :class:`HostCapabilityPolicyPort` implementations; the
-capability convergence asks them whenever a turn arrives with a ``host_ref``.
-A non-``None`` answer is **stamped onto the session** (metadata), so turns
-that reach the session without a host_ref — queued follow-up drains, resumes
-— keep the hosted decision instead of snapping back to the global preference.
-
-Contract notes:
-
-- Policies decide from the host reference alone and must be pure and fast —
-  they run inside the pre-turn hook of every hosted send.
-- ``None`` means "no opinion"; the first non-``None`` answer across the
-  registered policies wins.
-- Like every host_ref consumer, a policy grants nothing: it only tunes
-  capabilities the session's owner already has.
+Only server callers supply TaskCheckConfig. Host references provide location,
+never permission or a reason to bypass checks. These policies cannot change
+authorization, confirmation, or tool/schema validation. Queue items carry their
+own config; continuations reuse an owner/session/run matched snapshot. Fresh
+conversation inputs never inherit a previous input's resolved decision.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool
 
 from valuz_agent.ports.message_context import HostRef
 
-__all__ = ["HostCapabilityPolicyPort"]
+
+class OptionalCheckOverrides(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    citation_enabled: StrictBool | None = None
+    verification_enabled: StrictBool | None = None
+    task_coverage_enabled: StrictBool | None = None
+
+
+class TaskCheckConfig(BaseModel):
+    """Non-secret, durable input authored by an owned server operation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    operation: str = Field(default="conversation", min_length=1, max_length=128)
+    origin: Literal["chat", "task", "automation"] = "chat"
+    run_id: str | None = None
+    revision: str | None = None
+    automation_id: str | None = None
+    playbook_definition_id: str | None = None
+    playbook_run_id: str | None = None
+    configuration: dict[str, JsonValue] = Field(default_factory=dict)
+    overrides: OptionalCheckOverrides = Field(default_factory=OptionalCheckOverrides)
+
+
+class TaskCheckContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    user_id: str
+    session_id: str
+    project_id: str | None = None
+    task_id: str | None = None
+    host_ref: HostRef | None = None
+    config: TaskCheckConfig
+    policy_sources: tuple[str, ...] = ()
+
+
+class TaskCheckPolicyPort(Protocol):
+    async def resolve(self, context: TaskCheckContext) -> OptionalCheckOverrides | None:
+        """First non-None value per check wins; errors defer to preferences.
+
+        Resolve references under context.user_id before using their config.
+        HostRef alone is not authority. Never inspect prompt text for policy.
+        """
+        ...
 
 
 class HostCapabilityPolicyPort(Protocol):
-    """Override session capabilities for conversations on a given host."""
+    """Deprecated live-host compatibility; no sticky session stamp."""
 
     def task_coverage_override(self, host_ref: HostRef) -> bool | None:
         """Whether task-coverage continuations run for this host.

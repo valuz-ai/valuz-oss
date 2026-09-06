@@ -81,6 +81,99 @@ async def test_enqueue_is_fifo_with_monotonic_position() -> None:
     assert [r.position for r in rows] == [0, 1, 2]
 
 
+async def test_edit_queue_resets_policy_but_keeps_attachments_and_host(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions.service import SessionService
+    from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+    from valuz_agent.ports.capability_policy import OptionalCheckOverrides, TaskCheckConfig
+
+    config = TaskCheckConfig(run_id="old", operation="layout.configure", overrides=(
+        OptionalCheckOverrides(task_coverage_enabled=False)
+    ))
+    row = _row("edited", "change layout")
+    row.input.update({
+        CONFIG_KEY: config.model_dump(mode="json"),
+        "attachments": [{"source_path": "input.pdf"}],
+        "host_ref": {"host_type": "test", "host_id": "desk"},
+    })
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, row)
+    service = SessionService.__new__(SessionService)
+    monkeypatch.setattr(service, "list_queue", AsyncMock(return_value=None))
+    await service.edit_queued("edited", row.id, "research the company", OWNER)
+    async with async_unit_of_work(commit=False) as db:
+        updated = await SessionDatastore(db).get_queued(OWNER, "edited", row.id)
+    assert updated.input["text"] == "research the company"
+    assert updated.input["attachments"] == [{"source_path": "input.pdf"}]
+    assert updated.input["host_ref"] == {"host_type": "test", "host_id": "desk"}
+    new_config = TaskCheckConfig.model_validate(updated.input[CONFIG_KEY])
+    assert new_config.run_id != "old"
+    assert new_config.operation == "conversation"
+    assert new_config.overrides.task_coverage_enabled is None
+
+
+async def test_drain_reconstructs_each_items_own_policy_context(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import pre_turn, run_orchestrator
+    from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+    from valuz_agent.ports.capability_policy import OptionalCheckOverrides, TaskCheckConfig
+
+    expected = []
+    async with async_unit_of_work() as db:
+        for operation, flag in (("layout.configure", False), ("conversation", None),
+                                ("layout.configure", False)):
+            row = _row("policy-drain", operation)
+            config = TaskCheckConfig(operation=operation, overrides=OptionalCheckOverrides(
+                task_coverage_enabled=flag,
+            ))
+            row.input[CONFIG_KEY] = config.model_dump(mode="json")
+            await SessionDatastore(db).create_queued(OWNER, row)
+            expected.append((row.id, operation, flag))
+    _patch_drain(monkeypatch)
+    actual = []
+    async def capture(*args, **kwargs):
+        config = kwargs["task_check_config"]
+        actual.append((config.run_id, config.operation, config.overrides.task_coverage_enabled))
+        assert kwargs.get("resume_task_checks", False) is False
+    monkeypatch.setattr(pre_turn, "_refresh_citation_policy", capture)
+    for fn in (
+        "_refresh_bundled_skills", "_refresh_docs_capabilities",
+        "restamp_always_on_mcp", "_refresh_ptc",
+    ):
+        monkeypatch.setattr(pre_turn, fn, AsyncMock())
+    async def execute(*args, pre_turn=None, **kwargs):
+        await pre_turn()
+    monkeypatch.setattr(run_orchestrator, "run_session_to_idle", execute)
+    await run_orchestrator._drain_queue_after_turn("policy-drain", _FakeBus(), user_id=OWNER)
+    assert actual == expected
+
+
+async def test_service_enqueue_persists_detached_config(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import service as module
+    from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+    from valuz_agent.ports.capability_policy import TaskCheckConfig
+
+    config = TaskCheckConfig(run_id="captured", configuration={"nested": {"name": "original"}})
+    async def get_session(*args):
+        # Mutation after the service accepted the request cannot alter it.
+        config.configuration["nested"]["name"] = "changed"
+        return SimpleNamespace(status="running", metadata={"valuz": {"project_id": "proj-1"}})
+    monkeypatch.setattr(module, "data_reader", lambda: SimpleNamespace(get_session=get_session))
+    monkeypatch.setattr(module, "_load_pending_attachments", AsyncMock(return_value=[]))
+    service = module.SessionService.__new__(module.SessionService)
+    service._bus = _FakeBus()
+    monkeypatch.setattr(service, "list_queue", AsyncMock(return_value=None))
+    await service.enqueue("captured", "create component", user_id=OWNER, task_check_config=config)
+    async with async_unit_of_work(commit=False) as db:
+        items = await SessionDatastore(db).list_queued(OWNER, "captured")
+    assert items[0].input[CONFIG_KEY]["configuration"] == {"nested": {"name": "original"}}
+
+
 async def test_count_and_peek_and_mark_dispatched() -> None:
     async with async_unit_of_work() as db:
         ds = SessionDatastore(db)
@@ -273,6 +366,7 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
         queued_attachments=None,
         pre_turn=None,
         user_id=None,
+        host_ref=None,
     ):
         assert user_id == OWNER
         # A drained item is a full chat turn, so it must carry the full

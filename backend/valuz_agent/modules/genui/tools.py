@@ -29,6 +29,11 @@ from src.core.tools import ExecContext
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.genui.ids import resolve_tool_use_id
+from valuz_agent.modules.genui.parameters import (
+    ParameterValidationError,
+    component_json_schema,
+    validate_component_parameters,
+)
 from valuz_agent.modules.genui.prompts import TOOL_DESCRIPTION
 from valuz_agent.modules.genui.protocol import (
     OUTPUT_FORMAT,
@@ -275,13 +280,17 @@ def _component_param_schema(name: str, spec: dict[str, Any]) -> dict[str, Any]:
 def _registered_component_data_item_schemas() -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for component, contract in registered_component_data_contracts().items():
+        if contract.get("parameter_schema_error"):
+            continue
         param_specs = dict(contract.get("param_specs") or {})
         schemas.append(
             {
                 "type": "object",
                 "properties": {
                     "component": {"type": "string", "enum": [component]},
-                    "params": {
+                    "params": component_json_schema(contract["parameter_schema"])
+                    if "parameter_schema" in contract
+                    else {
                         "type": "object",
                         "properties": {
                             name: _component_param_schema(name, spec)
@@ -352,6 +361,10 @@ def _validate_generation_choices(
         return (), (), (
             "unknown component name(s): " + ", ".join(unknown_components)
         )
+    contracts = registered_component_data_contracts()
+    schema_error = _invalid_parameter_schema_error(requested_components, contracts)
+    if schema_error:
+        return (), (), schema_error
 
     # These are general composition glue, not business-semantic choices. The
     # compiler routinely needs one heading, card boundary, grid, or separator
@@ -371,7 +384,6 @@ def _validate_generation_choices(
         return (), (), "'component_data' must be an array"
 
     known_query_components = frozenset(registered_component_data_names())
-    contracts = registered_component_data_contracts()
     normalized_plans: list[dict[str, Any]] = []
     for index, raw in enumerate(component_data):
         if not isinstance(raw, dict):
@@ -397,6 +409,26 @@ def _validate_generation_choices(
         if not isinstance(params, dict):
             return (), (), f"component_data[{index}].params must be an object"
         contract = contracts.get(component, {})
+        if contract.get("parameter_schema_error"):
+            return (
+                (),
+                (),
+                (
+                    f"component_data[{index}] component '{component}' has an invalid "
+                    f"registered parameterSchema: {contract['parameter_schema_error']}"
+                ),
+            )
+        if "parameter_schema" in contract:
+            try:
+                normalized_params = validate_component_parameters(
+                    params, contract["parameter_schema"]
+                )
+            except ParameterValidationError as exc:
+                return (), (), f"component_data[{index}] component '{component}': {exc}"
+            if component not in requested_components:
+                requested_components.append(component)
+            normalized_plans.append(_component_data_plan(component, normalized_params, contract))
+            continue
         param_specs = dict(contract.get("param_specs") or {})
         normalized_params = dict(params)
         # Models occasionally pluralize a single-symbol parameter (or the
@@ -504,36 +536,37 @@ def _validate_generation_choices(
             )
         if component not in requested_components:
             requested_components.append(component)
-        normalized: dict[str, Any] = {
-            "component": component,
-            "params": normalized_params,
-            "inputs": tuple(
-                {
-                    **input_contract,
-                    "params": {
-                        **(
-                            normalized_params
-                            if not input_contract.get("param_map")
-                            else {}
-                        ),
-                        **{
-                            source_name: normalized_params[component_name]
-                            for source_name, component_name in dict(
-                                input_contract.get("param_map") or {}
-                            ).items()
-                            if component_name in normalized_params
-                        },
-                        # Developer-owned constants are authoritative even if
-                        # a future component param happens to reuse the name.
-                        **dict(input_contract.get("fixed_params") or {}),
-                    },
-                }
-                for input_contract in (contract.get("inputs") or ())
-            ),
-            "fixed_props": dict(contract.get("fixed_props") or {}),
-        }
-        normalized_plans.append(normalized)
+        normalized_plans.append(_component_data_plan(component, normalized_params, contract))
     return tuple(requested_components), tuple(normalized_plans), None
+
+
+def _component_data_plan(
+    component: str, normalized_params: dict[str, Any], contract: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "component": component,
+        "params": normalized_params,
+        "inputs": tuple(
+            {
+                **input_contract,
+                "params": {
+                    **(normalized_params if not input_contract.get("param_map") else {}),
+                    **{
+                        source_name: normalized_params[component_name]
+                        for source_name, component_name in dict(
+                            input_contract.get("param_map") or {}
+                        ).items()
+                        if component_name in normalized_params
+                    },
+                    # Developer-owned constants are authoritative even if
+                    # a future component param happens to reuse the name.
+                    **dict(input_contract.get("fixed_params") or {}),
+                },
+            }
+            for input_contract in (contract.get("inputs") or ())
+        ),
+        "fixed_props": dict(contract.get("fixed_props") or {}),
+    }
 
 
 def _document_component_names(document: str | None) -> tuple[str, ...]:
@@ -552,6 +585,26 @@ def _document_component_names(document: str | None) -> tuple[str, ...]:
             if isinstance(component, dict) and isinstance(component.get("component"), str):
                 names.append(component["component"])
     return tuple(dict.fromkeys(names))
+
+
+def _invalid_parameter_schema_error(
+    component_names: list[str] | tuple[str, ...],
+    contracts: dict[str, dict[str, Any]],
+) -> str | None:
+    for name in component_names:
+        error = contracts.get(name, {}).get("parameter_schema_error")
+        if error:
+            return f"component '{name}' has an invalid registered parameterSchema: {error}"
+    return None
+
+
+def _document_parameter_schema_error(document: str | None) -> str | None:
+    # The caller may omit a generation plan and let the compiler choose inline
+    # components. An invalid query registration is still unavailable: omitting
+    # component_data/dataRefs must not turn it into an unchecked inline card.
+    return _invalid_parameter_schema_error(
+        _document_component_names(document), registered_component_data_contracts()
+    )
 
 
 def _ensure_planned_component_data_refs(
@@ -708,6 +761,10 @@ def _compiled_document_error(
     actual_names = tuple(
         str(component.get("component") or "") for component in components
     )
+    contracts = registered_component_data_contracts()
+    schema_error = _invalid_parameter_schema_error(actual_names, contracts)
+    if schema_error:
+        return schema_error
     if "Stack" not in actual_names or not any(
         component.get("id") == "root" for component in components
     ):
@@ -725,7 +782,6 @@ def _compiled_document_error(
     if unexpected_names:
         return "compiler used unselected component(s): " + ", ".join(unexpected_names)
 
-    contracts = registered_component_data_contracts()
     current_refs: dict[str, tuple[str, Any]] = {}
     if generation_mode == "edit" and current_document:
         for line in current_document.splitlines():
@@ -1425,7 +1481,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
             generation_mode=generation_mode,
         )
         if has_generation_plan
-        else None
+        else _document_parameter_schema_error(primary_document)
     )
     if compiler.is_lite and (
         primary_document is None or primary_validation_error is not None
@@ -1488,7 +1544,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
             generation_mode=generation_mode,
         )
         if has_generation_plan
-        else None
+        else _document_parameter_schema_error(document)
     )
     receipt_trailer = ""
     if validation_error is not None:

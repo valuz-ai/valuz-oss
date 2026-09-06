@@ -347,6 +347,27 @@ async def test_a_failing_pre_turn_hook_never_sinks_the_turn(monkeypatch) -> None
     assert order == ["run_turn"]
 
 
+async def test_required_policy_failure_blocks_dispatch_and_releases_pin(monkeypatch) -> None:
+    alloc = _ScopedAllocator()
+    alloc.live = False
+    monkeypatch.setattr(ext, "sandbox_allocator", alloc)
+    order: list[str] = []
+    live = _RecordingKernel("live", order)
+    durable = _RecordingKernel("durable", order)
+    monkeypatch.setattr(kc, "_endpoint_clients", {"https://session:s1.pool": live})
+    monkeypatch.setattr(kc, "_host_data_client", durable)
+
+    async def required_policy() -> None:
+        raise kc.RequiredPreTurnError("Current task check policy unavailable")
+
+    with pytest.raises(kc.TurnNotStartedError, match="Current task check policy unavailable"):
+        await kc.run_turn("u1", "s1", "new research", pre_turn=required_policy)
+    assert order == []
+    await kc.update_session("u1", "s1", object())
+    assert durable.updates == ["s1"]
+    assert live.updates == []
+
+
 # ── ephemeral review reuse (memory review inside the source's warm sandbox) ──
 
 

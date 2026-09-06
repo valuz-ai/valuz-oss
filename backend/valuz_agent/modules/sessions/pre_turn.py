@@ -18,8 +18,8 @@ instead puts them in the one window where the write is guaranteed to reach the
 kernel that is about to consume it. See ``kernel_client.run_turn`` for the
 failure this fixes.
 
-Every hook is best-effort per refresher: a failed refresh degrades one
-capability for one turn; it must never sink the turn.
+Credential/skill refreshers are best-effort. Check-policy convergence is
+required: dispatching with the previous input's disabled checks is unsafe.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 
+from valuz_agent.ports.capability_policy import OptionalCheckOverrides, TaskCheckConfig
 from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,8 @@ async def _refresh_citation_policy(
     verification_enabled_override: bool | None,
     task_coverage_enabled_override: bool | None = None,
     host_ref: HostRef | None = None,
+    task_check_config: TaskCheckConfig | None = None,
+    resume_task_checks: bool = False,
 ) -> None:
     """Converge the citation / verification / task-coverage policy on the
     session (skill, system policy block, resolved quality policy).
@@ -148,20 +151,32 @@ async def _refresh_citation_policy(
             verification_enabled_override=verification_enabled_override,
             task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
+            task_check_config=task_check_config,
+            resume_task_checks=resume_task_checks,
         )
-    except Exception:  # noqa: BLE001 — the kernel guard still fails closed
-        logger.warning("citation policy refresh failed for session %s", session_id, exc_info=True)
+    except Exception as exc:
+        # Continuing would run a new research request with a prior turn's
+        # persisted disabled flags. The turn driver reports/finalizes this
+        # preparation failure; never invoke the model with a stale exemption.
+        logger.error("check policy refresh failed for session %s", session_id, exc_info=True)
+        from valuz_agent.adapters import kernel_client
+
+        raise kernel_client.RequiredPreTurnError(
+            "Unable to resolve the current task check policy"
+        ) from exc
 
 
 def always_on_mcp_hook(session_id: str, user_id: str | None) -> PreTurnHook:
-    """Credential convergence only — the task lead / member turn path.
-
-    Task sessions get their capabilities from ``build_member_session`` at
-    dispatch and are not user-editable mid-task, so only the credential
-    re-stamp is meaningful per turn.
-    """
+    """Task/recovery path: retain this run's check snapshot, refresh credentials."""
 
     async def _hook() -> None:
+        await _refresh_citation_policy(
+            session_id,
+            user_id,
+            citation_enabled_override=None,
+            verification_enabled_override=None,
+            resume_task_checks=True,
+        )
         await restamp_always_on_mcp(session_id, user_id)
 
     return _hook
@@ -175,6 +190,7 @@ def chat_capability_hook(
     verification_enabled_override: bool | None = None,
     task_coverage_enabled_override: bool | None = None,
     host_ref: HostRef | None = None,
+    task_check_config: TaskCheckConfig | None = None,
 ) -> PreTurnHook:
     """Full convergence — the chat turn path (send, queue drain, sync send).
 
@@ -188,6 +204,23 @@ def chat_capability_hook(
     with an MCP server to pair with.
     """
 
+    from valuz_agent.modules.sessions.task_checks import fresh_config
+
+    config = fresh_config(task_check_config)
+    overrides = config.overrides.model_dump()
+    overrides.update(
+        {
+            key: value
+            for key, value in {
+                "citation_enabled": citation_enabled_override,
+                "verification_enabled": verification_enabled_override,
+                "task_coverage_enabled": task_coverage_enabled_override,
+            }.items()
+            if value is not None
+        }
+    )
+    config = config.model_copy(update={"overrides": OptionalCheckOverrides(**overrides)})
+
     async def _hook() -> None:
         await _refresh_citation_policy(
             session_id,
@@ -196,6 +229,7 @@ def chat_capability_hook(
             verification_enabled_override=verification_enabled_override,
             task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
+            task_check_config=config,
         )
         await _refresh_bundled_skills(session_id, user_id)
         await _refresh_docs_capabilities(session_id, user_id)

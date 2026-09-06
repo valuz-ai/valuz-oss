@@ -19,6 +19,8 @@ from uuid import uuid4
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.sessions.task_checks import CONFIG_KEY, fresh_config
+from valuz_agent.ports.capability_policy import TaskCheckConfig
 from valuz_agent.modules.tasks import launcher
 from valuz_agent.modules.tasks.task_worktree import (
     resolve_task_cwd,
@@ -94,6 +96,7 @@ class LifecycleService:
         trigger_automation_id: str | None = None,
         worktree: bool = False,
         user_id: str,
+        task_check_config: TaskCheckConfig | None = None,
     ) -> TaskRow:
         """Register a task, then start its lead session behind the response.
 
@@ -109,6 +112,7 @@ class LifecycleService:
         ``spill_goal_brief_if_too_long``), so a long goal never crashes the
         ``/goal`` payload mid-turn.
         """
+        check_config = fresh_config(task_check_config) if task_check_config else None
         async with async_unit_of_work() as db:
             task_ds = TaskDatastore(db)
 
@@ -185,6 +189,7 @@ class LifecycleService:
                 trigger_automation_id=prov.trigger_automation_id,
                 metadata_={
                     "dispatch_mode": "async",
+                    **({CONFIG_KEY: check_config.model_dump(mode="json")} if check_config else {}),
                     # v3: when a project conversation spawns this task via the
                     # ``create_task`` tool, record the originating session so
                     # the task panel / conversation can cross-reference.

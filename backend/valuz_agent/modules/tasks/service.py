@@ -137,9 +137,28 @@ class TaskService:
 
         Returns whether the task has a lead to receive it.
         """
+        from pydantic import ValidationError
+
+        from valuz_agent.modules.sessions.task_checks import CONFIG_KEY, fresh_config
         from valuz_agent.modules.tasks import messaging
+        from valuz_agent.ports.capability_policy import TaskCheckConfig
 
         task.goal = goal
+        # A revised goal is new intent, not a continuation of a layout-only
+        # exemption. Keep execution lineage on TaskRow; only the optional-check
+        # revision changes so every lead/member converges at its next boundary.
+        try:
+            previous_checks = TaskCheckConfig.model_validate(
+                (task.metadata_ or {}).get(CONFIG_KEY) or {}
+            )
+        except ValidationError:
+            previous_checks = TaskCheckConfig()
+        task.metadata_ = {
+            **(task.metadata_ or {}),
+            CONFIG_KEY: fresh_config(TaskCheckConfig(
+                origin="task", operation="task.execute", run_id=previous_checks.run_id or task.id,
+            )).model_dump(mode="json"),
+        }
         await self._tasks.update_task(task)
         # One transaction: the row, the timeline entry and the lead's copy of
         # the revision. Splitting them is how a task ends up looking redirected

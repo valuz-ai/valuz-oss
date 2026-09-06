@@ -120,6 +120,14 @@ class KernelNotImplementedError(KernelClientError):
     pass
 
 
+class RequiredPreTurnError(RuntimeError):
+    """A required policy could not be established; do not dispatch stale state.
+
+    Ordinary credential/docs refresh failures remain best-effort. Callers use
+    this explicit signal only where continuing would apply another run's policy.
+    """
+
+
 class TurnNotStartedError(RuntimeError):
     """A turn failed BEFORE the kernel accepted it.
 
@@ -1342,8 +1350,9 @@ async def run_turn(
     retire write-back carries it forward — which is exactly why the failure
     only ever showed up on long-idle sessions.)
 
-    Hooks are best-effort by contract: a refresh failure degrades a capability,
-    it must never sink the turn.
+    Ordinary refresh failures degrade a capability without sinking the turn.
+    RequiredPreTurnError explicitly prevents dispatch when this turn's policy
+    cannot be established; callers receive the standard pre-flight failure.
     """
     # Everything up to ``k.run_turn`` below is PRE-FLIGHT: the kernel has not
     # accepted the turn yet, so it has not opened the turn's event bracket. A
@@ -1358,6 +1367,8 @@ async def run_turn(
             token = _pinned_control_kernel.set((session_id, k))
             try:
                 await pre_turn()
+            except RequiredPreTurnError:
+                raise
             except Exception:  # noqa: BLE001 — a hook must never block a turn
                 logger.warning("pre-turn hook failed for session %s", session_id, exc_info=True)
             finally:

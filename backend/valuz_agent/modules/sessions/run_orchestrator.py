@@ -27,7 +27,9 @@ from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.execution_lease import hold_lease, load_lease_states
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.sessions.pre_turn import chat_capability_hook
+from valuz_agent.modules.sessions.task_checks import queued_check_input
 from valuz_agent.modules.sessions.turn_driver import _INTERRUPT_CATEGORIES, run_session_to_idle
+from valuz_agent.ports.capability_policy import TaskCheckConfig
 from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
@@ -177,6 +179,7 @@ async def _run_agent_background(
     event_bus: EventBus,
     user_id: str | None = None,
     host_ref: HostRef | None = None,
+    task_check_config: TaskCheckConfig | None = None,
 ) -> None:
     """Drive one agent turn in the background, then drain any queued follow-ups.
 
@@ -201,7 +204,9 @@ async def _run_agent_background(
         content,
         event_bus,
         on_message=meter,
-        pre_turn=chat_capability_hook(session_id, owner_user_id, host_ref=host_ref),
+        pre_turn=chat_capability_hook(
+            session_id, owner_user_id, host_ref=host_ref, task_check_config=task_check_config
+        ),
         user_id=owner_user_id,
         host_ref=host_ref,
     )
@@ -278,6 +283,7 @@ async def _drain_queue_after_turn(
 
             head_id = head.id
             payload = head.input or {}
+            check_config, host_ref = queued_check_input(payload, head_id)
             text = str(payload.get("text") or "")
             attachments = list(payload.get("attachments") or [])
 
@@ -330,8 +336,12 @@ async def _drain_queue_after_turn(
                     # can run arbitrarily long after the send that enqueued it
                     # — so it needs the same per-turn convergence, not just the
                     # credential re-stamp the default would give it.
-                    pre_turn=chat_capability_hook(session_id, owner_user_id),
+                    pre_turn=chat_capability_hook(
+                        session_id, owner_user_id, host_ref=host_ref,
+                        task_check_config=check_config,
+                    ),
                     user_id=owner_user_id,
+                    host_ref=host_ref,
                 )
             finally:
                 _dispatching_heads.pop(session_id, None)

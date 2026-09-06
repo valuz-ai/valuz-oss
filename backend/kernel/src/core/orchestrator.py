@@ -16,6 +16,7 @@ import asyncio
 import copy
 import dataclasses
 import logging
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -97,7 +98,8 @@ def _is_task_coverage_noop_tool_name(value: Any) -> bool:
 # and a model that emits "No response requested." anyway used to leave that
 # line in the transcript. The sink treats a pass whose ONLY visible output is
 # such a meta-response (or nothing) as the no-op it was supposed to be.
-# Normalized containment match, lowercase, whitespace-collapsed.
+# Whole-expression matches only. Uncertain text remains visible; a completion
+# phrase is not proof that its surrounding text contains no useful correction.
 _TASK_COVERAGE_META_RESPONSES = (
     "no response requested",
     "no response is requested",
@@ -105,6 +107,7 @@ _TASK_COVERAGE_META_RESPONSES = (
     "nothing further",
     "no correction is needed",
     "no supplement is needed",
+    "no supplement or correction is needed",
     "response is complete",
     "answer is complete",
     "request is complete",
@@ -146,13 +149,14 @@ def _matches_tool_name(tool_name: str, name: str) -> bool:
 
 
 def _structural_output_kind(data: dict[str, Any], tool_name: str) -> str | None:
-    """Classify turns whose product deliverable is structural, not prose.
+    """Classify a tool operation whose deliverable is structural, not prose.
 
     ``generate_ui`` produces an A2UI artifact. The mutation actions below
     produce a confirmation card whose pending state is the complete result of
     the Agent turn. In both cases, a trailing acknowledgement has no factual
     or task-coverage value, so Citation, Claim Audit, and Task Coverage should
-    not run for that turn.
+    not run for a turn containing only these operations. A research/data call
+    or citation evidence elsewhere in the same turn prevents that exemption.
 
     Classification happens from the canonical tool-use input rather than
     model-authored text or localized tool-result prose. Every supported Runtime
@@ -181,7 +185,29 @@ def _is_task_coverage_meta_response(text: str) -> bool:
     normalized = " ".join(text.lower().split())
     if not normalized:
         return True
-    return any(marker in normalized for marker in _TASK_COVERAGE_META_RESPONSES)
+    # A completion phrase inside a real supplement is not a no-op. Classify
+    # every sentence, preserving uncertain/mixed content rather than dropping
+    # an entire continuation because one sentence says "already complete".
+    sentences = [
+        part.strip(" .!?。！？;；")
+        for part in re.split(r"(?<=[.!?;])\s+|[。！？；]|\n+", text.lower())
+    ]
+    sentences = [sentence for sentence in sentences if sentence]
+    found_noop = False
+    for sentence in sentences:
+        sentence = " ".join(sentence.split())
+        if sentence in _TASK_COVERAGE_META_RESPONSES or re.fullmatch(
+            r"(?:the )?(?:response|answer|request) is (?:already )?complete(?: and correct)?",
+            sentence,
+        ):
+            found_noop = True
+            continue
+        # A card receipt plus the completion sentence is still only protocol
+        # chatter. This is not a filter on the primary assistant answer.
+        if re.fullmatch(r"the .+ (?:was|has been) submitted as a confirmation card", sentence):
+            continue
+        return False
+    return found_noop
 
 
 class _TaskCoverageProtocolSink:
@@ -630,6 +656,7 @@ class _MessageObserverSink:
         self._post_run_verification_completed = False
 
         self._tool_names: dict[str, str] = {}
+        self._structural_tool_ids: set[str] = set()
         self._structural_output_kinds: set[str] = set()
         self._received_citation_evidence = False
         self._external_tool_called = False
@@ -730,18 +757,12 @@ class _MessageObserverSink:
                 self._tool_names[tool_use_id] = tool_name
                 if self._tool_event_is_external(event.data, tool_name):
                     self._external_tool_called = True
-                # A runtime emits ``session_idle`` before ``run()`` returns.
-                # When task coverage is already disabled, that idle event
-                # finalizes Citation/Audit immediately, so waiting for the
-                # outer orchestrator to inspect ``called_tool`` is too late.
-                # Disable prose sidecars as soon as the Runtime requests a
-                # structural deliverable. This must happen before session_idle:
-                # hosted turns with Task Coverage disabled finalize Citation /
-                # Audit inside this observer, before run() returns.
+                # Record intent, but do not disable sidecars yet: research can
+                # precede OR follow this operation on the same native turn.
                 structural_kind = _structural_output_kind(event.data, tool_name)
                 if structural_kind is not None:
+                    self._structural_tool_ids.add(tool_use_id)
                     self._structural_output_kinds.add(structural_kind)
-                    self.skip_post_run_verification_for_structural_output()
 
         elif event.type == "tool_result":
             tool_use_id = event.data.get("id")
@@ -749,11 +770,9 @@ class _MessageObserverSink:
             event = self._register_and_redact_tool_result(event)
 
         elif event.type == "session_idle":
-            # A receipt-only output turn has no research prose to verify.
-            # Decide at idle, not at the first output call: a later search or
-            # data read must retain the ordinary research checks.
-            if self._only_output_receipts():
-                self._structural_output_kinds.add("automation_output.receipts")
+            # Decide before idle finalizes sidecars, but after every primary
+            # operation is known. A later search or data read retains checks.
+            if self.requested_structural_output():
                 self.skip_post_run_verification_for_structural_output()
             # Citation verification and Task Coverage are useful only after
             # the primary turn brought external information into the answer.
@@ -1087,21 +1106,28 @@ class _MessageObserverSink:
         return self._external_tool_called
 
     def requested_structural_output(self) -> bool:
-        """Whether this turn requested A2UI or a product confirmation card."""
+        """Whether this turn contains ONLY structural deliveries/receipts.
 
-        return bool(self._structural_output_kinds) or self._only_output_receipts()
-
-    def _only_output_receipts(self) -> bool:
+        Unknown operations are conservatively non-structural. The exemption
+        is local to this observer/turn, never a sticky session capability.
+        Tool validation failures remain visible; this only omits optional
+        prose post-processing, not validation or the runtime error itself.
+        """
         return (
             bool(self._tool_names)
             and not self._received_citation_evidence
             and all(
-                _matches_tool_name(name, "automation_output") for name in self._tool_names.values()
+                tool_id in self._structural_tool_ids
+                or _matches_tool_name(name, "automation_output")
+                for tool_id, name in self._tool_names.items()
             )
         )
 
     def structural_output_kinds(self) -> tuple[str, ...]:
-        return tuple(sorted(self._structural_output_kinds))
+        kinds = set(self._structural_output_kinds)
+        if any(_matches_tool_name(name, "automation_output") for name in self._tool_names.values()):
+            kinds.add("automation_output.receipts")
+        return tuple(sorted(kinds))
 
     def has_assistant_text(self) -> bool:
         """Whether the primary run produced any assistant prose.
@@ -1819,6 +1845,23 @@ class SessionOrchestrator:
             started_at=now_ms(),
             status="running",
         )
+        # Keep the trusted host snapshot with this message, not just the
+        # mutable Session. Later turns can choose another policy without
+        # rewriting the configuration under which this turn actually ran.
+        host_metadata = session.metadata.get("valuz")
+        check_snapshot = (
+            host_metadata.get("optional_check_snapshot")
+            if isinstance(host_metadata, dict)
+            else None
+        )
+        if isinstance(check_snapshot, dict) and check_snapshot.get("version") == 1:
+            context = check_snapshot.get("context")
+            if (
+                isinstance(context, dict)
+                and context.get("user_id") == user_id
+                and context.get("session_id") == session_id
+            ):
+                message.metadata["optional_check_snapshot"] = copy.deepcopy(check_snapshot)
         await self._store.save_message(user_id, message)
         self._active_message[session_id] = message
 

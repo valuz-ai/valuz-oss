@@ -417,7 +417,7 @@ def no_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(capabilities, "async_unit_of_work", _uow)
 
 
-async def test_hosted_turn_policy_switches_task_coverage_off_and_stamps(
+async def test_live_legacy_policy_applies_without_creating_sticky_stamp(
     citation_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     workbench_policy: _WorkbenchPolicy,
@@ -447,18 +447,15 @@ async def test_hosted_turn_policy_switches_task_coverage_off_and_stamps(
     assert changed is True
     valuz = updates[0].metadata["valuz"]
     assert valuz["task_coverage_enabled"] is False
-    # The decision is stamped so host_ref-less turns keep it.
-    assert valuz["task_coverage_host_override"] is False
+    assert "task_coverage_host_override" not in valuz
 
 
-async def test_stamp_keeps_hosted_decision_on_hostless_turns(
+async def test_retired_anonymous_stamp_is_removed_on_hostless_turn(
     citation_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     no_db: None,
 ) -> None:
-    # A previous hosted turn stamped the session; a queue-drain turn arrives
-    # with no host_ref and the global preference would say True — the stamp
-    # must win or the drain snaps coverage back on.
+    # No provider can authorize an old anonymous stamp for a fresh input.
     session = _session()
     session.metadata["valuz"]["task_coverage_host_override"] = False
     updates: list[object] = []
@@ -473,6 +470,14 @@ async def test_stamp_keeps_hosted_decision_on_hostless_turns(
     monkeypatch.setattr(capabilities.kernel_client, "get_session", get_session)
     monkeypatch.setattr(capabilities.kernel_client, "update_session", update_session)
 
+    async def pref_true(db: object, user_id: str | None = None) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        "valuz_agent.modules.settings.preferences.get_conversation_task_coverage_enabled",
+        pref_true,
+    )
+
     await capabilities.refresh_citation_policy_for_session(
         "session-1",
         "owner-1",
@@ -482,8 +487,9 @@ async def test_stamp_keeps_hosted_decision_on_hostless_turns(
     )
 
     valuz = updates[0].metadata["valuz"]
-    assert valuz["task_coverage_enabled"] is False
-    assert valuz["task_coverage_host_override"] is False
+    assert valuz["task_coverage_enabled"] is True
+    assert "task_coverage_host_override" not in valuz
+    assert updates[0].metadata["other"] == {"keep": True}
 
 
 async def test_policy_without_opinion_defers_to_global_preference(

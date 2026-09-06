@@ -37,7 +37,7 @@ from valuz_agent.ports.builtin_declaration import (
     PackagedBuiltinDeclarations,
 )
 from valuz_agent.ports.cache import CachePort, FileCache
-from valuz_agent.ports.capability_policy import HostCapabilityPolicyPort
+from valuz_agent.ports.capability_policy import HostCapabilityPolicyPort, TaskCheckPolicyPort
 from valuz_agent.ports.citation_documents import CitationDocumentResolverPort
 from valuz_agent.ports.citation_quality import (
     CitationQualityPolicyRegistry,
@@ -239,12 +239,10 @@ class Extensions:
         # after resolving it server-side. OSS registers none; a failing
         # provider is skipped so it can never block a turn.
         self.message_context_providers: list[MessageContextProviderPort] = []
-        # Host-scoped capability policies (list semantics — editions append).
-        # A hosted turn asks each policy for capability overrides (e.g. task
-        # coverage off on an edition's workbench conversations); the first
-        # non-None answer wins and is stamped on the session so host_ref-less
-        # turns (queue drains, resumes) keep the hosted decision.
+        # Deprecated live-host compatibility. New inputs do not inherit it;
+        # use task_check_policies for operation/config based policy.
         self.host_capability_policies: list[HostCapabilityPolicyPort] = []
+        self.task_check_policies: list[TaskCheckPolicyPort] = []
         # Edition-owned always-on internal MCP servers (list semantics —
         # editions append). The capability resolver appends them to every
         # session after the five built-ins, with the same internal credential

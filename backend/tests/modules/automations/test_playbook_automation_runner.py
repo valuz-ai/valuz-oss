@@ -84,6 +84,7 @@ def _automation_run() -> SimpleNamespace:
         automation_id="auto-1",
         project_id="execution-project",
         status="queued",
+        trigger_type="manual",
         triggered_at=1000,
         started_at=None,
         completed_at=None,
@@ -167,6 +168,27 @@ async def test_pinned_playbook_creates_and_completes_linked_run() -> None:
     assert "Use /earnings-analysis to re-test the pinned v1 thesis." in sent_prompt
     assert "Use the latest filed 10-Q as evidence." in sent_prompt
     assert "execution contract" not in sent_prompt
+    checks = session_svc.send_message_sync.await_args.kwargs["task_check_config"]
+    assert checks.run_id == "run-1"
+    assert checks.automation_id == "auto-1"
+    assert checks.playbook_run_id == "playbook-run-1"
+    assert checks.playbook_definition_id == "pb-1"
+    assert checks.configuration["playbook_version"] == 1
+
+
+def test_check_context_uses_pinned_run_not_edited_automation_definition():
+    from valuz_agent.modules.automations.in_process_runner import _automation_check_config
+
+    row = _automation()
+    row.playbook_definition_id = "new-definition"
+    row.playbook_version = 99
+    run = _automation_run()
+    run.playbook_run_id = "old-run"
+    checks = _automation_check_config(row, run, SimpleNamespace(
+        definition_id="original-definition", definition_version=3,
+    ))
+    assert checks.playbook_definition_id == "original-definition"
+    assert checks.configuration["playbook_version"] == 3
 
 
 @pytest.mark.asyncio
@@ -243,7 +265,7 @@ async def test_playbook_session_creation_releases_sqlite_writer(tmp_path, outcom
     try:
         async with uow() as db:
             db.add(AutomationRow(**vars(_automation()), agent_kind="project_member"))
-            db.add(AutomationRunRow(**vars(_automation_run()), trigger_type="manual"))
+            db.add(AutomationRunRow(**vars(_automation_run())))
             db.add(
                 PlaybookDefinitionRow(
                     id="pb-1",
