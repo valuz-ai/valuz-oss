@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from hashlib import sha256
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from valuz_agent.integrations._mcp_asgi import (
     build_internal_mcp_asgi,
@@ -142,14 +143,18 @@ Actions:
 - create: propose a Playbook from `name` + complete `content`. `project_id` is
   optional; in a project conversation it defaults to that project, while a
   normal chat proposes an owner-global Playbook. `status` optionally sets draft,
-  active, or retired and defaults to draft. The user must confirm the returned
-  Operation Card before anything is created.
+  active, or retired and defaults to draft. `agent_slug` optionally sets the
+  default executor Agent for runs of this Playbook; omit it to leave the
+  Playbook unbound to any Agent. The user must confirm the returned Operation
+  Card before anything is created.
 - update: propose immutable vNext. Requires definition_id, base_version and the
   complete replacement content. Existing references and default Agent are
   preserved unless `agent_slug` is supplied. The user must confirm the Operation.
 - update_definition: propose changing mutable Definition metadata without making
   a Version. Requires definition_id and expected_revision; accepts name, status,
-  project_id, or clear_project=true. The user must confirm the Operation.
+  project_id, or clear_project=true to detach the Definition from its current
+  project (owner-global afterwards). `project_id` and `clear_project` are
+  mutually exclusive. The user must confirm the Operation.
 - set_status: propose changing a Definition to draft, active, or retired.
   Requires definition_id, expected_revision, and status. The user must confirm.
 - retire: propose retiring a Definition. Requires definition_id and
@@ -733,6 +738,28 @@ async def playbook(
     run_id: str | None = None,
     status: str | None = None,
     error_message: str | None = None,
+    agent_slug: Annotated[
+        str | None,
+        Field(
+            description=(
+                "create/update only: default executor Agent slug for runs of "
+                "this Playbook. On create it seeds the Version's "
+                "default_executor; on update it replaces the prior Version's "
+                "default_executor (omit to carry the existing one forward). "
+                "Ignored for every other action."
+            )
+        ),
+    ] = None,
+    clear_project: Annotated[
+        bool,
+        Field(
+            description=(
+                "update_definition only: true detaches the Definition from "
+                "its current project, making it owner-global. Mutually "
+                "exclusive with project_id. Ignored for every other action."
+            )
+        ),
+    ] = False,
 ) -> str:
     return await playbook_invoke(
         action=action,
@@ -748,6 +775,8 @@ async def playbook(
         run_id=run_id,
         status=status,
         error_message=error_message,
+        agent_slug=agent_slug,
+        clear_project=clear_project,
     )
 
 
