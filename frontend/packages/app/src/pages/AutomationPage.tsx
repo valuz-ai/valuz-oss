@@ -49,6 +49,7 @@ import {
 import { automationTemplatePrefill } from "../lib/template-library";
 import { AutomationHubTitle } from "./AutomationHubTitle";
 import { AutomationHubTabs } from "./AutomationHubTabs";
+import { ProjectFilterChips } from "../components/ProjectFilterChips";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
@@ -86,18 +87,9 @@ export const AutomationPage = () => {
   // can fold the per-project tables once they grow long. Persisted
   // only for the current page lifetime; the design didn't ask for cross-
   // session persistence.
-  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
-    new Set(),
-  );
-
-  const toggleGroupCollapsed = useCallback((projectId: string) => {
-    setCollapsedGroupIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
-  }, []);
+  // 全部 / per-project chips filter the single table (design: one sticky
+  // column header, a section row per project).
+  const [projectFilter, setProjectFilter] = useState<string>("all");
 
   // ── Data loading ─────────────────────────────────────────────────
 
@@ -375,7 +367,7 @@ export const AutomationPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col px-5 pb-5">
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-5 pb-5">
         <AutomationHubTabs
           value={view}
           onValueChange={setView}
@@ -452,39 +444,48 @@ export const AutomationPage = () => {
           </div>
         ) : (
           <>
-            <div className="space-y-8">
-              {groups
+            <ProjectFilterChips
+              value={projectFilter}
+              onChange={setProjectFilter}
+              options={groups
                 .filter((group) => group.automations.length > 0)
-                .map((group) => (
-                  <section key={group.project_id}>
-                    <AutomationDefinitionTable
-                      automations={group.automations}
-                      title={group.project_name}
-                      countLabel={t(
-                        k(
-                          group.automations.length === 1
-                            ? "automation.groupCount"
-                            : "automation.groupCountPlural",
-                        ),
-                        { count: group.automations.length },
-                      )}
-                      collapsed={collapsedGroupIds.has(group.project_id)}
-                      onToggleCollapse={() =>
-                        toggleGroupCollapsed(group.project_id)
-                      }
-                      onOpen={(id) => navigate(`/automations/${id}`)}
-                      onToggle={(id) => toggleAutomation(id)}
-                      onRunNow={(id) => runNow(id)}
-                      onDelete={(id) => {
-                        const automation = group.automations.find(
-                          (item) => item.automation_id === id,
-                        );
-                        if (automation) setDeleteTarget(automation);
-                      }}
-                    />
-                  </section>
-                ))}
-            </div>
+                .map((group) => ({
+                  id: group.project_id,
+                  label: group.project_name,
+                  count: group.automations.length,
+                }))}
+            />
+            <AutomationDefinitionTable
+              groups={groups
+                .filter(
+                  (group) =>
+                    group.automations.length > 0 &&
+                    (projectFilter === "all" ||
+                      group.project_id === projectFilter),
+                )
+                .map((group) => ({
+                  id: group.project_id,
+                  name: group.project_name,
+                  countLabel: t(
+                    k(
+                      group.automations.length === 1
+                        ? "automation.groupCount"
+                        : "automation.groupCountPlural",
+                    ),
+                    { count: group.automations.length },
+                  ),
+                  automations: group.automations,
+                }))}
+              onOpen={(id) => navigate(`/automations/${id}`)}
+              onToggle={(id) => toggleAutomation(id)}
+              onRunNow={(id) => runNow(id)}
+              onDelete={(id) => {
+                const automation = groups
+                  .flatMap((group) => group.automations)
+                  .find((item) => item.automation_id === id);
+                if (automation) setDeleteTarget(automation);
+              }}
+            />
           </>
         )}
       </div>

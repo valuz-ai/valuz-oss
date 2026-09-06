@@ -280,6 +280,7 @@
     "projects": "Projects"
   },
   "common": {
+    "all": "All",
     "add": "Add",
     "available": "Available",
     "back": "Back",
@@ -634,6 +635,8 @@
     "attachmentsClearedOnSwitch": "Service switched, attachments cleared — a staged file only exists on the service it was uploaded to. Please attach it again."
   },
   "cron": {
+    "scheduleColumn": "Schedule",
+    "human": {"daily": "Daily at {time}", "weekdays": "Weekdays at {time}", "weekly": "Every {day} at {time}", "monthly": "Monthly on day {day} at {time}", "hourly": "Hourly at :{minute}", "everyMinutes": "Every {n} minutes", "everyHours": "Every {n} hours", "weekday": {"0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday"}},
     "actionColumn": "Actions",
     "addTask": "Add task",
     "advanced": "Advanced",

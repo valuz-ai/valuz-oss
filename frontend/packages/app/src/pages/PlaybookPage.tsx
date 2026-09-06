@@ -45,6 +45,7 @@ import {
 import { playbookTemplatePrefill } from "../lib/template-library";
 import { AutomationHubTitle } from "./AutomationHubTitle";
 import { AutomationHubTabs } from "./AutomationHubTabs";
+import { ProjectFilterChips } from "../components/ProjectFilterChips";
 
 export const PlaybookPage = () => {
   const { t, locale } = useTranslation();
@@ -69,9 +70,7 @@ export const PlaybookPage = () => {
   const [deleting, setDeleting] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<PlaybookRun | null>(null);
-  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
-    new Set(),
-  );
+  const [projectFilter, setProjectFilter] = useState<string>("all");
   const selectedDefinitionId = searchParams.get("definition");
   const view = searchParams.get("view") === "templates" ? "templates" : "mine";
 
@@ -193,15 +192,6 @@ export const PlaybookPage = () => {
       return aOrder - bOrder || a.name.localeCompare(b.name);
     });
   }, [definitions, t, targets]);
-
-  const toggleGroupCollapsed = useCallback((groupId: string) => {
-    setCollapsedGroupIds((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  }, []);
 
   const totalCount = definitions.length;
   const activeCount = definitions.filter(
@@ -394,7 +384,7 @@ export const PlaybookPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col px-5 pb-5">
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-5 pb-5">
         <AutomationHubTabs
           value={view}
           onValueChange={setView}
@@ -468,35 +458,45 @@ export const PlaybookPage = () => {
             />
           </div>
         ) : (
-          <div className="space-y-8">
-            {groups.map((group) => (
-              <section key={group.id}>
-                <PlaybookDefinitionTable
-                  definitions={group.definitions}
-                  runningId={runningId}
-                  selectedDefinitionId={selectedDefinitionId}
-                  title={group.name}
-                  countLabel={t(
+          <>
+            <ProjectFilterChips
+              value={projectFilter}
+              onChange={setProjectFilter}
+              options={groups.map((group) => ({
+                id: group.id,
+                label: group.name,
+                count: group.definitions.length,
+              }))}
+            />
+            <PlaybookDefinitionTable
+              groups={groups
+                .filter(
+                  (group) => projectFilter === "all" || group.id === projectFilter,
+                )
+                .map((group) => ({
+                  id: group.id,
+                  name: group.name,
+                  countLabel: t(
                     group.definitions.length === 1
                       ? "playbook.groupCount"
                       : "playbook.groupCountPlural",
                     { count: group.definitions.length },
-                  )}
-                  collapsed={collapsedGroupIds.has(group.id)}
-                  onToggleCollapse={() => toggleGroupCollapsed(group.id)}
-                  onOpen={(definition) =>
-                    navigate(`/playbooks/${definition.id}?from=/playbooks`)
-                  }
-                  onEdit={(definition) => void openEdit(definition)}
-                  onRun={(definition) => void run(definition)}
-                  onStatusChange={(definition, status) =>
-                    void changeStatus(definition, status)
-                  }
-                  onDelete={setDeleteTarget}
-                />
-              </section>
-            ))}
-          </div>
+                  ),
+                  definitions: group.definitions,
+                }))}
+              runningId={runningId}
+              selectedDefinitionId={selectedDefinitionId}
+              onOpen={(definition) =>
+                navigate(`/playbooks/${definition.id}?from=/playbooks`)
+              }
+              onEdit={(definition) => void openEdit(definition)}
+              onRun={(definition) => void run(definition)}
+              onStatusChange={(definition, status) =>
+                void changeStatus(definition, status)
+              }
+              onDelete={setDeleteTarget}
+            />
+          </>
         )}
       </div>
 
