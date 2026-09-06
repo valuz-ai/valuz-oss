@@ -123,6 +123,94 @@ describe("PlaybookOperationCard", () => {
     expect(screen.getByRole("button", { name: "common.retry" })).toBeTruthy();
   });
 
+  it("asks for a comment before requesting changes and echoes the feedback", async () => {
+    const onRequestChanges = vi.fn();
+    const { rerender } = render(
+      <PlaybookOperationCard
+        operation={proposedOperation}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        onRequestChanges={onRequestChanges}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "playbook.operation.requestChanges" }),
+    );
+    const send = screen.getByRole("button", {
+      name: "playbook.operation.requestChangesSubmit",
+    });
+    expect(send.hasAttribute("disabled")).toBe(true);
+    await userEvent.type(
+      screen.getByRole("textbox", {
+        name: "playbook.operation.requestChangesTitle",
+      }),
+      "  补充风险提示  ",
+    );
+    await userEvent.click(send);
+
+    expect(onRequestChanges).toHaveBeenCalledWith("补充风险提示");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    rerender(
+      <PlaybookOperationCard
+        operation={{
+          ...proposedOperation,
+          state: "awaiting_confirmation",
+          latest_decision: {
+            decision: "request_changes",
+            comment: "补充风险提示",
+          },
+        }}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        onRequestChanges={onRequestChanges}
+      />,
+    );
+    expect(
+      screen.getByText("playbook.operation.changesRequested: 补充风险提示"),
+    ).toBeTruthy();
+    // still decidable as proposed
+    expect(
+      screen.getByRole("button", { name: "playbook.operation.createAction" }),
+    ).toBeTruthy();
+  });
+
+  it("hides the request-changes action without a handler", () => {
+    render(
+      <PlaybookOperationCard
+        operation={proposedOperation}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", {
+        name: "playbook.operation.requestChanges",
+      }),
+    ).toBeNull();
+  });
+
+  it.each(["expired", "superseded"] as const)(
+    "renders a %s proposal as dismissed with no actions",
+    (state) => {
+      const { container } = render(
+        <PlaybookOperationCard
+          operation={{ ...proposedOperation, state }}
+          onConfirm={vi.fn()}
+          onCancel={vi.fn()}
+          onRequestChanges={vi.fn()}
+        />,
+      );
+      expect(screen.getByText(`playbook.operation.${state}`)).toBeTruthy();
+      expect(screen.queryAllByRole("button", { name: /Action$/ })).toEqual([]);
+      const card = container.querySelector(
+        '[data-slot="playbook-operation-card"]',
+      );
+      expect(card?.classList.contains("opacity-80")).toBe(true);
+    },
+  );
+
   it("keeps the prompt preview integrated with the card surface", () => {
     const { container } = render(
       <PlaybookOperationCard

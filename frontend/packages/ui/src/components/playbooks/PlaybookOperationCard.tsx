@@ -20,24 +20,34 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
+import { Textarea } from "../ui/textarea";
 
 export interface PlaybookOperationView {
   state: string;
   preview: Record<string, unknown>;
   result_payload: Record<string, unknown>;
   error_message: string | null;
+  /** Latest confirmation decision; a ``request_changes`` one carries the
+   *  feedback the card echoes back. Absent on tool-output snapshots. */
+  latest_decision?: { decision: string; comment: string | null } | null;
 }
 
 export interface PlaybookOperationCardProps {
   operation: PlaybookOperationView;
-  busy?: "confirm" | "cancel" | null;
+  busy?: "confirm" | "cancel" | "request_changes" | null;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Ask the proposer to revise: records a ``request_changes`` decision with
+   *  the comment. The proposal stays pending. Omit to hide the action. */
+  onRequestChanges?: (comment: string) => void;
   onOpenPlaybook?: (definitionId: string) => void;
 }
+
+const DISMISSED_STATES = ["cancelled", "expired", "superseded"];
 
 const changeIcon = {
   create: Plus,
@@ -53,10 +63,13 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
   busy,
   onConfirm,
   onCancel,
+  onRequestChanges,
   onOpenPlaybook,
 }: PlaybookOperationCardProps) {
   const { t } = useI18n();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [changesComment, setChangesComment] = useState("");
   const change = String(operation.preview.change ?? "update") as
     | "create"
     | "update"
@@ -97,6 +110,19 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
   const canCancel =
     operation.state === "proposed" ||
     operation.state === "awaiting_confirmation";
+  const canRequestChanges = canCancel && Boolean(onRequestChanges);
+  const changesRequested =
+    canCancel && operation.latest_decision?.decision === "request_changes"
+      ? (operation.latest_decision.comment ?? "")
+      : null;
+  const dismissed = DISMISSED_STATES.includes(operation.state);
+  const submitChanges = () => {
+    const comment = changesComment.trim();
+    if (!comment) return;
+    onRequestChanges?.(comment);
+    setChangesOpen(false);
+    setChangesComment("");
+  };
   const definitionId =
     typeof operation.result_payload.definition_id === "string"
       ? operation.result_payload.definition_id
@@ -109,8 +135,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
         className={cn(
           "rounded-lg border bg-surface-soft transition-colors",
           operation.state === "succeeded" && "border-success/40 bg-success/5",
-          operation.state === "cancelled" &&
-            "border-surface-border bg-surface-2 opacity-80",
+          dismissed && "border-surface-border bg-surface-2 opacity-80",
           ["failed", "stale"].includes(operation.state) &&
             "border-error/40 bg-error-light/40",
           !terminal && operation.state !== "failed" && "border-surface-border",
@@ -125,7 +150,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
           >
             {operation.state === "succeeded" ? (
               <Check className="h-4 w-4" />
-            ) : operation.state === "cancelled" ? (
+            ) : dismissed ? (
               <X className="h-4 w-4 text-ink-muted" />
             ) : ["failed", "stale"].includes(operation.state) ? (
               <AlertTriangle className="h-4 w-4 text-error" />
@@ -188,9 +213,18 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
                 {t("playbook.operation.deleted")}
               </p>
             ) : null}
-            {operation.state === "cancelled" ? (
+            {changesRequested !== null ? (
+              <p
+                data-slot="playbook-operation-feedback"
+                className="mt-2 whitespace-pre-wrap break-words text-xs text-warning-text"
+              >
+                {t("playbook.operation.changesRequested")}
+                {changesRequested ? `: ${changesRequested}` : ""}
+              </p>
+            ) : null}
+            {dismissed ? (
               <p className="mt-2 text-xs text-ink-meta">
-                {t("playbook.operation.cancelled")}
+                {t(`playbook.operation.${operation.state}`)}
               </p>
             ) : null}
             {["failed", "stale"].includes(operation.state) ? (
@@ -212,6 +246,18 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
                 onClick={onCancel}
               >
                 {t("common.cancel")}
+              </Button>
+            ) : null}
+            {canRequestChanges ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={Boolean(busy)}
+                loading={busy === "request_changes"}
+                onClick={() => setChangesOpen(true)}
+              >
+                {t("playbook.operation.requestChanges")}
               </Button>
             ) : null}
             <Button
@@ -244,6 +290,46 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
                 className="text-sm leading-6 text-ink-body [&_h1]:mb-3 [&_h1]:mt-0 [&_h1]:text-xl [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_li]:my-1 [&_ol]:my-3 [&_p]:my-2 [&_table]:text-xs [&_ul]:my-3"
               />
             </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
+      {canRequestChanges ? (
+        <Dialog open={changesOpen} onOpenChange={setChangesOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {t("playbook.operation.requestChangesTitle")}
+              </DialogTitle>
+              <DialogDescription>
+                {t("playbook.operation.requestChangesHint")}
+              </DialogDescription>
+            </DialogHeader>
+            <Textarea
+              value={changesComment}
+              onChange={(event) => setChangesComment(event.target.value)}
+              placeholder={t("playbook.operation.requestChangesPlaceholder")}
+              aria-label={t("playbook.operation.requestChangesTitle")}
+              autoFocus
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setChangesOpen(false)}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!changesComment.trim()}
+                onClick={submitChanges}
+              >
+                {t("playbook.operation.requestChangesSubmit")}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       ) : null}

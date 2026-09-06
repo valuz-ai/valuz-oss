@@ -41,6 +41,10 @@ class OperationRegistration:
     #: record's transaction, never able to fail the cancel (a proposal that
     #: parked files somewhere gets to remove them).
     cancel_handler: OperationHandler | None = None
+    #: Default lifetime of a pending proposal of this type, in ms. A proposal
+    #: that does not carry its own ``expires_at`` gets ``now + default_ttl_ms``;
+    #: ``None`` = never expires.
+    default_ttl_ms: int | None = None
 
 
 class OperationRegistry:

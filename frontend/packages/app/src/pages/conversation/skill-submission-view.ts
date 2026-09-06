@@ -88,7 +88,7 @@ function cardState(state: string, busy: boolean): SkillSubmissionState {
 
 export function skillSubmissionView(
   operation: OperationView,
-  busy?: "confirm" | "cancel" | null,
+  busy?: "confirm" | "cancel" | "request_changes" | null,
 ): SkillSubmissionView {
   const preview = operation.preview ?? {};
   const result = operation.result_payload ?? {};
