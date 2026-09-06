@@ -132,6 +132,7 @@
     "deleteTitle": "删除执行手册「{name}」？",
     "dialogHint": "保存一段可版本化、可被智能体与自动化调用的完整指令。",
     "defaultChatGroup": "Chat",
+    "unknownProjectGroup": "未知项目",
     "editTitle": "编辑执行手册",
     "emptyDescription": "把反复使用的完整指令保存为执行手册，之后可由智能体或自动化按固定版本调用。",
     "emptyTitle": "暂无执行手册",

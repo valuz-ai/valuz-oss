@@ -1520,6 +1520,7 @@ I18nKey = Literal[
     "playbook.statusSuccess",
     "playbook.subtitle",
     "playbook.title",
+    "playbook.unknownProjectGroup",
     "playbook.updateSuccess",
     "playbook.versionColumn",
     "playbook.versionCurrent",

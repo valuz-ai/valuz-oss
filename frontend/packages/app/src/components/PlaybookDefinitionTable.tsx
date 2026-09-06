@@ -104,7 +104,7 @@ export function PlaybookDefinitionTable({
         </span>
       </button>
     ) : (
-      <div className="mt-4 flex h-8 items-center gap-2 rounded-md bg-surface-soft px-2 text-xs font-semibold text-ink-heading first:mt-0">
+      <div className="mt-5 flex h-7 items-center gap-2 px-2 text-xs font-semibold text-ink-body first:mt-2">
         <span className="truncate">{section.name}</span>
         {section.countLabel ? (
           <span className="font-normal text-ink-meta">{section.countLabel}</span>

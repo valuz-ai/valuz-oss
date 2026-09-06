@@ -172,12 +172,23 @@ export const PlaybookPage = () => {
     >();
 
     for (const definition of definitions) {
-      const id = definition.project_id ?? chatGroupId;
+      // A project_id with no matching target (deleted project, or one that
+      // lives on another backend) is shown as one "未知项目" group instead
+      // of leaking the raw id.
+      const known =
+        !definition.project_id || projectNames.has(definition.project_id);
+      const id = !definition.project_id
+        ? chatGroupId
+        : known
+          ? definition.project_id
+          : "__unknown";
       const group = grouped.get(id) ?? {
         id,
-        name: definition.project_id
-          ? (projectNames.get(definition.project_id) ?? definition.project_id)
-          : t("playbook.defaultChatGroup"),
+        name: !definition.project_id
+          ? t("playbook.defaultChatGroup")
+          : known
+            ? projectNames.get(definition.project_id)!
+            : t("playbook.unknownProjectGroup"),
         definitions: [],
       };
       group.definitions.push(definition);

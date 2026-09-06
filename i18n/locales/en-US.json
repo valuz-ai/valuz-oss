@@ -132,6 +132,7 @@
     "deleteTitle": "Delete Playbook \"{name}\"?",
     "dialogHint": "Save one complete instruction that Agents and automations can invoke by version.",
     "defaultChatGroup": "Chat",
+    "unknownProjectGroup": "Unknown project",
     "editTitle": "Edit Playbook",
     "emptyDescription": "Save repeated Prompts as Playbooks, then invoke an exact version from an Agent or automation.",
     "emptyTitle": "No Playbooks yet",

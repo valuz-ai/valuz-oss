@@ -1514,6 +1514,7 @@ export type KnownI18nKey =
   | "playbook.statusSuccess"
   | "playbook.subtitle"
   | "playbook.title"
+  | "playbook.unknownProjectGroup"
   | "playbook.updateSuccess"
   | "playbook.versionColumn"
   | "playbook.versionCurrent"
