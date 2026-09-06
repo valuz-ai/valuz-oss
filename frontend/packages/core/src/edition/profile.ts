@@ -111,6 +111,12 @@ export interface NavItemModule {
    * a generic gear icon.
    */
   icon?: string;
+  /**
+   * Extra route prefixes that keep this item highlighted, for pages reached
+   * through the item's own page rather than the sidebar (e.g. 自动化 stays
+   * active on ``/playbooks``, which its title switch opens).
+   */
+  activePaths?: string[];
   edition: Edition;
 }
 

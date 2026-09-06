@@ -106,6 +106,8 @@ export interface DesktopSidebarBottomItem {
   id: string;
   label: string;
   href: string;
+  /** Extra route prefixes that also count as "on this item". */
+  activePaths?: string[];
   /** Icon id — key of the sidebar icon map; unknown ids fall back to the
    *  gear icon so plugin-supplied items degrade gracefully. */
   icon: string;
@@ -177,6 +179,12 @@ const DefaultNavLink: NavLinkComponent = ({
 
 const isActivePath = (activePath: string, href: string) =>
   activePath === href || activePath.startsWith(`${href}/`);
+const isItemActive = (
+  activePath: string,
+  item: { href: string; activePaths?: string[] },
+) =>
+  isActivePath(activePath, item.href) ||
+  (item.activePaths ?? []).some((path) => isActivePath(activePath, path));
 
 const SectionLabel = ({
   children,
@@ -1109,7 +1117,7 @@ export const DesktopSidebar = ({
                       <SidebarLink
                         key={item.id}
                         href={item.href}
-                        active={isActivePath(activePath, item.href)}
+                        active={isItemActive(activePath, item)}
                         LinkComponent={LinkComponent}
                       >
                         <Icon
@@ -1157,7 +1165,7 @@ export const DesktopSidebar = ({
                           <SidebarLink
                             key={item.id}
                             href={item.href}
-                            active={isActivePath(activePath, item.href)}
+                            active={isItemActive(activePath, item)}
                             LinkComponent={LinkComponent}
                           >
                             <Icon
@@ -1340,7 +1348,7 @@ export const DesktopSidebar = ({
                       <SidebarLink
                         key={item.id}
                         href={item.href}
-                        active={isActivePath(activePath, item.href)}
+                        active={isItemActive(activePath, item)}
                         LinkComponent={LinkComponent}
                       >
                         <Icon
@@ -1371,7 +1379,7 @@ export const DesktopSidebar = ({
                     <SidebarLink
                       key={item.id}
                       href={item.href}
-                      active={isActivePath(activePath, item.href)}
+                      active={isItemActive(activePath, item)}
                       LinkComponent={LinkComponent}
                     >
                       <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />

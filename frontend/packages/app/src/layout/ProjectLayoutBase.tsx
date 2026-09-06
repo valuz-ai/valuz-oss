@@ -151,6 +151,7 @@ function useNavItems(): DesktopSidebarBottomItem[] {
     id: item.id,
     label: t(item.label as Parameters<typeof t>[0]),
     href: item.href,
+    activePaths: item.activePaths,
     // Profile-declared icon id wins (plugins bring their own); fall back to
     // the built-in per-id map, then to the generic gear.
     icon: item.icon ?? NAV_ICON_MAP[item.id] ?? "settings",

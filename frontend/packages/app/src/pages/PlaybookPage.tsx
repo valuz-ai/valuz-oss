@@ -44,6 +44,7 @@ import {
   type PlaybookTemplatePrefill,
 } from "@valuz/app/components";
 import { playbookTemplatePrefill } from "../lib/template-library";
+import { AutomationHubTitle } from "./AutomationHubTitle";
 
 export const PlaybookPage = () => {
   const { t, locale } = useTranslation();
@@ -226,7 +227,7 @@ export const PlaybookPage = () => {
   const header = useMemo(
     () => (
       <PageHeader
-        title={t("playbook.title")}
+        title={<AutomationHubTitle active="playbooks" />}
         navigation={
           <SegmentedControl
             value={view}

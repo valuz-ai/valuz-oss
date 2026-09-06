@@ -48,6 +48,7 @@ import {
   type AutomationTemplatePrefill,
 } from "@valuz/app/components";
 import { automationTemplatePrefill } from "../lib/template-library";
+import { AutomationHubTitle } from "./AutomationHubTitle";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
@@ -191,7 +192,7 @@ export const AutomationPage = () => {
   const pageHeader = useMemo(
     () => (
       <PageHeader
-        title={t(k("automation.title"))}
+        title={<AutomationHubTitle active="automations" />}
         navigation={
           <SegmentedControl
             value={view}
