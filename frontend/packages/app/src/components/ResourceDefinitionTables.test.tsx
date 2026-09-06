@@ -58,8 +58,7 @@ describe("canonical resource definition tables", () => {
     );
 
     expect(screen.getByText("任务")).toBeTruthy();
-    expect(screen.getByText("触发规则")).toBeTruthy();
-    expect(screen.getByText("时区")).toBeTruthy();
+    expect(screen.getByText("计划")).toBeTruthy();
     expect(screen.getByText("上次执行")).toBeTruthy();
     expect(screen.getAllByText("启用").length).toBeGreaterThan(0);
   });

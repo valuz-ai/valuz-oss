@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
 export interface PageHeaderProps {
-  title: string;
+  /** Plain text, or a node such as a title-level mode switch. */
+  title: ReactNode;
   description?: string;
   navigation?: ReactNode;
   action?: ReactNode;

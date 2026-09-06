@@ -20,7 +20,6 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
-  SegmentedControl,
 } from "@valuz/ui";
 import {
   agentsApi,
@@ -48,9 +47,20 @@ import {
   type AutomationTemplatePrefill,
 } from "@valuz/app/components";
 import { automationTemplatePrefill } from "../lib/template-library";
+import { AutomationHubTitle } from "./AutomationHubTitle";
+import { AutomationHubTabs } from "./AutomationHubTabs";
+import { ProjectFilterChips } from "../components/ProjectFilterChips";
+import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
+
+/** Local and cloud backends each contribute a "Chat" group with the same
+ *  project_id, so keys carry the execution origin too. */
+const groupOrigin = (group: AutomationGroup): string | undefined =>
+  group.automations[0]?.exec_origin;
+const groupKey = (group: AutomationGroup): string =>
+  `${group.project_id}@${groupOrigin(group) ?? "local"}`;
 
 export const AutomationPage = () => {
   const { t, locale } = useTranslation();
@@ -85,18 +95,9 @@ export const AutomationPage = () => {
   // can fold the per-project tables once they grow long. Persisted
   // only for the current page lifetime; the design didn't ask for cross-
   // session persistence.
-  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
-    new Set(),
-  );
-
-  const toggleGroupCollapsed = useCallback((projectId: string) => {
-    setCollapsedGroupIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
-  }, []);
+  // 全部 / per-project chips filter the single table (design: one sticky
+  // column header, a section row per project).
+  const [projectFilter, setProjectFilter] = useState<string>("all");
 
   // ── Data loading ─────────────────────────────────────────────────
 
@@ -190,63 +191,9 @@ export const AutomationPage = () => {
 
   const pageHeader = useMemo(
     () => (
-      <PageHeader
-        title={t(k("automation.title"))}
-        navigation={
-          <SegmentedControl
-            value={view}
-            onValueChange={setView}
-            className="h-8 w-fit"
-            options={[
-              {
-                value: "mine",
-                label: t(k("templateLibrary.myAutomations")),
-                icon: Clock3,
-              },
-              {
-                value: "templates",
-                label: t(k("templateLibrary.templates")),
-                icon: LayoutTemplate,
-              },
-            ]}
-          />
-        }
-        action={
-          <div className="flex shrink-0 items-center gap-2">
-            {view === "mine" && totalCount > 0 ? (
-              <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
-                <span className="font-medium text-ink-heading">
-                  {t(
-                    k(
-                      totalCount === 1
-                        ? "automation.headerCount"
-                        : "automation.headerCountPlural",
-                    ),
-                    { count: totalCount },
-                  )}
-                </span>
-                <span className="text-ink-meta">·</span>
-                <span className="text-ink-meta">
-                  {t(k("automation.headerEnabled"), { count: enabledCount })}
-                </span>
-              </div>
-            ) : null}
-            <Button
-              variant="default"
-              size="sm"
-              className="shrink-0"
-              onClick={openCreate}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {hasAutomations
-                ? t(k("automation.actionNew"))
-                : t(k("automation.actionCreate"))}
-            </Button>
-          </div>
-        }
-      />
+      <PageHeader title={<AutomationHubTitle active="automations" />} />
     ),
-    [totalCount, enabledCount, hasAutomations, openCreate, setView, t, view],
+    [],
   );
 
   useEffect(() => {
@@ -428,11 +375,60 @@ export const AutomationPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-5 pb-5">
+        <AutomationHubTabs
+          value={view}
+          onValueChange={setView}
+          options={[
+            {
+              value: "mine",
+              label: t(k("templateLibrary.myAutomations")),
+              icon: Clock3,
+            },
+            {
+              value: "templates",
+              label: t(k("templateLibrary.templates")),
+              icon: LayoutTemplate,
+            },
+          ]}
+          right={
+            <>
+              {view === "mine" && totalCount > 0 ? (
+                <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
+                  <span className="font-medium text-ink-heading">
+                    {t(
+                      k(
+                        totalCount === 1
+                          ? "automation.headerCount"
+                          : "automation.headerCountPlural",
+                      ),
+                      { count: totalCount },
+                    )}
+                  </span>
+                  <span className="text-ink-meta">·</span>
+                  <span className="text-ink-meta">
+                    {t(k("automation.headerEnabled"), { count: enabledCount })}
+                  </span>
+                </div>
+              ) : null}
+              <Button
+                variant="default"
+                size="sm"
+                className="shrink-0"
+                onClick={openCreate}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {hasAutomations
+                  ? t(k("automation.actionNew"))
+                  : t(k("automation.actionCreate"))}
+              </Button>
+            </>
+          }
+        />
         {view === "templates" ? (
           <TemplateLibrary kind="automation" onUse={useTemplate} />
         ) : !hasAutomations ? (
-          <div className="space-y-10 px-5 pt-10">
+          <div className="space-y-10 pt-10">
             <div className="flex justify-center">
               <EmptyState
                 variant="plain"
@@ -456,39 +452,52 @@ export const AutomationPage = () => {
           </div>
         ) : (
           <>
-            <div className="space-y-5">
-              {groups
+            <ProjectFilterChips
+              value={projectFilter}
+              onChange={setProjectFilter}
+              options={groups
                 .filter((group) => group.automations.length > 0)
-                .map((group) => (
-                  <section key={group.project_id}>
-                    <AutomationDefinitionTable
-                      automations={group.automations}
-                      title={group.project_name}
-                      countLabel={t(
-                        k(
-                          group.automations.length === 1
-                            ? "automation.groupCount"
-                            : "automation.groupCountPlural",
-                        ),
-                        { count: group.automations.length },
-                      )}
-                      collapsed={collapsedGroupIds.has(group.project_id)}
-                      onToggleCollapse={() =>
-                        toggleGroupCollapsed(group.project_id)
-                      }
-                      onOpen={(id) => navigate(`/automations/${id}`)}
-                      onToggle={(id) => toggleAutomation(id)}
-                      onRunNow={(id) => runNow(id)}
-                      onDelete={(id) => {
-                        const automation = group.automations.find(
-                          (item) => item.automation_id === id,
-                        );
-                        if (automation) setDeleteTarget(automation);
-                      }}
-                    />
-                  </section>
-                ))}
-            </div>
+                .map((group) => ({
+                  id: groupKey(group),
+                  label: group.project_name,
+                  count: group.automations.length,
+                  icon: groupOrigin(group) ? (
+                    <OriginIcon origin={groupOrigin(group)} />
+                  ) : undefined,
+                }))}
+            />
+            <AutomationDefinitionTable
+              groups={groups
+                .filter(
+                  (group) =>
+                    group.automations.length > 0 &&
+                    (projectFilter === "all" ||
+                      groupKey(group) === projectFilter),
+                )
+                .map((group) => ({
+                  id: groupKey(group),
+                  name: group.project_name,
+                  origin: groupOrigin(group),
+                  countLabel: t(
+                    k(
+                      group.automations.length === 1
+                        ? "automation.groupCount"
+                        : "automation.groupCountPlural",
+                    ),
+                    { count: group.automations.length },
+                  ),
+                  automations: group.automations,
+                }))}
+              onOpen={(id) => navigate(`/automations/${id}`)}
+              onToggle={(id) => toggleAutomation(id)}
+              onRunNow={(id) => runNow(id)}
+              onDelete={(id) => {
+                const automation = groups
+                  .flatMap((group) => group.automations)
+                  .find((item) => item.automation_id === id);
+                if (automation) setDeleteTarget(automation);
+              }}
+            />
           </>
         )}
       </div>

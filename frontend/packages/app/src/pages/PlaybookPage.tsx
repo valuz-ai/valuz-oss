@@ -33,7 +33,6 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
-  SegmentedControl,
 } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import {
@@ -44,6 +43,9 @@ import {
   type PlaybookTemplatePrefill,
 } from "@valuz/app/components";
 import { playbookTemplatePrefill } from "../lib/template-library";
+import { AutomationHubTitle } from "./AutomationHubTitle";
+import { AutomationHubTabs } from "./AutomationHubTabs";
+import { ProjectFilterChips } from "../components/ProjectFilterChips";
 
 export const PlaybookPage = () => {
   const { t, locale } = useTranslation();
@@ -68,9 +70,7 @@ export const PlaybookPage = () => {
   const [deleting, setDeleting] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<PlaybookRun | null>(null);
-  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
-    new Set(),
-  );
+  const [projectFilter, setProjectFilter] = useState<string>("all");
   const selectedDefinitionId = searchParams.get("definition");
   const view = searchParams.get("view") === "templates" ? "templates" : "mine";
 
@@ -172,12 +172,23 @@ export const PlaybookPage = () => {
     >();
 
     for (const definition of definitions) {
-      const id = definition.project_id ?? chatGroupId;
+      // A project_id with no matching target (deleted project, or one that
+      // lives on another backend) is shown as one "未知项目" group instead
+      // of leaking the raw id.
+      const known =
+        !definition.project_id || projectNames.has(definition.project_id);
+      const id = !definition.project_id
+        ? chatGroupId
+        : known
+          ? definition.project_id
+          : "__unknown";
       const group = grouped.get(id) ?? {
         id,
-        name: definition.project_id
-          ? (projectNames.get(definition.project_id) ?? definition.project_id)
-          : t("playbook.defaultChatGroup"),
+        name: !definition.project_id
+          ? t("playbook.defaultChatGroup")
+          : known
+            ? projectNames.get(definition.project_id)!
+            : t("playbook.unknownProjectGroup"),
         definitions: [],
       };
       group.definitions.push(definition);
@@ -192,15 +203,6 @@ export const PlaybookPage = () => {
       return aOrder - bOrder || a.name.localeCompare(b.name);
     });
   }, [definitions, t, targets]);
-
-  const toggleGroupCollapsed = useCallback((groupId: string) => {
-    setCollapsedGroupIds((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  }, []);
 
   const totalCount = definitions.length;
   const activeCount = definitions.filter(
@@ -225,61 +227,9 @@ export const PlaybookPage = () => {
 
   const header = useMemo(
     () => (
-      <PageHeader
-        title={t("playbook.title")}
-        navigation={
-          <SegmentedControl
-            value={view}
-            onValueChange={setView}
-            className="h-8 w-fit"
-            options={[
-              {
-                value: "mine",
-                label: t("templateLibrary.myPlaybooks"),
-                icon: BookOpenText,
-              },
-              {
-                value: "templates",
-                label: t("templateLibrary.templates"),
-                icon: LayoutTemplate,
-              },
-            ]}
-          />
-        }
-        action={
-          <div className="flex shrink-0 items-center gap-2">
-            {view === "mine" && totalCount > 0 ? (
-              <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
-                <span className="font-medium text-ink-heading">
-                  {t(
-                    totalCount === 1
-                      ? "playbook.headerCount"
-                      : "playbook.headerCountPlural",
-                    { count: totalCount },
-                  )}
-                </span>
-                <span className="text-ink-meta">·</span>
-                <span className="text-ink-meta">
-                  {t("playbook.headerActive", { count: activeCount })}
-                </span>
-              </div>
-            ) : null}
-            <Button
-              variant="default"
-              size="sm"
-              className="shrink-0"
-              onClick={openCreate}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {hasPlaybooks
-                ? t("playbook.actionNew")
-                : t("playbook.createAction")}
-            </Button>
-          </div>
-        }
-      />
+      <PageHeader title={<AutomationHubTitle active="playbooks" />} />
     ),
-    [activeCount, hasPlaybooks, openCreate, setView, t, totalCount, view],
+    [],
   );
 
   useEffect(() => {
@@ -445,11 +395,58 @@ export const PlaybookPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-5 pb-5">
+        <AutomationHubTabs
+          value={view}
+          onValueChange={setView}
+          options={[
+            {
+              value: "mine",
+              label: t("templateLibrary.myPlaybooks"),
+              icon: BookOpenText,
+            },
+            {
+              value: "templates",
+              label: t("templateLibrary.templates"),
+              icon: LayoutTemplate,
+            },
+          ]}
+          right={
+            <>
+              {view === "mine" && totalCount > 0 ? (
+                <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
+                  <span className="font-medium text-ink-heading">
+                    {t(
+                      totalCount === 1
+                        ? "playbook.headerCount"
+                        : "playbook.headerCountPlural",
+                      { count: totalCount },
+                    )}
+                  </span>
+                  <span className="text-ink-meta">·</span>
+                  <span className="text-ink-meta">
+                    {t("playbook.headerActive", { count: activeCount })}
+                  </span>
+                </div>
+              ) : null}
+              <Button
+                variant="default"
+                size="sm"
+                className="shrink-0"
+                onClick={openCreate}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {hasPlaybooks
+                  ? t("playbook.actionNew")
+                  : t("playbook.createAction")}
+              </Button>
+            </>
+          }
+        />
         {view === "templates" ? (
           <TemplateLibrary kind="playbook" onUse={useTemplate} />
         ) : definitions.length === 0 ? (
-          <div className="space-y-10 px-5 pt-10">
+          <div className="space-y-10 pt-10">
             <div className="flex justify-center">
               <EmptyState
                 variant="plain"
@@ -472,35 +469,45 @@ export const PlaybookPage = () => {
             />
           </div>
         ) : (
-          <div className="space-y-5">
-            {groups.map((group) => (
-              <section key={group.id}>
-                <PlaybookDefinitionTable
-                  definitions={group.definitions}
-                  runningId={runningId}
-                  selectedDefinitionId={selectedDefinitionId}
-                  title={group.name}
-                  countLabel={t(
+          <>
+            <ProjectFilterChips
+              value={projectFilter}
+              onChange={setProjectFilter}
+              options={groups.map((group) => ({
+                id: group.id,
+                label: group.name,
+                count: group.definitions.length,
+              }))}
+            />
+            <PlaybookDefinitionTable
+              groups={groups
+                .filter(
+                  (group) => projectFilter === "all" || group.id === projectFilter,
+                )
+                .map((group) => ({
+                  id: group.id,
+                  name: group.name,
+                  countLabel: t(
                     group.definitions.length === 1
                       ? "playbook.groupCount"
                       : "playbook.groupCountPlural",
                     { count: group.definitions.length },
-                  )}
-                  collapsed={collapsedGroupIds.has(group.id)}
-                  onToggleCollapse={() => toggleGroupCollapsed(group.id)}
-                  onOpen={(definition) =>
-                    navigate(`/playbooks/${definition.id}?from=/playbooks`)
-                  }
-                  onEdit={(definition) => void openEdit(definition)}
-                  onRun={(definition) => void run(definition)}
-                  onStatusChange={(definition, status) =>
-                    void changeStatus(definition, status)
-                  }
-                  onDelete={setDeleteTarget}
-                />
-              </section>
-            ))}
-          </div>
+                  ),
+                  definitions: group.definitions,
+                }))}
+              runningId={runningId}
+              selectedDefinitionId={selectedDefinitionId}
+              onOpen={(definition) =>
+                navigate(`/playbooks/${definition.id}?from=/playbooks`)
+              }
+              onEdit={(definition) => void openEdit(definition)}
+              onRun={(definition) => void run(definition)}
+              onStatusChange={(definition, status) =>
+                void changeStatus(definition, status)
+              }
+              onDelete={setDeleteTarget}
+            />
+          </>
         )}
       </div>
 

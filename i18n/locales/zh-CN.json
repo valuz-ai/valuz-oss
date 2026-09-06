@@ -132,6 +132,7 @@
     "deleteTitle": "删除执行手册「{name}」？",
     "dialogHint": "保存一段可版本化、可被智能体与自动化调用的完整指令。",
     "defaultChatGroup": "Chat",
+    "unknownProjectGroup": "未知项目",
     "editTitle": "编辑执行手册",
     "emptyDescription": "把反复使用的完整指令保存为执行手册，之后可由智能体或自动化按固定版本调用。",
     "emptyTitle": "暂无执行手册",
@@ -280,6 +281,7 @@
     "projects": "项目"
   },
   "common": {
+    "all": "全部",
     "add": "添加",
     "available": "可用",
     "back": "返回",
@@ -634,6 +636,8 @@
     "attachmentsClearedOnSwitch": "已切换服务，原有附件已清除——附件只存在于上传时所选的服务上，请重新上传。"
   },
   "cron": {
+    "scheduleColumn": "计划",
+    "human": {"daily": "每天 {time}", "weekdays": "每个工作日 {time}", "weekly": "每周{day} {time}", "monthly": "每月 {day} 日 {time}", "hourly": "每小时 :{minute}", "everyMinutes": "每 {n} 分钟", "everyHours": "每 {n} 小时", "weekday": {"0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六"}},
     "actionColumn": "操作",
     "addTask": "添加自动化任务",
     "advanced": "高级",

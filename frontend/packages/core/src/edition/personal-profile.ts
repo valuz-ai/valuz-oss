@@ -37,14 +37,9 @@ const personalBranding: BrandingProfile = {
 // Library (Agents, Skills, Connectors, Knowledge) → Settings. Tasks are no
 // longer a top-level entry — they live inside a Project.
 const personalNavItems: NavItemModule[] = [
-  {
-    id: "playbooks",
-    label: "sidebar.playbooks",
-    href: "/playbooks",
-    position: "top",
-    navGroup: "main",
-    edition: "personal",
-  },
+  // 执行手册 no longer has its own sidebar entry: it is reached from the
+  // 自动化 page's title switch (AutomationHubTitle) and stays routable at
+  // /playbooks.
   {
     // Sidebar entry points at the new ADR-021 automation page. The
     // sentinel id stays ``scheduled`` for now so the navigation tests'
@@ -53,6 +48,7 @@ const personalNavItems: NavItemModule[] = [
     id: "scheduled",
     label: "sidebar.automation",
     href: "/automations",
+    activePaths: ["/playbooks"],
     position: "top",
     navGroup: "main",
     edition: "personal",
