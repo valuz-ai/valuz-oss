@@ -8,6 +8,9 @@ export interface AutomationDefinitionGroup {
   id: string;
   name: string;
   countLabel?: string;
+  /** Execution origin of the group's project (local / cloud), shown next
+   *  to the section title when the list fans out across backends. */
+  origin?: string;
   automations: AutomationItem[];
 }
 
@@ -92,6 +95,9 @@ export function AutomationDefinitionTable({
           id: group.id,
           title: group.name,
           countLabel: group.countLabel,
+          titleAdornment: group.origin ? (
+            <OriginIcon origin={group.origin} />
+          ) : null,
           tasks: toRows(group.automations),
         }))}
         {...shared}

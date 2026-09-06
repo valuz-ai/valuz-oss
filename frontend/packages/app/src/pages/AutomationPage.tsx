@@ -50,9 +50,17 @@ import { automationTemplatePrefill } from "../lib/template-library";
 import { AutomationHubTitle } from "./AutomationHubTitle";
 import { AutomationHubTabs } from "./AutomationHubTabs";
 import { ProjectFilterChips } from "../components/ProjectFilterChips";
+import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
+
+/** Local and cloud backends each contribute a "Chat" group with the same
+ *  project_id, so keys carry the execution origin too. */
+const groupOrigin = (group: AutomationGroup): string | undefined =>
+  group.automations[0]?.exec_origin;
+const groupKey = (group: AutomationGroup): string =>
+  `${group.project_id}@${groupOrigin(group) ?? "local"}`;
 
 export const AutomationPage = () => {
   const { t, locale } = useTranslation();
@@ -450,9 +458,12 @@ export const AutomationPage = () => {
               options={groups
                 .filter((group) => group.automations.length > 0)
                 .map((group) => ({
-                  id: group.project_id,
+                  id: groupKey(group),
                   label: group.project_name,
                   count: group.automations.length,
+                  icon: groupOrigin(group) ? (
+                    <OriginIcon origin={groupOrigin(group)} />
+                  ) : undefined,
                 }))}
             />
             <AutomationDefinitionTable
@@ -461,11 +472,12 @@ export const AutomationPage = () => {
                   (group) =>
                     group.automations.length > 0 &&
                     (projectFilter === "all" ||
-                      group.project_id === projectFilter),
+                      groupKey(group) === projectFilter),
                 )
                 .map((group) => ({
-                  id: group.project_id,
+                  id: groupKey(group),
                   name: group.project_name,
+                  origin: groupOrigin(group),
                   countLabel: t(
                     k(
                       group.automations.length === 1

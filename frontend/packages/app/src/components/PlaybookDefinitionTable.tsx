@@ -104,10 +104,10 @@ export function PlaybookDefinitionTable({
         </span>
       </button>
     ) : (
-      <div className="flex h-9 items-center gap-2 px-0 pt-2 text-sm font-semibold text-ink-heading">
+      <div className="mt-4 flex h-8 items-center gap-2 rounded-md bg-surface-soft px-2 text-xs font-semibold text-ink-heading first:mt-0">
         <span className="truncate">{section.name}</span>
         {section.countLabel ? (
-          <span className="font-medium text-[#6e7481]">{section.countLabel}</span>
+          <span className="font-normal text-ink-meta">{section.countLabel}</span>
         ) : null}
       </div>
     );
@@ -179,11 +179,11 @@ export function PlaybookDefinitionTable({
         id={`playbook-${definition.id}`}
         className={
           selected
-            ? "border-b border-surface-border bg-brand/5 ring-1 ring-inset ring-brand/30 last:border-0"
-            : "border-b border-surface-border last:border-0"
+            ? "rounded-md bg-brand/5 ring-1 ring-inset ring-brand/30"
+            : "rounded-md transition-colors hover:bg-surface-soft/60"
         }
       >
-        <div className={`hidden items-center px-0 py-2.5 md:grid ${GRID}`}>
+        <div className={`hidden items-center px-2 py-2 md:grid ${GRID}`}>
           <div className="flex min-w-0 items-center gap-2">
             <BookOpenText
               className={
@@ -258,7 +258,7 @@ export function PlaybookDefinitionTable({
         <>
           {hasRows ? (
             <div
-              className={`sticky top-0 z-10 hidden border-b border-surface-border bg-card px-0 py-2 text-xs font-medium text-[#6E7481] md:grid dark:text-ink-body ${GRID}`}
+              className={`sticky top-0 z-10 hidden border-b border-surface-border bg-card px-2 py-2 text-xs font-medium text-[#6E7481] md:grid dark:text-ink-body ${GRID}`}
             >
               <div>{t("playbook.nameColumn")}</div>
               <div>{t("playbook.versionColumn")}</div>

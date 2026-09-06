@@ -39,6 +39,8 @@ export interface ScheduledTaskSection {
   id: string;
   title: string;
   countLabel?: string;
+  /** Rendered after the title (e.g. the execution-origin icon). */
+  titleAdornment?: ReactNode;
   tasks: ScheduledTaskRow[];
 }
 
@@ -188,10 +190,11 @@ export const ScheduledTaskTable = ({
         </span>
       </button>
     ) : (
-      <div className="flex h-9 items-center gap-2 px-0 pt-2 text-sm font-semibold text-ink-heading">
+      <div className="mt-4 flex h-8 items-center gap-2 rounded-md bg-surface-soft px-2 text-xs font-semibold text-ink-heading first:mt-0">
         <span className="truncate">{section.title}</span>
+        {section.titleAdornment}
         {section.countLabel ? (
-          <span className="font-medium text-[#6e7481]">{section.countLabel}</span>
+          <span className="font-normal text-ink-meta">{section.countLabel}</span>
         ) : null}
       </div>
     );
@@ -199,10 +202,10 @@ export const ScheduledTaskTable = ({
   const renderRow = (task: ScheduledTaskRow) => (
     <div
       key={task.id}
-      className="border-b border-surface-border last:border-0"
+      className="rounded-md transition-colors hover:bg-surface-soft/60"
     >
       {/* Desktop row */}
-      <div className={cn("hidden items-center px-0 py-2.5 md:grid", grid)}>
+      <div className={cn("hidden items-center px-2 py-2 md:grid", grid)}>
         <div className="flex min-w-0 items-center gap-2">
           <Clock
             className={cn(
@@ -315,7 +318,7 @@ export const ScheduledTaskTable = ({
           {hasRows ? (
             <div
               className={cn(
-                "sticky top-0 z-10 hidden border-b border-surface-border bg-card px-0 py-2 text-xs font-medium text-[#6E7481] md:grid dark:text-ink-body",
+                "sticky top-0 z-10 hidden border-b border-surface-border bg-card px-2 py-2 text-xs font-medium text-[#6E7481] md:grid dark:text-ink-body",
                 grid,
               )}
             >
@@ -327,7 +330,7 @@ export const ScheduledTaskTable = ({
             </div>
           ) : null}
           {resolved.map((section) => (
-            <div key={section.id}>
+            <div key={section.id} className={sections ? "first:mt-0" : undefined}>
               {sections && section.title ? sectionHeading(section) : null}
               {section.tasks.map(renderRow)}
             </div>
