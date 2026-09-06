@@ -244,3 +244,127 @@ async def test_agent_cannot_finish_a_run_from_another_session(
         "action": "finish",
         "error_code": "playbook_run_session_mismatch",
     }
+
+
+async def test_playbook_tool_schema_declares_agent_slug_and_clear_project() -> None:
+    """UI-vs-agent parity: the registered MCP tool must expose the same
+    default-executor and project-detach knobs that ``playbook_invoke`` (and
+    the REST/UI path) already support."""
+    tools = await mcp._mcp.list_tools()
+    playbook_tool = next(t for t in tools if t.name == "playbook")
+    properties = playbook_tool.inputSchema["properties"]
+    assert "agent_slug" in properties
+    assert "clear_project" in properties
+    assert properties["clear_project"]["type"] == "boolean"
+
+
+async def test_playbook_tool_forwards_agent_slug_on_create(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects = Projects()
+
+    @asynccontextmanager
+    async def unit_of_work(*args, **kwargs):  # type: ignore[no-untyped-def]
+        yield db
+
+    async def playbook_service(_db):  # type: ignore[no-untyped-def]
+        return PlaybookService(db, projects)
+
+    async def operation_service(_db):  # type: ignore[no-untyped-def]
+        return OperationService(db, projects)  # type: ignore[arg-type]
+
+    async def session_project(session_id: str, user_id: str) -> tuple[str, str]:
+        return "p1", "project"
+
+    from valuz_agent.infra import db as db_module
+
+    monkeypatch.setattr(db_module, "async_unit_of_work", unit_of_work)
+    monkeypatch.setattr(mcp, "get_current_mcp_session_id", lambda: "session-1")
+    monkeypatch.setattr(mcp, "get_current_mcp_user_id", lambda: USER)
+    monkeypatch.setattr(mcp, "_session_project", session_project)
+    monkeypatch.setattr(mcp, "_service", playbook_service)
+    monkeypatch.setattr(mcp, "_operation_service", operation_service)
+
+    # Drive through the registered ``playbook`` tool (not ``playbook_invoke``
+    # directly) so a regression that drops a parameter from the tool's own
+    # signature is caught.
+    proposed = json.loads(
+        await mcp.playbook(
+            action="create",
+            name="Weekly digest",
+            content="Summarize the week's research notes.",
+            agent_slug="assistant-2",
+        )
+    )
+    assert proposed["ok"] is True
+
+    operation = await OperationService(db, projects).confirm(  # type: ignore[arg-type]
+        USER,
+        proposed["operation"]["id"],
+        expected_proposal_hash=proposed["operation"]["proposal_hash"],
+    )
+    assert operation.state == "succeeded"
+    definition_id = operation.result_payload["definition_id"]
+
+    current = json.loads(await mcp.playbook(action="get", definition_id=definition_id))
+    assert current["current_version"]["default_executor"] == {"agent_slug": "assistant-2"}
+
+
+async def test_playbook_tool_forwards_clear_project_on_update_definition(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects = Projects()
+
+    @asynccontextmanager
+    async def unit_of_work(*args, **kwargs):  # type: ignore[no-untyped-def]
+        yield db
+
+    async def playbook_service(_db):  # type: ignore[no-untyped-def]
+        return PlaybookService(db, projects)
+
+    async def operation_service(_db):  # type: ignore[no-untyped-def]
+        return OperationService(db, projects)  # type: ignore[arg-type]
+
+    async def session_project(_session_id: str, _user_id: str) -> tuple[str, str]:
+        return "p1", "project"
+
+    from valuz_agent.infra import db as db_module
+    from valuz_agent.modules.playbooks.schemas import PlaybookCreateRequest
+
+    definition, _ = await PlaybookService(db, projects).create_definition(
+        USER,
+        PlaybookCreateRequest(
+            name="Scoped review", content="Review the project.", project_id="p1"
+        ),
+    )
+    assert definition.project_id == "p1"
+
+    monkeypatch.setattr(db_module, "async_unit_of_work", unit_of_work)
+    monkeypatch.setattr(mcp, "get_current_mcp_session_id", lambda: "session-1")
+    monkeypatch.setattr(mcp, "get_current_mcp_user_id", lambda: USER)
+    monkeypatch.setattr(mcp, "_session_project", session_project)
+    monkeypatch.setattr(mcp, "_service", playbook_service)
+    monkeypatch.setattr(mcp, "_operation_service", operation_service)
+
+    proposed = json.loads(
+        await mcp.playbook(
+            action="update_definition",
+            definition_id=definition.id,
+            expected_revision=definition.revision,
+            clear_project=True,
+        )
+    )
+    assert proposed["ok"] is True
+
+    operation = await OperationService(db, projects).confirm(  # type: ignore[arg-type]
+        USER,
+        proposed["operation"]["id"],
+        expected_proposal_hash=proposed["operation"]["proposal_hash"],
+    )
+    assert operation.state == "succeeded"
+    assert operation.result_payload["project_id"] is None
+
+    updated = await PlaybookService(db, projects).get_definition(USER, definition.id)
+    assert updated.project_id is None
