@@ -16,8 +16,6 @@ import {
 } from "@valuz/core";
 import {
   Button,
-  Card,
-  CardContent,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -69,13 +67,13 @@ export function PlaybookDefinitionTable({
   );
 
   return (
-    <Card className="gap-0 overflow-hidden border-0 py-0 shadow-[var(--shadow-1)]">
-      <CardContent className="px-0 py-0">
+    <section>
+      <div>
         {title ? (
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="flex h-10 w-full items-center justify-between gap-4 px-5 text-left"
+            className="flex h-9 w-full items-center justify-between gap-4 px-5 text-left"
             aria-expanded={!collapsed}
           >
             <div className="flex min-w-0 items-center gap-3">
@@ -95,7 +93,7 @@ export function PlaybookDefinitionTable({
 
         {collapsed ? null : (
           <>
-            <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px] dark:border-surface-border dark:text-ink-body">
+            <div className="hidden border-b border-surface-border px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px] dark:text-ink-body">
               <div>{t("playbook.nameColumn")}</div>
               <div className="text-center">{t("playbook.versionColumn")}</div>
               <div className="text-center">{t("playbook.statusColumn")}</div>
@@ -168,8 +166,8 @@ export function PlaybookDefinitionTable({
                   id={`playbook-${definition.id}`}
                   className={
                     selected
-                      ? "bg-brand/5 ring-1 ring-inset ring-brand/30"
-                      : undefined
+                      ? "border-b border-surface-border bg-brand/5 ring-1 ring-inset ring-brand/30 last:border-0"
+                      : "border-b border-surface-border last:border-0"
                   }
                 >
                   <div className="hidden items-center px-5 py-4 md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px]">
@@ -240,7 +238,7 @@ export function PlaybookDefinitionTable({
             })}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

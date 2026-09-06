@@ -12,8 +12,6 @@ import {
 } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Card } from "../ui/card";
-import { CardContent } from "../ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -142,13 +140,13 @@ export const ScheduledTaskTable = ({
   );
 
   return (
-    <Card className="gap-0 overflow-hidden border-0 py-0 shadow-[var(--shadow-1)]">
-      <CardContent className="px-0 py-0">
+    <section>
+      <div>
         {title && (
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="flex h-10 w-full items-center justify-between gap-4 px-5 text-left"
+            className="flex h-9 w-full items-center justify-between gap-4 px-5 text-left"
             aria-expanded={!collapsed}
           >
             <div className="flex min-w-0 items-center gap-3">
@@ -169,7 +167,7 @@ export const ScheduledTaskTable = ({
         {collapsed ? null : (
           <>
             {/* Header row — hidden on mobile */}
-            <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px] dark:border-surface-border dark:text-ink-body">
+            <div className="hidden border-b border-surface-border px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px] dark:text-ink-body">
               <div>{t("cron.taskColumn")}</div>
               <div className="text-center">{t("cron.triggerColumn")}</div>
               <div className="text-center">{t("cron.timezoneColumn")}</div>
@@ -179,7 +177,10 @@ export const ScheduledTaskTable = ({
             </div>
 
             {tasks.map((task) => (
-              <div key={task.id}>
+              <div
+                key={task.id}
+                className="border-b border-surface-border last:border-0"
+              >
                 {/* Desktop row */}
                 <div className="hidden items-center px-5 py-4 md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px]">
                   <div className="flex min-w-0 items-start gap-2">
@@ -294,7 +295,7 @@ export const ScheduledTaskTable = ({
             ))}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 };

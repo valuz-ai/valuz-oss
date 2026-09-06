@@ -375,7 +375,7 @@ export const AutomationPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5">
         <AutomationHubTabs
           value={view}
           onValueChange={setView}
@@ -452,7 +452,7 @@ export const AutomationPage = () => {
           </div>
         ) : (
           <>
-            <div className="space-y-5">
+            <div className="space-y-8">
               {groups
                 .filter((group) => group.automations.length > 0)
                 .map((group) => (
