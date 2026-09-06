@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import CheckConstraint, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -74,6 +74,13 @@ class OperationRecordRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     )
     error_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Epoch ms after which a still-pending proposal can no longer be
+    #: confirmed. ``None`` = never. Read lazily: a pending row past this
+    #: instant reports ``expired`` before anything wrote it.
+    expires_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: The newer proposal for the same owner/type/target that replaced
+    #: this one (state ``superseded``).
+    superseded_by_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class ConfirmationDecisionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):

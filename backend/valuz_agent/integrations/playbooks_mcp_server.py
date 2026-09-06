@@ -90,6 +90,8 @@ def _operation(row: Any) -> dict[str, Any]:
         "result_payload": row.result_payload,
         "error_code": row.error_code,
         "error_message": row.error_message,
+        "expires_at": row.expires_at,
+        "superseded_by_id": row.superseded_by_id,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }

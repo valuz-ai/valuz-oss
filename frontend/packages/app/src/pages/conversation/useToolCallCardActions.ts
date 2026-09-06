@@ -164,7 +164,7 @@ export function useToolCallCardActions({
     Record<string, OperationView>
   >({});
   const [operationBusy, setOperationBusy] = useState<
-    Record<string, "confirm" | "cancel" | undefined>
+    Record<string, "confirm" | "cancel" | "request_changes" | undefined>
   >({});
 
   const submissionProjectLabel = useMemo(() => {
@@ -441,6 +441,41 @@ export function useToolCallCardActions({
           cause instanceof Error
             ? cause.message
             : t("conversation.cancelFailed"),
+        );
+      } finally {
+        setOperationBusy((current) => ({
+          ...current,
+          [operation.id]: undefined,
+        }));
+      }
+    },
+    [selectedSessionIdRef, t],
+  );
+
+  const handleRequestChangesOperation = useCallback(
+    async (operation: OperationView, comment: string) => {
+      const sid = selectedSessionIdRef.current;
+      if (!sid) return;
+      setOperationBusy((current) => ({
+        ...current,
+        [operation.id]: "request_changes",
+      }));
+      try {
+        const next = await operationsApi.requestChanges(
+          operation.id,
+          operation.proposal_hash,
+          comment,
+          sid,
+        );
+        setOperationStates((current) => ({
+          ...current,
+          [operation.id]: next,
+        }));
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : t("playbook.operation.failed"),
         );
       } finally {
         setOperationBusy((current) => ({
@@ -762,5 +797,6 @@ export function useToolCallCardActions({
     handleDismissAutomation,
     handleConfirmOperation,
     handleCancelOperation,
+    handleRequestChangesOperation,
   };
 }

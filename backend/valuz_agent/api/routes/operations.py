@@ -9,9 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.facade.projects import ProjectLibrary, get_project_library
 from valuz_agent.infra.db import async_unit_of_work
-from valuz_agent.modules.operations.models import OperationRecordRow
+from valuz_agent.modules.operations.models import (
+    ConfirmationDecisionRow,
+    OperationRecordRow,
+)
 from valuz_agent.modules.operations.schemas import (
     OperationDecisionRequest,
+    OperationDecisionView,
+    OperationRequestChangesRequest,
     OperationStatusRequest,
     OperationStatusResponse,
     OperationView,
@@ -30,7 +35,20 @@ async def get_operation_service(
         yield OperationService(db, projects)
 
 
-def operation_view(row: OperationRecordRow) -> OperationView:
+def decision_view(row: ConfirmationDecisionRow) -> OperationDecisionView:
+    return OperationDecisionView(
+        decision=row.decision,  # type: ignore[arg-type]
+        decided_by=row.decided_by,
+        decided_at=row.created_at,
+        proposal_hash=row.proposal_hash,
+        comment=row.comment,
+    )
+
+
+def operation_view(
+    row: OperationRecordRow,
+    latest_decision: ConfirmationDecisionRow | None = None,
+) -> OperationView:
     return OperationView(
         id=row.id,
         project_id=row.project_id,
@@ -54,9 +72,23 @@ def operation_view(row: OperationRecordRow) -> OperationView:
         result_payload=row.result_payload,
         error_code=row.error_code,
         error_message=row.error_message,
+        expires_at=row.expires_at,
+        superseded_by_id=row.superseded_by_id,
+        latest_decision=decision_view(latest_decision) if latest_decision else None,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+async def _views(
+    service: OperationService, user_id: str, rows: list[OperationRecordRow]
+) -> list[OperationView]:
+    decisions = await service.latest_decisions(user_id, [row.id for row in rows])
+    return [operation_view(row, decisions.get(row.id)) for row in rows]
+
+
+async def _view(service: OperationService, user_id: str, row: OperationRecordRow) -> OperationView:
+    return (await _views(service, user_id, [row]))[0]
 
 
 @router.get("/{operation_id}")
@@ -66,7 +98,7 @@ async def get_operation(
     user_id: str = Depends(get_current_user_id),
 ) -> OperationView:
     try:
-        return operation_view(await service.get(user_id, operation_id))
+        return await _view(service, user_id, await service.get(user_id, operation_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -86,7 +118,7 @@ async def confirm_operation(
             comment=body.comment,
             decision=body.decision,
         )
-        return operation_view(row)
+        return await _view(service, user_id, row)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -107,7 +139,29 @@ async def cancel_operation(
             expected_proposal_hash=body.proposal_hash,
             comment=body.comment,
         )
-        return operation_view(row)
+        return await _view(service, user_id, row)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{operation_id}/request-changes")
+async def request_operation_changes(
+    operation_id: str,
+    body: OperationRequestChangesRequest,
+    service: OperationService = Depends(get_operation_service),
+    user_id: str = Depends(get_current_user_id),
+) -> OperationView:
+    """Record a ``request_changes`` decision; the proposal stays pending."""
+    try:
+        row = await service.request_changes(
+            user_id,
+            operation_id,
+            expected_proposal_hash=body.proposal_hash,
+            comment=body.comment,
+        )
+        return await _view(service, user_id, row)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -121,7 +175,8 @@ async def operation_status(
     user_id: str = Depends(get_current_user_id),
 ) -> OperationStatusResponse:
     rows = await service.status(user_id, body.operation_ids)
-    return OperationStatusResponse(operations={row.id: operation_view(row) for row in rows})
+    views = await _views(service, user_id, rows)
+    return OperationStatusResponse(operations={view.id: view for view in views})
 
 
-__all__ = ["get_operation_service", "operation_view", "router"]
+__all__ = ["decision_view", "get_operation_service", "operation_view", "router"]

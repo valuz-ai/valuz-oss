@@ -108,6 +108,7 @@ export function useToolCallCards({
     handleDismissAutomation,
     handleConfirmOperation,
     handleCancelOperation,
+    handleRequestChangesOperation,
   } = useToolCallCardActions({
     turns,
     isBusy,
@@ -343,6 +344,9 @@ export function useToolCallCards({
               busy={operationBusy[operation.id] ?? null}
               onConfirm={() => void handleConfirmOperation(operation)}
               onCancel={() => void handleCancelOperation(operation)}
+              onRequestChanges={(comment) =>
+                void handleRequestChangesOperation(operation, comment)
+              }
               onOpenPlaybook={(definitionId) =>
                 navigate(
                   `/playbooks?definition=${encodeURIComponent(definitionId)}`,
@@ -740,6 +744,7 @@ export function useToolCallCards({
       operationBusy,
       handleConfirmOperation,
       handleCancelOperation,
+      handleRequestChangesOperation,
       askUserQuestionAnswersByToolId,
       askUserQuestionLocalAnswers,
       askUserQuestionSubmitRef,

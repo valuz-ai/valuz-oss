@@ -26,6 +26,9 @@ class OperationProposal(BaseModel):
         "direct", "explicit_submit", "confirm", "approval", "preauthorized"
     ] = "confirm"
     idempotency_key: str = Field(min_length=1, max_length=128)
+    #: Epoch ms after which the pending proposal can no longer be confirmed.
+    #: Omitted → the registration's ``default_ttl_ms`` (or never).
+    expires_at: int | None = Field(default=None, ge=0)
 
 
 class OperationDecisionRequest(BaseModel):
@@ -35,6 +38,21 @@ class OperationDecisionRequest(BaseModel):
     #: choice to the user (which of two ways to resolve a conflict). Handed
     #: to the handler as ``OperationContext.decision``; ignored on cancel.
     decision: dict[str, Any] | None = None
+
+
+class OperationRequestChangesRequest(BaseModel):
+    proposal_hash: str = Field(min_length=64, max_length=64)
+    #: What the proposer must change. Required: a request for changes
+    #: without a reason is not actionable.
+    comment: str = Field(min_length=1, max_length=4_000)
+
+
+class OperationDecisionView(BaseModel):
+    decision: Literal["approve", "reject", "request_changes"]
+    decided_by: str
+    decided_at: int
+    proposal_hash: str
+    comment: str | None
 
 
 class OperationView(BaseModel):
@@ -60,6 +78,11 @@ class OperationView(BaseModel):
     result_payload: dict[str, Any]
     error_code: str | None
     error_message: str | None
+    expires_at: int | None
+    superseded_by_id: str | None
+    #: Most recent confirmation decision on this record, so the proposer can
+    #: read a ``request_changes`` comment back.
+    latest_decision: OperationDecisionView | None
     created_at: int
     updated_at: int
 
@@ -74,7 +97,9 @@ class OperationStatusResponse(BaseModel):
 
 __all__ = [
     "OperationDecisionRequest",
+    "OperationDecisionView",
     "OperationProposal",
+    "OperationRequestChangesRequest",
     "OperationStatusRequest",
     "OperationStatusResponse",
     "OperationView",

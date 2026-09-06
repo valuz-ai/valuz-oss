@@ -20,6 +20,18 @@ export type OperationState =
   | "stale"
   | "superseded";
 
+/** Latest append-only confirmation decision on a record. A
+ *  ``request_changes`` decision carries the user's feedback for the proposer;
+ *  the record itself stays pending until a revised proposal supersedes it or
+ *  the user confirms/cancels it as is. */
+export interface OperationDecisionView {
+  decision: "approve" | "reject" | "request_changes";
+  decided_by: string;
+  decided_at: number;
+  proposal_hash: string;
+  comment: string | null;
+}
+
 export interface OperationView {
   id: string;
   project_id: string | null;
@@ -48,6 +60,11 @@ export interface OperationView {
   result_payload: Record<string, unknown>;
   error_code: string | null;
   error_message: string | null;
+  /** Epoch ms after which a pending proposal reads as ``expired``; null = never. */
+  expires_at: number | null;
+  /** The newer proposal for the same target that replaced this one. */
+  superseded_by_id: string | null;
+  latest_decision: OperationDecisionView | null;
   created_at: number;
   updated_at: number;
 }
@@ -106,6 +123,26 @@ export const operationsApi = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ proposal_hash: proposalHash }),
+        baseUrl: sessionBase(sessionId),
+      },
+    );
+  },
+
+  /** Record a ``request_changes`` decision with the user's comment. The
+   *  proposal stays pending; the proposer reads the comment back through
+   *  ``latest_decision``. */
+  requestChanges(
+    operationId: string,
+    proposalHash: string,
+    comment: string,
+    sessionId?: string | null,
+  ): Promise<OperationView> {
+    return fetchJson(
+      `/v1/operations/${encodeURIComponent(operationId)}/request-changes`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposal_hash: proposalHash, comment }),
         baseUrl: sessionBase(sessionId),
       },
     );
