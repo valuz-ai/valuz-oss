@@ -190,7 +190,7 @@ export const ScheduledTaskTable = ({
         </span>
       </button>
     ) : (
-      <div className="mt-5 flex h-7 items-center gap-2 px-2 text-xs font-semibold text-ink-body first:mt-2">
+      <div className="mt-8 flex h-7 items-center gap-2 px-3 text-xs font-semibold text-ink-body first:mt-2">
         <span className="truncate">{section.title}</span>
         {section.titleAdornment}
         {section.countLabel ? (
@@ -202,10 +202,10 @@ export const ScheduledTaskTable = ({
   const renderRow = (task: ScheduledTaskRow) => (
     <div
       key={task.id}
-      className="rounded-md transition-colors hover:bg-surface-soft/60"
+      className="rounded-xl transition-colors hover:bg-surface-soft"
     >
       {/* Desktop row */}
-      <div className={cn("hidden items-center px-2 py-2 md:grid", grid)}>
+      <div className={cn("hidden items-center px-3 py-3 md:grid", grid)}>
         <div className="flex min-w-0 items-center gap-2">
           <Clock
             className={cn(
@@ -318,7 +318,7 @@ export const ScheduledTaskTable = ({
           {hasRows ? (
             <div
               className={cn(
-                "sticky top-0 z-10 hidden border-b border-surface-border bg-card px-2 py-2 text-xs font-medium text-[#6E7481] md:grid dark:text-ink-body",
+                "sticky top-0 z-10 hidden border-b border-surface-border bg-card px-3 py-2 text-xs font-medium text-[#6E7481] md:grid dark:text-ink-body",
                 grid,
               )}
             >
@@ -330,7 +330,7 @@ export const ScheduledTaskTable = ({
             </div>
           ) : null}
           {resolved.map((section) => (
-            <div key={section.id} className={sections ? "first:mt-0" : undefined}>
+            <div key={section.id} className="space-y-1">
               {sections && section.title ? sectionHeading(section) : null}
               {section.tasks.map(renderRow)}
             </div>
