@@ -20,7 +20,6 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
-  SegmentedControl,
 } from "@valuz/ui";
 import {
   agentsApi,
@@ -49,6 +48,7 @@ import {
 } from "@valuz/app/components";
 import { automationTemplatePrefill } from "../lib/template-library";
 import { AutomationHubTitle } from "./AutomationHubTitle";
+import { AutomationHubTabs } from "./AutomationHubTabs";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
@@ -191,63 +191,9 @@ export const AutomationPage = () => {
 
   const pageHeader = useMemo(
     () => (
-      <PageHeader
-        title={<AutomationHubTitle active="automations" />}
-        navigation={
-          <SegmentedControl
-            value={view}
-            onValueChange={setView}
-            className="h-8 w-fit"
-            options={[
-              {
-                value: "mine",
-                label: t(k("templateLibrary.myAutomations")),
-                icon: Clock3,
-              },
-              {
-                value: "templates",
-                label: t(k("templateLibrary.templates")),
-                icon: LayoutTemplate,
-              },
-            ]}
-          />
-        }
-        action={
-          <div className="flex shrink-0 items-center gap-2">
-            {view === "mine" && totalCount > 0 ? (
-              <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
-                <span className="font-medium text-ink-heading">
-                  {t(
-                    k(
-                      totalCount === 1
-                        ? "automation.headerCount"
-                        : "automation.headerCountPlural",
-                    ),
-                    { count: totalCount },
-                  )}
-                </span>
-                <span className="text-ink-meta">·</span>
-                <span className="text-ink-meta">
-                  {t(k("automation.headerEnabled"), { count: enabledCount })}
-                </span>
-              </div>
-            ) : null}
-            <Button
-              variant="default"
-              size="sm"
-              className="shrink-0"
-              onClick={openCreate}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {hasAutomations
-                ? t(k("automation.actionNew"))
-                : t(k("automation.actionCreate"))}
-            </Button>
-          </div>
-        }
-      />
+      <PageHeader title={<AutomationHubTitle active="automations" />} />
     ),
-    [totalCount, enabledCount, hasAutomations, openCreate, setView, t, view],
+    [],
   );
 
   useEffect(() => {
@@ -430,6 +376,55 @@ export const AutomationPage = () => {
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
       <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+        <AutomationHubTabs
+          value={view}
+          onValueChange={setView}
+          options={[
+            {
+              value: "mine",
+              label: t(k("templateLibrary.myAutomations")),
+              icon: Clock3,
+            },
+            {
+              value: "templates",
+              label: t(k("templateLibrary.templates")),
+              icon: LayoutTemplate,
+            },
+          ]}
+          right={
+            <>
+              {view === "mine" && totalCount > 0 ? (
+                <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
+                  <span className="font-medium text-ink-heading">
+                    {t(
+                      k(
+                        totalCount === 1
+                          ? "automation.headerCount"
+                          : "automation.headerCountPlural",
+                      ),
+                      { count: totalCount },
+                    )}
+                  </span>
+                  <span className="text-ink-meta">·</span>
+                  <span className="text-ink-meta">
+                    {t(k("automation.headerEnabled"), { count: enabledCount })}
+                  </span>
+                </div>
+              ) : null}
+              <Button
+                variant="default"
+                size="sm"
+                className="shrink-0"
+                onClick={openCreate}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {hasAutomations
+                  ? t(k("automation.actionNew"))
+                  : t(k("automation.actionCreate"))}
+              </Button>
+            </>
+          }
+        />
         {view === "templates" ? (
           <TemplateLibrary kind="automation" onUse={useTemplate} />
         ) : !hasAutomations ? (

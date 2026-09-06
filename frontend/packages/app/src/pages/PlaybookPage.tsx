@@ -33,7 +33,6 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
-  SegmentedControl,
 } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import {
@@ -45,6 +44,7 @@ import {
 } from "@valuz/app/components";
 import { playbookTemplatePrefill } from "../lib/template-library";
 import { AutomationHubTitle } from "./AutomationHubTitle";
+import { AutomationHubTabs } from "./AutomationHubTabs";
 
 export const PlaybookPage = () => {
   const { t, locale } = useTranslation();
@@ -226,61 +226,9 @@ export const PlaybookPage = () => {
 
   const header = useMemo(
     () => (
-      <PageHeader
-        title={<AutomationHubTitle active="playbooks" />}
-        navigation={
-          <SegmentedControl
-            value={view}
-            onValueChange={setView}
-            className="h-8 w-fit"
-            options={[
-              {
-                value: "mine",
-                label: t("templateLibrary.myPlaybooks"),
-                icon: BookOpenText,
-              },
-              {
-                value: "templates",
-                label: t("templateLibrary.templates"),
-                icon: LayoutTemplate,
-              },
-            ]}
-          />
-        }
-        action={
-          <div className="flex shrink-0 items-center gap-2">
-            {view === "mine" && totalCount > 0 ? (
-              <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
-                <span className="font-medium text-ink-heading">
-                  {t(
-                    totalCount === 1
-                      ? "playbook.headerCount"
-                      : "playbook.headerCountPlural",
-                    { count: totalCount },
-                  )}
-                </span>
-                <span className="text-ink-meta">·</span>
-                <span className="text-ink-meta">
-                  {t("playbook.headerActive", { count: activeCount })}
-                </span>
-              </div>
-            ) : null}
-            <Button
-              variant="default"
-              size="sm"
-              className="shrink-0"
-              onClick={openCreate}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {hasPlaybooks
-                ? t("playbook.actionNew")
-                : t("playbook.createAction")}
-            </Button>
-          </div>
-        }
-      />
+      <PageHeader title={<AutomationHubTitle active="playbooks" />} />
     ),
-    [activeCount, hasPlaybooks, openCreate, setView, t, totalCount, view],
+    [],
   );
 
   useEffect(() => {
@@ -447,6 +395,53 @@ export const PlaybookPage = () => {
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
       <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5 pt-3">
+        <AutomationHubTabs
+          value={view}
+          onValueChange={setView}
+          options={[
+            {
+              value: "mine",
+              label: t("templateLibrary.myPlaybooks"),
+              icon: BookOpenText,
+            },
+            {
+              value: "templates",
+              label: t("templateLibrary.templates"),
+              icon: LayoutTemplate,
+            },
+          ]}
+          right={
+            <>
+              {view === "mine" && totalCount > 0 ? (
+                <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs lg:flex">
+                  <span className="font-medium text-ink-heading">
+                    {t(
+                      totalCount === 1
+                        ? "playbook.headerCount"
+                        : "playbook.headerCountPlural",
+                      { count: totalCount },
+                    )}
+                  </span>
+                  <span className="text-ink-meta">·</span>
+                  <span className="text-ink-meta">
+                    {t("playbook.headerActive", { count: activeCount })}
+                  </span>
+                </div>
+              ) : null}
+              <Button
+                variant="default"
+                size="sm"
+                className="shrink-0"
+                onClick={openCreate}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {hasPlaybooks
+                  ? t("playbook.actionNew")
+                  : t("playbook.createAction")}
+              </Button>
+            </>
+          }
+        />
         {view === "templates" ? (
           <TemplateLibrary kind="playbook" onUse={useTemplate} />
         ) : definitions.length === 0 ? (
