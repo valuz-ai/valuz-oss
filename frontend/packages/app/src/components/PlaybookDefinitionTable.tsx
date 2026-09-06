@@ -73,7 +73,7 @@ export function PlaybookDefinitionTable({
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="flex h-9 w-full items-center justify-between gap-4 px-5 text-left"
+            className="flex h-9 w-full items-center justify-between gap-4 px-0 text-left"
             aria-expanded={!collapsed}
           >
             <div className="flex min-w-0 items-center gap-3">
@@ -93,7 +93,7 @@ export function PlaybookDefinitionTable({
 
         {collapsed ? null : (
           <>
-            <div className="hidden border-b border-surface-border px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px] dark:text-ink-body">
+            <div className="hidden border-b border-surface-border px-0 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px] dark:text-ink-body">
               <div>{t("playbook.nameColumn")}</div>
               <div className="text-center">{t("playbook.versionColumn")}</div>
               <div className="text-center">{t("playbook.statusColumn")}</div>
@@ -170,7 +170,7 @@ export function PlaybookDefinitionTable({
                       : "border-b border-surface-border last:border-0"
                   }
                 >
-                  <div className="hidden items-center px-5 py-4 md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px]">
+                  <div className="hidden items-center px-0 py-4 md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px]">
                     <div className="flex min-w-0 items-start gap-2">
                       <BookOpenText
                         className={
@@ -206,7 +206,7 @@ export function PlaybookDefinitionTable({
                     <div className="flex justify-center">{actionMenu}</div>
                   </div>
 
-                  <div className="px-5 py-4 md:hidden">
+                  <div className="px-0 py-4 md:hidden">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-start gap-2">
                         <BookOpenText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-meta" />

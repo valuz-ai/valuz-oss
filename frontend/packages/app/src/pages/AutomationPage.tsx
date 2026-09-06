@@ -375,7 +375,7 @@ export const AutomationPage = () => {
 
   return (
     <div className="relative h-full min-h-0 overflow-y-auto bg-card">
-      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col pb-5">
+      <div className="mx-auto flex min-h-full w-full max-w-[1100px] flex-col px-5 pb-5">
         <AutomationHubTabs
           value={view}
           onValueChange={setView}
@@ -428,7 +428,7 @@ export const AutomationPage = () => {
         {view === "templates" ? (
           <TemplateLibrary kind="automation" onUse={useTemplate} />
         ) : !hasAutomations ? (
-          <div className="space-y-10 px-5 pt-10">
+          <div className="space-y-10 pt-10">
             <div className="flex justify-center">
               <EmptyState
                 variant="plain"

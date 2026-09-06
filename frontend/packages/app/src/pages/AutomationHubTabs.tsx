@@ -25,7 +25,7 @@ export function AutomationHubTabs<V extends string>({
   right?: ReactNode;
 }) {
   return (
-    <div className="mb-3 flex items-end justify-between gap-4 border-b border-surface-border px-5">
+    <div className="mb-3 flex items-end justify-between gap-4 border-b border-surface-border">
       <Tabs value={value} onValueChange={(next) => onValueChange(next as V)}>
         <TabsList
           variant="line"
