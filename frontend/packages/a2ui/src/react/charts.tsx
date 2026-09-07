@@ -181,6 +181,56 @@ function ChartTooltip({ show }: { show?: boolean }) {
   );
 }
 
+/**
+ * Value-axis scale for cartesian charts. `auto` picks a log axis only when
+ * every plotted value is positive and the range spans at least two orders of
+ * magnitude (max / min >= 100): that is when a linear axis flattens the small
+ * bars into nothing, and a log axis needs strictly positive values. Anything
+ * else stays linear, and stacked series never auto-switch because stacking
+ * segments on a log axis misrepresents their proportions.
+ */
+export function resolveValueScale(
+  mode: "auto" | "linear" | "log" | undefined,
+  data: Record<string, unknown>[],
+  series: { key: string; stackId?: string }[],
+): "linear" | "log" {
+  if (mode === "linear" || mode === "log") return mode;
+  if (series.some((entry) => entry.stackId !== undefined)) return "linear";
+  const values = series
+    .flatMap((entry) => data.map((row) => Number(row[entry.key])))
+    .filter((value) => Number.isFinite(value));
+  if (values.length < 2) return "linear";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return min > 0 && max / min >= 100 ? "log" : "linear";
+}
+
+const valueLabelFormatter = new Intl.NumberFormat(undefined, {
+  notation: "compact",
+  maximumFractionDigits: 2,
+});
+
+function formatValueLabel(value: unknown): string {
+  const number = Number(value);
+  return Number.isFinite(number) ? valueLabelFormatter.format(number) : "";
+}
+
+/**
+ * Lower bound for a log axis: the power of ten just below half the smallest
+ * value, so the smallest bar still has visible height instead of sitting on
+ * the axis floor (a bar on a log axis is drawn from the domain minimum).
+ */
+export function logAxisFloor(dataMin: number): number {
+  const positive = Number.isFinite(dataMin) && dataMin > 0 ? dataMin : 1;
+  return 10 ** Math.floor(Math.log10(positive / 2));
+}
+
+function valueAxisProps(scale: "linear" | "log") {
+  return scale === "log"
+    ? ({ scale: "log", domain: [logAxisFloor, "auto"] } as const)
+    : ({ scale: "auto" } as const);
+}
+
 function asNumber(value: unknown, fallback = 0) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -292,6 +342,7 @@ function asSankeyData(value: unknown): SankeyData {
 
 export const LineChart = createComponentImplementation(LineChartApi, ({ props }) => {
   const data = asRecords(props.data);
+  const valueScale = resolveValueScale(props.valueScale, data, props.series ?? []);
   const paletteColors = getDistributedChartColors(props.palette ?? "ocean", props.series?.length ?? 0);
   return (
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
@@ -299,7 +350,7 @@ export const LineChart = createComponentImplementation(LineChartApi, ({ props })
         <RechartsLineChart data={data} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
           {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
-          {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
+          {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} {...valueAxisProps(valueScale)} />}
           <ChartTooltip show={props.showTooltip} />
           <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
@@ -326,6 +377,7 @@ export const LineChart = createComponentImplementation(LineChartApi, ({ props })
 
 export const AreaChart = createComponentImplementation(AreaChartApi, ({ props }) => {
   const data = asRecords(props.data);
+  const valueScale = resolveValueScale(props.valueScale, data, props.series ?? []);
   const gradientId = useId().replace(/:/g, "");
   const paletteColors = getDistributedChartColors(props.palette ?? "ocean", props.series?.length ?? 0);
   return (
@@ -345,7 +397,7 @@ export const AreaChart = createComponentImplementation(AreaChartApi, ({ props })
           </defs>
           {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
-          {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
+          {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} {...valueAxisProps(valueScale)} />}
           <ChartTooltip show={props.showTooltip} />
           <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
@@ -375,6 +427,7 @@ export const AreaChart = createComponentImplementation(AreaChartApi, ({ props })
 
 export const BarChart = createComponentImplementation(BarChartApi, ({ props }) => {
   const data = asRecords(props.data);
+  const valueScale = resolveValueScale(props.valueScale, data, props.series ?? []);
   const radius = props.barRadius ?? 4;
   const barMaxSize = maxBarSize(props.series ?? [], props.stacked);
   const paletteColors = getDistributedChartColors(props.palette ?? "ocean", props.series?.length ?? 0);
@@ -384,7 +437,7 @@ export const BarChart = createComponentImplementation(BarChartApi, ({ props }) =
         <RechartsBarChart data={data} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
           {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
-          {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
+          {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} {...valueAxisProps(valueScale)} />}
           <ChartTooltip show={props.showTooltip} />
           <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
@@ -409,7 +462,17 @@ export const BarChart = createComponentImplementation(BarChartApi, ({ props }) =
                   "vertical",
                 )}
                 isAnimationActive={false}
-              />
+              >
+                {props.showValues && stackId === undefined ? (
+                  <LabelList
+                    dataKey={series.key}
+                    position="top"
+                    fill="var(--va2-text)"
+                    fontSize={11}
+                    formatter={formatValueLabel}
+                  />
+                ) : null}
+              </Bar>
             );
           })}
         </RechartsBarChart>
@@ -420,6 +483,7 @@ export const BarChart = createComponentImplementation(BarChartApi, ({ props }) =
 
 export const HorizontalBarChart = createComponentImplementation(HorizontalBarChartApi, ({ props }) => {
   const data = asRecords(props.data);
+  const valueScale = resolveValueScale(props.valueScale, data, props.series ?? []);
   const radius = props.barRadius ?? 4;
   const barMaxSize = maxBarSize(props.series ?? [], props.stacked);
   const paletteColors = getDistributedChartColors(props.palette ?? "ocean", props.series?.length ?? 0);
@@ -428,7 +492,7 @@ export const HorizontalBarChart = createComponentImplementation(HorizontalBarCha
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsBarChart data={data} layout="vertical" margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
           {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" horizontal={false} />}
-          {props.showAxes !== false && <XAxis type="number" axisLine={false} tick={axisStyle} tickLine={false} />}
+          {props.showAxes !== false && <XAxis type="number" axisLine={false} tick={axisStyle} tickLine={false} {...valueAxisProps(valueScale)} />}
           {props.showAxes !== false && <YAxis dataKey={props.categoryKey} type="category" axisLine={false} tick={props.linkKey ? <LinkedCategoryTick data={data} categoryKey={props.categoryKey} linkKey={props.linkKey} /> : axisStyle} tickLine={false} width={84} />}
           <ChartTooltip show={props.showTooltip} />
           <SeriesLegend show={props.showLegend} series={props.series} />
@@ -454,7 +518,17 @@ export const HorizontalBarChart = createComponentImplementation(HorizontalBarCha
                   "horizontal",
                 )}
                 isAnimationActive={false}
-              />
+              >
+                {props.showValues && stackId === undefined ? (
+                  <LabelList
+                    dataKey={series.key}
+                    position="right"
+                    fill="var(--va2-text)"
+                    fontSize={11}
+                    formatter={formatValueLabel}
+                  />
+                ) : null}
+              </Bar>
             );
           })}
         </RechartsBarChart>

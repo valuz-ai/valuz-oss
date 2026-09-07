@@ -20,12 +20,23 @@ const chartFrameProps = {
   palette: chartPaletteSchema.default("ocean").optional(),
 };
 
+export const ValueScaleSchema = z
+  .enum(["auto", "linear", "log"])
+  .describe(
+    "Value-axis scale. `auto` (default) uses a log axis when every value is positive and the largest is at least 100x the smallest, so bars spanning several orders of magnitude stay visible; otherwise linear. Force `log` or `linear` to override.",
+  );
+
 const cartesianProps = {
   ...chartCommonProps,
   xKey: z.string().describe("Record key used for the horizontal category or time axis."),
   series: z.array(chartSeriesSchema).min(1).max(8),
   showAxes: DynamicBooleanSchema.default(true).optional(),
+  valueScale: ValueScaleSchema.default("auto").optional(),
 };
+
+const showValuesProp = DynamicBooleanSchema.default(false)
+  .optional()
+  .describe("Print each bar's value beside it; use when bars differ by orders of magnitude or exact figures matter.");
 
 export const LineChartApi = {
   name: "LineChart",
@@ -56,6 +67,7 @@ export const BarChartApi = {
       ...cartesianProps,
       stacked: DynamicBooleanSchema.default(false).optional(),
       barRadius: z.number().int().min(0).max(12).default(4).optional(),
+      showValues: showValuesProp,
     })
     .strict()
     .describe("Use for categorical magnitude comparisons; stack only for additive parts of the same total."),
@@ -72,6 +84,8 @@ export const HorizontalBarChartApi = {
       stacked: DynamicBooleanSchema.default(false).optional(),
       showAxes: DynamicBooleanSchema.default(true).optional(),
       barRadius: z.number().int().min(0).max(12).default(4).optional(),
+      valueScale: ValueScaleSchema.default("auto").optional(),
+      showValues: showValuesProp,
     })
     .strict()
     .describe("Use for ranked or long-labelled categorical comparisons where exact ordering matters. Set linkKey when category labels navigate to the represented entity."),
