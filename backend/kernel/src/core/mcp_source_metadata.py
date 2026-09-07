@@ -748,6 +748,7 @@ def _document_envelopes(
         title = _mapped_value(doc_base, document.get("title")) or _fallback_document_title(
             url,
             category=category,
+            opening=text if _is_document_opening(item) else None,
         )
         quote = text.strip()[:_MAX_QUOTE_CHARS]
         if not isinstance(chunk_id, (str, int)) or not str(chunk_id).strip():
@@ -981,9 +982,50 @@ def _document_summary_envelopes(
     ]
 
 
-def _fallback_document_title(value: Any, *, category: Any) -> str:
-    """Return a readable fallback without exposing an opaque document id."""
+_OPENING_SENTENCE_BREAKS = ("\n", "｡", "。", "？", "?")
+_OPENING_TITLE_MAX_CHARS = 80
+_OPENING_TITLE_MIN_CHARS = 4
 
+
+def _is_document_opening(item: Any) -> bool:
+    """Whether a chunk record is the document's first chunk. Providers that
+    expose chunk order say so with ``sequence`` / ``char_start`` of 0; without
+    that signal a chunk may sit anywhere in the body and its first sentence
+    is no title."""
+
+    if not isinstance(item, Mapping):
+        return False
+    return item.get("sequence") == 0 or item.get("char_start") == 0
+
+
+def _opening_sentence(text: Any) -> str | None:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    head = text.strip()
+    cut = len(head)
+    for mark in _OPENING_SENTENCE_BREAKS:
+        index = head.find(mark)
+        if 0 < index < cut:
+            cut = index
+    head = head[:cut].strip()
+    if len(head) < _OPENING_TITLE_MIN_CHARS:
+        return None
+    if len(head) > _OPENING_TITLE_MAX_CHARS:
+        head = head[: _OPENING_TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return head
+
+
+def _fallback_document_title(value: Any, *, category: Any, opening: Any = None) -> str:
+    """Return a readable fallback without exposing an opaque document id.
+
+    ``opening`` is the document's first chunk when the provider marked it as
+    such: an untitled web page opens with its headline, which reads far
+    better in a source list than the hostname it was indexed from.
+    """
+
+    headline = _opening_sentence(opening)
+    if headline:
+        return headline
     if isinstance(value, str) and value.strip():
         parsed = urlparse(value.strip())
         if parsed.hostname:
