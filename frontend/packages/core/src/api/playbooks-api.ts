@@ -34,6 +34,8 @@ export interface PlaybookDefinition {
   revision: number;
   created_at: number;
   updated_at: number;
+  /** ``default_executor.agent_slug`` of the current version (list surfaces). */
+  agent_slug?: string | null;
   /** Client-side execution target observation; never persisted by the API. */
   exec_origin?: string;
 }

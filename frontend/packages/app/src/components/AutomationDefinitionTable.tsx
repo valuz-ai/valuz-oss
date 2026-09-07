@@ -23,6 +23,9 @@ export interface AutomationDefinitionTableProps {
   onDelete: (id: string) => void;
   onOpen: (id: string) => void;
   onRunNow: (id: string) => void;
+  /** Display name for the row's agent (localised project member / agent
+   *  name); falls back to the server's `agent_name`. */
+  agentName?: (item: AutomationItem) => string | undefined;
   title?: string;
   countLabel?: string;
   collapsed?: boolean;
@@ -52,6 +55,7 @@ export function AutomationDefinitionTable({
   onDelete,
   onOpen,
   onRunNow,
+  agentName,
   title,
   countLabel,
   collapsed,
@@ -69,7 +73,7 @@ export function AutomationDefinitionTable({
       .map((item) => ({
         id: item.automation_id,
         name: item.name,
-        prompt: item.agent_name ?? "",
+        prompt: agentName?.(item) ?? item.agent_name ?? "",
         trigger: describeTrigger(item, translate),
         triggerTimezone:
           item.trigger.kind === "cron"
