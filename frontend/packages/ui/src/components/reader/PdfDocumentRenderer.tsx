@@ -44,6 +44,7 @@ import {
 } from "./pdf-zoom";
 import "./PdfDocumentRenderer.css";
 import { LoadingState } from "../common/LoadingState";
+import { assetUrl } from "@valuz/shared";
 
 type LocateStatus =
   | "located-exact"
@@ -495,7 +496,15 @@ export function PdfDocumentRenderer({
     void import("pdfjs-dist/legacy/build/pdf.mjs")
       .then((pdfjs) => {
         pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-        task = pdfjs.getDocument({ url });
+        task = pdfjs.getDocument({
+          url,
+          // Predefined CMaps + standard fonts are served by the shared Vite
+          // preset (`pdfjsAssetsPlugin`); without them CJK fonts that are not
+          // embedded in the PDF render as blank glyphs.
+          cMapUrl: assetUrl("pdfjs/cmaps/"),
+          cMapPacked: true,
+          standardFontDataUrl: assetUrl("pdfjs/standard_fonts/"),
+        });
         return task.promise;
       })
       .then((document) => {

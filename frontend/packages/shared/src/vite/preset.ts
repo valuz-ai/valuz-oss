@@ -24,6 +24,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { PluginOption, UserConfig } from "vite";
 import { i18nHmrPlugin } from "./i18n-hmr-plugin.ts";
+import { pdfjsAssetsPlugin } from "./pdfjs-assets-plugin.ts";
 
 const edition = process.env.EDITION ?? "personal";
 
@@ -58,6 +59,7 @@ export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
         root,
         command: ["uv", "run", "python", "../i18n/scripts/gen_types.py"],
       }),
+      pdfjsAssetsPlugin({ configDir: options.configDir }),
     ],
     define: {
       __EDITION__: JSON.stringify(edition),
