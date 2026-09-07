@@ -5,9 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from valuz_agent.facade._playbook_paging import (
+    MAX_PLAYBOOK_PAGE_SIZE,
+    PageContext,
+    PlaybookPage,
+)
 from valuz_agent.modules.playbooks.models import (
     PlaybookDefinitionRow,
     PlaybookRunRow,
@@ -192,10 +198,152 @@ class PlaybookLibrary:
         rows = (await self._db.execute(statement)).scalars().all()
         return [self._run_ref(row) for row in rows]
 
+    async def list_project_page(
+        self,
+        user_id: str,
+        project_id: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+        as_of_ms: int | None = None,
+    ) -> PlaybookPage[tuple[PlaybookDefinitionRef, PlaybookVersionRef]]:
+        """Read one SQL-bounded page with each definition's exact selected version.
+
+        Order is definition ``(created_at, id)`` ascending. Historical selection
+        uses the highest version recorded at or before ``as_of_ms``. Definitions
+        without that owner-scoped version are omitted before applying the limit.
+        The cursor binds the query but never grants authorization.
+        """
+        context = PageContext("definitions", user_id, project_id, as_of_ms)
+        context.validate(limit)
+        after = context.decode(cursor)
+        version_match = PlaybookVersionRow.version == PlaybookDefinitionRow.current_version
+        if as_of_ms is not None:
+            selected_version = (
+                select(func.max(PlaybookVersionRow.version))
+                .where(
+                    PlaybookVersionRow.user_id == user_id,
+                    PlaybookVersionRow.definition_id == PlaybookDefinitionRow.id,
+                    PlaybookVersionRow.created_at <= as_of_ms,
+                )
+                .correlate(PlaybookDefinitionRow)
+                .scalar_subquery()
+            )
+            version_match = PlaybookVersionRow.version == selected_version
+        statement = (
+            select(PlaybookDefinitionRow, PlaybookVersionRow)
+            .join(
+                PlaybookVersionRow,
+                and_(
+                    PlaybookVersionRow.user_id == user_id,
+                    PlaybookVersionRow.definition_id == PlaybookDefinitionRow.id,
+                    version_match,
+                ),
+            )
+            .where(
+                PlaybookDefinitionRow.user_id == user_id,
+                PlaybookDefinitionRow.project_id == project_id,
+            )
+        )
+        if as_of_ms is not None:
+            statement = statement.where(PlaybookDefinitionRow.created_at <= as_of_ms)
+        if after is not None:
+            created_at, row_id = after
+            statement = statement.where(
+                or_(
+                    PlaybookDefinitionRow.created_at > created_at,
+                    and_(
+                        PlaybookDefinitionRow.created_at == created_at,
+                        PlaybookDefinitionRow.id > row_id,
+                    ),
+                )
+            )
+        rows = (
+            await self._db.execute(
+                statement.order_by(
+                    PlaybookDefinitionRow.created_at, PlaybookDefinitionRow.id
+                ).limit(limit + 1)
+            )
+        ).all()
+        selected = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit:
+            last_definition = selected[-1][0]
+            next_cursor = context.encode(last_definition.created_at, last_definition.id)
+        return PlaybookPage(
+            items=tuple(
+                (self._definition_ref(definition), self._version_ref(version))
+                for definition, version in selected
+            ),
+            next_cursor=next_cursor,
+        )
+
+    async def list_runs_page(
+        self,
+        user_id: str,
+        project_id: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+        research_scope_id: str | None = None,
+        include_unscoped: bool = False,
+        as_of_ms: int | None = None,
+    ) -> PlaybookPage[PlaybookRunRef]:
+        """Read runs ordered by ``(created_at, id)``, with all filters in SQL.
+
+        A supplied research scope matches exactly unless ``include_unscoped``
+        also includes NULL-scope runs. No research scope means all project runs.
+        Scope matching is a generic placement filter, not permission to a scope.
+        """
+        context = PageContext(
+            "runs", user_id, project_id, as_of_ms, research_scope_id, include_unscoped
+        )
+        context.validate(limit)
+        after = context.decode(cursor)
+        statement = select(PlaybookRunRow).where(
+            PlaybookRunRow.user_id == user_id,
+            PlaybookRunRow.project_id == project_id,
+        )
+        if research_scope_id is not None:
+            scope_match: ColumnElement[bool] = PlaybookRunRow.research_scope_id == research_scope_id
+            if include_unscoped:
+                scope_match = or_(scope_match, PlaybookRunRow.research_scope_id.is_(None))
+            statement = statement.where(scope_match)
+        if as_of_ms is not None:
+            statement = statement.where(PlaybookRunRow.created_at <= as_of_ms)
+        if after is not None:
+            created_at, row_id = after
+            statement = statement.where(
+                or_(
+                    PlaybookRunRow.created_at > created_at,
+                    and_(PlaybookRunRow.created_at == created_at, PlaybookRunRow.id > row_id),
+                )
+            )
+        rows = (
+            (
+                await self._db.execute(
+                    statement.order_by(PlaybookRunRow.created_at, PlaybookRunRow.id).limit(
+                        limit + 1
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        selected = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit:
+            next_cursor = context.encode(selected[-1].created_at, selected[-1].id)
+        return PlaybookPage(
+            items=tuple(self._run_ref(row) for row in selected), next_cursor=next_cursor
+        )
+
 
 __all__ = [
+    "MAX_PLAYBOOK_PAGE_SIZE",
     "PlaybookDefinitionRef",
     "PlaybookLibrary",
+    "PlaybookPage",
     "PlaybookRunRef",
     "PlaybookVersionRef",
 ]
