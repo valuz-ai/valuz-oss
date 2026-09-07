@@ -49,6 +49,25 @@ class PlaybookDatastore:
         )
         return result.scalar_one_or_none()
 
+    async def current_versions(
+        self, user_id: str, definitions: list[PlaybookDefinitionRow]
+    ) -> dict[str, PlaybookVersionRow]:
+        """Current version row per definition id, in one query."""
+        if not definitions:
+            return {}
+        wanted = {row.id: row.current_version for row in definitions}
+        result = await self._db.execute(
+            select(PlaybookVersionRow).where(
+                PlaybookVersionRow.user_id == user_id,
+                PlaybookVersionRow.definition_id.in_(list(wanted)),
+            )
+        )
+        return {
+            row.definition_id: row
+            for row in result.scalars().all()
+            if wanted.get(row.definition_id) == row.version
+        }
+
     async def list_versions(self, user_id: str, definition_id: str) -> list[PlaybookVersionRow]:
         result = await self._db.execute(
             select(PlaybookVersionRow)

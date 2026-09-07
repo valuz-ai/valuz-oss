@@ -488,6 +488,27 @@ export const AutomationPage = () => {
                   ),
                   automations: group.automations,
                 }))}
+              agentName={(item) => {
+                // Same source of truth as the 执行手册 page: the agent
+                // library's (locale-aware) names. A project member is a
+                // copy whose slug carries an 8-hex suffix, so resolve it
+                // back to its source agent when the copy itself is unknown.
+                const member = (projectMembers[item.project_id] ?? []).find(
+                  (entry) => entry.member.agent_slug === item.agent_slug,
+                );
+                const sourceSlug =
+                  member?.member.source_agent_slug ??
+                  item.agent_slug.replace(/-[0-9a-f]{8}$/, "");
+                const bySlug = (slug: string) =>
+                  libraryAgents.find((agent) => agent.slug === slug)?.name;
+                return (
+                  bySlug(item.agent_slug) ??
+                  bySlug(sourceSlug) ??
+                  member?.agent?.name ??
+                  item.agent_name ??
+                  undefined
+                );
+              }}
               onOpen={(id) => navigate(`/automations/${id}`)}
               onToggle={(id) => toggleAutomation(id)}
               onRunNow={(id) => runNow(id)}

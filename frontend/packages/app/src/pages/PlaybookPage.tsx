@@ -497,6 +497,20 @@ export const PlaybookPage = () => {
                 }))}
               runningId={runningId}
               selectedDefinitionId={selectedDefinitionId}
+              agentName={(definition) => {
+                const slug = definition.agent_slug;
+                if (!slug) return undefined;
+                const scoped = definition.project_id
+                  ? projectAgents[definition.project_id]?.find(
+                      (agent) => agent.slug === slug,
+                    )
+                  : undefined;
+                return (
+                  scoped?.name ??
+                  agents.find((agent) => agent.slug === slug)?.name ??
+                  slug
+                );
+              }}
               onOpen={(definition) =>
                 navigate(`/playbooks/${definition.id}?from=/playbooks`)
               }
