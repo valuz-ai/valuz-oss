@@ -51,7 +51,7 @@ export const PageLoader = ({
   children || logo ? (
     <div
       className={cn(
-        "flex min-h-[60vh] w-full items-center justify-center",
+        "flex w-full justify-center py-16",
         className,
       )}
       role="status"

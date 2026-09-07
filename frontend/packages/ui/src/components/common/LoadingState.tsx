@@ -4,11 +4,11 @@ import { cn } from "../../lib/cn";
 
 export interface LoadingStateProps {
   /**
-   * `page`: a page or pane's first load — a fixed 60vh box so the spinner
-   * lands at the same height on every page regardless of the container
-   * (no flex-grow: a filling box would centre differently on pages whose
-   * content column stretches), 24px muted spinner, optional label
-   * underneath.
+   * `page`: a page or pane's first load — anchored to the top of the
+   * content area (horizontally centred, 64px down), where the content will
+   * appear; never vertically centred, so the spinner lands at the same
+   * height on every page and pane regardless of the container. 24px muted
+   * spinner, optional label underneath.
    * `section`: a card / list section reloading — centred in the section,
    * 16px muted spinner with the label inline.
    */
@@ -33,7 +33,7 @@ export const LoadingState = ({
       role="status"
       aria-label={label ?? "Loading"}
       className={cn(
-        "flex min-h-[60vh] w-full flex-col items-center justify-center gap-2 text-ink-muted",
+        "flex w-full flex-col items-center gap-2 py-16 text-ink-muted",
         className,
       )}
     >
