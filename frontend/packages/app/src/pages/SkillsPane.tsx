@@ -391,7 +391,7 @@ export function SkillsPane({
     <>
       <div className="w-[345px] shrink-0 overflow-y-auto border-r border-surface-border">
         {loading ? (
-          <PageLoader logo className="py-16" />
+          <PageLoader />
         ) : (
           <div className="px-4 pt-6 pb-2">
             <CategorizedList

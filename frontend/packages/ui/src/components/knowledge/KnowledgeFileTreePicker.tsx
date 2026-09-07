@@ -264,7 +264,7 @@ export const KnowledgeFileTreePicker = ({
           scroll inside the flex column instead of overflowing it. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
-          <LoadingState variant="section" label={t("common.loading")} />
+          <LoadingState variant="section" />
         ) : visibleKbs.length === 0 ? (
           <div className="py-6 text-center text-xs text-ink-meta">
             {query

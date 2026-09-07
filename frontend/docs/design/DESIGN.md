@@ -1,4 +1,4 @@
-# Valuz Design Spec v2.6
+# Valuz Design Spec v2.7
 
 > 2026-06-15 · 替代 `frontend/docs/design/DESIGN.md`（v1）
 > 配套文件：[tokens.css](tokens.css)（可直接替换 project.css 的 token 段）· [spec.html](spec.html)（可视化规范页）· [components.html](components.html)（十七个高频组件）· [design-audit.html](design-audit.html)（一致性检测器）
@@ -168,6 +168,14 @@ Info 复用品牌紫（裁决：不引入第五个状态色相）。
 - **弹窗关闭按钮规则（v2.6.5）**：普通弹窗/可关闭面板右上角放线性 X（`.iclose`，hover fg-1 底）；**alert-dialog（危险确认）不放 X**——高风险操作强制在「取消/确认」间明确选择，多一个 X 是模糊的第三退出路径。
 - **Tooltip 规则（v2.6.15）**：提示气泡出现在触发元素下方居中，反色底（`foreground` 底 + `background` 字）、`shadow-3`、圆角 `md(6)`，**不画三角/箭头**。母版不再维护 Avatar 组件，避免与 Chat Message「Agent 无头像」规则冲突。
 - DESIGN.md v1 §5 的组件像素规格（Sidebar/Composer/Popover/ToolCard/ContextPanel）仍然有效，但其中色值/字号/圆角一律按本文档 token 替换字面量。
+- **加载态三档（v2.7）**：加载指示只有三种形态，由「在哪里等」决定，调用方只选档位和文案，不选尺寸、颜色、位置——
+  ①**页面 / 面板首屏** `LoadingState variant="page"`（`PageLoader` 同此）：内容区居中，最小高度 240px，24px spinner `ink-muted`，可选一行 `text-xs ink-meta` 文案在下方；
+  ②**区块 / 列表 / 对话框内容重载** `LoadingState variant="section"`：区块内居中，`py-8`，16px spinner `ink-meta`，文案同行；
+  ③**行内（按钮 / 表格行 / chip）** `Spinner`：14px，跟随文字色（currentColor），必须与它描述的文字并排，`aria-hidden`（装饰，不改变按钮的可访问名）。
+  文案规则：**泛用文案（「加载中…」「Loading…」）一律不显示**，spinner 本身就是信息；只有描述具体操作的文案才作为 label（「正在解析表格」「正在创建第一版工作台…」）。
+  Logo 闪光（`PageLoader logo`）只用于应用启动的路由兜底，页面内一律不用。
+  禁止：加载态用品牌紫；手写 `Loader2 className="… animate-spin"`；纯文字加载块；页面首屏把 spinner 顶在左上角；同一页两种尺寸。
+  例外：刷新按钮上的 `RefreshCw` 在刷新中旋转属于按钮图标状态，不是加载态，不受本条约束。
 
 ## 8. 暗色模式
 
@@ -193,11 +201,13 @@ Info 复用品牌紫（裁决：不引入第五个状态色相）。
 | `rounded-[14px]` `rounded-[18px]` | `rounded-2xl` |
 | `text-muted-foreground`（63 处） | 保留可用（已 alias 到 fg-60），新代码统一 `text-ink-body` |
 | `variant="secondary"`（4 处） | `variant="outline"`（MultiSelect 处改用 Badge） |
+| `<Loader2 className="h-N w-N animate-spin …" />`（约 160 处） | 行内 → `<Spinner />`；居中块 → `<LoadingState variant="page \| section" label={…} />` |
+| 自绘 CSS 圆环 `animate-spin rounded-full border-2 …` | `<LoadingState variant="section" />` |
 
 ## 10. 治理
 
 1. ESLint：tsx 禁 hex 字面量、禁 `text-[npx]` 任意值（CI 红灯）。
-2. `scripts/design-audit.sh` 棘轮：违规计数只许减不许增。
+2. `scripts/design-audit.sh` 棘轮：违规计数只许减不许增（含 `raw-spinner`：`Loader2`/`LoaderCircle` 手写 `animate-spin`，基线 0）。
 3. `frontend/CLAUDE.md` 写入："颜色只用语义 token；新 UI 先查 packages/ui；变体/状态全集见 DESIGN-v2 §7"。
 4. CODEOWNERS：`packages/ui/src/styles/**` 由设计负责人 review。
 5. 本文档新增模式走文末 changelog：记"新增了什么、从哪个基色派生、为何现有组件不够"。
@@ -206,6 +216,7 @@ Info 复用品牌紫（裁决：不引入第五个状态色相）。
 
 ## Changelog
 
+- **2026-09-07 v2.7**：**加载态收敛为三档**（§7 新增条目，§9 补 codemod 行，§10 审计新增 `raw-spinner` 规则）。此前 app/ui/finance/commercial 四个包里约 200 处手写 spinner：尺寸 12–24px 五档、颜色六种（含品牌紫）、有无文案、居中或顶在左上不一。新增 `LoadingState`（`page` / `section` 两档）并让 `PageLoader` 直接渲染 page 档；`Spinner` 收为 14px、currentColor、`aria-hidden` 的行内档（此前 `role="status" aria-label="Loading"` 会混进按钮的可访问名）。全部调用点按档位替换（含纯文字「加载中…」块与页面内的 logo 闪光），泛用文案删除、只保留描述具体操作的 label；`RefreshCw` 刷新中旋转的按钮图标不在此列。
 - **2026-07-13 v2.6.18**：修复标签规范四文件漂移——`spec.html` 的 StatusPill / Badge 示例恢复与 `components.html` 母版一致的 `4px` 圆角、完整状态/meta 示例、图标与 warning/error 样式；补齐遗漏的 success/warning/error 三件套 token，移除 queued 多余描边，并同步角色标签固定尺寸说明。`DESIGN.md` / `tokens.css` / `components.html` / `spec.html` 已重新交叉审计。
 - **2026-07-03 v2.6.17**：标签规范同步——role / 角色职位标签固定为 `h-4 px-1 text-[10px]`，组件母版新增 `role-tag` 与 Lead 紫色软底（`brand-100 / brand-700`）示例；tokens.css 记录 token 用法，spec.html 补 StatusPill / Badge 三分法示例，DESIGN.md / tokens.css / components.html / spec.html 四文件同步。
 - **2026-06-17 v2.6.15**：组件母版从 18 个收敛为 17 个——删除 `17 Avatar（头像）` 整段与相关 `.avatar*` 样式；`Tooltip（提示气泡）` 重编号为 17，改为触发元素**下方居中**，移除三角/箭头伪元素，演示 padding 同步改为下方留白。`components.html` 标题/导语计数与本文档配套文件描述同步。

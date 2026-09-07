@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Download, CheckCircle, Loader2 } from "lucide-react";
+import { Download, CheckCircle } from "lucide-react";
 import { t as _t } from "@valuz/shared/i18n";
-import { Button, Progress } from "@valuz/ui";
+import { Button, Progress, Spinner } from "@valuz/ui";
 import { DESKTOP_CHANNELS, DESKTOP_EVENTS } from "../../preload/channels";
 
 type DesktopBridge = {
@@ -157,7 +157,7 @@ export const UpdateWindowApp = () => {
             </Button>
           ) : isDownloading ? (
             <Button disabled className="min-w-[140px]">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Spinner className="mr-2" />
               {_t("updater.downloading")}
             </Button>
           ) : (

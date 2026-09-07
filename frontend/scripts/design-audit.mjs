@@ -40,6 +40,14 @@ const rules = [
     description: 'Deprecated secondary component variant',
     pattern: /\bvariant=["']secondary["']/g,
   },
+  {
+    id: "raw-spinner",
+    description:
+      "Hand-rolled loading spinner (Loader2/LoaderCircle + animate-spin) instead of LoadingState / Spinner (DESIGN.md §7 加载态)",
+    pattern: /\b(?:Loader2|LoaderCircle|Loader2Icon)\b[^\n]*\banimate-spin\b|\banimate-spin\b[^\n]*\brounded-full\b[^\n]*\bborder-/g,
+    exclude:
+      /(?:components\/ui\/(?:spinner|button)|components\/common\/(?:LoadingState|PageLoader))\.tsx$/,
+  },
 ];
 
 const scanRoots = ["apps", "packages", "src"];
@@ -55,6 +63,7 @@ for (const file of files) {
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex];
     for (const rule of rules) {
+      if (rule.exclude && rule.exclude.test(rel)) continue;
       const matches = line.match(rule.pattern);
       if (!matches) continue;
       counts[rule.id] += matches.length;

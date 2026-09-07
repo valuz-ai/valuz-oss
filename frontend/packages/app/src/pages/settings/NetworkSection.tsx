@@ -8,6 +8,7 @@ import {
   CardContent,
   SettingsRow,
   SettingsSection,
+  LoadingState,
 } from "@valuz/ui";
 import { useRunningRuns, useTranslation } from "@valuz/core";
 import {
@@ -425,9 +426,7 @@ export const NetworkSection = () => {
         <Card className="rounded-xl shadow-xs">
           <CardContent className="p-0">
             {loading ? (
-              <div className="px-5 py-8 text-center text-sm text-ink-meta">
-                {t("settings.network.loading")}
-              </div>
+              <LoadingState variant="section" />
             ) : status && !status.enabled ? (
               <div className="flex flex-col items-center px-5 py-8 text-center">
                 <Activity

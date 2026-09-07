@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useTranslation } from "@valuz/core";
 import type { ActivityFeed, ActivityItem } from "@valuz/core";
-import { Badge, cn, Spinner } from "@valuz/ui";
+import { Badge, cn, Spinner, LoadingState } from "@valuz/ui";
 import {
   BookOpenText,
   Clock3,
@@ -131,9 +131,7 @@ export const ActivityFeedList = ({
 
   if (loading && items.length === 0) {
     return (
-      <div className="px-3 py-12 text-center text-sm text-ink-meta">
-        {t("common.loading" as Parameters<typeof t>[0])}
-      </div>
+      <LoadingState variant="page" />
     );
   }
   if (items.length === 0) {

@@ -201,7 +201,7 @@ export function DocumentReaderView({
   const body = () => {
     if (loading) {
       return (
-        <LoadingState variant="page" label={t("common.loading")} />
+        <LoadingState variant="page" />
       );
     }
     if (error) {

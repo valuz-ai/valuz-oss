@@ -220,6 +220,7 @@ Mandatory rules for new or changed UI:
 - Button variants are those defined by `DESIGN.md` §7. Do not introduce or use `secondary` as a new emphasis level.
 - Badge/status/meta/role tags must follow the `DESIGN.md` §7 tag taxonomy; do not mix status, ownership/meta, and role colors.
 - Typography, radius, shadow, icon sizes, icon stroke widths, and focus states must use the `DESIGN.md` token scale. Avoid arbitrary pixel utilities such as `text-[12.5px]`, `rounded-[7px]`, and hand-written `shadow-[...]`.
+- Loading states come in three tiers only (`DESIGN.md` §7 加载态): `LoadingState variant="page"` (page / pane first load; `PageLoader` renders this), `LoadingState variant="section"` (card / list / dialog body reload), `Spinner` (inline, next to the text it describes). Never hand-roll `Loader2 className="… animate-spin"`, never render a text-only "加载中…" block, never use brand colour or the logo shimmer for in-page loading, never park a page loader top-left.
 - Any intentional exception must be documented next to the code and must explain why the existing token/component system is insufficient.
 
 `pnpm lint` runs `scripts/design-audit.mjs`, which compares current design-rule
@@ -274,6 +275,30 @@ import { EmptyState } from "@valuz/ui"
 
 - `dashed` (default): dashed border + background, for inline empty states inside lists
 - `plain`: centered layout, for full-page empty states. Icon rendered with `IconBox size="xl"`
+
+#### LoadingState / Spinner — loading states
+
+Three tiers, chosen by *where the user is waiting*; the tier fixes size, colour and position, the caller only picks the tier and the copy.
+
+```tsx
+import { LoadingState, PageLoader, Spinner } from "@valuz/ui"
+
+// Page / pane first load: centred, min-height 240px, 24px muted
+if (!data) return <LoadingState variant="page" />
+// (`<PageLoader />` is the same thing for route-level fallbacks)
+
+// Card / list / dialog body reloading: centred in the section, 16px muted, label inline
+{loading ? <LoadingState variant="section" /> : <List rows={rows} />}
+
+// Inline: 14px, follows the text colour, always beside the text it describes
+<Button disabled={busy}>{busy ? <Spinner /> : <Plus />} {t("common.save")}</Button>
+```
+
+- No generic copy: never pass "加载中…" / "Loading…" as `label` — the spinner is the message. `label` is only for operation-specific copy (`t("ui.artifact.sheetParsing")`, `t("finance.workspaceHome.materializing")`).
+- `PageLoader logo` (logo shimmer) is reserved for the app-boot route fallback; pages use the plain tier.
+- `Spinner` is decorative (`aria-hidden`) so it never changes a button's accessible name; `LoadingState` carries `role="status"`.
+- Dialog / tab / panel bodies are `section` (the `page` tier's min-height would stretch a small container).
+- A `RefreshCw` icon spinning while a refresh is in flight is a button icon state, not a loading state — leave it.
 
 #### FormDialog — form dialog template
 

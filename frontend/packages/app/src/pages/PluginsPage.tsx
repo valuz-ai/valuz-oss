@@ -490,7 +490,7 @@ export const PluginsPage = () => {
           <>
             <div className="w-[345px] shrink-0 overflow-y-auto border-r border-surface-border">
               {loading ? (
-                <PageLoader logo className="py-16" />
+                <PageLoader />
               ) : filtered.length === 0 ? (
                 <div className="flex justify-center pt-24">
                   <EmptyState

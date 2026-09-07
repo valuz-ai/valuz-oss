@@ -274,7 +274,7 @@ export function DocumentResearchPanel({
   const renderSummary = () => {
     if ((summaryLoading && !summary) || summary?.status === "pending") {
       return (
-        <LoadingState variant="section" label={t("common.loading")} />
+        <LoadingState variant="section" />
       );
     }
     if (summaryError && !summary) {
