@@ -488,6 +488,18 @@ export const AutomationPage = () => {
                   ),
                   automations: group.automations,
                 }))}
+              agentName={(item) => {
+                const member = (projectMembers[item.project_id] ?? []).find(
+                  (entry) => entry.member.agent_slug === item.agent_slug,
+                );
+                return (
+                  member?.agent?.name ??
+                  chatAgents.find((agent) => agent.slug === item.agent_slug)
+                    ?.name ??
+                  item.agent_name ??
+                  undefined
+                );
+              }}
               onOpen={(id) => navigate(`/automations/${id}`)}
               onToggle={(id) => toggleAutomation(id)}
               onRunNow={(id) => runNow(id)}

@@ -98,8 +98,8 @@ const ScheduledTaskActionMenu = ({
         <Button
           type="button"
           variant="ghost"
-          size="icon-sm"
-          className="h-8 w-8 hover:bg-[#f3f4f6] hover:text-inherit dark:hover:bg-surface-muted"
+          size="icon-xs"
+          className="h-5 w-5 hover:bg-[#f3f4f6] hover:text-inherit dark:hover:bg-surface-muted"
           aria-label={t("cron.actionColumn")}
         >
           <MoreHorizontal className="h-3.5 w-3.5" />
