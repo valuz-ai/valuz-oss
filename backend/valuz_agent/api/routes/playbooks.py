@@ -36,7 +36,9 @@ async def get_playbook_service(
         yield PlaybookService(db, projects)
 
 
-def _definition(row: PlaybookDefinitionRow) -> PlaybookDefinitionView:
+def _definition(
+    row: PlaybookDefinitionRow, agent_slug: str | None = None
+) -> PlaybookDefinitionView:
     return PlaybookDefinitionView(
         id=row.id,
         project_id=row.project_id,
@@ -48,6 +50,7 @@ def _definition(row: PlaybookDefinitionRow) -> PlaybookDefinitionView:
         revision=row.revision,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        agent_slug=agent_slug,
     )
 
 
@@ -109,7 +112,9 @@ async def list_playbooks(
     user_id: str = Depends(get_current_user_id),
 ) -> list[PlaybookDefinitionView]:
     try:
-        return [_definition(item) for item in await service.list_definitions(user_id, project_id)]
+        rows = await service.list_definitions(user_id, project_id)
+        agents = await service.current_agent_slugs(user_id, rows)
+        return [_definition(item, agents.get(item.id)) for item in rows]
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

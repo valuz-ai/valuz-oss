@@ -62,6 +62,18 @@ class PlaybookService:
             raise LookupError("playbook_project_not_found")
         return await self._ds.list_definitions(user_id, project_id)
 
+    async def current_agent_slugs(
+        self, user_id: str, definitions: list[PlaybookDefinitionRow]
+    ) -> dict[str, str | None]:
+        """``default_executor.agent_slug`` of each definition's current version."""
+        versions = await self._ds.current_versions(user_id, definitions)
+        out: dict[str, str | None] = {}
+        for row in definitions:
+            executor = versions[row.id].default_executor if row.id in versions else {}
+            slug = executor.get("agent_slug") if isinstance(executor, dict) else None
+            out[row.id] = slug if isinstance(slug, str) and slug else None
+        return out
+
     async def create_definition(
         self, user_id: str, body: PlaybookCreateRequest
     ) -> tuple[PlaybookDefinitionRow, PlaybookVersionRow]:

@@ -50,6 +50,9 @@ class PlaybookDefinitionView(BaseModel):
     revision: int
     created_at: int
     updated_at: int
+    # ``default_executor.agent_slug`` of the current version, so list surfaces
+    # can show which agent runs the playbook without fetching each detail.
+    agent_slug: str | None = None
 
 
 class PlaybookDefinitionUpdateRequest(BaseModel):

@@ -163,7 +163,7 @@ export const ScheduledTaskTable = ({
       {statusLabel(status)}
     </Badge>
   );
-  const grid = "md:grid-cols-[2.4fr_1.4fr_0.9fr_0.7fr_56px]";
+  const grid = "md:grid-cols-[2fr_1.3fr_0.8fr_0.7fr_40px]";
   const resolved: ScheduledTaskSection[] = sections ?? [
     { id: "__single", title: title ?? "", countLabel: taskCountLabel, tasks },
   ];
@@ -206,42 +206,38 @@ export const ScheduledTaskTable = ({
     >
       {/* Desktop row */}
       <div className={cn("hidden items-center px-3 py-3 md:grid", grid)}>
-        <div className="flex min-w-0 items-center gap-2">
+        {/* 任务: name over agent; 计划: schedule over timezone — two lines
+            each so the row reads as a pair of stacked labels. */}
+        <div className="flex min-w-0 items-start gap-2">
           <Clock
             className={cn(
-              "h-3.5 w-3.5 shrink-0 text-ink-meta",
+              "mt-1 h-3.5 w-3.5 shrink-0 text-ink-meta",
               task.status === "off" && "opacity-50",
             )}
           />
-          <button
-            type="button"
-            onClick={() => onRowClick?.(task.id)}
-            className={cn(
-              "flex min-w-0 items-center gap-1.5 truncate text-left text-sm font-medium text-ink-heading transition-colors hover:text-brand",
-              task.status === "off" && "opacity-50",
-            )}
-          >
-            <span className="truncate">{task.name}</span>
-            {task.exec_origin && renderOrigin
-              ? renderOrigin(task.exec_origin)
-              : null}
-          </button>
-          {task.prompt ? (
-            <span
-              className={cn(
-                "truncate text-xs text-ink-meta",
-                task.status === "off" && "opacity-50",
-              )}
+          <div className={cn("min-w-0", task.status === "off" && "opacity-50")}>
+            <button
+              type="button"
+              onClick={() => onRowClick?.(task.id)}
+              className="flex min-w-0 items-center gap-1.5 truncate text-left text-sm font-medium leading-5 text-ink-heading transition-colors hover:text-brand"
             >
-              {task.prompt}
-            </span>
-          ) : null}
+              <span className="truncate">{task.name}</span>
+              {task.exec_origin && renderOrigin
+                ? renderOrigin(task.exec_origin)
+                : null}
+            </button>
+            <div className="truncate text-xs leading-4 text-ink-meta">
+              {task.prompt || "\u00a0"}
+            </div>
+          </div>
         </div>
-        <div className="min-w-0 truncate text-xs text-ink-body">
-          {task.trigger}
-          {task.triggerTimezone ? (
-            <span className="ml-1.5 text-ink-meta">· {task.triggerTimezone}</span>
-          ) : null}
+        <div className="min-w-0">
+          <div className="truncate text-sm leading-5 text-ink-body">
+            {task.trigger}
+          </div>
+          <div className="truncate text-xs leading-4 text-ink-meta">
+            {task.triggerTimezone || "\u00a0"}
+          </div>
         </div>
         <div className="text-xs text-ink-body">{task.last}</div>
         <div className="flex">{statusBadge(task.status)}</div>
