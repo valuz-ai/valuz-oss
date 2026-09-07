@@ -98,6 +98,10 @@ Theme and analytical visualization contract:
   categorical comparison, part-to-whole, distribution, range/target, bridge,
   flow, hierarchy, correlation, or network. Prefer a semantic edition component
   when it answers the research question; do not wrap every fact in a chart.
+- When plotted values span two or more orders of magnitude (largest >= 100x
+  the smallest), keep the default `valueScale: "auto"` (it switches bar/line
+  charts to a log axis) or set `showValues: true` so the small bars stay
+  readable; never leave such data on a flat linear axis without labels.
 - A chart may select ONE registered palette for its data relationship. Use
   ocean/orchid/emerald/steel/amber for ordered single-hue data, vivid for
   distinct categories, spectrum for values around a meaningful midpoint, and
