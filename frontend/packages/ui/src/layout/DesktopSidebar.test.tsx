@@ -114,14 +114,51 @@ describe("DesktopSidebar", () => {
         bottomItems={[]}
         onAddProject={() => {}}
         onImportProject={() => {}}
-        projectAddMenuItems={
-          <DropdownMenuItem>组织内导入</DropdownMenuItem>
-        }
+        projectAddMenuItems={<DropdownMenuItem>组织内导入</DropdownMenuItem>}
       />,
     );
 
     await userEvent.click(screen.getByLabelText("添加项目"));
 
     expect(await screen.findByText("组织内导入")).toBeTruthy();
+  });
+
+  const manyProjects = Array.from({ length: 12 }, (_, i) => ({
+    id: `p${i + 1}`,
+    label: `工作区 ${i + 1}`,
+    href: `/projects/p${i + 1}`,
+  }));
+
+  it("caps the project list at ten behind a show-more toggle", async () => {
+    render(
+      <DesktopSidebar
+        activePath="/projects"
+        projectGroups={manyProjects}
+        bottomItems={[]}
+      />,
+    );
+
+    expect(screen.getByText("工作区 10")).toBeTruthy();
+    expect(screen.queryByText("工作区 11")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "展开" }));
+
+    expect(screen.getByText("工作区 12")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "收起" })).toBeTruthy();
+  });
+
+  it("holds the project list open when the active project sits past the cap", () => {
+    render(
+      <DesktopSidebar
+        activePath="/projects/p12"
+        activeProjectId="p12"
+        projectGroups={manyProjects}
+        bottomItems={[]}
+      />,
+    );
+
+    expect(screen.getByText("工作区 12")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "展开" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "收起" })).toBeNull();
   });
 });

@@ -749,6 +749,9 @@ export const DesktopSidebar = ({
   // before the show-more toggle appears.
   const RUNS_COLLAPSED = 5;
   const CHATS_COLLAPSED = 10;
+  // The project list itself collapses the same way as the Chats group: the
+  // first ten projects show, the rest sit behind a show-more toggle.
+  const PROJECTS_COLLAPSED = 10;
 
   // Collapse-on-navigate: selecting any menu item outside an open project
   // collapses it. On every navigation keep only the active project's accordion
@@ -769,6 +772,45 @@ export const DesktopSidebar = ({
 
   const toggleGroup = (key: string) =>
     setGroupExpanded((m) => ({ ...m, [key]: !m[key] }));
+
+  // Trailing show-more / show-less toggle under a capped list. ``padClass``
+  // matches the indent of the rows above it so the text lines up.
+  const renderShowMoreToggle = (
+    key: string,
+    expanded: boolean,
+    padClass: string,
+  ) => (
+    <button
+      type="button"
+      onClick={() => toggleGroup(key)}
+      className={cn(
+        "mx-1 flex items-center gap-1 py-[3px] pr-[10px] text-[11.5px] text-ink-muted transition-colors hover:text-ink-body",
+        padClass,
+      )}
+    >
+      {expanded ? t("sidebar.showLess") : t("sidebar.showMore")}
+      <ChevronDown
+        className={cn(
+          "h-3 w-3 transition-transform duration-[150ms]",
+          expanded && "rotate-180",
+        )}
+        strokeWidth={2}
+      />
+    </button>
+  );
+
+  // Projects beyond the cap stay hidden until "show more" — unless the
+  // active project is one of them, in which case the list is held open (a
+  // collapsed list can't hide the project you're working in) and the toggle
+  // is omitted, mirroring how the active project's own accordion is pinned.
+  const activeProjectIndex = activeProjectId
+    ? projectGroups.findIndex((project) => project.id === activeProjectId)
+    : -1;
+  const projectsHeldOpen = activeProjectIndex >= PROJECTS_COLLAPSED;
+  const projectsExpanded = projectsHeldOpen || !!groupExpanded.projects;
+  const visibleProjects = projectsExpanded
+    ? projectGroups
+    : projectGroups.slice(0, PROJECTS_COLLAPSED);
 
   // One chat/task row. ``depth`` sets the left indent so project-nested rows
   // sit under the project label while Chats-group rows align with the section
@@ -806,7 +848,8 @@ export const DesktopSidebar = ({
       );
     }
     const showRowMenu =
-      item.kind === "chat" && (onRecentRename || onRecentDelete || onRecentFork);
+      item.kind === "chat" &&
+      (onRecentRename || onRecentDelete || onRecentFork);
     // This row's fork request is in flight — the right-edge slot swaps to a
     // spinner (replacing the dot / "…" menu) until the request settles.
     const forkPending = recentForkPendingId === item.id;
@@ -831,9 +874,7 @@ export const DesktopSidebar = ({
         <span className="min-w-0 flex-1 truncate">{item.title}</span>
         {(item.isRunning || showRowMenu || forkPending) && (
           <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
-            {forkPending && (
-              <Spinner aria-label={t("sidebar.forking")} />
-            )}
+            {forkPending && <Spinner aria-label={t("sidebar.forking")} />}
             {!forkPending && item.isRunning && (
               <span
                 aria-label={t("sidebar.runningIndicator")}
@@ -918,25 +959,8 @@ export const DesktopSidebar = ({
     return (
       <>
         {visible.map((item) => renderRunRow(item, depth))}
-        {items.length > collapsedLimit && (
-          <button
-            type="button"
-            onClick={() => toggleGroup(key)}
-            className={cn(
-              "mx-1 flex items-center gap-1 py-[3px] pr-[10px] text-[11.5px] text-ink-muted transition-colors hover:text-ink-body",
-              padClass,
-            )}
-          >
-            {expanded ? t("sidebar.showLess") : t("sidebar.showMore")}
-            <ChevronDown
-              className={cn(
-                "h-3 w-3 transition-transform duration-[150ms]",
-                expanded && "rotate-180",
-              )}
-              strokeWidth={2}
-            />
-          </button>
-        )}
+        {items.length > collapsedLimit &&
+          renderShowMoreToggle(key, expanded, padClass)}
       </>
     );
   };
@@ -1251,59 +1275,69 @@ export const DesktopSidebar = ({
                     {t("sidebar.noProjects")}
                   </div>
                 ) : (
-                  projectGroups.map((project) => {
-                    const expandable = (project.items?.length ?? 0) > 0;
-                    // The project you're currently in is pinned open — always
-                    // expanded, and its collapse chevron is hidden (you can't
-                    // collapse the project you're working in; it'd just reopen).
-                    const pinned = project.id === activeProjectId;
-                    const expanded =
-                      expandable &&
-                      (expandedProjectIds.has(project.id) || pinned);
-                    return (
-                      <div key={project.id}>
-                        <ProjectRow
-                          project={project}
-                          activePath={activePath}
-                          LinkComponent={LinkComponent}
-                          expandable={expandable}
-                          expanded={expanded}
-                          pinned={pinned}
-                          onToggleExpanded={() =>
-                            setExpandedProjectIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(project.id)) next.delete(project.id);
-                              else next.add(project.id);
-                              return next;
-                            })
-                          }
-                          projectRenaming={projectRenamingId === project.id}
-                          onProjectRenameStart={
-                            onProjectRename
-                              ? (id) => setProjectRenamingId(id)
-                              : undefined
-                          }
-                          onProjectRenameConfirm={(id, newName) => {
-                            onProjectRename?.(id, newName);
-                            setProjectRenamingId(null);
-                          }}
-                          onProjectRenameCancel={() =>
-                            setProjectRenamingId(null)
-                          }
-                          onProjectOpenInFinder={onProjectOpenInFinder}
-                          onProjectExport={onProjectExport}
-                          onProjectRemove={onProjectRemove}
-                        />
-                        {expanded &&
-                          project.items &&
-                          renderGroupItems(
-                            project.id,
-                            project.items,
-                            "project",
-                          )}
-                      </div>
-                    );
-                  })
+                  <>
+                    {visibleProjects.map((project) => {
+                      const expandable = (project.items?.length ?? 0) > 0;
+                      // The project you're currently in is pinned open — always
+                      // expanded, and its collapse chevron is hidden (you can't
+                      // collapse the project you're working in; it'd just reopen).
+                      const pinned = project.id === activeProjectId;
+                      const expanded =
+                        expandable &&
+                        (expandedProjectIds.has(project.id) || pinned);
+                      return (
+                        <div key={project.id}>
+                          <ProjectRow
+                            project={project}
+                            activePath={activePath}
+                            LinkComponent={LinkComponent}
+                            expandable={expandable}
+                            expanded={expanded}
+                            pinned={pinned}
+                            onToggleExpanded={() =>
+                              setExpandedProjectIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(project.id))
+                                  next.delete(project.id);
+                                else next.add(project.id);
+                                return next;
+                              })
+                            }
+                            projectRenaming={projectRenamingId === project.id}
+                            onProjectRenameStart={
+                              onProjectRename
+                                ? (id) => setProjectRenamingId(id)
+                                : undefined
+                            }
+                            onProjectRenameConfirm={(id, newName) => {
+                              onProjectRename?.(id, newName);
+                              setProjectRenamingId(null);
+                            }}
+                            onProjectRenameCancel={() =>
+                              setProjectRenamingId(null)
+                            }
+                            onProjectOpenInFinder={onProjectOpenInFinder}
+                            onProjectExport={onProjectExport}
+                            onProjectRemove={onProjectRemove}
+                          />
+                          {expanded &&
+                            project.items &&
+                            renderGroupItems(
+                              project.id,
+                              project.items,
+                              "project",
+                            )}
+                        </div>
+                      );
+                    })}
+                    {projectGroups.length > PROJECTS_COLLAPSED &&
+                      !projectsHeldOpen &&
+                      renderShowMoreToggle(
+                        "projects",
+                        projectsExpanded,
+                        "pl-[10px]",
+                      )}
+                  </>
                 )}
 
                 {/* 对话 / Chats — chats + tasks that don't belong to any
