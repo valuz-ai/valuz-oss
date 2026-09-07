@@ -187,29 +187,29 @@ export function PlaybookDefinitionTable({
         }
       >
         <div className={`hidden items-center px-3 py-3 md:grid ${GRID}`}>
-          <div className="flex min-w-0 items-start gap-2">
-            <BookOpenText
-              className={
-                retired
-                  ? "mt-1 h-3.5 w-3.5 shrink-0 text-ink-meta opacity-50"
-                  : "mt-1 h-3.5 w-3.5 shrink-0 text-ink-meta"
-              }
-            />
-            <div className={retired ? "min-w-0 opacity-50" : "min-w-0"}>
-              <button
-                type="button"
-                onClick={() => onOpen(definition)}
-                className="flex min-w-0 items-center gap-1.5 truncate text-left text-sm font-medium leading-5 text-ink-heading transition-colors hover:text-brand"
-              >
-                <span className="truncate">{definition.name}</span>
-                {definition.exec_origin ? (
-                  <OriginIcon origin={definition.exec_origin} />
-                ) : null}
-              </button>
-              <div className="truncate text-xs leading-4 text-ink-meta">
-                {agentName?.(definition) ?? definition.agent_slug ?? "\u00a0"}
-              </div>
-            </div>
+          <div
+            className={
+              retired
+                ? "flex min-w-0 items-center gap-2 opacity-50"
+                : "flex min-w-0 items-center gap-2"
+            }
+          >
+            <BookOpenText className="h-3.5 w-3.5 shrink-0 text-ink-meta" />
+            <button
+              type="button"
+              onClick={() => onOpen(definition)}
+              className="flex min-w-0 items-center gap-1.5 truncate text-left text-sm font-medium text-ink-heading transition-colors hover:text-brand"
+            >
+              <span className="truncate">{definition.name}</span>
+              {definition.exec_origin ? (
+                <OriginIcon origin={definition.exec_origin} />
+              ) : null}
+            </button>
+            {agentName?.(definition) ?? definition.agent_slug ? (
+              <span className="truncate text-xs text-ink-meta">
+                {agentName?.(definition) ?? definition.agent_slug}
+              </span>
+            ) : null}
           </div>
           <div className="font-mono text-xs text-ink-label">
             v{definition.current_version}
