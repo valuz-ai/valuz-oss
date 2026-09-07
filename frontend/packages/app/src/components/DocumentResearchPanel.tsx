@@ -43,6 +43,7 @@ const SUMMARY_PROFILE = "brief" as const;
 
 export interface DocumentResearchPanelProps {
   document: DocumentSource | null;
+  /** Kept for callers; the panel no longer surfaces resolution notices. */
   resolutionNotice?: string | null;
   originSessionId?: string | null;
   originMessageId?: string | null;
@@ -68,7 +69,6 @@ const wait = (ms: number, signal: AbortSignal): Promise<void> =>
 
 export function DocumentResearchPanel({
   document,
-  resolutionNotice,
   originSessionId,
   originMessageId,
   onCitationClick,
@@ -334,22 +334,11 @@ export function DocumentResearchPanel({
       summary.citation_bundle?.version === 1
         ? summary.citation_bundle
         : undefined;
-    const degraded =
-      summary.status === "degraded" ||
-      summary.status === "failed" ||
-      summary.status === "stale";
     return (
       <div
         ref={summaryScrollRef}
         className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
       >
-        {degraded ? (
-          <div className="mb-3 rounded-md border border-warning/30 bg-warning-light px-3 py-2 text-xs text-warning-text">
-            {summary.status === "stale"
-              ? t("ui.reader.summaryStale" as Parameters<typeof t>[0])
-              : t("ui.reader.summaryDegraded" as Parameters<typeof t>[0])}
-          </div>
-        ) : null}
         <MarkdownContent
           content={summary.content}
           citationBundle={bundle}
@@ -509,11 +498,6 @@ export function DocumentResearchPanel({
             className="border-b border-danger/30 bg-danger-light px-3 py-2 text-xs text-danger-text"
           >
             {shareError}
-          </div>
-        ) : null}
-        {resolutionNotice ? (
-          <div className="border-b border-warning/30 bg-warning-light px-3 py-2 text-xs text-warning-text">
-            {resolutionNotice}
           </div>
         ) : null}
         <TabsContent
