@@ -8,12 +8,11 @@ import { useEffect, useRef, useState } from "react";
 
 import { useTranslation } from "@valuz/core";
 import type { ActivityFeed, ActivityItem } from "@valuz/core";
-import { Badge, cn } from "@valuz/ui";
+import { Badge, cn, Spinner } from "@valuz/ui";
 import {
   BookOpenText,
   Clock3,
   ListChecks,
-  Loader2,
   MessageSquare,
 } from "lucide-react";
 
@@ -282,7 +281,7 @@ export const ActivityFeedList = ({
         >
           {loadingMore && (
             <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner />
               {t("common.loading" as Parameters<typeof t>[0])}
             </span>
           )}

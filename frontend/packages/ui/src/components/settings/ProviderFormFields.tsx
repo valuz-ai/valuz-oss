@@ -1,6 +1,6 @@
 import { useState, type FC } from "react";
 import { useI18n } from "../../hooks/use-i18n";
-import { Check, Eye, EyeOff, Loader2, X } from "lucide-react";
+import { Check, Eye, EyeOff, X } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -10,6 +10,7 @@ import {
 } from "../ui/select";
 import { cn } from "@valuz/ui/lib/utils";
 import { modelLabel } from "@valuz/shared";
+import { Spinner } from "../ui/spinner";
 
 export type TestStatus = "idle" | "testing" | "ok" | "fail";
 
@@ -220,7 +221,7 @@ export const ProviderFormFields: FC<ProviderFormFieldsProps> = ({
           )}
         >
           {testStatus === "testing" && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner />
           )}
           {testStatus === "ok" && <Check className="h-3.5 w-3.5" />}
           {testStatus === "fail" && <X className="h-3.5 w-3.5" />}

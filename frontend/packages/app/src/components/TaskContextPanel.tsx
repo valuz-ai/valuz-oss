@@ -6,7 +6,6 @@ import {
   Expand,
   FolderOpen,
   ListTodo,
-  Loader2,
   PauseCircle,
   Users,
   X,
@@ -33,6 +32,7 @@ import {
   TabsList,
   TabsTrigger,
   type FileTreeNode,
+  Spinner,
 } from "@valuz/ui";
 // File count — same recursive sum ProjectContextPanel uses, so the
 // header "N files" matches what users see on the project home rail.
@@ -520,7 +520,7 @@ function StatusIcon({ status }: { status: string }) {
     return <PauseCircle className="h-3.5 w-3.5 text-ink-meta" />;
   }
   if (status === "active") {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-brand" />;
+    return <Spinner />;
   }
   return <Circle className="h-3 w-3 text-ink-meta" />;
 }

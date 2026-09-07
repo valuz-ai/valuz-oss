@@ -4,7 +4,6 @@ import {
   Copy,
   Eye,
   FolderOpen,
-  Loader2,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -27,6 +26,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../ui/tooltip";
+import { Spinner } from "../ui/spinner";
 
 export interface SkillDetailPanelFile {
   path: string;
@@ -664,7 +664,7 @@ export const SkillDetailPanel = ({
           <div className="label-mono mb-2">{t("skill.fileStructure")}</div>
           {files === undefined ? (
             <div className="flex items-center gap-1.5 py-2 text-xs text-ink-meta">
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Spinner />
               {t("common.loading")}
             </div>
           ) : skill.protected ? (
@@ -707,7 +707,7 @@ export const SkillDetailPanel = ({
             <span className="truncate">{selectedPath ?? "Preview"}</span>
             <div className="flex shrink-0 items-center gap-1">
               {contentLoading && (
-                <Loader2 className="h-3 w-3 animate-spin text-ink-meta" />
+                <Spinner />
               )}
               {/* Copy source — always available when there's content,
                   sits LEFT of the view-mode toggles so the row reads

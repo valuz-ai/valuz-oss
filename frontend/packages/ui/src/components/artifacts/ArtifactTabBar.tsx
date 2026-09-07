@@ -1,4 +1,4 @@
-import { Loader2, X } from "lucide-react";
+import { X } from "lucide-react";
 import type { MouseEvent } from "react";
 import { useEffect, useRef } from "react";
 
@@ -6,6 +6,7 @@ import { useI18n } from "../../hooks/use-i18n";
 import { cn } from "../../lib/utils";
 import { ArtifactIcon } from "./ArtifactViewerShell";
 import type { ArtifactPreviewKind } from "./artifact-viewer.types";
+import { Spinner } from "../ui/spinner";
 
 /** Softens the last few pixels of an over-long file name. */
 const FADE_MASK =
@@ -114,7 +115,7 @@ export function ArtifactTabBar({
           >
             <span className="flex h-3 w-3 shrink-0 items-center justify-center [&_svg]:h-3 [&_svg]:w-3">
               {tab.loading ? (
-                <Loader2 className="h-3 w-3 animate-spin text-ink-meta" />
+                <Spinner />
               ) : (
                 <ArtifactIcon kind={tab.previewKind ?? "unsupported"} />
               )}

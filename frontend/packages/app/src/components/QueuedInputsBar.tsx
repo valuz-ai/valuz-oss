@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { Button, Textarea } from "@valuz/ui";
+import { Button, Textarea, Spinner } from "@valuz/ui";
 import { useTranslation, type QueuedInput } from "@valuz/core";
 import {
   Check,
   CornerDownRight,
-  Loader2,
   Paperclip,
   Pencil,
   Play,
@@ -107,7 +106,7 @@ export const QueuedInputsBar = ({
               className="flex h-6 shrink-0 items-center gap-1 text-xs text-ink-meta"
               title={t("common.queueSending")}
             >
-              <Loader2 className="size-3 animate-spin" />
+              <Spinner />
               {t("common.queueSending")}
             </span>
           </div>

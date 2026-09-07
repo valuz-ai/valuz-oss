@@ -41,8 +41,9 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  Spinner,
 } from "@valuz/ui";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useTranslation } from "@valuz/core";
 import type { I18nKey } from "@valuz/shared";
 
@@ -189,7 +190,7 @@ function PluginCard({ plugin, onConfigure, onTested, t }: PluginCardProps) {
               disabled={testing}
             >
               {testing ? (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                <Spinner className="mr-1" />
               ) : (
                 <RefreshCw className="mr-1 h-3 w-3" />
               )}
@@ -507,7 +508,7 @@ function InlineKeyEditor({
             {t("common.cancel")}
           </Button>
           <Button onClick={handleSave} disabled={busy}>
-            {busy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            {busy ? <Spinner className="mr-1" /> : null}
             {t("common.save")}
           </Button>
         </DialogFooter>
@@ -608,7 +609,7 @@ export function ParserSettingsSection() {
   if (loading || !routing) {
     return (
       <div className="flex items-center gap-2 text-xs text-ink-section">
-        <Loader2 className="h-3 w-3 animate-spin" />{" "}
+        <Spinner />{" "}
         {t("settings.parsing.loadingConfig")}
       </div>
     );

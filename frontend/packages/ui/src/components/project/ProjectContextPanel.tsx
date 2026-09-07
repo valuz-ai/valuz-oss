@@ -12,7 +12,6 @@ import {
   Database,
   Folder,
   FolderOpen,
-  Loader2,
   Paperclip,
   Trash2,
   Unlink,
@@ -62,6 +61,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { Spinner } from "../ui/spinner";
 
 /**
  * Total file count across the whole tree (recursive into folders),
@@ -762,7 +762,7 @@ function TodosList({ items }: { items: TodoListItem[] }) {
               {todo.status === "completed" ? (
                 <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
               ) : todo.status === "in_progress" ? (
-                <Loader2 className="h-3 w-3 animate-spin text-brand" />
+                <Spinner />
               ) : (
                 <Circle className="h-2.5 w-2.5 text-ink-muted" />
               )}
@@ -1405,7 +1405,7 @@ export const ProjectDetailContextPanel = ({
                 </span>
                 {f.parseStatus === "parsing" ? (
                   <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-meta">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <Spinner />
                     {t("conversation.attachmentParsing")}
                   </span>
                 ) : f.size ? (
@@ -1961,7 +1961,7 @@ export const ProjectDetailContextPanel = ({
                             )}: ${playbook.name}`}
                           >
                             {playbook.running ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              <Spinner />
                             ) : (
                               <Play className="h-3.5 w-3.5" />
                             )}

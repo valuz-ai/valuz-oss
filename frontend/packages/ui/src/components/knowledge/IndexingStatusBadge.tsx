@@ -1,6 +1,7 @@
-import { AlertTriangle, Check, Loader2, FileQuestion } from "lucide-react";
+import { AlertTriangle, Check, FileQuestion } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 export interface IndexingStatusBadgeProps {
   status: "ready" | "indexing" | "failed" | "queued" | "missing";
@@ -26,7 +27,7 @@ export const IndexingStatusBadge = ({
     return (
       <div className="flex items-center gap-2">
         <Badge variant="brand" className="gap-1">
-          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          <Spinner />
           {t("knowledge.indexing")}
         </Badge>
         <div className="h-1.5 w-20 overflow-hidden rounded-full bg-surface-border">

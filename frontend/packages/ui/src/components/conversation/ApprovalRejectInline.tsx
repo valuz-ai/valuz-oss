@@ -11,12 +11,13 @@
  * user is composing doesn't fire the decision mid-thought.
  */
 import { memo, useState } from "react";
-import { Loader2, XCircle } from "lucide-react";
+import { XCircle } from "lucide-react";
 
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 interface ApprovalRejectInlineProps {
   submitting?: boolean;
@@ -72,7 +73,7 @@ export const ApprovalRejectInline = memo(function ApprovalRejectInline({
           disabled={submitting}
         >
           {submitting ? (
-            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+            <Spinner className="mr-1.5" />
           ) : (
             <XCircle className="mr-1.5 h-3 w-3" />
           )}

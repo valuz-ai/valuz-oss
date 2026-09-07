@@ -35,7 +35,6 @@ import {
   ClipboardList,
   FileEdit,
   FilePenLine,
-  Loader2,
   MoreHorizontal,
   Plug,
   Sparkles,
@@ -56,6 +55,7 @@ import {
 } from "../ui/dropdown-menu";
 import { ApprovalEditModal } from "./ApprovalEditModal";
 import { ApprovalRejectInline } from "./ApprovalRejectInline";
+import { Spinner } from "../ui/spinner";
 
 export type ApprovalCardSubject =
   | "shell_command"
@@ -372,7 +372,7 @@ export const ApprovalCard = memo(function ApprovalCard({
                 className="bg-brand text-white hover:bg-brand-hover"
               >
                 {submitting ? (
-                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  <Spinner className="mr-1.5" />
                 ) : (
                   <CheckCircle2 className="mr-1.5 h-3 w-3" />
                 )}

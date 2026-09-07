@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronRight,
   FilePenLine,
-  Loader2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -28,6 +27,7 @@ import {
   DropdownMenuTrigger,
   ForkIcon,
   cn,
+  Spinner,
 } from "@valuz/ui";
 import { SlotRenderer } from "@valuz/core";
 import { canForkSession } from "./useTitleActions";
@@ -244,7 +244,7 @@ export function ConversationHeader({
                         onSelect={() => onFork()}
                       >
                         {forkInFlight ? (
-                          <Loader2 className="animate-spin" />
+                          <Spinner />
                         ) : (
                           <ForkIcon />
                         )}

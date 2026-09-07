@@ -21,11 +21,11 @@ import {
   ChevronRight,
   FileText,
   Folder,
-  Loader2,
   X,
 } from "lucide-react";
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 export type SkillSubmissionState =
   | "awaiting_files"
@@ -170,7 +170,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
           ) : state === "dismissed" ? (
             <X className="h-4 w-4 text-ink-muted" />
           ) : isAwaiting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Spinner />
           ) : (
             <FileText className="h-4 w-4" />
           )}
@@ -352,7 +352,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
             )}
           >
             {state === "dismissing" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              <Spinner className="mr-1.5" />
             ) : null}
             {t("common.cancel")}
           </button>
@@ -374,7 +374,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
             }
           >
             {state === "confirming" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              <Spinner className="mr-1.5" />
             ) : null}
             {nextVersion != null && !needsDecision
               ? t("skill.saveAsVersion", { version: String(nextVersion) })

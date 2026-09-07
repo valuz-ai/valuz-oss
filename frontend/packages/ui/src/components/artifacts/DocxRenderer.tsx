@@ -1,10 +1,10 @@
-import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { ArtifactRendererProps } from "./artifact-viewer.types";
 
 import { t as _t } from "@valuz/shared/i18n";
 import { useI18n } from "../../hooks/use-i18n";
+import { LoadingState } from "../common/LoadingState";
 
 
 export function DocxRenderer({ artifact, content }: ArtifactRendererProps) {
@@ -78,13 +78,7 @@ export function DocxRenderer({ artifact, content }: ArtifactRendererProps) {
   return (
     <div className="relative h-full min-h-0 overflow-auto bg-surface-base p-5">
       {loading ? (
-        <div
-          className="absolute inset-0 z-10 flex items-center justify-center bg-surface-base/80 text-sm text-ink-meta"
-          role="status"
-        >
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          {t("ui.artifact.docxRendering")}
-        </div>
+        <LoadingState variant="page" label={t("ui.artifact.docxRendering")} />
       ) : null}
       {error ? (
         <div className="flex h-full items-center justify-center px-6 py-16">

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, Bot, Check, Loader2, Plug, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Check, Plug, Plus } from "lucide-react";
 import {
   Button,
   Dialog,
@@ -278,7 +278,7 @@ const TemplateCard = ({ template, adding, onOpen, onAdd }: TemplateCardProps) =>
           }}
         >
           {adding ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner />
           ) : (
             <Plus className="h-3.5 w-3.5" />
           )}
@@ -339,7 +339,7 @@ const TemplateDetail = ({ template, adding, onAdd }: TemplateDetailProps) => {
             </span>
             <Button size="sm" disabled={adding} onClick={onAdd}>
               {adding ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Spinner />
               ) : (
                 <Plus className="h-3.5 w-3.5" />
               )}

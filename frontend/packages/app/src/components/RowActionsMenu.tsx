@@ -7,8 +7,9 @@ import {
   DropdownMenuTrigger,
   ForkIcon,
   cn,
+  Spinner,
 } from "@valuz/ui";
-import { FilePenLine, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
+import { FilePenLine, MoreHorizontal, Trash2 } from "lucide-react";
 
 // Hover-revealed "⋯" actions for a list row, mirroring the sidebar's
 // ``moreActions`` menu. Rendered INSIDE the status pill's slot (a ``relative``
@@ -50,7 +51,7 @@ export const RowActionsMenu = ({
           aria-label={t("sidebar.moreActions" as Parameters<typeof t>[0])}
         >
           {forkPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner />
           ) : (
             <MoreHorizontal className="h-3.5 w-3.5" />
           )}
@@ -76,7 +77,7 @@ export const RowActionsMenu = ({
             disabled={forkPending || forkDisabled}
             onSelect={onFork}
           >
-            {forkPending ? <Loader2 className="animate-spin" /> : <ForkIcon />}
+            {forkPending ? <Spinner /> : <ForkIcon />}
             {t("sidebar.fork" as Parameters<typeof t>[0])}
           </DropdownMenuItem>
         )}

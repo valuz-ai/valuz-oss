@@ -9,10 +9,11 @@
  * not an error.
  */
 import { memo, useState } from "react";
-import { History, Loader2, RotateCcw } from "lucide-react";
+import { History, RotateCcw } from "lucide-react";
 
 import { useI18n } from "../../hooks/use-i18n";
 import { cn } from "../../lib/cn";
+import { Spinner } from "../ui/spinner";
 
 export interface SkillVersionEntry {
   revisionId: string;
@@ -102,7 +103,7 @@ export const SkillVersionList = memo(function SkillVersionList({
       {expanded ? (
         loading ? (
           <div className="mt-2 flex items-center gap-1.5 text-2xs text-ink-meta">
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Spinner />
             {t("common.loading")}
           </div>
         ) : ordered.length === 0 ? (
@@ -163,7 +164,7 @@ export const SkillVersionList = memo(function SkillVersionList({
                       )}
                     >
                       {busy ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Spinner />
                       ) : (
                         <RotateCcw className="h-3 w-3" />
                       )}

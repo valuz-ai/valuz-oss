@@ -7,7 +7,6 @@ import {
   Plus,
   FilePenLine,
   Trash2,
-  Loader2,
   RefreshCw,
   Lock,
   LockOpen,
@@ -39,6 +38,8 @@ import {
   SelectValue,
   cn,
   IconBox,
+  LoadingState,
+  Spinner,
 } from "@valuz/ui";
 import { useTranslation } from "@valuz/core";
 import { useSettingsStore } from "@valuz/core";
@@ -962,7 +963,7 @@ export const ConnectorsSection = () => {
                                 }}
                               >
                                 {oauthPending === connector.slug ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  <Spinner />
                                 ) : (
                                   t("common.connect")
                                 )}
@@ -977,9 +978,7 @@ export const ConnectorsSection = () => {
               </div>
             ))}
             {connectorsLoading && directoryItems.length === 0 && (
-              <div className="flex items-center justify-center py-8 text-ink-meta">
-                <Loader2 className="h-4 w-4 animate-spin" />
-              </div>
+              <LoadingState variant="section" />
             )}
           </div>
         </div>
@@ -1077,7 +1076,7 @@ export const ConnectorsSection = () => {
                         ) : connector.status === "connecting" ||
                           connector.status === "pending_auth" ? (
                           <Badge variant="outline" className="gap-1">
-                            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            <Spinner />
                             {t(
                               "settings.connectors.connecting" as Parameters<
                                 typeof t
@@ -1103,7 +1102,7 @@ export const ConnectorsSection = () => {
                           onClick={() => void handleTestConnector(connector.id)}
                         >
                           {connectorTesting === connector.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Spinner />
                           ) : (
                             <RefreshCw className="h-3 w-3" />
                           )}
@@ -1739,7 +1738,7 @@ export const ConnectorsSection = () => {
                 <span>{t("settings.connectors.url")}</span>
                 {httpDiscovering && (
                   <span className="flex items-center gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <Spinner />
                     {t(
                       "settings.connectors.detecting" as Parameters<
                         typeof t

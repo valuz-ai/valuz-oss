@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { Loader2 } from "lucide-react";
 import { assetUrl } from "@valuz/shared";
 import { cn } from "../../lib/cn";
+import { LoadingState } from "./LoadingState";
 
 export interface PageLoaderProps {
   className?: string;
@@ -47,17 +47,22 @@ export const PageLoader = ({
   label = "Loading",
   children,
   logo = false,
-}: PageLoaderProps) => (
-  <div
-    className={cn("flex items-center justify-center", className)}
-    role="status"
-    aria-label={label}
-  >
-    {children ??
-      (logo ? (
-        <LogoShimmer />
-      ) : (
-        <Loader2 className="h-6 w-6 animate-spin text-ink-muted" />
-      ))}
-  </div>
-);
+}: PageLoaderProps) =>
+  children || logo ? (
+    <div
+      className={cn(
+        "flex min-h-[240px] w-full flex-1 items-center justify-center",
+        className,
+      )}
+      role="status"
+      aria-label={label}
+    >
+      {children ?? <LogoShimmer />}
+    </div>
+  ) : (
+    <LoadingState
+      variant="page"
+      label={label === "Loading" ? undefined : label}
+      className={className}
+    />
+  );

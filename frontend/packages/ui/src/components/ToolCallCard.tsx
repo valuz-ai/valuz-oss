@@ -1,9 +1,10 @@
 import { memo, useState } from "react";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@valuz/ui/lib/utils";
 import type { PrototypeToolCall, PrototypeToolCallStatus } from "@valuz/shared";
 import { useI18n } from "../hooks/use-i18n";
 import { MarkdownContent } from "./conversation/MarkdownContent";
+import { Spinner } from "./ui/spinner";
 
 const STATUS_KEYS: Record<PrototypeToolCallStatus, string> = {
   success: "toolCall.complete",
@@ -124,7 +125,7 @@ export const ToolCallCard = memo(
             <div className="flex-1" />
           )}
           {tc.status === "running" ? (
-            <Loader2 className="h-[14px] w-[14px] shrink-0 animate-spin text-brand" />
+            <Spinner className="shrink-0" />
           ) : null}
           <span
             className={cn(

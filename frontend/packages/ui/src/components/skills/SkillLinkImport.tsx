@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Loader2, CheckCircle, AlertCircle, Layers } from "lucide-react";
+import { CheckCircle, AlertCircle, Layers } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 export interface LinkPreview {
   name: string;
@@ -81,7 +82,7 @@ export const SkillLinkImport = ({
             disabled={!url.trim() || fetching}
             onClick={() => onFetch(url.trim())}
           >
-            {fetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {fetching ? <Spinner /> : null}
             {t("skill.fetchSkill")}
           </Button>
         </div>
@@ -199,7 +200,7 @@ export const SkillLinkImport = ({
             disabled={importing || (isMulti && selectedCount === 0)}
           >
             {importing && (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              <Spinner className="mr-1.5" />
             )}
             {isMulti
               ? t("skill.importSelected", { count: selectedCount })

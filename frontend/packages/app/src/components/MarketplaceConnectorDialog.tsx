@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ExternalLink, Loader2, Plug, ShieldCheck } from "lucide-react";
+import { ExternalLink, Plug, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
   Button,
@@ -9,6 +9,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  LoadingState,
+  Spinner,
 } from "@valuz/ui";
 import {
   connectorsApi,
@@ -177,9 +179,7 @@ export function MarketplaceConnectorDialog({
         </DialogHeader>
 
         {loading ? (
-          <div className="flex min-h-48 items-center justify-center">
-            <Loader2 className="h-5 w-5 animate-spin text-brand" />
-          </div>
+          <LoadingState variant="section" />
         ) : detail && config ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-body">
@@ -283,7 +283,7 @@ export function MarketplaceConnectorDialog({
             }
             onClick={() => void connect()}
           >
-            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
+            {submitting ? <Spinner /> : <Plug className="h-3.5 w-3.5" />}
             {detail?.installed
               ? t("marketplace.connected")
               : t("marketplace.connectConnector")}

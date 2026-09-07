@@ -2,7 +2,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Loader2,
   Minus,
   Plus,
   RotateCw,
@@ -44,6 +43,7 @@ import {
   type PdfZoomMode,
 } from "./pdf-zoom";
 import "./PdfDocumentRenderer.css";
+import { LoadingState } from "../common/LoadingState";
 
 type LocateStatus =
   | "located-exact"
@@ -408,9 +408,7 @@ function PdfPage({
       }}
     >
       {shouldRender && !page ? (
-        <div className="absolute inset-0 flex items-center justify-center text-ink-meta">
-          <Loader2 className="h-4 w-4 animate-spin" />
-        </div>
+        <LoadingState variant="page" />
       ) : null}
       <canvas ref={canvasRef} className="absolute inset-0" />
       <div
@@ -837,10 +835,7 @@ export function PdfDocumentRenderer({
         tabIndex={0}
       >
         {!pdf ? (
-          <div className="flex h-full items-center justify-center text-sm text-ink-meta">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t("ui.reader.loadingPdf")}
-          </div>
+          <LoadingState variant="page" label={t("ui.reader.loadingPdf")} />
         ) : (
           pages.map((pageNumber) => (
             <PdfPage

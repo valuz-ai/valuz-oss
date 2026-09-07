@@ -13,12 +13,12 @@
  * versions of a skill" and "what this turn changed" look like one idea.
  */
 import { useCallback, useEffect, useState } from "react";
-import { FileText, GitCompare, Loader2, RotateCcw } from "lucide-react";
+import { FileText, GitCompare, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 import { skillsApi, useTranslation } from "@valuz/core";
 import type { SkillVersionDetail, SkillVersionItem } from "@valuz/core";
-import { Button, SkillVersionList, TwoSidedDiffView } from "@valuz/ui";
+import { Button, SkillVersionList, TwoSidedDiffView, LoadingState, Spinner } from "@valuz/ui";
 import type { SkillVersionEntry } from "@valuz/ui";
 import { t as _t } from "@valuz/shared/i18n";
 
@@ -205,9 +205,7 @@ export function SkillVersionsTab({
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-brand" />
-      </div>
+      <LoadingState variant="section" />
     );
   }
 
@@ -275,7 +273,7 @@ export function SkillVersionsTab({
                 title={t("skill.versionRestoreHint" as Parameters<typeof t>[0])}
               >
                 {restoringId === selected.revision_id ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  <Spinner className="mr-1" />
                 ) : (
                   <RotateCcw className="mr-1 h-3 w-3" />
                 )}
@@ -307,7 +305,7 @@ export function SkillVersionsTab({
 
           <div className="min-w-0 flex-1 overflow-auto p-4">
             {contentLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-ink-meta" />
+              <Spinner />
             ) : showDiff && selectedPath ? (
               <TwoSidedDiffView
                 path={selectedPath}

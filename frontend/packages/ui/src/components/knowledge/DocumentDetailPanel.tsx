@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   ExternalLink,
-  Loader2,
   RotateCw,
   Trash2,
   XCircle,
@@ -18,6 +17,7 @@ import type {
   ArtifactContent,
   ArtifactDescriptor,
 } from "../artifacts/artifact-viewer.types";
+import { Spinner } from "../ui/spinner";
 
 /** Mirror of the backend ``ParserAttempt`` row (one entry per plugin
  *  run for this doc — succeeded or failed). UI doesn't import the
@@ -297,7 +297,7 @@ export const DocumentDetailPanel = ({
             {parse?.parserMode || isProcessing ? (
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-heading">
                 {isProcessing ? (
-                  <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand" />
+                  <Spinner className="shrink-0" />
                 ) : null}
                 <span>
                   {t("knowledge.parserEngine")}:{" "}

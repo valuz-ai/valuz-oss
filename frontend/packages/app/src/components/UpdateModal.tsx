@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Download, CheckCircle, Loader2 } from "lucide-react";
+import { Download, CheckCircle } from "lucide-react";
 import { useTranslation, useUpdaterStore } from "@valuz/core";
 import {
   Button,
@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
   Progress,
+  Spinner,
 } from "@valuz/ui";
 
 interface UpdateModalProps {
@@ -84,7 +85,7 @@ export const UpdateModal = ({
             </Button>
           ) : isDownloading ? (
             <Button disabled>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Spinner className="mr-2" />
               {t("updater.downloading" as Parameters<typeof t>[0])}
             </Button>
           ) : (

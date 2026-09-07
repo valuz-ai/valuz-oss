@@ -7,7 +7,6 @@ import {
   Folder,
   FolderTree,
   GitFork,
-  Loader2,
   RefreshCw,
   Sparkles,
 } from "lucide-react";
@@ -15,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { IconBox } from "../common/IconBox";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 /**
  * Right-side panel rendered inside the conversation page when a chat is in
@@ -504,7 +504,7 @@ export const SkillStagingPanel = ({
           )}
         >
           {syncing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Spinner />
           ) : (
             <CheckCircle2 className="h-3.5 w-3.5" />
           )}
