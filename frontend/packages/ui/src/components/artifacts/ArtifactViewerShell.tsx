@@ -8,7 +8,6 @@ import {
   FileImage,
   FileSpreadsheet,
   FileText,
-  Loader2,
   Maximize2,
   Minimize2,
   RefreshCw,
@@ -42,6 +41,8 @@ import type {
 } from "./artifact-viewer.types";
 
 import { useI18n } from "../../hooks/use-i18n";
+import { LoadingState } from "../common/LoadingState";
+import { Spinner } from "../ui/spinner";
 
 export type {
   ArtifactContent,
@@ -402,13 +403,7 @@ function ImageRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
           }`}
         >
           {loadState === "loading" ? (
-            <div
-              className="absolute inset-0 z-10 flex items-center justify-center bg-surface-base/80 text-sm text-ink-meta"
-              role="status"
-            >
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t("ui.artifact.loadingImage")}
-            </div>
+            <LoadingState variant="page" label={t("ui.artifact.loadingImage")} />
           ) : null}
           {loadState === "error" ? (
             <div
@@ -474,13 +469,7 @@ function MediaRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
 
   const statusOverlay =
     loadState === "loading" ? (
-      <div
-        className="absolute inset-0 z-10 flex items-center justify-center bg-surface-base/80 text-sm text-ink-meta"
-        role="status"
-      >
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        {t("ui.artifact.loadingMedia")}
-      </div>
+      <LoadingState variant="page" label={t("ui.artifact.loadingMedia")} />
     ) : loadState === "error" ? (
       <div
         className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-surface-base px-6 text-sm text-error-text"
@@ -743,13 +732,7 @@ export function ArtifactRenderer({
   return (
     <Suspense
       fallback={
-        <div
-          className="flex h-full items-center justify-center text-sm text-ink-meta"
-          role="status"
-        >
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          {t("ui.artifact.loadingRenderer")}
-        </div>
+        <LoadingState variant="page" label={t("ui.artifact.loadingRenderer")} />
       }
     >
       <Renderer
@@ -909,7 +892,7 @@ export function ArtifactViewerShell({
                 {artifact ? (
                   <ArtifactIcon kind={artifact.previewKind} />
                 ) : (
-                  <Loader2 className="h-4 w-4 animate-spin text-ink-meta" />
+                  <Spinner />
                 )}
               </div>
               <div className="min-w-0 flex-1">
@@ -1087,14 +1070,7 @@ export function ArtifactViewerShell({
       </header>
       <div className="min-h-0 flex-1">
         {loading ? (
-          <div
-            className="flex h-full items-center justify-center text-sm text-ink-meta"
-            role="status"
-            aria-live="polite"
-          >
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t("ui.artifact.readingFile")}
-          </div>
+          <LoadingState variant="page" label={t("ui.artifact.readingFile")} />
         ) : error ? (
           <div className="flex h-full items-center justify-center px-6 py-16">
             <div

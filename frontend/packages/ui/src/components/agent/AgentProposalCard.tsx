@@ -11,9 +11,10 @@
  * parent so multiple cards in the same conversation behave independently.
  */
 import { memo } from "react";
-import { Bot, Check, Loader2, Plug, Wrench, X } from "lucide-react";
+import { Bot, Check, Plug, Wrench, X } from "lucide-react";
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 export type AgentProposalState =
   | "pending"
@@ -156,7 +157,7 @@ export const AgentProposalCard = memo(function AgentProposalCard({
             )}
           >
             {state === "dismissing" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              <Spinner className="mr-1.5" />
             ) : null}
             {t("common.cancel")}
           </button>
@@ -171,7 +172,7 @@ export const AgentProposalCard = memo(function AgentProposalCard({
             )}
           >
             {state === "confirming" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              <Spinner className="mr-1.5" />
             ) : null}
             {t("agent.proposalCreate")}
           </button>

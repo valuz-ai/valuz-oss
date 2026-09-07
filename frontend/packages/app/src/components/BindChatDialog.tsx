@@ -12,6 +12,7 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
+  LoadingState,
 } from "@valuz/ui";
 import {
   channelsApi,
@@ -307,9 +308,7 @@ export function BindChatDialog({
           {t("project.bindChatExistingTitle" as Parameters<typeof t>[0])}
         </div>
         {loading ? (
-          <p className="py-6 text-center text-xs text-ink-meta">
-            {t("common.loading")}
-          </p>
+          <LoadingState variant="section" />
         ) : chats.length === 0 ? (
           <p className="py-6 text-center text-xs text-ink-meta">
             {t("project.bindChatEmpty" as Parameters<typeof t>[0])}

@@ -17,7 +17,6 @@ import {
   FileText,
   Gauge,
   Globe,
-  LoaderCircle,
   Minimize2,
   RotateCw,
   Sparkles,
@@ -62,6 +61,7 @@ import {
 import { useI18n } from "../../hooks/use-i18n";
 import { t as _t } from "@valuz/shared/i18n";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Spinner } from "../ui/spinner";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1401,10 +1401,7 @@ const TurnRow = memo(
                 aria-live="polite"
               >
                 <div className="inline-flex items-center gap-1.5 rounded-full border border-surface-border bg-surface-soft/80 px-2.5 py-1 text-xs leading-5 text-ink-muted">
-                  <LoaderCircle
-                    className="h-3.5 w-3.5 shrink-0 animate-spin"
-                    aria-hidden="true"
-                  />
+                  <Spinner aria-hidden="true" />
                   <span>
                     {t("conversation.verifyingAndGeneratingCitations")}
                   </span>

@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import {
   useDeferredValue,
   useEffect,
@@ -25,6 +25,7 @@ import {
 
 import { t as _t } from "@valuz/shared/i18n";
 import { useI18n } from "../../hooks/use-i18n";
+import { LoadingState } from "../common/LoadingState";
 
 type SpreadsheetSheet = Omit<SpreadsheetSheetData, "cellStyles"> & {
   cellStyles: Map<string, SpreadsheetCellStyle>;
@@ -348,10 +349,7 @@ export function SpreadsheetRenderer({
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-ink-meta" role="status">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        {t("ui.artifact.sheetParsing")}
-      </div>
+      <LoadingState variant="page" label={t("ui.artifact.sheetParsing")} />
     );
   }
 

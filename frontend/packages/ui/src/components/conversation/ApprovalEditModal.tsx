@@ -13,8 +13,6 @@
  * and the agent's error message if the args are nonsensical.
  */
 import { memo, useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
-
 import {
   Dialog,
   DialogContent,
@@ -27,6 +25,7 @@ import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 interface ApprovalEditModalProps {
   open: boolean;
@@ -113,7 +112,7 @@ export const ApprovalEditModal = memo(function ApprovalEditModal({
           </Button>
           <Button onClick={handleSubmit} disabled={submitting}>
             {submitting ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              <Spinner className="mr-1.5" />
             ) : null}
             {t("conversation.approvalEditSubmit")}
           </Button>

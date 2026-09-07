@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Check, Loader2, Package, Plug, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, Package, Plug, Sparkles } from "lucide-react";
 import {
   Button,
   Dialog,
@@ -8,6 +8,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  LoadingState,
 } from "@valuz/ui";
 import {
   agentTemplatesApi,
@@ -103,9 +104,7 @@ export function ImportPackDialog({
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-12 text-ink-meta">
-            <Loader2 className="h-5 w-5 animate-spin" />
-          </div>
+          <LoadingState variant="section" />
         ) : result ? (
           <ImportResultView result={result} />
         ) : preview ? (

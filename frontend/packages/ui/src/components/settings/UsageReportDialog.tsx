@@ -15,6 +15,7 @@ import {
   type ChartConfig,
 } from "../ui/chart";
 import { useI18n } from "../../hooks/use-i18n";
+import { LoadingState } from "../common/LoadingState";
 
 const MODEL_COLORS = [
   "hsl(35, 90%, 55%)",
@@ -371,9 +372,7 @@ export function UsageReportDialog({
         </DialogHeader>
 
         {loading && (
-          <div className="py-10 text-center text-sm text-muted-foreground">
-            {t("ui.usageReport.loading")}
-          </div>
+          <LoadingState variant="section" />
         )}
 
         {error && (

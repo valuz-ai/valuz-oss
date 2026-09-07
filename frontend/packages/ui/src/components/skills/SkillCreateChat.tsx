@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from "react";
-import { Loader2, Bot, User, Sparkles } from "lucide-react";
+import { Bot, User, Sparkles } from "lucide-react";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
+import { LoadingState } from "../common/LoadingState";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -129,10 +131,7 @@ export const SkillCreateChat = ({
                 </div>
               ))}
               {generating && (
-                <div className="flex items-center gap-2 text-xs text-ink-meta">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {t("common.loading")}
-                </div>
+                <LoadingState variant="section" />
               )}
               <div ref={messagesEndRef} />
             </div>
@@ -239,7 +238,7 @@ export const SkillCreateChat = ({
             {t("common.cancel")}
           </Button>
           <Button onClick={onSave} disabled={!canSave || saving}>
-            {saving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            {saving && <Spinner className="mr-1.5" />}
             {t("skill.saveToLib")}
           </Button>
         </div>

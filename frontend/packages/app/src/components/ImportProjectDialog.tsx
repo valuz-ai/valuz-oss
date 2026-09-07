@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Check,
   FolderOpen,
-  Loader2,
   Package,
   Plug,
   Sparkles,
@@ -18,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  LoadingState,
 } from "@valuz/ui";
 import {
   projectsApi,
@@ -170,9 +170,7 @@ export function ImportProjectDialog({
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-12 text-ink-meta">
-            <Loader2 className="h-5 w-5 animate-spin" />
-          </div>
+          <LoadingState variant="section" />
         ) : result ? (
           <ImportResultView result={result} />
         ) : preview ? (

@@ -16,6 +16,7 @@ import {
   SelectValue,
   ModelSelectionHint,
   type ProviderOption,
+  Spinner,
 } from "@valuz/ui";
 import {
   providersApi,
@@ -29,7 +30,7 @@ import {
 import { useCapabilities, useTranslation } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
 import { modelLabel } from "@valuz/shared";
-import { Check, Loader2, Lock, Plus } from "lucide-react";
+import { Check, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCliLoginFlow,
@@ -240,7 +241,7 @@ export const ConnectStep = ({
     >
       {loading ? (
         <div className="flex items-center gap-3 rounded-xl border border-surface-border bg-surface-soft/60 px-4 py-4 text-sm text-ink-meta">
-          <Loader2 className="h-4 w-4 animate-spin text-brand" />
+          <Spinner />
           {t("onboarding.connectLoading" as Parameters<typeof t>[0])}
         </div>
       ) : (
@@ -415,7 +416,7 @@ const OptionCard = ({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {busy && <Loader2 className="h-4 w-4 animate-spin text-brand" />}
+          {busy && <Spinner />}
           {connected && !isDefault && (
             <Badge
               className={`${AVAILABLE_BADGE_CLASS} gap-1 bg-[#f3f2ff] text-[#725cf9]`}

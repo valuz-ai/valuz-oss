@@ -17,8 +17,8 @@ import {
   type SetupJobStatusResponse,
   type SetupRequirement,
 } from "@valuz/core";
-import { Badge, Button, Card, CardContent, cn } from "@valuz/ui";
-import { Download, Loader2, RefreshCw, X } from "lucide-react";
+import { Badge, Button, Card, CardContent, cn, Spinner } from "@valuz/ui";
+import { Download, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "@valuz/core";
 import type { I18nKey } from "@valuz/shared";
 
@@ -144,7 +144,7 @@ function AuthDialog({ job, onConfirm, onCancel, t }: AuthDialogProps) {
               {t("common.cancel")}
             </Button>
             <Button onClick={handleConfirm} disabled={!accepted || busy}>
-              {busy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+              {busy ? <Spinner className="mr-1" /> : null}
               {t("settings.parsing.setup.agreeAndDownload")}
             </Button>
           </div>
@@ -389,7 +389,7 @@ export function ParserSetupCard({ onJobSucceeded }: ParserSetupCardProps) {
     <div className={cn("space-y-2")}>
       {loading ? (
         <div className="flex items-center gap-2 text-xs text-ink-section">
-          <Loader2 className="h-3 w-3 animate-spin" />{" "}
+          <Spinner />{" "}
           {t("settings.parsing.setup.loading")}
         </div>
       ) : jobs.length === 0 ? (

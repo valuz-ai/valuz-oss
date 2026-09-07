@@ -7,7 +7,6 @@ import {
 } from "react";
 import {
   AlertTriangle,
-  Loader2,
   RefreshCw,
   Send,
   Share2,
@@ -33,6 +32,8 @@ import {
   type DocumentSource,
   cn,
   usePersistentScroll,
+  LoadingState,
+  Spinner,
 } from "@valuz/ui";
 
 import { SessionStreamView } from "./SessionStreamView";
@@ -273,10 +274,7 @@ export function DocumentResearchPanel({
   const renderSummary = () => {
     if ((summaryLoading && !summary) || summary?.status === "pending") {
       return (
-        <div className="flex flex-1 items-center justify-center" role="status">
-          <Loader2 className="h-4 w-4 animate-spin text-ink-meta" />
-          <span className="sr-only">{t("common.loading")}</span>
-        </div>
+        <LoadingState variant="section" />
       );
     }
     if (summaryError && !summary) {
@@ -395,7 +393,7 @@ export function DocumentResearchPanel({
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-center">
             {sessionLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-ink-meta" />
+              <Spinner />
             ) : (
               <p className="text-xs leading-5 text-ink-meta">
                 {t("ui.reader.qaEmpty" as Parameters<typeof t>[0])}
@@ -434,7 +432,7 @@ export function DocumentResearchPanel({
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             {sending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner />
             ) : (
               <Send className="h-3.5 w-3.5" />
             )}
@@ -490,7 +488,7 @@ export function DocumentResearchPanel({
               )}
             >
               {sharing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Spinner />
               ) : (
                 <Share2 className="h-3.5 w-3.5" />
               )}

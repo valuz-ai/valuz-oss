@@ -631,7 +631,7 @@ export const AgentsPage = () => {
 
       {/* Content area */}
       {loading ? (
-        <PageLoader logo />
+        <PageLoader />
       ) : (
         <div className="flex-1 overflow-y-auto py-4">
           <div className="mb-4 px-4">

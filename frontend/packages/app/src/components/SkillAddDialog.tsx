@@ -3,7 +3,6 @@ import {
   Archive,
   FileText,
   Folder,
-  Loader2,
   Sparkles,
   Upload,
 } from "lucide-react";
@@ -19,6 +18,7 @@ import {
   Input,
   SkillLinkImport,
   cn,
+  Spinner,
 } from "@valuz/ui";
 import type { LinkPreview } from "@valuz/ui";
 import {
@@ -358,7 +358,7 @@ export function SkillAddDialog({
                 >
                   {uploadPreviewing ? (
                     <>
-                      <Loader2 className="h-8 w-8 animate-spin text-brand" />
+                      <Spinner />
                       <p className="mt-3 text-sm text-ink-body">
                         {t("common.processing" as Parameters<typeof t>[0])}
                       </p>

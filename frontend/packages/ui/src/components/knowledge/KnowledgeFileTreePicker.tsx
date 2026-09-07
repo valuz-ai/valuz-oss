@@ -5,7 +5,6 @@ import {
   FileText,
   Folder,
   FolderOpen,
-  Loader2,
   Search,
   X,
 } from "lucide-react";
@@ -15,6 +14,7 @@ import { Input } from "../ui/input";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 import type { KbBindingTreeNode } from "../project/ProjectContextPanel";
+import { LoadingState } from "../common/LoadingState";
 
 export interface KnowledgeFileTreePickerProps {
   /** All knowledge bases as a tree (``kb`` → ``folder`` → ``document``).
@@ -264,10 +264,7 @@ export const KnowledgeFileTreePicker = ({
           scroll inside the flex column instead of overflowing it. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-6 text-xs text-ink-meta">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {t("common.loading")}
-          </div>
+          <LoadingState variant="section" />
         ) : visibleKbs.length === 0 ? (
           <div className="py-6 text-center text-xs text-ink-meta">
             {query

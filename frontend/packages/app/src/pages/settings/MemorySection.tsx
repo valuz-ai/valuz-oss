@@ -10,6 +10,7 @@ import {
   SettingsSection,
   Switch,
   Textarea,
+  LoadingState,
 } from "@valuz/ui";
 import {
   memoryApi,
@@ -262,9 +263,7 @@ export const MemorySection = () => {
             <Card className="rounded-xl shadow-xs">
               <CardContent className="py-2">
                 {loading ? (
-                  <div className="py-3 text-sm text-ink-meta">
-                    {t("settings.memory.loading")}
-                  </div>
+                  <LoadingState variant="section" />
                 ) : entries.length === 0 ? (
                   <div className="py-8 text-center text-sm text-ink-meta">
                     {t("settings.memory.empty")}

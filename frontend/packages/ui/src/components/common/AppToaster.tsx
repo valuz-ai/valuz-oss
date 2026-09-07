@@ -1,10 +1,10 @@
 import {
   Check,
   Zap,
-  Loader2,
   X,
 } from "lucide-react";
 import { Toaster as SonnerToaster } from "sonner";
+import { Spinner } from "../ui/spinner";
 
 const ToastInfoIcon = () => (
   <svg
@@ -31,7 +31,7 @@ export const AppToaster = () => (
       error: <X className="h-[11px] w-[11px]" />,
       info: <ToastInfoIcon />,
       warning: <Zap className="h-[11px] w-[11px]" />,
-      loading: <Loader2 className="h-[11px] w-[11px] animate-spin" />,
+      loading: <Spinner />,
     }}
     toastOptions={{
       classNames: {

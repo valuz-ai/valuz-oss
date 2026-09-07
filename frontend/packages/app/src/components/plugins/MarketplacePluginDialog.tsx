@@ -4,7 +4,6 @@ import {
   Download,
   ExternalLink,
   Info,
-  LoaderCircle,
   Package,
   RefreshCw,
 } from "lucide-react";
@@ -16,6 +15,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Spinner,
 } from "@valuz/ui";
 import type {
   AgentPluginMemberRef,
@@ -353,7 +353,7 @@ export function MarketplacePluginDialog({
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
             {busy === "install" || busy === "update" ? (
               <div className="mb-5 flex items-start gap-2.5 rounded-lg border border-brand/20 bg-brand-light/40 px-3.5 py-3">
-                <LoaderCircle className="mt-0.5 h-4 w-4 flex-none animate-spin text-brand" />
+                <Spinner className="mt-0.5 flex-none" />
                 <div className="text-xs leading-relaxed text-ink-body">
                   {tr("marketplace.installProgressPluginHint")}
                 </div>

@@ -9,7 +9,6 @@ import {
   Info,
   KeyRound,
   Link2,
-  LoaderCircle,
   MessageSquare,
   ShieldCheck,
 } from "lucide-react";
@@ -20,6 +19,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Spinner,
 } from "@valuz/ui";
 import type {
   MarketplaceInstallResult,
@@ -515,7 +515,7 @@ function InstallProgressCard({
   return (
     <section className="mb-5 rounded-lg border border-brand/20 bg-brand-light/40 px-3.5 py-3">
       <div className="mb-2.5 flex items-start gap-2.5">
-        <LoaderCircle className="mt-0.5 h-4 w-4 flex-none animate-spin text-brand" />
+        <Spinner className="mt-0.5 flex-none" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
             <div className="text-[12.5px] font-semibold text-ink-heading">

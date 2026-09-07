@@ -1,6 +1,6 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, Loader2, Settings } from "lucide-react";
+import { CheckCircle2, Settings } from "lucide-react";
 import { sessionsApi, useTranslation } from "@valuz/core";
 import type { ConversationTurn } from "@valuz/shared";
 import {
@@ -9,6 +9,7 @@ import {
   ConversationTurnList,
   EmptyState,
   ForkIcon,
+  Spinner,
 } from "@valuz/ui";
 import type { usePlatform } from "@valuz/app/platform";
 import type { useCitationDocumentPreview } from "../../components/CitationDocumentPreviewProvider";
@@ -326,7 +327,7 @@ export function ConversationBody({
                         className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted disabled:cursor-default disabled:opacity-60"
                       >
                         {forkInFlight && forkingMessageId === turn.messageId ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <Spinner />
                         ) : (
                           <ForkIcon className="h-3.5 w-3.5" />
                         )}
@@ -365,7 +366,7 @@ export function ConversationBody({
                       className="bg-brand text-white hover:bg-brand-hover"
                     >
                       {planApproving ? (
-                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                        <Spinner className="mr-1.5" />
                       ) : (
                         <CheckCircle2 className="mr-1.5 h-3 w-3" />
                       )}

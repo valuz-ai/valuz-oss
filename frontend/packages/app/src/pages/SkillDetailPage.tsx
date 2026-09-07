@@ -4,7 +4,6 @@ import {
   FileText,
   Eye,
   FilePenLine,
-  Loader2,
   Check,
   X,
   Bot,
@@ -23,6 +22,8 @@ import {
   TabsList,
   TabsTrigger,
   type SkillVersionEntry,
+  LoadingState,
+  Spinner,
 } from "@valuz/ui";
 import { skillsApi } from "@valuz/core";
 import { isBinaryContent } from "./skill-file-preview";
@@ -248,9 +249,7 @@ export const SkillDetailPage = () => {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-brand" />
-      </div>
+      <LoadingState variant="page" />
     );
   }
 
@@ -435,7 +434,7 @@ export const SkillDetailPage = () => {
                   disabled={saving}
                 >
                   {saving ? (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    <Spinner className="mr-1" />
                   ) : null}
                   {t("common.save" as Parameters<typeof t>[0])}
                 </Button>

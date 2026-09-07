@@ -1,10 +1,12 @@
-import { Loader2, Pencil, Plug, Wrench } from "lucide-react";
+import { Pencil, Plug, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ToolInfo } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ConnectorIcon } from "./ConnectorIcon";
+import { Spinner } from "../ui/spinner";
+import { LoadingState } from "../common/LoadingState";
 
 export interface ConnectorDetailPanelProps {
   name: string;
@@ -103,7 +105,7 @@ export const ConnectorDetailPanel = ({
               onClick={onConnect}
             >
               {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Spinner />
               ) : (
                 <Plug className="h-3.5 w-3.5" />
               )}
@@ -158,7 +160,7 @@ export const ConnectorDetailPanel = ({
             title={systemManaged ? t("connector.systemManaged") : undefined}
             onClick={onDisconnect}
           >
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {busy ? <Spinner /> : null}
             {t("connector.disconnect")}
           </Button>
         </div>
@@ -181,10 +183,7 @@ export const ConnectorDetailPanel = ({
             {t("connector.toolsError", { error: toolsError })}
           </p>
         ) : tools === undefined ? (
-          <div className="flex items-center gap-2 text-xs text-ink-meta">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {t("connector.loadingTools")}
-          </div>
+          <LoadingState variant="section" />
         ) : tools.length === 0 ? (
           <p className="text-xs text-ink-meta">{t("connector.noTools")}</p>
         ) : (

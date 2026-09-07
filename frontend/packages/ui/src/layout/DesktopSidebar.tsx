@@ -14,7 +14,6 @@ import {
   LayoutDashboard,
   Link2,
   ListTodo,
-  Loader2,
   MessageCirclePlus,
   MessageSquare,
   MoreHorizontal,
@@ -49,6 +48,7 @@ import { DeleteConfirmDialog } from "../components/common/DeleteConfirmDialog";
 import { ForkIcon } from "../components/common/ForkIcon";
 import type { NavLinkComponent } from "./AppShell";
 import { useI18n } from "../hooks/use-i18n";
+import { Spinner } from "../components/ui/spinner";
 
 export interface DesktopSidebarItem {
   id: string;
@@ -832,10 +832,7 @@ export const DesktopSidebar = ({
         {(item.isRunning || showRowMenu || forkPending) && (
           <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
             {forkPending && (
-              <Loader2
-                aria-label={t("sidebar.forking")}
-                className="h-3.5 w-3.5 animate-spin text-ink-muted"
-              />
+              <Spinner aria-label={t("sidebar.forking")} />
             )}
             {!forkPending && item.isRunning && (
               <span

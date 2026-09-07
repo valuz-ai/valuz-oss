@@ -1013,7 +1013,7 @@ export const KnowledgePage = ({
       <>
         <div className="flex-1 overflow-y-auto px-5 pb-5 pt-3">
           {loading ? (
-            <PageLoader logo className="py-20" />
+            <PageLoader />
           ) : isEmpty ? (
             <div className="flex flex-1 justify-center pt-[160px]">
               <EmptyState
@@ -1164,7 +1164,7 @@ export const KnowledgePage = ({
         </div>
 
         {treeLoading ? (
-          <PageLoader logo className="py-20" />
+          <PageLoader />
         ) : filteredRootNodes.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <EmptyState

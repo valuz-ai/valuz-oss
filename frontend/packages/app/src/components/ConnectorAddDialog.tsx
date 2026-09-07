@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, X } from "lucide-react";
+import { X } from "lucide-react";
 import {
   Button,
   Dialog,
@@ -13,6 +13,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Spinner,
 } from "@valuz/ui";
 import {
   connectorsApi,
@@ -388,7 +389,7 @@ export function ConnectorAddDialog({
                 <span>{t("settings.connectors.url")}</span>
                 {discovering ? (
                   <span className="flex items-center gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <Spinner />
                     {t("settings.connectors.detecting")}
                   </span>
                 ) : null}
@@ -581,7 +582,7 @@ export function ConnectorAddDialog({
             }
           >
             {submitting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner />
             ) : null}
             {editing ? t("common.save") : t("common.add")}
           </Button>

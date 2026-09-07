@@ -13,7 +13,6 @@ import { memo } from "react";
 import {
   CheckCircle2,
   FileEdit,
-  Loader2,
   Plug,
   Terminal,
   Wrench,
@@ -22,6 +21,7 @@ import {
 
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 export type RequiresActionSubjectKind =
   | "shell_command"
@@ -264,7 +264,7 @@ export const RequiresActionCard = memo(function RequiresActionCard({
               )}
             >
               {submitting ? (
-                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                <Spinner className="mr-1.5" />
               ) : (
                 <CheckCircle2 className="mr-1.5 h-3 w-3" />
               )}

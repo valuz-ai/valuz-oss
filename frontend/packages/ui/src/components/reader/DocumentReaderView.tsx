@@ -11,7 +11,6 @@ import {
   Download,
   ExternalLink,
   Globe,
-  Loader2,
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
@@ -40,6 +39,7 @@ import type {
   DocumentReaderViewProps,
   DocumentSource,
 } from "./document-reader.types";
+import { LoadingState } from "../common/LoadingState";
 
 const RESEARCH_WIDTH_STORAGE_KEY = "valuz.reader.researchWidth.v6";
 const RESEARCH_MIN_WIDTH = 360;
@@ -201,13 +201,7 @@ export function DocumentReaderView({
   const body = () => {
     if (loading) {
       return (
-        <div
-          className="flex h-full items-center justify-center text-sm text-ink-meta"
-          role="status"
-        >
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          {t("common.loading")}
-        </div>
+        <LoadingState variant="page" />
       );
     }
     if (error) {

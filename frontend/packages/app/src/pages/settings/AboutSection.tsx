@@ -1,11 +1,5 @@
-import { Check, Loader2, RefreshCw, ArrowUpRight } from "lucide-react";
-import {
-  Button,
-  Card,
-  CardContent,
-  MetricStrip,
-  SettingsSection,
-} from "@valuz/ui";
+import { Check, RefreshCw, ArrowUpRight } from "lucide-react";
+import { Button, Card, CardContent, MetricStrip, SettingsSection, Spinner } from "@valuz/ui";
 import { useTranslation, useUpdaterStore, useSystemStore } from "@valuz/core";
 import { assetUrl } from "@valuz/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -109,7 +103,7 @@ export const AboutSection = () => {
           onClick={handleCheck}
         >
           {updaterStatus === "checking" && (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            <Spinner className="mr-1.5" />
           )}
           {updaterStatus === "checking"
             ? t("settings.about.checking")

@@ -17,7 +17,6 @@ import {
   FileText,
   Flag,
   ListTodo,
-  Loader2,
   MessageCircleQuestion,
   MessageSquare,
   Paperclip,
@@ -44,6 +43,7 @@ import {
   Textarea,
   cn,
   type RuntimeStartLocation,
+  Spinner,
 } from "@valuz/ui";
 import {
   agentsApi,
@@ -1214,7 +1214,7 @@ export const TaskDetailPage = () => {
       </div>
       {isStarting ? (
         <div className="flex items-start gap-2 text-xs text-ink-meta">
-          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+          <Spinner className="mt-0.5 shrink-0" />
           <span>
             <span className="text-ink-body">{t("task.starting")}</span>
             <span className="ml-1">{t("task.startingHint")}</span>
@@ -1342,7 +1342,7 @@ export const TaskDetailPage = () => {
             <li className="flex gap-2">
               <div className="flex w-6 shrink-0 flex-col items-center self-stretch pt-0.5">
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand">
-                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <Spinner />
                 </span>
                 <span className="mt-1 -mb-3.5 w-px flex-1 bg-[#f7f8fa]" />
               </div>

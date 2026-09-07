@@ -8,10 +8,11 @@
  * page's message-sending mechanism.
  */
 import { memo, useState } from "react";
-import { CircleHelp, Loader2, Send } from "lucide-react";
+import { CircleHelp, Send } from "lucide-react";
 
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 export interface AskUserQuestionOption {
   label: string;
@@ -359,7 +360,7 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
             )}
           >
             {submitting ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              <Spinner className="mr-1.5" />
             ) : (
               <Send className="mr-1.5 h-3 w-3" />
             )}

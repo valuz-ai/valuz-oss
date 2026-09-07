@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { ArrowUpRight, Loader2 } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import {
   Button,
   Dialog,
@@ -8,6 +8,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Spinner,
 } from "@valuz/ui";
 import {
   useTranslation,
@@ -224,7 +225,7 @@ export function ConnectorConnectDialog({
           </Button>
           <Button size="sm" disabled={submitting} onClick={() => void submit()}>
             {submitting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner />
             ) : null}
             {t("settings.connectors.startAuth")}
           </Button>

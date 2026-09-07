@@ -14,6 +14,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  LoadingState,
 } from "@valuz/ui";
 import {
   BindChatDialog,
@@ -1673,11 +1674,7 @@ export const ProjectDetailPage = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <p className="text-sm text-muted-foreground">
-          {t("common.loading" as Parameters<typeof t>[0])}
-        </p>
-      </div>
+      <LoadingState variant="page" />
     );
   }
 
