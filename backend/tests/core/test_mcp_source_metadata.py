@@ -861,6 +861,69 @@ def test_chunk_source_title_falls_back_to_hostname_not_document_id() -> None:
     assert source["documentId"] not in source["title"]
 
 
+def test_untitled_web_page_first_chunk_titles_the_source_with_its_headline() -> None:
+    """valuz-data web pages carry no title; when the cited chunk is the
+    document's opening (``sequence`` / ``char_start`` 0) its first sentence
+    is the headline, which beats the hostname in a source list."""
+
+    payload = {
+        "doc_id": "W13543724646545414",
+        "title": "",
+        "url": "https://reportify.cn/reports/W13543724646545414",
+        "chunks": [
+            {
+                "id": "chunk_0098f05e75e78536",
+                "sequence": 0,
+                "char_start": 0,
+                "content": (
+                    "台灣進入｢老人國｣時代!高齡人口占比破20% 台北市居冠 CTWANT｡"
+                    "台灣65歲以上人口突破467萬人,占總人口比率20.06%,正式進入超高齡社會｡"
+                ),
+            },
+            {
+                "id": "chunk-2",
+                "sequence": 1,
+                "char_start": 803,
+                "content": "統計回顧,自2016年以來,台灣新生兒數已連續10年下降｡",
+            },
+        ],
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="document_fetch",
+        resources=[
+            {
+                "resourceId": "document-fetch-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "title": "/title",
+                    "url": "/url",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {"chunkId": "/id", "text": "/content"},
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="document_fetch",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None and adapted.citable
+    titles = [item["source"]["title"] for item in adapted.model_content["_valuz_evidence"]]
+    assert titles[0] == "台灣進入｢老人國｣時代!高齡人口占比破20% 台北市居冠 CTWANT"
+    # A later chunk is not the headline: the hostname fallback still applies.
+    assert titles[1] == "reportify.cn"
+
+
 def test_large_structured_result_registers_one_collection_and_materializes_one_address() -> None:
     rows = [
         {
