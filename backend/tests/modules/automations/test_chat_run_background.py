@@ -38,6 +38,8 @@ async def _fake_uow(*args, **kwargs):
 
 def _row():
     return SimpleNamespace(
+        id="auto-1",
+        action_kind="chat",
         project_id="proj-1",
         agent_slug="researcher",
         name="my-automation",
@@ -52,6 +54,7 @@ def _row():
 def _run():
     return SimpleNamespace(
         id="run-1",
+        trigger_type="manual",
         status="running",
         started_at=1000,
         completed_at=None,

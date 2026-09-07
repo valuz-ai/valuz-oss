@@ -12,6 +12,11 @@ from collections.abc import Sequence
 from importlib import resources
 from typing import Any, Literal
 
+from valuz_agent.modules.genui.parameters import (
+    ParameterValidationError,
+    parameter_specs,
+    parse_parameter_schema,
+)
 from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 from valuz_agent.ports.extensions import ext
 
@@ -448,7 +453,22 @@ def registered_component_data_contracts() -> dict[str, dict[str, Any]]:
             })
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", component) or not inputs:
             continue
-        required, param_specs = _parse_param_specs(params_doc)
+        schema_fields: dict[str, Any] = {}
+        if "parameterSchema" in payload:
+            try:
+                schema = parse_parameter_schema(payload["parameterSchema"])
+                required, param_specs = parameter_specs(schema)
+                schema_fields["parameter_schema"] = schema
+                names = {field["name"] for field in schema["fields"]}
+                if any(name not in names for item in inputs for name in item["param_map"].values()):
+                    raise ParameterValidationError("paramMap references an unknown parameter")
+            except ParameterValidationError as exc:
+                # Keep the component registered, but unusable for query
+                # generation. Dropping it would permit an inline fallback.
+                required, param_specs = (), {}
+                schema_fields = {"parameter_schema_error": str(exc)}
+        else:
+            required, param_specs = _parse_param_specs(params_doc)
         fixed_props = payload.get("fixedProps")
         contracts[component] = {
             "component": component,
@@ -456,6 +476,7 @@ def registered_component_data_contracts() -> dict[str, dict[str, Any]]:
             "param_specs": param_specs,
             "inputs": tuple(inputs),
             "fixed_props": dict(fixed_props) if isinstance(fixed_props, dict) else {},
+            **schema_fields,
         }
     return contracts
 
@@ -469,12 +490,19 @@ def registered_component_data_tool_guide() -> str:
 
     lines: list[str] = []
     for component, contract in registered_component_data_contracts().items():
+        if contract.get("parameter_schema_error"):
+            lines.append(f"- {component}: unavailable (invalid registered parameterSchema)")
+            continue
         params: list[str] = []
         for name, spec in dict(contract.get("param_specs") or {}).items():
             suffix = "" if spec.get("required") else "?"
             description = str(spec.get("description") or spec.get("kind") or "value")
             params.append(f"{name}{suffix}: {description}")
-        lines.append(f"- {component} {{{', '.join(params)}}}")
+        constraints = (contract.get("parameter_schema") or {}).get("constraints")
+        suffix = (
+            f" constraints={json.dumps(constraints, ensure_ascii=False)}" if constraints else ""
+        )
+        lines.append(f"- {component} {{{', '.join(params)}}}{suffix}")
     if not lines:
         return ""
     return (

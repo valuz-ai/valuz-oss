@@ -73,6 +73,25 @@ async def test_request_complete_confirmation_card_meta_text_is_dropped() -> None
     assert sink.no_gap_declared is True
 
 
+@pytest.mark.parametrize("supplement", [
+    "The request is complete. The missing settlement date is September 8.",
+    "The answer is already complete, but the price should be 12 USD.",
+    "回答已完整。\n补充：请注意结算时间为明天。",
+    "回答已完整。结算日应为9月8日。",
+    "No supplement or correction is needed for revenue, while the EPS should be 1.20 USD.",
+    "The answer is already complete and correct: revenue was 10 million USD.",
+])
+async def test_completion_phrase_must_not_hide_a_real_supplement(supplement):
+    inner = _Recorder()
+    sink = _TaskCoverageProtocolSink(inner)
+    await sink.emit(Event(type="text_delta", data={"text": supplement}))
+    await sink.emit(Event(type="assistant_message", data={"text": supplement}))
+    await sink.finalize()
+    assert [event.type for event in inner.events] == ["text_delta", "assistant_message"]
+    assert inner.events[-1].data["text"] == supplement
+    assert sink.no_gap_declared is False
+
+
 @pytest.mark.asyncio
 async def test_long_supplement_waits_for_terminal_classification() -> None:
     inner = _Recorder()
@@ -106,10 +125,8 @@ async def test_tool_call_does_not_make_long_complete_meta_response_visible() -> 
     inner = _Recorder()
     sink = _TaskCoverageProtocolSink(inner)
     meta = (
-        "The answer is already complete and correct: it lists the original figures "
-        "for both periods, the year-over-year change, and the full calculation "
-        "process. No supplement or correction is needed."
-    )
+        "The answer is already complete and correct. No supplement or correction is needed. "
+    ) * 3
 
     await sink.emit(Event(type="tool_use", data={"id": "calc-1", "name": "citation_calculate"}))
     await sink.emit(Event(type="tool_result", data={"id": "calc-1", "content": "-1.54"}))

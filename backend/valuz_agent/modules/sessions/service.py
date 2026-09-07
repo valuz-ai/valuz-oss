@@ -118,7 +118,9 @@ from valuz_agent.modules.sessions.run_orchestrator import (
     schedule_drain,
 )
 from valuz_agent.modules.sessions.schemas import SessionWorktreeSpec
+from valuz_agent.modules.sessions.task_checks import CONFIG_KEY, fresh_config
 from valuz_agent.modules.skills.datastore import SkillDatastore
+from valuz_agent.ports.capability_policy import TaskCheckConfig
 from valuz_agent.ports.message_context import HostRef
 from valuz_agent.token_usage import read_session_token_usage
 
@@ -1558,8 +1560,10 @@ class SessionService:
         model_id: str | None = None,
         user_id: str | None = None,
         host_ref: HostRef | None = None,
+        task_check_config: TaskCheckConfig | None = None,
     ) -> SessionDetail:
         """Kick off an async agent turn in the background.  Returns immediately."""
+        task_check_config = fresh_config(task_check_config)
         # Capability convergence (citation policy / docs caps / always-on MCP
         # re-stamp) is NOT done here. It rides the turn as ``pre_turn`` — see
         # ``sessions/pre_turn`` and ``kernel_client.run_turn``. Refreshing at
@@ -1625,6 +1629,7 @@ class SessionService:
                 event_bus=self._bus,
                 user_id=user_id,
                 host_ref=host_ref,
+                task_check_config=fresh_config(task_check_config),
             )
         )
 
@@ -1640,6 +1645,7 @@ class SessionService:
         citation_verification_enabled_override: bool | None = None,
         task_coverage_enabled_override: bool | None = None,
         host_ref: HostRef | None = None,
+        task_check_config: TaskCheckConfig | None = None,
     ) -> SessionRunResponse:
         """Block until the agent turn completes.  Used by the schedule runner."""
         # Mirror ``send_message``: convergence rides the turn, not this call —
@@ -1652,6 +1658,7 @@ class SessionService:
             verification_enabled_override=citation_verification_enabled_override,
             task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
+            task_check_config=task_check_config,
         )
 
         session = await data_reader().get_session(user_id, session_id)
@@ -1948,6 +1955,8 @@ class SessionService:
         provider_id: str | None = None,
         model_id: str | None = None,
         user_id: str | None = None,
+        task_check_config: TaskCheckConfig | None = None,
+        host_ref: HostRef | None = None,
     ) -> QueuedInputList:
         """Append a follow-up input to the session queue.
 
@@ -1955,6 +1964,7 @@ class SessionService:
         item only (no carry-over, see §8.6). If the session is idle, kicks an
         immediate drain; otherwise the post-turn drain picks it up.
         """
+        task_check_config = fresh_config(task_check_config)
         uid = user_id
         session = await data_reader().get_session(uid, session_id)
         if session is None:
@@ -1979,7 +1989,19 @@ class SessionService:
                 QueuedInputRow(
                     session_id=session_id,
                     project_id=project_id,
-                    input={"text": content, "attachments": attachments_json},
+                    input={
+                        "text": content,
+                        "attachments": attachments_json,
+                        CONFIG_KEY: fresh_config(task_check_config).model_dump(mode="json"),
+                        **(
+                            {"host_ref": {
+                                "host_type": host_ref.host_type,
+                                "host_id": host_ref.host_id,
+                                "slot": host_ref.slot,
+                            }}
+                            if host_ref is not None else {}
+                        ),
+                    },
                     status="queued",
                     provider_id=provider_id,
                     model_id=model_id,
@@ -2011,6 +2033,9 @@ class SessionService:
                 raise SessionConflict("Queued input is no longer editable")
             payload = dict(existing.input or {})
             payload["text"] = content
+            # Editing the request changes its intent. A trusted configuration
+            # exemption from the old text must not ride the human's new task.
+            payload[CONFIG_KEY] = fresh_config().model_dump(mode="json")
             await ds.update_queued_input(uid, session_id, queue_id, payload)
         return await self.list_queue(session_id, user_id=user_id)
 

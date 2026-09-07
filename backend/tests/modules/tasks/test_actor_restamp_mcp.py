@@ -31,6 +31,14 @@ from valuz_agent.modules.tasks import actor_runner
 LOCAL_USER_ID = "local-test-owner"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_check_policy(monkeypatch):
+    """Policy convergence has its own integration tests; isolate credentials here."""
+    async def noop(*args, **kwargs):
+        pass
+    monkeypatch.setattr(pre_turn, "_refresh_citation_policy", noop)
+
+
 def _as_async(fn: Any) -> Any:
     async def _f(*a: Any, **k: Any) -> Any:
         return fn(*a, **k)

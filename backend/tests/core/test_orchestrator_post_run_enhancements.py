@@ -74,6 +74,8 @@ class _RecordingRuntime:
         called_tool_external: bool | None = None,
         tool_result_is_error: bool = False,
         extra_tool_names: tuple[str, ...] = (),
+        extra_tool_inputs: tuple[dict[str, object], ...] = (),
+        extra_tools_first: bool = False,
     ) -> None:
         self.sink = sink
         self.fail_continuation = fail_continuation
@@ -94,6 +96,8 @@ class _RecordingRuntime:
         self.called_tool_external = called_tool_external
         self.tool_result_is_error = tool_result_is_error
         self.extra_tool_names = extra_tool_names
+        self.extra_tool_inputs = extra_tool_inputs
+        self.extra_tools_first = extra_tools_first
         self.prompts: list[UserMessage] = []
         self.coverage_tools: list[ToolDef] = []
         self.session_object_ids: list[int] = []
@@ -128,6 +132,31 @@ class _RecordingRuntime:
                         },
                     )
                 )
+            async def emit_extra_tools():
+                for index, name in enumerate(self.extra_tool_names):
+                    await self.sink.emit(
+                        Event(
+                            type="tool_use",
+                            data={
+                                "id": f"extra-{index}",
+                                "name": name,
+                                "input": (
+                                    self.extra_tool_inputs[index]
+                                    if index < len(self.extra_tool_inputs)
+                                    else {}
+                                ),
+                            },
+                        )
+                    )
+                    await self.sink.emit(
+                        Event(
+                            type="tool_result",
+                            data={"id": f"extra-{index}", "content": "ok", "is_error": False},
+                        )
+                    )
+
+            if self.extra_tools_first:
+                await emit_extra_tools()
             if self.called_tool_name is not None:
                 tool_use_id = "primary-tool-1"
                 await self.sink.emit(
@@ -155,27 +184,8 @@ class _RecordingRuntime:
                         },
                     )
                 )
-            for index, name in enumerate(self.extra_tool_names):
-                await self.sink.emit(
-                    Event(
-                        type="tool_use",
-                        data={
-                            "id": f"extra-{index}",
-                            "name": name,
-                            "input": {},
-                        },
-                    )
-                )
-                await self.sink.emit(
-                    Event(
-                        type="tool_result",
-                        data={
-                            "id": f"extra-{index}",
-                            "content": "ok",
-                            "is_error": False,
-                        },
-                    )
-                )
+            if not self.extra_tools_first:
+                await emit_extra_tools()
             await self.sink.emit(Event(type="assistant_message", data={"text": self.primary_text}))
             if self.primary_stop_reason is not None:
                 session.stop_reason = self.primary_stop_reason
@@ -735,6 +745,142 @@ async def test_output_receipts_do_not_exempt_actual_research(tmp_path, monkeypat
         event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
         for event in store.appended
     )
+
+
+@pytest.mark.parametrize("coverage", [True, False])
+@pytest.mark.parametrize("research_first", [True, False])
+@pytest.mark.parametrize("failed_card", [True, False])
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input"),
+    [
+        ("mcp__harness__generate_ui", {}),
+        ("valuz-playbooks/playbook", {"action": "create"}),
+        ("mcp__valuz_automations__automation", {"action": "create"}),
+        ("valuz_finance/domain_operation", {"action": "workbench_change"}),
+    ],
+)
+async def test_structural_delivery_does_not_exempt_research_in_same_turn(
+    tmp_path, monkeypatch, coverage, research_first, failed_card, tool_name, tool_input
+):
+    session = _session(
+        tmp_path, task_coverage_enabled=coverage, citation_enabled=True, verification_enabled=True
+    )
+    store = _FakeStore(session)
+    runtimes = []
+
+    def create_runtime(*args, **kwargs):
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name=tool_name,
+            called_tool_input=tool_input,
+            tool_result_is_error=failed_card,
+            extra_tool_names=("mcp__valuz_docs__document_search",),
+            extra_tools_first=research_first,
+            primary_text="The research result and its supporting evidence.",
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+    await SessionOrchestrator(store).run_turn(
+        "owner-1", session.id, UserMessage(text="Research this and prepare a component.")
+    )
+    assert len(runtimes[0].prompts) == (2 if coverage else 1)
+    assert any(
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+    # A failed structural write must not swallow its own error either.
+    if failed_card:
+        assert any(e.type == "tool_result" and e.data.get("is_error") for e in store.appended)
+
+
+async def test_multiple_structural_deliveries_and_receipts_stay_silent(tmp_path, monkeypatch):
+    session = _session(
+        tmp_path, task_coverage_enabled=True, citation_enabled=True, verification_enabled=True
+    )
+    store = _FakeStore(session)
+    runtimes = []
+
+    def create_runtime(*args, **kwargs):
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="generate_ui",
+            extra_tool_names=("valuz-playbooks/playbook", "valuz_finance/automation_output"),
+            extra_tool_inputs=({"action": "create"}, {}),
+            primary_text="The preview and confirmation card are ready.",
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1", session.id, UserMessage(text="Prepare the requested resources.")
+    )
+    assert len(runtimes[0].prompts) == 1
+    assert not {"task_coverage", "citation_bundle", "claim_audits"}.intersection(message.metadata)
+
+
+async def test_structural_exemption_does_not_carry_to_next_turn(tmp_path, monkeypatch):
+    session = _session(
+        tmp_path, task_coverage_enabled=True, citation_enabled=True, verification_enabled=True
+    )
+    store = _FakeStore(session)
+    runtimes = []
+
+    def create_runtime(*args, **kwargs):
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="generate_ui" if not runtimes else "mcp__valuz_docs__document_search",
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+    orchestrator = SessionOrchestrator(store)
+    await orchestrator.run_turn("owner-1", session.id, UserMessage(text="Create a component."))
+    assert len(runtimes[0].prompts) == 1
+    # The orchestrator reuses the warm runtime, but installs a fresh observer.
+    # Reset the fake's primary/continuation script for the next user turn.
+    runtimes[0].prompts.clear()
+    runtimes[0].called_tool_name = "mcp__valuz_docs__document_search"
+    await orchestrator.run_turn(
+        "owner-1", session.id, UserMessage(text="Now research the subject.")
+    )
+    assert len(runtimes) == 1
+    assert len(runtimes[0].prompts) == 2
+    assert session.metadata["valuz"]["task_coverage_enabled"] is True
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+async def test_message_preserves_its_own_check_policy_snapshot(tmp_path, monkeypatch, foreign):
+    session = _session(tmp_path, task_coverage_enabled=False)
+    snapshot = {
+        "version": 1,
+        "context": {
+            "user_id": "other-owner" if foreign else "owner-1",
+            "session_id": session.id,
+            "config": {"run_id": "original-run", "operation": "layout.configure"},
+        },
+        "resolved": {"task_coverage_enabled": False},
+    }
+    session.metadata["valuz"]["optional_check_snapshot"] = snapshot
+    store = _FakeStore(session)
+    monkeypatch.setattr(
+        "src.runtimes.factory.create_runtime",
+        lambda *args, **kwargs: _RecordingRuntime(args[2], called_tool_name="generate_ui"),
+    )
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1", session.id, UserMessage(text="Create the layout.")
+    )
+    if foreign:
+        assert "optional_check_snapshot" not in message.metadata
+    else:
+        assert message.metadata["optional_check_snapshot"] == snapshot
+        snapshot["context"]["config"]["operation"] = "research"
+        assert message.metadata["optional_check_snapshot"]["context"]["config"] == {
+            "run_id": "original-run", "operation": "layout.configure"
+        }
 
 
 async def test_failed_generate_ui_also_skips_post_run_checks_for_that_turn(

@@ -55,6 +55,40 @@ The `generate_ui.components` argument controls prompt size:
 The renderer remains capable of drawing the full effective catalog; scope only
 changes what the model is taught for a particular generation.
 
+## Native query-parameter schemas
+
+An edition's `COMPONENT_DATA_CONTRACT` may include `parameterSchema` with
+`version: 1`, `fields`, and optional `constraints`. It is authoritative for
+`generate_ui.component_data[].params`; the human-readable `params` text is
+only a compatibility fallback when `parameterSchema` is absent. A malformed
+or unsupported schema disables that query contract and produces a validation
+error rather than falling back to prose. Disabled contracts cannot be selected
+or emitted as inline components: actual compiled output is checked even when
+the caller omitted both `component_names` and `component_data`. Ordinary
+non-query inline components remain available.
+
+Each field declares `name`, `type` (`string`, `integer`, `boolean`, or
+`string-list`), and `optional`. Supported constraints are literal string
+`choices`, integer `minimum`/`maximum`, `format` (`date` or canonical
+`symbol`), list `minItems`/`maxItems`/`uniqueItems`/`itemChoices`, and explicit
+`aliases`. `acceptArray` permits string-list array input. `description`,
+`semantic`, `unit`, and `default` document the field; defaults are not silently
+inserted. Unknown parameters, duplicate aliases, unsupported fields/rules,
+invalid values, and unsafe/nonfinite integers are rejected. Cross-field rules
+are `dateOrder`, `atLeastOne`, and `requiredWhenAny`.
+
+The native schema drives the Agent's tool JSON Schema, its parameter guide,
+and compiler validation. Fixed data `paramMap`, `fixedParams`, bindings, and
+source selection remain registry-owned. Accepted string-list inputs serialize
+to CSV at the scalar DataRef boundary; an array item cannot contain a comma.
+
+`{"$host":"name"}` is a deferred reference, not a literal that bypasses data
+validation. Generation checks compatible parameter/alias keys (including the
+existing singular-Host-to-plural-list convention); the consuming data runtime
+must validate resolved values and deferred cross-field rules before calling
+its fixed adapter. No component may use a Host reference to select a source,
+endpoint, credential, or unregistered parameter.
+
 ## Protocol contract
 
 - Version: `v0.9.1` only.
