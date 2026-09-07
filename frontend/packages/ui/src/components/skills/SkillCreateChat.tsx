@@ -5,6 +5,7 @@ import { Textarea } from "../ui/textarea";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 import { Spinner } from "../ui/spinner";
+import { LoadingState } from "../common/LoadingState";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -130,10 +131,7 @@ export const SkillCreateChat = ({
                 </div>
               ))}
               {generating && (
-                <div className="flex items-center gap-2 text-xs text-ink-meta">
-                  <Spinner />
-                  {t("common.loading")}
-                </div>
+                <LoadingState variant="section" />
               )}
               <div ref={messagesEndRef} />
             </div>

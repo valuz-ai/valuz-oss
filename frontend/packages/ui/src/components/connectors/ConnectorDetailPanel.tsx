@@ -6,6 +6,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ConnectorIcon } from "./ConnectorIcon";
 import { Spinner } from "../ui/spinner";
+import { LoadingState } from "../common/LoadingState";
 
 export interface ConnectorDetailPanelProps {
   name: string;
@@ -182,10 +183,7 @@ export const ConnectorDetailPanel = ({
             {t("connector.toolsError", { error: toolsError })}
           </p>
         ) : tools === undefined ? (
-          <div className="flex items-center gap-2 text-xs text-ink-meta">
-            <Spinner />
-            {t("connector.loadingTools")}
-          </div>
+          <LoadingState variant="section" />
         ) : tools.length === 0 ? (
           <p className="text-xs text-ink-meta">{t("connector.noTools")}</p>
         ) : (

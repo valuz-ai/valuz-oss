@@ -283,7 +283,7 @@ Three tiers, chosen by *where the user is waiting*; the tier fixes size, colour 
 ```tsx
 import { LoadingState, PageLoader, Spinner } from "@valuz/ui"
 
-// Page / pane first load: centred, min-height 240px, 24px muted
+// Page / pane first load: centred in a fixed 60vh box (same height on every page), 24px muted
 if (!data) return <LoadingState variant="page" />
 // (`<PageLoader />` is the same thing for route-level fallbacks)
 
@@ -297,7 +297,7 @@ if (!data) return <LoadingState variant="page" />
 - No generic copy: never pass "加载中…" / "Loading…" as `label` — the spinner is the message. `label` is only for operation-specific copy (`t("ui.artifact.sheetParsing")`, `t("finance.workspaceHome.materializing")`).
 - `PageLoader logo` (logo shimmer) is reserved for the app-boot route fallback; pages use the plain tier.
 - `Spinner` is decorative (`aria-hidden`) so it never changes a button's accessible name; `LoadingState` carries `role="status"`.
-- Dialog / tab / panel bodies are `section` (the `page` tier's min-height would stretch a small container).
+- Dialog / tab / panel bodies are `section` (the `page` tier's 60vh box would stretch a small container).
 - A `RefreshCw` icon spinning while a refresh is in flight is a button icon state, not a loading state — leave it.
 
 #### FormDialog — form dialog template

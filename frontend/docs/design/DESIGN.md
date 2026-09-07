@@ -169,7 +169,7 @@ Info 复用品牌紫（裁决：不引入第五个状态色相）。
 - **Tooltip 规则（v2.6.15）**：提示气泡出现在触发元素下方居中，反色底（`foreground` 底 + `background` 字）、`shadow-3`、圆角 `md(6)`，**不画三角/箭头**。母版不再维护 Avatar 组件，避免与 Chat Message「Agent 无头像」规则冲突。
 - DESIGN.md v1 §5 的组件像素规格（Sidebar/Composer/Popover/ToolCard/ContextPanel）仍然有效，但其中色值/字号/圆角一律按本文档 token 替换字面量。
 - **加载态三档（v2.7）**：加载指示只有三种形态，由「在哪里等」决定，调用方只选档位和文案，不选尺寸、颜色、位置——
-  ①**页面 / 面板首屏** `LoadingState variant="page"`（`PageLoader` 同此）：内容区居中，最小高度 240px，24px spinner `ink-muted`，可选一行 `text-xs ink-meta` 文案在下方；
+  ①**页面 / 面板首屏** `LoadingState variant="page"`（`PageLoader` 同此）：固定 60vh 高的盒子内居中（不随容器拉伸，保证各页面 spinner 出现在同一高度），24px spinner `ink-muted`，可选一行 `text-xs ink-meta` 文案在下方；
   ②**区块 / 列表 / 对话框内容重载** `LoadingState variant="section"`：区块内居中，`py-8`，16px spinner `ink-meta`，文案同行；
   ③**行内（按钮 / 表格行 / chip）** `Spinner`：14px，跟随文字色（currentColor），必须与它描述的文字并排，`aria-hidden`（装饰，不改变按钮的可访问名）。
   文案规则：**泛用文案（「加载中…」「Loading…」）一律不显示**，spinner 本身就是信息；只有描述具体操作的文案才作为 label（「正在解析表格」「正在创建第一版工作台…」）。

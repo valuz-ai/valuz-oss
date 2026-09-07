@@ -4,8 +4,11 @@ import { cn } from "../../lib/cn";
 
 export interface LoadingStateProps {
   /**
-   * `page`: a page or pane's first load — centred in the content area with
-   * a minimum height, 24px muted spinner, optional label underneath.
+   * `page`: a page or pane's first load — a fixed 60vh box so the spinner
+   * lands at the same height on every page regardless of the container
+   * (no flex-grow: a filling box would centre differently on pages whose
+   * content column stretches), 24px muted spinner, optional label
+   * underneath.
    * `section`: a card / list section reloading — centred in the section,
    * 16px muted spinner with the label inline.
    */
@@ -30,7 +33,7 @@ export const LoadingState = ({
       role="status"
       aria-label={label ?? "Loading"}
       className={cn(
-        "flex min-h-[240px] w-full flex-1 flex-col items-center justify-center gap-2 text-ink-muted",
+        "flex min-h-[60vh] w-full flex-col items-center justify-center gap-2 text-ink-muted",
         className,
       )}
     >
