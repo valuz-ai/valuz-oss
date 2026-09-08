@@ -1,0 +1,156 @@
+"""Stable Edition API for the shared Operation/Decision engine.
+
+The caller supplies its request/job owner and transaction. This library never
+commits, grants authority, or maintains a second operation table. Handlers must
+validate domain permissions/revisions on that same transaction; registration
+and a confirmation decision are not substitutes for authorization.
+
+Returned Pydantic views contain detached data, not writable ORM records. Import
+these contracts here instead of depending on ``modules.operations`` internals.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from valuz_agent.facade.projects import ProjectLibrary
+from valuz_agent.modules.operations.models import OperationRecordRow
+from valuz_agent.modules.operations.registry import (
+    OperationContext,
+    OperationExecution,
+    OperationHandler,
+    OperationRegistration,
+    OperationResult,
+    operation_registry,
+)
+from valuz_agent.modules.operations.schemas import (
+    OperationDecisionRequest,
+    OperationDecisionView,
+    OperationProposal,
+    OperationRequestChangesRequest,
+    OperationView,
+)
+from valuz_agent.modules.operations.service import OperationService
+
+
+def register_operation(registration: OperationRegistration) -> None:
+    """Register an installed capability at composition time, never per request."""
+    operation_registry.register(registration)
+
+
+class OperationLibrary:
+    def __init__(self, db: AsyncSession, projects: ProjectLibrary) -> None:
+        self._service = OperationService(db, projects)
+
+    @staticmethod
+    def _owner(user_id: str) -> str:
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError("operation_owner_required")
+        return user_id
+
+    async def _views(self, user_id: str, rows: list[OperationRecordRow]) -> list[OperationView]:
+        decisions = await self._service.latest_decisions(user_id, [row.id for row in rows])
+        views = []
+        for row in rows:
+            decision = decisions.get(row.id)
+            data = {
+                name: deepcopy(getattr(row, name))
+                for name in OperationView.model_fields
+                if name != "latest_decision"
+            }
+            data["latest_decision"] = (
+                OperationDecisionView(
+                    decision=decision.decision,  # type: ignore[arg-type]
+                    decided_by=decision.decided_by,
+                    decided_at=decision.created_at,
+                    proposal_hash=decision.proposal_hash,
+                    comment=decision.comment,
+                )
+                if decision is not None
+                else None
+            )
+            views.append(OperationView.model_validate(data))
+        return views
+
+    async def get(self, user_id: str, operation_id: str) -> OperationView:
+        row = await self._service.get(self._owner(user_id), operation_id)
+        return (await self._views(user_id, [row]))[0]
+
+    async def propose(self, user_id: str, proposal: OperationProposal) -> OperationView:
+        row = await self._service.propose(self._owner(user_id), proposal)
+        return (await self._views(user_id, [row]))[0]
+
+    async def confirm(
+        self,
+        user_id: str,
+        operation_id: str,
+        *,
+        expected_proposal_hash: str,
+        comment: str | None = None,
+        decision: dict[str, Any] | None = None,
+    ) -> OperationView:
+        row = await self._service.confirm(
+            self._owner(user_id),
+            operation_id,
+            expected_proposal_hash=expected_proposal_hash,
+            comment=comment,
+            decision=decision,
+        )
+        return (await self._views(user_id, [row]))[0]
+
+    async def cancel(
+        self,
+        user_id: str,
+        operation_id: str,
+        *,
+        expected_proposal_hash: str,
+        comment: str | None = None,
+    ) -> OperationView:
+        row = await self._service.cancel(
+            self._owner(user_id),
+            operation_id,
+            expected_proposal_hash=expected_proposal_hash,
+            comment=comment,
+        )
+        return (await self._views(user_id, [row]))[0]
+
+    async def request_changes(
+        self,
+        user_id: str,
+        operation_id: str,
+        *,
+        expected_proposal_hash: str,
+        comment: str,
+    ) -> OperationView:
+        row = await self._service.request_changes(
+            self._owner(user_id),
+            operation_id,
+            expected_proposal_hash=expected_proposal_hash,
+            comment=comment,
+        )
+        return (await self._views(user_id, [row]))[0]
+
+    async def status(self, user_id: str, operation_ids: list[str]) -> list[OperationView]:
+        self._owner(user_id)
+        if len(operation_ids) > 100:
+            raise ValueError("operation_status_limit_exceeded")
+        return await self._views(user_id, await self._service.status(user_id, operation_ids))
+
+
+__all__ = [
+    "OperationContext",
+    "OperationDecisionRequest",
+    "OperationDecisionView",
+    "OperationExecution",
+    "OperationHandler",
+    "OperationLibrary",
+    "OperationProposal",
+    "OperationRegistration",
+    "OperationRequestChangesRequest",
+    "OperationResult",
+    "OperationView",
+    "register_operation",
+]

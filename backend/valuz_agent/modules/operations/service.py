@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import select
@@ -17,7 +18,11 @@ from valuz_agent.modules.operations.models import (
     ConfirmationDecisionRow,
     OperationRecordRow,
 )
-from valuz_agent.modules.operations.registry import OperationContext, operation_registry
+from valuz_agent.modules.operations.registry import (
+    OperationContext,
+    OperationExecution,
+    operation_registry,
+)
 from valuz_agent.modules.operations.schemas import OperationProposal
 
 logger = logging.getLogger(__name__)
@@ -100,6 +105,31 @@ class OperationService:
         self._db = db
         self._projects = projects
 
+    def _context(
+        self, row: OperationRecordRow, decision: dict[str, Any] | None = None
+    ) -> OperationContext:
+        return OperationContext(
+            db=self._db,
+            projects=self._projects,
+            user_id=row.user_id,
+            decision=deepcopy(decision or {}),
+            operation=OperationExecution(
+                id=row.id,
+                operation_type=row.operation_type,
+                operation_version=row.operation_version,
+                proposal_hash=row.proposal_hash,
+                project_id=row.project_id,
+                actor_kind=row.actor_kind,
+                actor_id=row.actor_id,
+                origin_session_id=row.origin_session_id,
+                origin_tool_call_id=row.origin_tool_call_id,
+                origin_playbook_run_id=row.origin_playbook_run_id,
+                origin_automation_run_id=row.origin_automation_run_id,
+                expected_revisions=deepcopy(row.expected_revisions),
+                target_refs=deepcopy(row.target_refs),
+            ),
+        )
+
     async def get(self, user_id: str, operation_id: str) -> OperationRecordRow:
         row = await self._db.scalar(
             select(OperationRecordRow).where(
@@ -158,6 +188,10 @@ class OperationService:
                 raise ValueError("operation_idempotency_conflict")
             apply_expiry(existing)
             return existing
+        if registration.input_schema is not None:
+            # Validate new input without rewriting the reviewed payload.
+            # An exact replay above remains a read of its original receipt.
+            registration.input_schema.model_validate(deepcopy(proposal.input_payload))
         created = now_ms()
         expires_at = proposal.expires_at
         if expires_at is None and registration.default_ttl_ms is not None:
@@ -173,10 +207,10 @@ class OperationService:
             origin_tool_call_id=proposal.origin_tool_call_id,
             origin_playbook_run_id=proposal.origin_playbook_run_id,
             origin_automation_run_id=proposal.origin_automation_run_id,
-            target_refs=proposal.target_refs,
-            input_payload=proposal.input_payload,
-            preview=proposal.preview,
-            expected_revisions=proposal.expected_revisions,
+            target_refs=deepcopy(proposal.target_refs),
+            input_payload=deepcopy(proposal.input_payload),
+            preview=deepcopy(proposal.preview),
+            expected_revisions=deepcopy(proposal.expected_revisions),
             risk_level=proposal.risk_level,
             confirmation_policy=proposal.confirmation_policy,
             state=(
@@ -307,14 +341,11 @@ class OperationService:
             # savepoint a commit would close the context; deferring turns each
             # one into a flush, and the record's own commit lands all of it.
             async with self._db.begin_nested(), defer_commits():
+                if registration.input_schema is not None:
+                    registration.input_schema.model_validate(deepcopy(row.input_payload))
                 result = await registration.handler(
-                    OperationContext(
-                        db=self._db,
-                        projects=self._projects,
-                        user_id=user_id,
-                        decision=dict(decision or {}),
-                    ),
-                    row.input_payload,
+                    self._context(row, decision),
+                    deepcopy(row.input_payload),
                 )
         except ValueError as exc:
             message = str(exc)
@@ -376,8 +407,8 @@ class OperationService:
         if registration.cancel_handler is not None:
             try:
                 await registration.cancel_handler(
-                    OperationContext(db=self._db, projects=self._projects, user_id=user_id),
-                    row.input_payload,
+                    self._context(row),
+                    deepcopy(row.input_payload),
                 )
             except Exception:  # noqa: BLE001 — cleanup must not undo the cancel
                 logger.warning(
