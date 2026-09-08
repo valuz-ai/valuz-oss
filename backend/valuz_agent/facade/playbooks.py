@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, fields
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -60,6 +61,13 @@ class PlaybookRunRef:
     created_at: int
 
 
+def _require_read_identity(user_id: str, resource_id: str) -> None:
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id must be non-empty")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise ValueError("resource_id must be non-empty")
+
+
 class PlaybookLibrary:
     """Owner-scoped immutable DTOs; editions never import Playbook internals."""
 
@@ -92,8 +100,8 @@ class PlaybookLibrary:
             definition_id=row.definition_id,
             version=row.version,
             content=row.content,
-            reference_metadata=tuple(row.reference_metadata),
-            default_executor=dict(row.default_executor),
+            reference_metadata=tuple(deepcopy(row.reference_metadata)),
+            default_executor=deepcopy(row.default_executor),
             produced_by_run=row.produced_by_run,
             created_at=row.created_at,
         )
@@ -109,12 +117,97 @@ class PlaybookLibrary:
             status=row.status,
             trigger_kind=row.trigger_kind,
             trigger_ref=row.trigger_ref,
-            subject_refs=tuple(row.subject_refs),
+            subject_refs=tuple(deepcopy(row.subject_refs)),
             artifact_refs=tuple(row.artifact_refs),
             change_set_refs=tuple(row.change_set_refs),
-            output_refs=tuple(row.output_refs),
+            output_refs=tuple(deepcopy(row.output_refs)),
             created_at=row.created_at,
         )
+
+    async def get_definition(
+        self, user_id: str, definition_id: str, *, version: int | None = None
+    ) -> tuple[PlaybookDefinitionRef, PlaybookVersionRef] | None:
+        """Read an owned definition and its exact published version in <= 2 queries.
+
+        Project placement is metadata, not an ownership condition. Definition
+        name/status/revision are current metadata, even for an old body version.
+        No version fallback, implicit flush, ORM identity-map reads or writes.
+        """
+        _require_read_identity(user_id, definition_id)
+        if version is not None and (type(version) is not int or not 1 <= version < 2**63):
+            raise ValueError("version must be a positive signed 64-bit integer")
+        definition_table = PlaybookDefinitionRow.__table__
+        version_table = PlaybookVersionRow.__table__
+        with self._db.no_autoflush:
+            definition = (
+                (
+                    await self._db.execute(
+                        select(
+                            *(
+                                definition_table.c[field.name]
+                                for field in fields(PlaybookDefinitionRef)
+                            )
+                        )
+                        .where(
+                            definition_table.c.user_id == user_id,
+                            definition_table.c.id == definition_id,
+                        )
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if definition is None:
+                return None
+            selected = version if version is not None else definition["current_version"]
+            if selected > definition["current_version"]:
+                return None
+            body = (
+                (
+                    await self._db.execute(
+                        select(
+                            *(version_table.c[field.name] for field in fields(PlaybookVersionRef))
+                        )
+                        .where(
+                            version_table.c.user_id == user_id,
+                            version_table.c.definition_id == definition_id,
+                            version_table.c.version == selected,
+                        )
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if body is None:
+            return None
+        payload = deepcopy(dict(body))
+        payload["reference_metadata"] = tuple(payload["reference_metadata"])
+        return PlaybookDefinitionRef(**definition), PlaybookVersionRef(**payload)
+
+    async def get_run(self, user_id: str, run_id: str) -> PlaybookRunRef | None:
+        """Read the current state of one owned run; its ID is not a history revision."""
+        _require_read_identity(user_id, run_id)
+        table = PlaybookRunRow.__table__
+        with self._db.no_autoflush:
+            row = (
+                (
+                    await self._db.execute(
+                        select(*(table.c[field.name] for field in fields(PlaybookRunRef)))
+                        .where(table.c.user_id == user_id, table.c.id == run_id)
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        payload = deepcopy(dict(row))
+        for name in ("subject_refs", "artifact_refs", "change_set_refs", "output_refs"):
+            payload[name] = tuple(payload[name])
+        return PlaybookRunRef(**payload)
 
     async def create_definition(
         self, user_id: str, payload: dict[str, Any]

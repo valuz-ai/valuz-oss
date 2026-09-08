@@ -339,3 +339,73 @@ async def test_empty_pages_and_legacy_unbounded_lists_remain_compatible(store) -
     assert page.next_cursor is not None
     assert len(await library.list_project("owner", "project")) == MAX_PLAYBOOK_PAGE_SIZE + 1
     assert len(await library.list_runs("owner", "project")) == MAX_PLAYBOOK_PAGE_SIZE + 1
+
+
+async def test_exact_definition_reads_are_owner_version_scoped_and_bounded(store) -> None:
+    db, queries = store
+    _definition(db, "target", project_id="elsewhere")
+    _definition(db, "foreign", user_id="other")
+    _definition(db, "wrong-version-owner", version_owner="other")
+    _definition(db, "missing-current", versions=((1, 100),))
+    await db.flush()
+    library = PlaybookLibrary(db)
+    queries.clear()
+    result = await library.get_definition("owner", "target")
+    assert result is not None
+    definition, version = result
+    assert definition.project_id == "elsewhere"
+    assert version.version == 2
+    assert len(queries) == 2
+    assert all("LIMIT" in sql for sql, _ in queries)
+    assert all("user_id =" in sql for sql, _ in queries)
+    old = await library.get_definition("owner", "target", version=1)
+    assert old is not None and old[1].content == "target version 1"
+    # A row above the published head must not be exposed.
+    assert await library.get_definition("owner", "target", version=3) is None
+    assert await library.get_definition("owner", "target", version=99) is None
+    for row_id in ("foreign", "wrong-version-owner", "missing-current", "missing"):
+        assert await library.get_definition("owner", row_id) is None
+    assert await library.get_definition("other", "target", version=1) is None
+
+
+@pytest.mark.parametrize("version", [True, 0, -1, "1", 1.5, 2**63])
+async def test_exact_definition_invalid_versions_never_query(store, version) -> None:
+    db, queries = store
+    with pytest.raises(ValueError, match="version must be"):
+        await PlaybookLibrary(db).get_definition("owner", "target", version=version)
+    assert queries == []
+
+
+async def test_exact_reads_do_not_flush_or_reuse_dirty_identity_map(store) -> None:
+    db, queries = store
+    _definition(db, "target")
+    _run(db, "run")
+    _run(db, "foreign", user_id="other")
+    await db.flush()
+    definition = await db.get(PlaybookDefinitionRow, "target")
+    run = await db.get(PlaybookRunRow, "run")
+    definition.name = "unflushed"
+    definition.current_version = 3
+    run.status = "failed"
+    library = PlaybookLibrary(db)
+    result = await library.get_definition("owner", "target")
+    assert result is not None
+    assert result[0].name == "target" and result[1].version == 2
+    queries.clear()
+    result_run = await library.get_run("owner", "run")
+    assert result_run is not None and result_run.status == "completed"
+    assert len(queries) == 1 and "LIMIT" in queries[0][0]
+    assert await library.get_run("owner", "foreign") is None
+    assert await library.get_run("other", "run") is None
+    assert await library.get_run("owner", "missing") is None
+    # Reading must leave the caller's pending edits intact, not refresh them away.
+    assert definition in db.dirty and definition.name == "unflushed"
+    assert run in db.dirty and run.status == "failed"
+    result[1].reference_metadata[0]["ref"] = "changed"
+    result[1].default_executor["agent_id"] = "changed"
+    result_run.output_refs[0]["id"] = "changed"
+    again = await library.get_definition("owner", "target")
+    again_run = await library.get_run("owner", "run")
+    assert again[1].reference_metadata[0]["ref"] == "research"
+    assert again[1].default_executor["agent_id"] == "agent"
+    assert again_run.output_refs[0]["id"] == "output"
