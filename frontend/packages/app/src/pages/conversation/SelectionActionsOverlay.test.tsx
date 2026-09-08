@@ -99,6 +99,7 @@ describe("SelectionActionsOverlay", () => {
       messageId: "msg-1",
       selectedText: "NVIDIA data centre revenue grew again this quarter.",
       selectedCitationIds: [],
+      selectedCitationRefs: [],
     });
     expect(typeof received[0].clear).toBe("function");
   });
@@ -211,13 +212,13 @@ describe("SelectionActionsOverlay", () => {
 
   it("extracts only citations inside the selected part of a message", () => {
     const readSelection = captureSelection();
-    render(<Harness content={<p data-testid="claim">First claim <button data-citation-id="cit-first">[1]</button> second claim <button data-citation-id="cit-second">[2]</button></p>} />);
+    render(<Harness content={<p data-testid="claim">First claim <button data-citation-id="cit-first" data-citation-message-id="msg-1">[1]</button> second claim <button data-citation-id="cit-second" data-citation-message-id="msg-1">[2]</button></p>} />);
     const claim = screen.getByTestId("claim");
     const range = document.createRange();
     range.setStart(claim.firstChild!, 0);
     range.setEnd(claim.childNodes[2], 7);
     selectRange(range);
-    expect(readSelection()).toMatchObject({ selectedText: "First claim [1] second", selectedCitationIds: ["cit-first"] });
+    expect(readSelection()).toMatchObject({ selectedText: "First claim [1] second", selectedCitationIds: ["cit-first"], selectedCitationRefs: [{ messageId: "msg-1", citationId: "cit-first" }] });
 
     range.setEnd(claim.firstChild!, 5);
     selectRange(range);
@@ -244,14 +245,14 @@ describe("SelectionActionsOverlay", () => {
 
   it("deduplicates selected citation ids in DOM order and includes icon-only markers", () => {
     const readSelection = captureSelection();
-    render(<Harness content={<p data-testid="claim">Claim <button data-citation-id="cit-z">[2]</button><button data-citation-id="cit-a">[1]</button><button data-citation-id="cit-z">[2]</button><button data-citation-id="cit-calculation"><svg><path d="M0 0" /></svg></button></p>} />);
+    render(<Harness content={<p data-testid="claim">Claim <button data-citation-id="cit-z" data-citation-message-id="msg-1">[2]</button><button data-citation-id="cit-a" data-citation-message-id="msg-1">[1]</button><button data-citation-id="cit-z" data-citation-message-id="msg-1">[2]</button><button data-citation-id="cit-calculation" data-citation-message-id="msg-1"><svg><path d="M0 0" /></svg></button></p>} />);
     selectTextIn(screen.getByTestId("claim"));
     expect(readSelection().selectedCitationIds).toEqual(["cit-z", "cit-a", "cit-calculation"]);
   });
 
   it("includes a marker whose nested text is only partially selected", () => {
     const readSelection = captureSelection();
-    render(<Harness content={<p><button data-citation-id="cit-partial"><span data-testid="label">Source 12</span></button></p>} />);
+    render(<Harness content={<p><button data-citation-id="cit-partial" data-citation-message-id="msg-1"><span data-testid="label">Source 12</span></button></p>} />);
     const text = screen.getByTestId("label").firstChild!;
     const range = document.createRange();
     range.setStart(text, 2);
@@ -275,6 +276,27 @@ describe("SelectionActionsOverlay", () => {
     vi.spyOn(selection, "rangeCount", "get").mockReturnValue(2);
     vi.spyOn(selection, "getRangeAt").mockImplementation((index) => [first, second][index]);
     act(() => document.dispatchEvent(new Event("selectionchange")));
+    expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+
+  it("deduplicates composite citation identities without collapsing another message's same id", () => {
+    const readSelection = captureSelection();
+    render(<Harness content={<p data-testid="claim">Claim <span data-citation-id="cit-shared" data-citation-message-id="origin-2">[1]</span><span data-citation-id="cit-shared" data-citation-message-id="origin-1">[2]</span><span data-citation-id="cit-shared" data-citation-message-id="origin-2">[1]</span></p>} />);
+    selectTextIn(screen.getByTestId("claim"));
+    expect(readSelection()).toMatchObject({
+      messageId: "msg-1",
+      selectedCitationIds: ["cit-shared"],
+      selectedCitationRefs: [
+        { messageId: "origin-2", citationId: "cit-shared" },
+        { messageId: "origin-1", citationId: "cit-shared" },
+      ],
+    });
+  });
+
+  it("does not guess the message anchor for a selected marker with no origin", () => {
+    captureSelection();
+    render(<Harness content={<p data-testid="claim">Claim <span data-citation-id="cit-unknown">[1]</span></p>} />);
+    selectTextIn(screen.getByTestId("claim"));
     expect(screen.queryByRole("toolbar")).toBeNull();
   });
 

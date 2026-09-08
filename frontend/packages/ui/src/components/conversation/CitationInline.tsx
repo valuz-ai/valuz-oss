@@ -1345,6 +1345,7 @@ export function CitationPill({
               : t("ui.citation.unavailable", "Citation unavailable")
           }
           data-citation-id={citationId}
+          data-citation-message-id={messageId}
           data-citation-calculation-source
           className="flex w-full max-w-full cursor-default items-center rounded-md bg-transparent px-2 py-1 text-left text-xs text-ink-body outline-none transition hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-primary/20"
         >
@@ -1373,6 +1374,7 @@ export function CitationPill({
           }
           aria-disabled={!canOpen}
           data-citation-id={citationId}
+          data-citation-message-id={messageId}
           data-citation-derivation={isCalculation || undefined}
           data-citation-quality={qualityStatus}
           className={cn(
