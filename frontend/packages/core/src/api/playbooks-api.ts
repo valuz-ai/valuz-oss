@@ -102,9 +102,15 @@ export const playbooksApi = {
       ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     if (projectId) {
-      return fetchJson(`/v1/playbooks${suffix}`, {
+      const definitions = await fetchJson<PlaybookDefinition[]>(`/v1/playbooks${suffix}`, {
         baseUrl: resolveApiBase({ projectId }, "") || undefined,
       });
+      // Scoped lists bypass fan-out, but their children still need the
+      // Project's authority for subsequent detail/edit/run requests.
+      const origin = getEntityOrigin(projectId, "project");
+      if (!origin) return definitions;
+      recordEntityOrigins(definitions.map((definition) => [definition.id, origin]));
+      return definitions.map((definition) => ({ ...definition, exec_origin: origin }));
     }
     if (getListFanOutTargets().length === 0) {
       return fetchJson(`/v1/playbooks`);
