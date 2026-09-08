@@ -34,11 +34,43 @@ export interface TurnFeedbackControlProps {
 const ENTRY_BUTTON =
   "flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-surface-muted";
 
+/**
+ * 👍👎 in one glyph for the UNRATED entry — lucide's thumbs-up (top-left)
+ * and thumbs-down (bottom-right) paths, each scaled to ~62% and offset so
+ * they read as a pair. Same stroke conventions as lucide (currentColor,
+ * round caps/joins); the inner stroke width compensates for the scale so it
+ * matches the sibling icons at 14px.
+ */
+function ThumbsUpDown({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={3.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <g transform="scale(0.62)">
+        <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+        <path d="M7 10v12" />
+      </g>
+      <g transform="translate(9.1 9.1) scale(0.62)">
+        <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
+        <path d="M17 14V2" />
+      </g>
+    </svg>
+  );
+}
+
 export function TurnFeedbackControl({ rating, onRate }: TurnFeedbackControlProps) {
   const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
   const [detailsFor, setDetailsFor] = useState<FeedbackValue | null>(null);
-  const EntryIcon = rating === "down" ? ThumbsDown : ThumbsUp;
+  // Unrated: the combined 👍👎 glyph; rated: the chosen thumb, filled.
+  const RatedIcon = rating === "down" ? ThumbsDown : ThumbsUp;
   const rateLabel = t("conversation.feedback.rate" as Parameters<typeof t>[0]);
 
   const choose = (value: FeedbackValue) => {
@@ -60,7 +92,11 @@ export function TurnFeedbackControl({ rating, onRate }: TurnFeedbackControlProps
             title={rateLabel}
             className={`${ENTRY_BUTTON} ${rating ? "text-brand" : "text-ink-body"}`}
           >
-            <EntryIcon className={`h-3.5 w-3.5 ${rating ? "fill-current" : ""}`} />
+            {rating ? (
+              <RatedIcon className="h-3.5 w-3.5 fill-current" />
+            ) : (
+              <ThumbsUpDown className="h-4 w-4" />
+            )}
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" side="bottom" className="w-44 p-1">
