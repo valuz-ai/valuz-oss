@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.facade.projects import ProjectLibrary
@@ -18,6 +19,30 @@ class OperationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class OperationExecution:
+    """Persisted, server-selected identity of the operation being executed.
+
+    Never reconstructed from handler input or the confirmation decision.
+    JSON members are detached copies, so a handler cannot edit the approved
+    envelope through this context. Domain writes use ``OperationContext.db``.
+    """
+
+    id: str
+    operation_type: str
+    operation_version: int
+    proposal_hash: str
+    project_id: str | None
+    actor_kind: str
+    actor_id: str | None
+    origin_session_id: str | None
+    origin_tool_call_id: str | None
+    origin_playbook_run_id: str | None
+    origin_automation_run_id: str | None
+    expected_revisions: dict[str, Any]
+    target_refs: list[dict[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
 class OperationContext:
     db: AsyncSession
     projects: ProjectLibrary
@@ -27,6 +52,9 @@ class OperationContext:
     #: hash: the proposal is what was shown, the decision is the answer to
     #: it. Empty for a plain confirm.
     decision: dict[str, Any] = field(default_factory=dict)
+    #: Present for every engine invocation; optional only for compatibility
+    #: with existing handlers' direct unit-test construction.
+    operation: OperationExecution | None = None
 
 
 OperationHandler = Callable[[OperationContext, dict[str, Any]], Awaitable[OperationResult]]
@@ -45,6 +73,9 @@ class OperationRegistration:
     #: that does not carry its own ``expires_at`` gets ``now + default_ttl_ms``;
     #: ``None`` = never expires.
     default_ttl_ms: int | None = None
+    #: Optional typed payload contract. Validated before storing a proposal
+    #: and again before execution. Existing untyped registrations are unchanged.
+    input_schema: type[BaseModel] | None = None
 
 
 class OperationRegistry:
@@ -70,6 +101,7 @@ operation_registry = OperationRegistry()
 
 __all__ = [
     "OperationContext",
+    "OperationExecution",
     "OperationHandler",
     "OperationRegistration",
     "OperationRegistry",
