@@ -673,7 +673,16 @@ const createTurnsBuilder = () => {
       // thinking/tool block (a plain Q&A would otherwise have totalElapsedMs
       // = 0 and skip the header). Updated on EVERY event in the turn so
       // ``endTimestamp`` always reflects the most recent activity.
-      if (currentTurn && envelope.timestamp) {
+      //
+      // ``message.user`` is deliberately excluded — it is the one event that
+      // does not belong to ``currentTurn``: it OPENS the next one, and
+      // ``currentTurn`` is still the previous turn at this point. Stamping it
+      // gave every turn but the last an ``endTimestamp`` of the NEXT turn's
+      // start, so a turn ran until the moment the user next typed — thirteen
+      // minutes of idle time on a published transcript whose middle turn
+      // actually ended after 3m24s. Only the final turn was ever right,
+      // because nothing followed it to overwrite the value.
+      if (currentTurn && envelope.timestamp && eventType !== "message.user") {
         currentTurn.endTimestamp = envelope.timestamp;
       }
 

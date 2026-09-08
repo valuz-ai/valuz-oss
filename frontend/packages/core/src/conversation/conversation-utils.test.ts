@@ -725,6 +725,73 @@ describe("buildTurns — runtime interrupt (not user cancel)", () => {
     expect(turns[0]!.cancelled).toBeFalsy();
     expect(turns[0]!.failedMessage).toBeNull();
   });
+
+  it("run.failed with category 'user_interrupt' is the user's stop", () => {
+    // The frame the host's durable interrupt marker produces
+    // (``session_error{category: "user_interrupt"}`` → ``run.failed``). Before
+    // that marker existed a user stop persisted NOTHING — no ``session_idle``,
+    // no ``session_error`` — so a reloaded turn rebuilt as an ordinary
+    // finished answer whose reply simply stops mid-thought.
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "go", message_id: "u1" }),
+      evt(2, "run.failed", {
+        category: "user_interrupt",
+        message: "turn interrupted",
+      }),
+    ]);
+    expect(turns[0]!.cancelled).toBe(true);
+    expect(turns[0]!.interrupted).toBeFalsy();
+    expect(turns[0]!.failedMessage).toBeNull();
+  });
+});
+
+describe("buildTurns — turn wall-clock bounds", () => {
+  // ``endTimestamp`` used to be stamped from EVERY event before the
+  // ``message.user`` branch switched turns — including the user message that
+  // OPENS the next turn, which is still folded while ``currentTurn`` is the
+  // previous one. Every turn but the last therefore claimed to have run until
+  // the moment the user next typed. One published transcript recorded a
+  // 3m24s turn as sixteen minutes long.
+
+  it("ends a turn at its own last event, not at the next turn's question", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "first", message_id: "u1" }, 1_000),
+      evt(2, "message.assistant.delta", { text: "a", message_id: "a1" }, 4_000),
+      evt(3, "session.idle", { stop_reason: "end_turn" }, 5_000),
+      // …the user sits and reads for ten minutes, then asks again.
+      evt(4, "message.user", { text: "second", message_id: "u2" }, 605_000),
+      evt(
+        5,
+        "message.assistant.delta",
+        { text: "b", message_id: "a2" },
+        607_000,
+      ),
+    ]);
+
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.endTimestamp).toBe(5_000);
+    expect(turns[1]!.userTimestamp).toBe(605_000);
+  });
+
+  it("still tracks the latest event of the turn in progress", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "hi", message_id: "u1" }, 1_000),
+      evt(2, "message.assistant.delta", { text: "a", message_id: "a1" }, 3_000),
+      evt(3, "message.assistant.delta", { text: "b", message_id: "a2" }, 9_000),
+    ]);
+
+    expect(turns[0]!.endTimestamp).toBe(9_000);
+  });
+
+  it("leaves an unanswered turn without an end", () => {
+    // A question with no reply yet has not ended; 0 seconds would be a claim,
+    // and its own send time would be a wrong one.
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "hi", message_id: "u1" }, 1_000),
+    ]);
+
+    expect(turns[0]!.endTimestamp).toBeUndefined();
+  });
 });
 
 describe("buildTurns — attachment names", () => {

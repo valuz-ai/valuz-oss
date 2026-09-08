@@ -494,6 +494,7 @@ async def _finalize_session(
     content: str,
     final_status: str,
     error: BaseException | None = None,
+    interrupt_category: str | None = None,
 ) -> None:
     """Persist post-turn valuz metadata and the resolved kernel status.
 
@@ -507,6 +508,16 @@ async def _finalize_session(
     failure, so without this the actual reason is lost on reload and the UI
     shows a bare "Run failed". ``stop_reason_*`` mark the terminal state as an
     error rather than a clean idle.
+
+    ``interrupt_category`` covers the interrupt that does NOT raise: the user
+    presses Stop, the runtime swallows the cancellation and returns normally
+    with ``stop_reason = Error(category="user_interrupt")``. That path emits no
+    ``session_idle`` at all and its terminal ``session_update`` carries the
+    session status (a plain ``idle``), so without a marker here the turn has no
+    durable trace of having been stopped — it rebuilds from events as an
+    ordinary finished answer whose reply just stops. Recorded exactly like the
+    ``CancelledError`` case: an interruption category, no ``stop_reason_*``
+    stamp, no failure notification.
     """
     owner_user_id = await _resolve_session_owner(session_id)
     if not owner_user_id:
@@ -541,6 +552,17 @@ async def _finalize_session(
         error_event = EventPayload(
             type="session_error",
             data={"category": "interrupted", "message": "turn interrupted"},
+        )
+    elif interrupt_category is not None:
+        # Same marker, reached without an exception: the runtime already
+        # absorbed the cancellation and stamped the category on the turn's
+        # Message. Carry that category through verbatim so the client can tell
+        # a user stop (``user_interrupt`` — "you stopped this") from a host
+        # teardown (``interrupted``), which render as the same quiet line under
+        # different labels.
+        error_event = EventPayload(
+            type="session_error",
+            data={"category": interrupt_category, "message": "turn interrupted"},
         )
     elif error is not None:
         message = str(error) or "agent turn failed"
