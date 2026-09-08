@@ -75,13 +75,22 @@ def _wire(
     fork_error: Exception | None = None,
 ):
     """Stub every collaborator ``fork_session`` touches; return the trace."""
-    trace = SimpleNamespace(fork_calls=[], index_records=[], get_message_ids=[])
+    trace = SimpleNamespace(fork_calls=[], index_records=[], get_message_ids=[], signals=[])
 
     class _Reader:
         async def get_session(self, *_a, **_k):
             return source
 
+        async def list_messages(self, user_id, session_id, *, limit=50, offset=0):
+            # Latest-first, like the kernel store: the tail turn is ``m-tail``.
+            return [SimpleNamespace(id="m-tail", status="completed")]
+
     monkeypatch.setattr(svc_mod, "data_reader", lambda: _Reader())
+
+    async def _record_signal(user_id, **kwargs):
+        trace.signals.append((user_id, kwargs))
+
+    monkeypatch.setattr(svc_mod, "record_server_action", _record_signal)
 
     async def _list_sessions(project_id=None, query=None, user_id=None):
         return [SimpleNamespace(name=n) for n in (sibling_names or [])]
@@ -250,3 +259,54 @@ def test_mappers_surface_kernel_fork_provenance() -> None:
 
     session.metadata = {"valuz": {"name": "plain"}}
     assert _session_to_list_item(session).forked_from_session_id is None
+
+
+async def test_fork_records_an_outcome_signal_on_the_source_turn(monkeypatch) -> None:
+    """docs/design/feedback-signals: fork → one ``fork`` row on the anchor
+    (or tail) message of the SOURCE session, targeting the new session."""
+    svc = _service()
+    trace = _wire(monkeypatch, svc, _source_session())
+
+    await svc.fork_session("src-1", message_id="m-anchor", user_id="u1")
+    await svc.fork_session("src-1", user_id="u1")
+
+    assert [(uid, kw["message_id"], kw["action"]) for uid, kw in trace.signals] == [
+        ("u1", "m-anchor", "fork"),
+        ("u1", "m-tail", "fork"),
+    ]
+    assert all(
+        kw["session_id"] == "src-1"
+        and (kw["target"].type, kw["target"].id) == ("session", "forked-1")
+        for _uid, kw in trace.signals
+    )
+
+
+async def test_regenerate_records_the_replaced_turn(monkeypatch) -> None:
+    svc = _service()
+    trace = _wire(monkeypatch, svc, _source_session())
+    sent: list[tuple] = []
+
+    async def _send(session_id, text, *, user_id=None, **_kw):
+        sent.append((session_id, text, user_id))
+        return "detail"
+
+    monkeypatch.setattr(svc, "send_message", _send)
+
+    assert await svc.regenerate("src-1", user_id="u1") == "detail"
+    assert sent == [("src-1", "latest question", "u1")]
+    assert [(uid, kw["message_id"], kw["action"], kw["target"]) for uid, kw in trace.signals] == [
+        ("u1", "m-tail", "regenerate", None)
+    ]
+
+
+async def test_signal_failure_never_fails_the_fork(monkeypatch) -> None:
+    svc = _service()
+    trace = _wire(monkeypatch, svc, _source_session())
+
+    async def _boom(user_id, **kwargs):
+        raise RuntimeError("feedback store down")
+
+    monkeypatch.setattr(svc_mod, "record_server_action", _boom)
+    forked = await svc.fork_session("src-1", user_id="u1")
+    assert forked.id == "forked-1"
+    assert trace.fork_calls

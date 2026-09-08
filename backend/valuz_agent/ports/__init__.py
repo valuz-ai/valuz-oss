@@ -49,6 +49,15 @@ from valuz_agent.ports.connector_oauth_refresh import (
     set_connector_oauth_refresh_port,
 )
 from valuz_agent.ports.docs_runtime import DocsRuntimePort
+from valuz_agent.ports.feedback import (
+    FeedbackActor,
+    FeedbackPort,
+    FeedbackRecord,
+    FeedbackSubject,
+    FeedbackTarget,
+    get_feedback_port,
+    set_feedback_port,
+)
 from valuz_agent.ports.file_address import (
     FileAddressResolverPort,
     LocalFileAddressResolver,
@@ -209,6 +218,11 @@ __all__ = [
     "ManagedMutationResult",
     "RuntimeResourceApplyPort",
     "RuntimeResourceContractError",
+    "FeedbackActor",
+    "FeedbackPort",
+    "FeedbackRecord",
+    "FeedbackSubject",
+    "FeedbackTarget",
     "SandboxMaintenancePort",
     "SandboxMaintenanceLease",
     "SandboxMaintenanceProbe",
@@ -224,6 +238,7 @@ __all__ = [
     "authorize_sandbox_provision",
     "get_agent_lifecycle_hook",
     "get_billing_port",
+    "get_feedback_port",
     "get_connector_lifecycle_hook",
     "get_connector_oauth_refresh_port",
     "get_file_address_resolver",
@@ -232,6 +247,7 @@ __all__ = [
     "get_skill_lifecycle_hook",
     "set_agent_lifecycle_hook",
     "set_billing_port",
+    "set_feedback_port",
     "set_connector_lifecycle_hook",
     "set_connector_oauth_refresh_port",
     "set_file_address_resolver",

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Feedback signals on assistant turns** — 👍/👎 (with reason chips) and
+  copy are recorded per message, and regenerate / fork / research-share are
+  written server-side, all into one host table `valuz_feedback` (one row per
+  `(user, message, action)`, repeats counted). New `GET`/`POST`/`DELETE
+  /v1/sessions/{id}/feedback`; `FeedbackPort` lets an edition decorate the
+  local provider. Nothing touches the kernel or the event stream. (#1174)
 - **Artifacts: `skill` kind and a bytes delivery form** — `ArtifactKind.SKILL`
   labels an installable skill package, and `DeliveryRequest.content_bytes`
   records opaque bytes (an archive, an image) that arrive as content rather

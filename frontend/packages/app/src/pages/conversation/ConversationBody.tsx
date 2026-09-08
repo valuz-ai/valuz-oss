@@ -2,7 +2,7 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Settings } from "lucide-react";
 import { sessionsApi, useTranslation } from "@valuz/core";
-import type { ConversationTurn } from "@valuz/shared";
+import type { ConversationTurn, FeedbackValue } from "@valuz/shared";
 import {
   Button,
   ConversationIndexRail,
@@ -81,6 +81,17 @@ type ConversationBodyProps = {
    * hover button swaps to a spinner while the request runs (#879). */
   forkingMessageId?: string | null;
   onForkFromTurn?: (messageId: string) => void;
+  /** Current 👍/👎 per ``turn.messageId`` (docs/design/feedback-signals.md);
+   *  rehydrated from ``GET /v1/sessions/{id}/feedback`` on open. */
+  turnRatings?: Record<string, FeedbackValue>;
+  /** Rate a turn; ``null`` withdraws. ``reasonCode`` rides a 👎 chip. */
+  onRateTurn?: (
+    turn: ConversationTurn,
+    value: FeedbackValue | null,
+    reasonCode?: string,
+  ) => void;
+  /** Fired after the assistant text was copied — recorded as a ``copy`` signal. */
+  onCopyTurn?: (turn: ConversationTurn) => void;
   /** Index of the turn at the viewport top, from ``useConversationScroll``.
    *  Its presence is also what opts a host into the message index rail —
    *  the embedded ``variant="panel"`` conversation omits it (a 345px
@@ -142,6 +153,9 @@ export function ConversationBody({
   forkInFlight,
   forkingMessageId,
   onForkFromTurn,
+  turnRatings,
+  onRateTurn,
+  onCopyTurn,
   activeTurnIndex,
   selectedSessionMode,
   setSelectedSessionMode,
@@ -300,6 +314,9 @@ export function ConversationBody({
                 // Completes the slot added in #744: the prop existed but nothing
                 // passed it, so the slot was unreachable. Overlays register
                 // under ``conversation.turn.actions``.
+                turnRatings={turnRatings}
+                onRateTurn={onRateTurn}
+                onCopyTurn={onCopyTurn}
                 renderTurnActions={(turn) => (
                   <>
                     {canForkFromTurn &&

@@ -15,6 +15,7 @@ import {
 } from "./useConversationRouting";
 import { ApprovalTray } from "./ApprovalTray";
 import { ConversationBody } from "./ConversationBody";
+import { useSessionFeedback } from "./useSessionFeedback";
 import { ConversationHeader } from "./ConversationHeader";
 import { ComposerPane } from "./ComposerPane";
 import { KbPickerOverlay } from "./KbPickerOverlay";
@@ -130,6 +131,7 @@ function ConversationViewPage(props: ConversationViewProps) {
     useProjectOutlet();
   const composerSuppressed = useSurfaceSuppressed("conversation.composer");
   const core = useOrchestration(props, "page", directoryFieldMode);
+  const feedback = useSessionFeedback(core.selectedSessionId);
 
   const { handleSend, hasPendingProjectSend } = useProjectHandoff({
     id: core.id,
@@ -280,6 +282,9 @@ function ConversationViewPage(props: ConversationViewProps) {
             forkInFlight={forkInFlight}
             forkingMessageId={forkingMessageId}
             onForkFromTurn={(messageId) => void handleFork(messageId)}
+            turnRatings={feedback.ratings}
+            onRateTurn={feedback.rateTurn}
+            onCopyTurn={feedback.reportCopy}
             activeTurnIndex={core.activeTurnIndex}
           />
 
@@ -415,6 +420,7 @@ function ConversationViewPage(props: ConversationViewProps) {
  *  owns its own header/新对话 affordances around this. */
 function ConversationViewPanel(props: ConversationViewProps) {
   const core = useOrchestration(props, "panel", "input");
+  const feedback = useSessionFeedback(core.selectedSessionId);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-surface">
@@ -453,6 +459,9 @@ function ConversationViewPanel(props: ConversationViewProps) {
         setSelectedSessionMode={core.setSelectedSessionMode}
         performSend={core.performSend}
         emptyStateOverride={props.emptyState}
+        turnRatings={feedback.ratings}
+        onRateTurn={feedback.rateTurn}
+        onCopyTurn={feedback.reportCopy}
       />
 
       <ApprovalTray

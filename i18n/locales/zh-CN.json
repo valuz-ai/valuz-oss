@@ -436,6 +436,21 @@
     "kbFilesCount": "{count}个",
     "liveOutput": "查看实时输出 →",
     "loadDetailFailed": "加载项目详情失败",
+    "feedback": {
+      "thumbsUp": "有帮助",
+      "thumbsDown": "没帮助",
+      "reasonTitle": "哪里不对？",
+      "saveFailed": "反馈保存失败，请稍后再试",
+      "reason": {
+        "inaccurate": "不准确",
+        "incomplete": "不完整",
+        "off_topic": "答非所问",
+        "too_slow": "太慢",
+        "format": "格式不对",
+        "unsafe": "不安全或不当",
+        "other": "其他"
+      }
+    },
     "loadOlder": "加载更早的对话",
     "loadProjectFailed": "加载项目列表失败",
     "localUpload": "本地上传",

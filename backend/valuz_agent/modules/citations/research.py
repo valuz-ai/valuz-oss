@@ -18,11 +18,13 @@ import valuz_agent.boot.kernel  # noqa: F401 — app/src import path bootstrap
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.system_prompt_builder import CITATION_POLICY_REVISION
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.feedback.emit import record_server_action
 from valuz_agent.modules.agents.builtin import VALURION_SLUG
 from valuz_agent.modules.citations.datastore import DocumentResearchDatastore
 from valuz_agent.modules.citations.models import DocumentSummaryArtifactRow
 from valuz_agent.modules.docs.errors import DocumentNotFound
 from valuz_agent.modules.docs.service import DocumentDetail, DocumentLibraryService
+from valuz_agent.ports.feedback import FeedbackTarget
 from valuz_agent.ports.document_research import (
     DocumentResearchProviderPort,
     ResolvedResearchDocument,
@@ -451,6 +453,13 @@ class DocumentResearchService:
                 user_text="Shared from document research",
             ),
         )
+        await record_server_action(
+            user_id,
+            session_id=research_session_id,
+            message_id=source_message.id,
+            action="research_share",
+            target=FeedbackTarget(type="research_message", id=imported.id),
+        )
         return SharedResearchMessage(
             target_session_id=origin_session_id,
             message_id=imported.id,
@@ -757,8 +766,7 @@ def _summary_from_row(
     error_parts = [
         part.strip()
         for part in str(row.error_message or "").split(";")
-        if part.strip()
-        not in {"citation_quality_not_passed", "citation_quality_not_publishable"}
+        if part.strip() not in {"citation_quality_not_passed", "citation_quality_not_publishable"}
     ]
     if status == "degraded" and not error_parts:
         structural_errors = validate_document_summary(

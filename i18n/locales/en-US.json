@@ -436,6 +436,21 @@
     "kbFilesCount": "{count}",
     "liveOutput": "View live output →",
     "loadDetailFailed": "Failed to load project details",
+    "feedback": {
+      "thumbsUp": "Helpful",
+      "thumbsDown": "Not helpful",
+      "reasonTitle": "What went wrong?",
+      "saveFailed": "Couldn't save your feedback, please try again",
+      "reason": {
+        "inaccurate": "Inaccurate",
+        "incomplete": "Incomplete",
+        "off_topic": "Off topic",
+        "too_slow": "Too slow",
+        "format": "Wrong format",
+        "unsafe": "Unsafe or inappropriate",
+        "other": "Other"
+      }
+    },
     "loadOlder": "Load older messages",
     "loadProjectFailed": "Failed to load projects",
     "localUpload": "Local upload",

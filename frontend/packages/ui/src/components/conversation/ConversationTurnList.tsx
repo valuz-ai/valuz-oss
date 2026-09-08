@@ -21,6 +21,8 @@ import {
   RotateCw,
   Sparkles,
   Terminal,
+  ThumbsDown,
+  ThumbsUp,
   Wrench,
   Zap,
   type LucideIcon,
@@ -57,6 +59,8 @@ import {
   summarizeSegmentPhrase,
   type ProcessingItem,
   type ToolCategory,
+  type FeedbackValue,
+  FEEDBACK_REASON_CODES,
 } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
 import { t as _t } from "@valuz/shared/i18n";
@@ -69,15 +73,31 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const ICON_BUTTON =
+  "flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted";
+
 const MessageActions = ({
   text,
   onRetry,
   tokenUsage,
   extraActions,
+  rating,
+  onRate,
+  onCopied,
 }: {
   text: string;
   onRetry?: () => void;
   tokenUsage?: ConversationTokenUsage;
+  /** Current 👍/👎 on this turn (docs/design/feedback-signals.md). */
+  rating?: FeedbackValue | null;
+  /**
+   * Rate the turn — ``null`` withdraws. Absent → no thumbs (a turn without
+   * a kernel Message has nothing to attach a rating to). ``reasonCode`` is
+   * the 👎 chip the user picked, from ``FEEDBACK_REASON_CODES``.
+   */
+  onRate?: (value: FeedbackValue | null, reasonCode?: string) => void;
+  /** Fired after the text landed on the clipboard (recorded as ``copy``). */
+  onCopied?: () => void;
   /**
    * Host-supplied controls appended to this row (share, export, …).
    *
@@ -90,6 +110,7 @@ const MessageActions = ({
 }) => {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [reasonOpen, setReasonOpen] = useState(false);
 
   const handleCopy = async () => {
     if (!text) return;
@@ -97,6 +118,7 @@ const MessageActions = ({
       await navigator.clipboard.writeText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
+      onCopied?.();
     } catch {
       /* clipboard denied — silent */
     }
@@ -125,6 +147,74 @@ const MessageActions = ({
           <Copy className="h-3.5 w-3.5" />
         )}
       </button>
+      {onRate ? (
+        <>
+          <button
+            type="button"
+            aria-pressed={rating === "up"}
+            onClick={() => onRate(rating === "up" ? null : "up")}
+            title={t(
+              "conversation.feedback.thumbsUp" as Parameters<typeof t>[0],
+            )}
+            className={`${ICON_BUTTON} ${rating === "up" ? "text-brand" : ""}`}
+          >
+            <ThumbsUp className="h-3.5 w-3.5" />
+          </button>
+          {/* 👎 records immediately (the signal survives a dismissed popover)
+              and opens the reason chips, which refine the same row. A second
+              click on an active 👎 withdraws instead of reopening. */}
+          <Popover open={reasonOpen} onOpenChange={setReasonOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-pressed={rating === "down"}
+                onClick={(event) => {
+                  if (rating === "down") {
+                    event.preventDefault();
+                    onRate(null);
+                    return;
+                  }
+                  onRate("down");
+                }}
+                title={t(
+                  "conversation.feedback.thumbsDown" as Parameters<typeof t>[0],
+                )}
+                className={`${ICON_BUTTON} ${rating === "down" ? "text-brand" : ""}`}
+              >
+                <ThumbsDown className="h-3.5 w-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" side="bottom" className="w-64 p-3">
+              <div className="mb-2 text-xs font-medium text-ink-heading">
+                {t(
+                  "conversation.feedback.reasonTitle" as Parameters<
+                    typeof t
+                  >[0],
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {FEEDBACK_REASON_CODES.map((code) => (
+                  <button
+                    key={code}
+                    type="button"
+                    onClick={() => {
+                      onRate("down", code);
+                      setReasonOpen(false);
+                    }}
+                    className="rounded-full border border-surface-border px-2 py-0.5 text-xs text-ink-body transition-colors hover:bg-surface-muted"
+                  >
+                    {t(
+                      `conversation.feedback.reason.${code}` as Parameters<
+                        typeof t
+                      >[0],
+                    )}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </>
+      ) : null}
       {onRetry ? (
         <button
           type="button"
@@ -918,6 +1008,16 @@ interface TurnRowProps {
    * changes this value. Any change re-renders every row.
    */
   turnActionsKey?: string | null;
+  /** This turn's current 👍/👎 — its own memo input, so a rating change
+   *  re-renders exactly the row it belongs to. */
+  turnRating?: FeedbackValue | null;
+  /** See ``ConversationTurnListProps.onRateTurn`` / ``onCopyTurn``. */
+  onRateTurn?: (
+    turn: ConversationTurn,
+    value: FeedbackValue | null,
+    reasonCode?: string,
+  ) => void;
+  onCopyTurn?: (turn: ConversationTurn) => void;
   /**
    * Host control rendered at the START of a turn, before its messages.
    *
@@ -968,6 +1068,9 @@ const TurnRow = memo(
     retryCount,
     renderToolCall,
     renderTurnActions,
+    turnRating,
+    onRateTurn,
+    onCopyTurn,
     renderTurnLeading,
     renderPlanActions,
     isToolCardFoldable,
@@ -1439,6 +1542,18 @@ const TurnRow = memo(
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
                 tokenUsage={turn.tokenUsage}
                 extraActions={renderTurnActions?.(turn)}
+                rating={turnRating}
+                // Rating addresses a Message — same gate as fork-from-here:
+                // a pre-flight failure never got one, and whatever
+                // ``messageId`` it carries was borrowed from a neighbour.
+                onRate={
+                  onRateTurn && turn.messageId
+                    ? (value, reasonCode) => onRateTurn(turn, value, reasonCode)
+                    : undefined
+                }
+                onCopied={
+                  onCopyTurn && turn.messageId ? () => onCopyTurn(turn) : undefined
+                }
               />
             ) : null}
 
@@ -1459,7 +1574,8 @@ const TurnRow = memo(
       return (
         prev.turn === next.turn &&
         prev.retryCount === next.retryCount &&
-        prev.turnActionsKey === next.turnActionsKey
+        prev.turnActionsKey === next.turnActionsKey &&
+        prev.turnRating === next.turnRating
       );
     }
     return false;
@@ -1486,6 +1602,16 @@ interface ConversationTurnListProps {
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
   /** See ``TurnRowProps.renderTurnActions``. */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /** Current 👍/👎 keyed by ``turn.messageId`` (docs/design/feedback-signals.md). */
+  turnRatings?: Record<string, FeedbackValue>;
+  /** Rate a turn; ``null`` withdraws; ``reasonCode`` rides a 👎 chip. */
+  onRateTurn?: (
+    turn: ConversationTurn,
+    value: FeedbackValue | null,
+    reasonCode?: string,
+  ) => void;
+  /** Fired after an assistant turn's text was copied. */
+  onCopyTurn?: (turn: ConversationTurn) => void;
   /**
    * External state ``renderTurnActions`` depends on, folded into the memo
    * comparator. Non-latest rows only re-render when their ``turn`` object
@@ -1555,6 +1681,9 @@ export function ConversationTurnList({
   renderToolCall,
   renderTurnActions,
   turnActionsKey,
+  turnRatings,
+  onRateTurn,
+  onCopyTurn,
   renderTurnLeading,
   renderPlanActions,
   isToolCardFoldable,
@@ -1726,6 +1855,13 @@ export function ConversationTurnList({
                     renderToolCall={renderToolCall}
                     renderTurnActions={renderTurnActions}
                     turnActionsKey={turnActionsKey}
+                    turnRating={
+                      turn.messageId
+                        ? (turnRatings?.[turn.messageId] ?? null)
+                        : null
+                    }
+                    onRateTurn={onRateTurn}
+                    onCopyTurn={onCopyTurn}
                     renderTurnLeading={renderTurnLeading}
                     renderPlanActions={renderPlanActions}
                     isToolCardFoldable={isToolCardFoldable}

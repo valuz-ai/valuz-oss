@@ -29,6 +29,7 @@ from valuz_agent.api.routes.citations import router as citations_router
 from valuz_agent.api.routes.connectors import router as connectors_router
 from valuz_agent.api.routes.docs import router as docs_router
 from valuz_agent.api.routes.document_research import router as document_research_router
+from valuz_agent.api.routes.feedback import router as feedback_router
 from valuz_agent.api.routes.files import router as files_router
 from valuz_agent.api.routes.marketplace import router as marketplace_router
 from valuz_agent.api.routes.memory import router as memory_router
@@ -162,6 +163,7 @@ def create_app(
     api.include_router(channels_router)
     api.include_router(citations_router)
     api.include_router(document_research_router)
+    api.include_router(feedback_router)
     api.include_router(connectors_router)
     api.include_router(browser_router)
     api.include_router(runs_router)

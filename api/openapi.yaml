@@ -3409,6 +3409,101 @@ paths:
               schema:
                 $ref: "#/components/schemas/SessionDetail"
 
+  /v1/sessions/{session_id}/feedback:
+    get:
+      summary: List the caller's feedback rows for a session
+      description: |
+        Every feedback row the CALLER wrote in this session — used to
+        rehydrate the 👍/👎 state after a reload. Visibility is per-user:
+        nobody else's rows are ever returned. See
+        docs/design/feedback-signals.md.
+      operationId: listSessionFeedback
+      tags: [feedback]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The caller's feedback rows, oldest update first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedbackList"
+    post:
+      summary: Record feedback on an assistant turn (rating / copy)
+      description: |
+        Upserts ONE row per ``(user, message, action, block_ref)``: a repeat
+        bumps ``occurrences`` and ``updated_at``; ``value`` / ``reason`` are
+        last-write-wins, so 👍 → 👎 is the same row. Clients may only submit
+        ``rating`` and ``copy`` — ``regenerate`` / ``fork`` / ``share`` /
+        ``research_share`` are written server-side by the routes that
+        perform those actions. The message must belong to the session and
+        have ended.
+      operationId: recordSessionFeedback
+      tags: [feedback]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordFeedbackRequest"
+      responses:
+        "201":
+          description: The upserted row
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedbackRecord"
+        "404":
+          description: Message not found in this session (or not owned by the caller)
+        "409":
+          description: Message is still running
+        "422":
+          description: |
+            Invalid payload — ``rating`` without ``value``, ``value`` /
+            ``reason`` on a non-rating action, unknown ``reason_code``
+    delete:
+      summary: Withdraw a feedback row (un-rate)
+      operationId: withdrawSessionFeedback
+      tags: [feedback]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: message_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [rating, copy]
+        - name: block_ref
+          in: query
+          required: false
+          schema:
+            type: string
+            default: ""
+      responses:
+        "204":
+          description: Row deleted
+        "404":
+          description: No such row
+
   /v1/sessions/{session_id}/permission-mode:
     patch:
       summary: Update session approval mode
@@ -8602,6 +8697,110 @@ components:
             carry a runtime-native fork anchor
             (``metadata.runtime_native``). Omitted — the whole session is
             forked at its current tail.
+
+    RecordFeedbackRequest:
+      type: object
+      required: [message_id, action]
+      properties:
+        message_id:
+          type: string
+          description: The kernel Message (assistant turn) acted on.
+        action:
+          type: string
+          enum: [rating, copy]
+        value:
+          type: string
+          enum: [up, down]
+          nullable: true
+          description: Required for ``rating``; must be absent otherwise.
+        reason_code:
+          type: string
+          nullable: true
+          enum: [inaccurate, incomplete, off_topic, too_slow, format, unsafe, other]
+          description: Rating only — closed set shared with the UI chips.
+        reason:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: Rating only — optional short free text.
+        block_ref:
+          type: string
+          default: ""
+          maxLength: 128
+          description: |
+            ``""`` = the whole turn; a sub-block reference (code block,
+            artifact, citation) otherwise.
+        source:
+          type: string
+          enum: [ui, api]
+          default: api
+        surface:
+          type: string
+          nullable: true
+          maxLength: 16
+          description: Where the action happened (chat / task / share_page / mobile).
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    FeedbackTarget:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          enum: [message, session, share, research_message]
+        id: {type: string}
+
+    FeedbackRecord:
+      type: object
+      required:
+        [id, session_id, message_id, action, block_ref, source, occurrences,
+         created_at, updated_at, metadata]
+      properties:
+        id: {type: string}
+        session_id: {type: string}
+        message_id: {type: string}
+        action:
+          type: string
+          enum: [rating, copy, regenerate, fork, share, research_share]
+        block_ref: {type: string}
+        value:
+          type: string
+          enum: [up, down]
+          nullable: true
+        reason_code: {type: string, nullable: true}
+        reason: {type: string, nullable: true}
+        target:
+          allOf:
+            - $ref: "#/components/schemas/FeedbackTarget"
+          nullable: true
+        source:
+          type: string
+          enum: [ui, api, server]
+        surface: {type: string, nullable: true}
+        occurrences:
+          type: integer
+          description: How many times this (user, message, action) happened.
+        created_at:
+          type: integer
+          description: Unix epoch ms (UTC) — first occurrence.
+        updated_at:
+          type: integer
+          description: Unix epoch ms (UTC) — latest occurrence.
+        metadata:
+          type: object
+          additionalProperties: true
+
+    FeedbackList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FeedbackRecord"
 
     SessionMessageRequest:
       type: object

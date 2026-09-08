@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from alembic.config import Config
 
@@ -19,8 +20,13 @@ def config(path: Path) -> Config:
 
 
 def test_playbook_tables_and_automation_binding_upgrade_and_downgrade(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # ``alembic/host/env.py`` prefers ``DATABASE_URL`` over the config's
+    # ``sqlalchemy.url``, and ``boot/kernel.py`` exports it while booting an
+    # app — an app-booting test earlier in the run would redirect this
+    # migration to ITS temp db.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     db_path = tmp_path / "host.db"
     cfg = config(db_path)
     command.upgrade(cfg, "head")

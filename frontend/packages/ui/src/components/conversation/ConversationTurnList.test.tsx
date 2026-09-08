@@ -92,6 +92,13 @@ function renderList(
     loading?: boolean;
     sending?: boolean;
     postRunVerificationActive?: boolean;
+    turnRatings?: Record<string, "up" | "down">;
+    onRateTurn?: (
+      turn: ConversationTurn,
+      value: "up" | "down" | null,
+      reasonCode?: string,
+    ) => void;
+    onCopyTurn?: (turn: ConversationTurn) => void;
   } = {},
 ) {
   const scrollContainerRef = createRef<HTMLDivElement>();
@@ -107,6 +114,9 @@ function renderList(
         loading={opts.loading ?? false}
         error={null}
         onRetry={opts.onRetry}
+        turnRatings={opts.turnRatings}
+        onRateTurn={opts.onRateTurn}
+        onCopyTurn={opts.onCopyTurn}
         onVirtualApiReady={(nextApi) => {
           api = nextApi;
         }}
@@ -219,6 +229,72 @@ describe("ConversationTurnList virtualization", () => {
 
     fireEvent.click(retry);
     expect(onRetry).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("offers 👍/👎 only on turns that own a kernel Message", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    // No messageId (pre-flight failure / legacy row) → no thumbs at all.
+    renderList([buildTurn(1)], { onRateTurn });
+    expect(screen.queryByTitle("有帮助")).toBeNull();
+    expect(screen.queryByTitle("没帮助")).toBeNull();
+  });
+
+  it("records 👍, toggles it off, and refines 👎 with a reason chip", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    const { rerender } = renderList([turn], { onRateTurn });
+
+    fireEvent.click(screen.getByTitle("有帮助"));
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", undefined);
+
+    // Rehydrated as "up": the same button now withdraws.
+    rerender(
+      <div>
+        <ConversationTurnList
+          turns={[turn]}
+          scrollContainerRef={createRef<HTMLDivElement>()}
+          sending={false}
+          loading={false}
+          error={null}
+          turnRatings={{ m1: "up" }}
+          onRateTurn={onRateTurn}
+        />
+      </div>,
+    );
+    const up = screen.getByTitle("有帮助");
+    expect(up.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(up);
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, null, undefined);
+
+    // 👎 records immediately, then the chip refines the same row.
+    fireEvent.click(screen.getByTitle("没帮助"));
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", undefined);
+    fireEvent.click(screen.getByText("不准确"));
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", "inaccurate");
+  });
+
+  it("reports a copy of the assistant text as a signal", async () => {
+    virtualState.start = 0;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const onCopyTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    renderList([turn], { onCopyTurn });
+
+    // Two copy buttons per turn: the user's prompt (not a signal) and the
+    // assistant reply. Only the reply reports.
+    const [userCopy, assistantCopy] = screen.getAllByTitle("复制");
+    fireEvent.click(userCopy);
+    await Promise.resolve();
+    expect(onCopyTurn).not.toHaveBeenCalled();
+    fireEvent.click(assistantCopy);
+    await vi.waitFor(() => expect(onCopyTurn).toHaveBeenCalledWith(turn));
+    expect(writeText).toHaveBeenCalledTimes(2);
   });
 
   it("shows actions for a reloaded cancelled turn without assistant text", () => {
