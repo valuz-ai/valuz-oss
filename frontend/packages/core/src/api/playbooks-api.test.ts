@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fanOutTargets, useDegradedListTargets } from "../edition/list-fanout";
 import { setExecutionTargets } from "../edition/execution-targets";
+import { recordEntityOrigin, getEntityOrigin, setEntityOriginAdapter } from "../edition/entity-origin";
+import { setApiBaseResolver } from "./base-resolver";
 import { playbooksApi, setPlaybooksApiBase } from "./playbooks-api";
 
 const LOCAL = {
@@ -18,6 +20,12 @@ const CLOUD = {
 };
 
 beforeEach(async () => {
+  const origins = new Map<string, string>();
+  setEntityOriginAdapter({
+    lookup: (id) => origins.get(id),
+    record: (id, origin) => { origins.set(id, origin); },
+  });
+  setApiBaseResolver(null);
   setPlaybooksApiBase("http://api.test");
   setExecutionTargets([]);
   await fanOutTargets(() => Promise.resolve(null));
@@ -102,6 +110,8 @@ describe("playbooksApi lifecycle", () => {
 });
 
 afterEach(async () => {
+  setApiBaseResolver(null);
+  setEntityOriginAdapter(null);
   setExecutionTargets([]);
   await act(async () => {
     await fanOutTargets(() => Promise.resolve(null));
@@ -110,6 +120,26 @@ afterEach(async () => {
 });
 
 describe("playbooksApi.list", () => {
+  it("keeps project-scoped definitions on their execution target for detail and run", async () => {
+    setExecutionTargets([LOCAL, CLOUD]);
+    recordEntityOrigin("cloud-project", "cloud");
+    setApiBaseResolver((ref) => {
+      const id = ref.projectId ?? ref.playbookId;
+      return id && getEntityOrigin(id) === "cloud" ? CLOUD.baseUrl : undefined;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      expect(url.startsWith(CLOUD.baseUrl)).toBe(true);
+      return new Response(JSON.stringify(url.includes("?project_id=")
+        ? [{ id: "scoped-playbook", project_id: "cloud-project", name: "Review" }]
+        : { definition: { id: "scoped-playbook" }, current_version: {} }),
+        { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await playbooksApi.list("cloud-project")).toMatchObject([{ id: "scoped-playbook", exec_origin: "cloud" }]);
+    expect((await playbooksApi.get("scoped-playbook")).definition.exec_origin).toBe("cloud");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
   it("treats a reachable legacy target without the Playbook route as empty", async () => {
     setExecutionTargets([LOCAL, CLOUD]);
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
