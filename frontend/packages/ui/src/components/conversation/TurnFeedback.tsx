@@ -10,7 +10,6 @@ import {
 import { useI18n } from "../../hooks/use-i18n";
 import { FormDialog } from "../common/FormDialog";
 import { Button } from "../ui/button";
-import { DialogFooter } from "../ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 
@@ -22,7 +21,7 @@ import { Textarea } from "../ui/textarea";
  * side records the rating IMMEDIATELY (the signal survives everything that
  * follows) and then offers the optional "提交反馈" dialog: multi-select
  * reason chips for that side plus a free-text box, which refine the same
- * row. Skipping the dialog keeps the thumb.
+ * row. Closing the dialog (✕ / Escape) keeps the thumb.
  *
  * ``@valuz/ui`` owns no transport: the host passes ``onRate`` down, the same
  * way it passes ``onRetry``.
@@ -166,23 +165,21 @@ export function FeedbackDetailsDialog({
       }}
       title={t("conversation.feedback.dialogTitle" as Parameters<typeof t>[0])}
       maxWidthClass="sm:max-w-lg"
+      // One full-width primary action; the dialog's own ✕ (or Escape) is
+      // the skip — the thumb already landed, so there is nothing to cancel.
       footer={
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            {t("conversation.feedback.skip" as Parameters<typeof t>[0])}
-          </Button>
-          <Button
-            disabled={!canSubmit}
-            onClick={() =>
-              onSubmit({
-                reasonCodes: selected.length ? selected : undefined,
-                reason: text.trim() || undefined,
-              })
-            }
-          >
-            {t("conversation.feedback.submit" as Parameters<typeof t>[0])}
-          </Button>
-        </DialogFooter>
+        <Button
+          className="w-full"
+          disabled={!canSubmit}
+          onClick={() =>
+            onSubmit({
+              reasonCodes: selected.length ? selected : undefined,
+              reason: text.trim() || undefined,
+            })
+          }
+        >
+          {t("conversation.feedback.submit" as Parameters<typeof t>[0])}
+        </Button>
       }
     >
       <div className="flex flex-wrap gap-2">

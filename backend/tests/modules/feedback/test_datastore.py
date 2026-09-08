@@ -41,14 +41,14 @@ async def test_repeat_bumps_occurrences_and_overwrites_value(db: AsyncSession) -
         message_id="m1",
         action="rating",
         value="down",
-        reason_code="inaccurate",
+        reason_code="inaccurate_or_incomplete",
         source="ui",
         metadata={"k": 1},
     )
     assert second.id == first.id
     assert second.occurrences == 2
     assert second.value == "down"
-    assert second.reason_code == "inaccurate"
+    assert second.reason_code == "inaccurate_or_incomplete"
     assert second.metadata_ == {"k": 1}
     assert second.updated_at >= first.created_at
 

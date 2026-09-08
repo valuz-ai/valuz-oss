@@ -8717,12 +8717,12 @@ components:
           type: string
           nullable: true
           enum: [solved, followed_instructions, good_quality, fast, helpful_autonomy,
-                 inaccurate, incomplete, ignored_instructions, off_topic, too_slow,
-                 format, unsafe, other]
+                 inaccurate_or_incomplete, ignored_instructions, off_topic,
+                 lost_context, slow_or_broken, safety_or_legal, other]
           description: |
             Rating only — the first selected chip. 👍 offers the positive set
-            (solved … helpful_autonomy), 👎 the negative set (inaccurate …
-            unsafe); ``other`` is in both.
+            (solved … helpful_autonomy), 👎 the negative set
+            (inaccurate_or_incomplete … safety_or_legal); ``other`` is in both.
         reason_codes:
           type: array
           nullable: true

@@ -123,7 +123,12 @@ def test_rate_then_flip_then_withdraw_roundtrip(client: TestClient, port: Memory
 
     flipped = client.post(
         "/v1/sessions/s1/feedback",
-        json={"message_id": "m1", "action": "rating", "value": "down", "reason_code": "inaccurate"},
+        json={
+            "message_id": "m1",
+            "action": "rating",
+            "value": "down",
+            "reason_code": "inaccurate_or_incomplete",
+        },
     )
     assert flipped.status_code == 201
     assert flipped.json()["id"] == body["id"]

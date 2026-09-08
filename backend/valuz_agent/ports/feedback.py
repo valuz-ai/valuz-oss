@@ -55,13 +55,12 @@ FEEDBACK_POSITIVE_REASON_CODES: tuple[str, ...] = (
     "other",
 )
 FEEDBACK_NEGATIVE_REASON_CODES: tuple[str, ...] = (
-    "inaccurate",
-    "incomplete",
+    "inaccurate_or_incomplete",
     "ignored_instructions",
     "off_topic",
-    "too_slow",
-    "format",
-    "unsafe",
+    "lost_context",
+    "slow_or_broken",
+    "safety_or_legal",
     "other",
 )
 FEEDBACK_REASON_CODES: tuple[str, ...] = tuple(

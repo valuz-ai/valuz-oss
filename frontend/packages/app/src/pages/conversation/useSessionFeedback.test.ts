@@ -82,7 +82,7 @@ describe("useSessionFeedback", () => {
     // The details dialog re-records the same row with chips + text and thanks the user.
     await act(() =>
       result.current.rateTurn(turn("m1"), "down", {
-        reasonCodes: ["too_slow", "format"],
+        reasonCodes: ["slow_or_broken", "lost_context"],
         reason: "  took a minute  ",
       }),
     );
@@ -90,8 +90,8 @@ describe("useSessionFeedback", () => {
       message_id: "m1",
       action: "rating",
       value: "down",
-      reason_code: "too_slow",
-      reason_codes: ["too_slow", "format"],
+      reason_code: "slow_or_broken",
+      reason_codes: ["slow_or_broken", "lost_context"],
       reason: "took a minute",
       source: "ui",
       surface: "chat",

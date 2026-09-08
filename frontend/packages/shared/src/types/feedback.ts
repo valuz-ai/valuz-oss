@@ -27,13 +27,12 @@ export const FEEDBACK_POSITIVE_REASON_CODES = [
 ] as const;
 
 export const FEEDBACK_NEGATIVE_REASON_CODES = [
-  "inaccurate",
-  "incomplete",
+  "inaccurate_or_incomplete",
   "ignored_instructions",
   "off_topic",
-  "too_slow",
-  "format",
-  "unsafe",
+  "lost_context",
+  "slow_or_broken",
+  "safety_or_legal",
   "other",
 ] as const;
 

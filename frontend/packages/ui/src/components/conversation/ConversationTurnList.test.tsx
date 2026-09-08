@@ -256,7 +256,7 @@ describe("ConversationTurnList virtualization", () => {
     // … then the optional details dialog opens with the POSITIVE chips.
     expect(screen.getByText("提交反馈")).toBeTruthy();
     expect(screen.getByText("解决了我的问题")).toBeTruthy();
-    expect(screen.queryByText("不准确")).toBeNull();
+    expect(screen.queryByText("不正确或不完整")).toBeNull();
     const submit = screen.getByRole("button", { name: "提交" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByText("解决了我的问题"));
@@ -298,9 +298,11 @@ describe("ConversationTurnList virtualization", () => {
     fireEvent.click(screen.getByTitle("评价回复"));
     fireEvent.click(screen.getByText("回复不佳"));
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", undefined);
-    expect(screen.getByText("没有遵循指示")).toBeTruthy();
+    expect(screen.getByText("没有遵循我的指示")).toBeTruthy();
+    expect(screen.getByText("丢失上下文")).toBeTruthy();
     expect(screen.queryByText("解决了我的问题")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    // No skip button: the dialog's own close control dismisses it.
+    fireEvent.click(screen.getByRole("button", { name: /close|关闭/i }));
     expect(screen.queryByText("提交反馈")).toBeNull();
     // Skipping keeps the thumb: exactly one rating call was made.
     expect(onRateTurn).toHaveBeenCalledTimes(1);

@@ -105,7 +105,7 @@ async def test_rating_records_through_port_with_explicit_owner() -> None:
         USER,
         "s1",
         RecordFeedbackRequest(
-            message_id="m1", action="rating", value="down", reason_code="too_slow"
+            message_id="m1", action="rating", value="down", reason_code="slow_or_broken"
         ),
     )
     assert record.value == "down"
@@ -117,9 +117,9 @@ async def test_rating_records_through_port_with_explicit_owner() -> None:
             "block_ref": "",
             "action": "rating",
             "value": "down",
-            "reason_code": "too_slow",
+            "reason_code": "slow_or_broken",
             "source": "api",
-            "metadata": {"reason_codes": ["too_slow"]},
+            "metadata": {"reason_codes": ["slow_or_broken"]},
         }
     ]
 
