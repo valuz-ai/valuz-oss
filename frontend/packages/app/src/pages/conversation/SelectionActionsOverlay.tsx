@@ -1,5 +1,5 @@
 import { SlotRenderer, useRegistryStore } from "@valuz/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Host extension point for assistant-text selections.
@@ -11,19 +11,60 @@ import { useCallback, useEffect, useState } from "react";
  * ``conversation.selection-actions`` slot next to the selection. With nothing
  * registered the component subscribes to nothing and renders nothing.
  *
- * Slot components receive ``{sessionId, messageId, selectedText, clear}`` —
- * enough to resolve the message's citations/evidence server-side and to
- * dismiss the toolbar after acting. Spanning two messages (or leaving the
- * transcript) hides the toolbar instead of guessing an anchor.
+ * Slot components receive ``{sessionId, messageId, selectedText,
+ * selectedCitationIds, clear, insertDraft}``. Citation IDs come only from
+ * markers intersecting this Range, in stable DOM order without duplicates;
+ * plain text selections have an empty array. Multiple ranges, spanning two
+ * messages or leaving the transcript hides the toolbar instead of guessing.
  */
 export const SELECTION_ACTIONS_SLOT = "conversation.selection-actions";
 
 interface ActiveSelection {
+  sessionId: string | null;
   messageId: string;
   text: string;
+  selectedCitationIds: string[];
   /** Viewport coordinates of the selection's bounding box. */
   top: number;
   centerX: number;
+}
+
+/** Lift equivalent text/element edges to their parent boundary. Otherwise
+ * intersectsNode considers a Range ending at a marker's nested text offset 0
+ * to intersect that marker even though none of its content was selected. */
+function outwardBoundary(
+  node: Node,
+  offset: number,
+  host: Element,
+): [Node, number] {
+  while (node !== host && node.parentNode) {
+    const length =
+      node instanceof CharacterData ? node.length : node.childNodes.length;
+    if (offset !== 0 && offset !== length) break;
+    const parent = node.parentNode;
+    const index = Array.from(parent.childNodes).findIndex(
+      (child) => child === node,
+    );
+    offset = index + (offset === 0 ? 0 : 1);
+    node = parent;
+  }
+  return [node, offset];
+}
+
+function citationIdsIn(range: Range, host: Element): string[] {
+  const selected = range.cloneRange();
+  selected.setStart(
+    ...outwardBoundary(range.startContainer, range.startOffset, host),
+  );
+  selected.setEnd(
+    ...outwardBoundary(range.endContainer, range.endOffset, host),
+  );
+  const ids = new Set<string>();
+  for (const marker of host.querySelectorAll("[data-citation-id]")) {
+    const id = marker.getAttribute("data-citation-id");
+    if (id && selected.intersectsNode(marker)) ids.add(id);
+  }
+  return [...ids];
 }
 
 /** jsdom (and some embedders) do not implement Range.getBoundingClientRect. */
@@ -52,6 +93,7 @@ export function SelectionActionsOverlay({
     (state) => (state.slots[SELECTION_ACTIONS_SLOT]?.length ?? 0) > 0,
   );
   const [active, setActive] = useState<ActiveSelection | null>(null);
+  const selectionSession = useRef(sessionId);
 
   const recompute = useCallback(() => {
     const container = containerRef.current;
@@ -59,7 +101,7 @@ export function SelectionActionsOverlay({
     if (
       !container ||
       !selection ||
-      selection.rangeCount === 0 ||
+      selection.rangeCount !== 1 ||
       selection.isCollapsed
     ) {
       setActive(null);
@@ -85,12 +127,30 @@ export function SelectionActionsOverlay({
     }
     const rect = rectOf(range);
     setActive({
+      sessionId,
       messageId,
       text,
+      selectedCitationIds: citationIdsIn(range, host),
       top: rect?.top ?? 0,
       centerX: (rect?.left ?? 0) + (rect?.width ?? 0) / 2,
     });
-  }, [containerRef]);
+  }, [containerRef, sessionId]);
+
+  useEffect(() => {
+    if (selectionSession.current === sessionId) return;
+    selectionSession.current = sessionId;
+    setActive(null);
+    if (!hasActions || !active) return;
+    // Do not reinterpret an old transcript Range as a selection in the new
+    // session on the next selectionchange/scroll. Leave unrelated UI alone.
+    const selection = document.getSelection();
+    if (
+      selection?.rangeCount &&
+      containerRef.current?.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      selection.removeAllRanges();
+    }
+  }, [active, containerRef, hasActions, sessionId]);
 
   useEffect(() => {
     if (!hasActions) {
@@ -112,7 +172,7 @@ export function SelectionActionsOverlay({
     setActive(null);
   }, []);
 
-  if (!hasActions || !active) return null;
+  if (!hasActions || !active || active.sessionId !== sessionId) return null;
 
   return (
     <div
@@ -131,6 +191,7 @@ export function SelectionActionsOverlay({
             sessionId,
             messageId: active.messageId,
             selectedText: active.text,
+            selectedCitationIds: active.selectedCitationIds,
             clear,
             insertDraft,
           }}
