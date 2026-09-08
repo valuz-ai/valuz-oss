@@ -67,6 +67,29 @@ The caller must commit that transaction to retain the failure receipt. A caller
 rollback discards both the receipt and domain writes. Repeating a successful
 confirmation returns the original canonical result without invoking the handler.
 
-Existing expiry, supersede, cancellation and retry rules are unchanged. Evidence
+Live operation expiry, supersede, cancellation and retry rules are unchanged. Evidence
 storage implementations and domain-specific adapters remain separate consumers;
 this facade does not migrate historical domain tables or reauthorize old records.
+
+## Identity-preserving history import
+
+Host migration `0048` adds `historical_only`, default false for existing live
+operations. The public facade view exposes this read-only flag. A historical
+operation retains its original state, hash, timestamps, origins and result;
+reads do not expire it and a new proposal cannot supersede it. Confirm, cancel
+and request-changes reject it before adding a decision or invoking a handler,
+including already terminal records. Replaying its original proposal key only
+returns history, never fresh authorization.
+
+`valuz_agent.facade.durable_operations` provides storage mappings for bounded
+read joins and `import_operation_records` for trusted, caller-owned import
+transactions. It is not an HTTP upload or alternative command service. Callers
+must check migration permission, approved digest and complete reference closure.
+Every row includes all storage columns and an explicit matching owner; each
+batch is limited to 100 rows. Missing operations are inserted under their
+original IDs with the history fence enabled. Decisions retain their original
+IDs and reviewer, require the matching parent/hash, and cannot be appended to
+an existing live parent. A matching existing record is not modified; an ID,
+owner, content or idempotency conflict rejects the batch. Savepoints do not
+commit the outer transaction. Downgrade is refused while historical operations
+exist, preventing rollback from restoring execution authority.

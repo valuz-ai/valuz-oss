@@ -45,6 +45,7 @@ class OperationView(OperationWireView):
     """Detached record including attempts derived from approved decisions."""
 
     attempt_count: int = 0
+    historical_only: bool = False
 
 
 def register_operation(registration: OperationRegistration) -> None:
