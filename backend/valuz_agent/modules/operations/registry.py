@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel
@@ -55,6 +56,9 @@ class OperationContext:
     #: Present for every engine invocation; optional only for compatibility
     #: with existing handlers' direct unit-test construction.
     operation: OperationExecution | None = None
+    #: Request-scoped, server-injected execution services. Never populated
+    #: from input_payload/decision, serialized, or used as an owner identity.
+    services: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 OperationHandler = Callable[[OperationContext, dict[str, Any]], Awaitable[OperationResult]]

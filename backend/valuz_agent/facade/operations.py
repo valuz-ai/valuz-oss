@@ -11,14 +11,16 @@ these contracts here instead of depending on ``modules.operations`` internals.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.facade.projects import ProjectLibrary
-from valuz_agent.modules.operations.models import OperationRecordRow
+from valuz_agent.modules.operations.models import ConfirmationDecisionRow, OperationRecordRow
 from valuz_agent.modules.operations.registry import (
     OperationContext,
     OperationExecution,
@@ -32,9 +34,17 @@ from valuz_agent.modules.operations.schemas import (
     OperationDecisionView,
     OperationProposal,
     OperationRequestChangesRequest,
-    OperationView,
+)
+from valuz_agent.modules.operations.schemas import (
+    OperationView as OperationWireView,
 )
 from valuz_agent.modules.operations.service import OperationService
+
+
+class OperationView(OperationWireView):
+    """Detached record including attempts derived from approved decisions."""
+
+    attempt_count: int = 0
 
 
 def register_operation(registration: OperationRegistration) -> None:
@@ -49,8 +59,17 @@ class OperationPage:
 
 
 class OperationLibrary:
-    def __init__(self, db: AsyncSession, projects: ProjectLibrary) -> None:
-        self._service = OperationService(db, projects)
+    def __init__(
+        self,
+        db: AsyncSession,
+        projects: ProjectLibrary,
+        *,
+        services: Mapping[str, object] | None = None,
+    ) -> None:
+        # Local dependencies, not persisted approval data. Construct a fresh
+        # library per request/UOW; explicit context.user_id stays authoritative.
+        self._service = OperationService(db, projects, services=services)
+        self._db = db
 
     @staticmethod
     def _owner(user_id: str) -> str:
@@ -60,14 +79,32 @@ class OperationLibrary:
 
     async def _views(self, user_id: str, rows: list[OperationRecordRow]) -> list[OperationView]:
         decisions = await self._service.latest_decisions(user_id, [row.id for row in rows])
+        attempts = (
+            dict(
+                (
+                    await self._db.execute(
+                        select(ConfirmationDecisionRow.operation_id, func.count())
+                        .where(
+                            ConfirmationDecisionRow.user_id == user_id,
+                            ConfirmationDecisionRow.operation_id.in_([row.id for row in rows]),
+                            ConfirmationDecisionRow.decision == "approve",
+                        )
+                        .group_by(ConfirmationDecisionRow.operation_id)
+                    )
+                ).all()
+            )
+            if rows
+            else {}
+        )
         views = []
         for row in rows:
             decision = decisions.get(row.id)
             data = {
                 name: deepcopy(getattr(row, name))
                 for name in OperationView.model_fields
-                if name != "latest_decision"
+                if name not in {"latest_decision", "attempt_count"}
             }
+            data["attempt_count"] = attempts.get(row.id, 0)
             data["latest_decision"] = (
                 OperationDecisionView(
                     decision=decision.decision,  # type: ignore[arg-type]

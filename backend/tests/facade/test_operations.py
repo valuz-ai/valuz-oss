@@ -114,6 +114,37 @@ async def test_trusted_context_detached_views_and_idempotent_result(db: AsyncSes
     assert (await library.get("owner", pending.id)).result_payload == {"id": pending.id}
 
 
+async def test_services_are_request_scoped_and_not_controlled_by_decision(db: AsyncSession) -> None:
+    seen = []
+    first_service, second_service = object(), object()
+
+    async def handler(context: OperationContext, payload: dict[str, Any]) -> OperationResult:
+        with pytest.raises(TypeError):
+            context.services["test"] = object()
+        seen.append((context.user_id, context.services.get("test")))
+        return OperationResult([], {})
+
+    kind = "test.facade.services"
+    register_operation(OperationRegistration(kind, 1, handler))
+    dependencies = {"test": first_service}
+    first = OperationLibrary(db, Projects(), services=dependencies)
+    second = OperationLibrary(db, Projects(), services={"test": second_service})
+    dependencies["test"] = second_service
+    for owner, library in (("first", first), ("second", second)):
+        pending = await library.propose(owner, proposal(kind))
+        await library.confirm(
+            owner,
+            pending.id,
+            expected_proposal_hash=pending.proposal_hash,
+            decision={"services": {"test": "untrusted"}, "user_id": "forged"},
+        )
+    assert seen == [("first", first_service), ("second", second_service)]
+    plain = OperationLibrary(db, Projects())
+    pending = await plain.propose("third", proposal(kind))
+    await plain.confirm("third", pending.id, expected_proposal_hash=pending.proposal_hash)
+    assert seen[-1] == ("third", None)
+
+
 async def test_failed_effect_rolls_back_but_decision_and_retry_survive(db: AsyncSession) -> None:
     fail = True
 
@@ -140,6 +171,7 @@ async def test_failed_effect_rolls_back_but_decision_and_retry_survive(db: Async
         "owner", pending.id, expected_proposal_hash=pending.proposal_hash
     )
     assert retried.state == "succeeded" and retried.id == pending.id
+    assert retried.attempt_count == 2
     assert await db.scalar(select(func.count()).select_from(EffectRow)) == 1
     assert await db.scalar(select(func.count()).select_from(ConfirmationDecisionRow)) == 2
 
