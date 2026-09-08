@@ -440,7 +440,7 @@
       "rate": "Rate this reply",
       "good": "Good response",
       "bad": "Bad response",
-      "withdraw": "Remove rating",
+      "remove": "Remove “{label}” feedback",
       "dialogTitle": "Submit feedback",
       "detailsPlaceholder": "Add details (optional)",
       "privacyNote": "Your feedback helps improve Valuz.",

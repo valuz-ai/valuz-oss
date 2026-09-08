@@ -248,8 +248,6 @@ describe("ConversationTurnList virtualization", () => {
     const entry = screen.getByTitle("评价回复");
     expect(entry.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(entry);
-    // Unrated: no 撤销 item yet.
-    expect(screen.queryByText("撤销评价")).toBeNull();
     fireEvent.click(screen.getByText("回复优秀"));
     // The thumb lands immediately …
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", undefined);
@@ -268,7 +266,7 @@ describe("ConversationTurnList virtualization", () => {
     });
     expect(screen.queryByText("提交反馈")).toBeNull();
 
-    // Rehydrated as "up": the entry shows pressed and the menu offers 撤销.
+    // Rehydrated as "up": the entry becomes the one-click remove action.
     rerender(
       <div>
         <ConversationTurnList
@@ -282,10 +280,10 @@ describe("ConversationTurnList virtualization", () => {
         />
       </div>,
     );
-    const pressed = screen.getByTitle("评价回复");
-    expect(pressed.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(pressed);
-    fireEvent.click(screen.getByText("撤销评价"));
+    expect(screen.queryByTitle("评价回复")).toBeNull();
+    const remove = screen.getByTitle("移除“回复优秀”反馈");
+    expect(remove.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(remove);
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, null, undefined);
   });
 

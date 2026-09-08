@@ -440,7 +440,7 @@
       "rate": "评价回复",
       "good": "回复优秀",
       "bad": "回复不佳",
-      "withdraw": "撤销评价",
+      "remove": "移除“{label}”反馈",
       "dialogTitle": "提交反馈",
       "detailsPlaceholder": "填写详情（选填）",
       "privacyNote": "你的反馈可用于改进 Valuz。",
