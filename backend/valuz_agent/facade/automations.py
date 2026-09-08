@@ -7,12 +7,14 @@ checks the stored owner before mutating execution state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.automations.models import AutomationRow, AutomationRunRow
 from valuz_agent.ports.automation_runtime import (
     AutomationExecutionLease,
     AutomationRunCommand,
@@ -23,6 +25,91 @@ from valuz_agent.ports.automation_runtime import (
 class RunClaimResult:
     claimed: bool
     reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationRef:
+    id: str
+    project_id: str
+    name: str
+    status: str
+    action_kind: str
+    trigger_kind: str
+    cron_expr: str | None
+    timezone: str | None
+    interval_seconds: int | None
+    playbook_definition_id: str | None
+    playbook_version: int | None
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationRunRef:
+    id: str
+    automation_id: str
+    project_id: str
+    status: str
+    trigger_type: str
+    triggered_at: int
+    started_at: int | None
+    completed_at: int | None
+    result_summary: str | None
+    error_code: str | None
+    session_id: str | None
+    playbook_run_id: str | None
+
+
+class AutomationLibrary:
+    """Read original records, without scheduling, executing or exporting resources.
+
+    Definition updated_at is a current-state token, not immutable history.
+    Run identity survives definition deletion; run status remains current state.
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def get(self, user_id: str, automation_id: str) -> AutomationRef | None:
+        _require_read_identity(user_id, automation_id)
+        table = AutomationRow.__table__
+        with self._db.no_autoflush:
+            row = (
+                (
+                    await self._db.execute(
+                        select(*(table.c[field.name] for field in fields(AutomationRef)))
+                        .where(table.c.user_id == user_id, table.c.id == automation_id)
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return AutomationRef(**row) if row is not None else None
+
+    async def get_run(self, user_id: str, run_id: str) -> AutomationRunRef | None:
+        _require_read_identity(user_id, run_id)
+        table = AutomationRunRow.__table__
+        with self._db.no_autoflush:
+            row = (
+                (
+                    await self._db.execute(
+                        select(*(table.c[field.name] for field in fields(AutomationRunRef)))
+                        .where(table.c.user_id == user_id, table.c.id == run_id)
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return AutomationRunRef(**row) if row is not None else None
+
+
+def _require_read_identity(user_id: str, resource_id: str) -> None:
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id must be non-empty")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise ValueError("resource_id must be non-empty")
 
 
 async def claim_due_runs(
@@ -209,6 +296,9 @@ async def run_failure_monitor_once(*, now: int | None = None) -> int:
 
 
 __all__ = [
+    "AutomationLibrary",
+    "AutomationRef",
+    "AutomationRunRef",
     "RunClaimResult",
     "claim_due_runs",
     "execute_claimed_run",
