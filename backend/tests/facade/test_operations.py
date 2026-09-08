@@ -209,3 +209,52 @@ async def test_facade_does_not_commit_callers_transaction(db: AsyncSession) -> N
     await db.rollback()
     assert await db.scalar(select(func.count()).select_from(OperationRecordRow)) == 0
     assert await db.scalar(select(func.count()).select_from(ConfirmationDecisionRow)) == 0
+
+
+async def test_bounded_pages_and_replay_lookup_are_owner_scoped(db: AsyncSession) -> None:
+    async def handler(context: OperationContext, payload: dict[str, Any]) -> OperationResult:
+        return OperationResult([], {})
+
+    kind = "test.facade.pages"
+    register_operation(OperationRegistration(kind, 1, handler))
+    library = OperationLibrary(db, Projects())  # type: ignore[arg-type]
+    ids = set()
+    for index in range(3):
+        body = proposal(kind).model_copy(
+            update={
+                "target_refs": [],
+                "project_id": "project-1",
+                "idempotency_key": f"page-{index}",
+            }
+        )
+        row = await library.propose("owner", body)
+        ids.add(row.id)
+    await library.propose("other-owner", body)
+    await library.propose(
+        "owner",
+        body.model_copy(
+            update={
+                "project_id": "project-2",
+                "idempotency_key": "other-project",
+            }
+        ),
+    )
+    first = await library.list_page("owner", project_id="project-1", limit=2)
+    assert len(first.items) == 2 and first.next_before is not None
+    second = await library.list_page(
+        "owner",
+        project_id="project-1",
+        limit=2,
+        before=first.next_before,
+    )
+    assert len(second.items) == 1 and second.next_before is None
+    assert {item.id for item in (*first.items, *second.items)} == ids
+    assert (await library.list_page("owner", operation_types=("unregistered",))).items == ()
+    assert (await library.list_page("owner", origin_session_id="absent")).items == ()
+    found = await library.find_by_idempotency("owner", "page-2")
+    assert found is not None and found.id in ids
+    assert await library.find_by_idempotency("other-owner", "page-0") is None
+    with pytest.raises(ValueError, match="limit_invalid"):
+        await library.list_page("owner", limit=101)
+    with pytest.raises(ValueError, match="position_invalid"):
+        await library.list_page("owner", before=(True, "id"))

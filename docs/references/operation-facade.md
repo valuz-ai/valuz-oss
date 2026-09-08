@@ -42,6 +42,15 @@ and excludes records belonging to other owners. Returned `OperationView`
 values are detached snapshots, including the latest decision, not mutable ORM
 objects. Mutating a returned view does not alter the approved proposal.
 
+Adapters can recover an exact owner-scoped proposal with `find_by_idempotency`.
+`list_page` accepts optional operation types (at most 32), project and origin
+session filters, and a page size from 1 through 100. It returns `OperationPage`
+with detached `items` and a nullable `next_before` position. Pass that position
+with the same filters for the next page. Results use descending `(created_at,
+id)` keyset order; every query reapplies the explicit owner. The position is
+not an access grant. A page fetches at most `limit + 1` operation rows and only
+the latest decision for each returned operation, not the full decision history.
+
 The library never commits. Proposal records and any associated pending source
 seals must be created in the same caller-owned transaction. On confirmation,
 domain writes on `context.db` run in the engine savepoint: failure rolls them

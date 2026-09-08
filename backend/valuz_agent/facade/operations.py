@@ -12,6 +12,7 @@ these contracts here instead of depending on ``modules.operations`` internals.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,12 @@ from valuz_agent.modules.operations.service import OperationService
 def register_operation(registration: OperationRegistration) -> None:
     """Register an installed capability at composition time, never per request."""
     operation_registry.register(registration)
+
+
+@dataclass(frozen=True, slots=True)
+class OperationPage:
+    items: tuple[OperationView, ...]
+    next_before: tuple[int, str] | None
 
 
 class OperationLibrary:
@@ -82,6 +89,33 @@ class OperationLibrary:
     async def propose(self, user_id: str, proposal: OperationProposal) -> OperationView:
         row = await self._service.propose(self._owner(user_id), proposal)
         return (await self._views(user_id, [row]))[0]
+
+    async def find_by_idempotency(self, user_id: str, idempotency_key: str) -> OperationView | None:
+        self._owner(user_id)
+        if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 128:
+            raise ValueError("operation_idempotency_key_invalid")
+        row = await self._service.find_by_idempotency(user_id, idempotency_key)
+        return (await self._views(user_id, [row]))[0] if row is not None else None
+
+    async def list_page(
+        self,
+        user_id: str,
+        *,
+        operation_types: tuple[str, ...] = (),
+        project_id: str | None = None,
+        origin_session_id: str | None = None,
+        limit: int = 100,
+        before: tuple[int, str] | None = None,
+    ) -> OperationPage:
+        rows, next_before = await self._service.list_page(
+            self._owner(user_id),
+            operation_types=operation_types,
+            project_id=project_id,
+            origin_session_id=origin_session_id,
+            limit=limit,
+            before=before,
+        )
+        return OperationPage(tuple(await self._views(user_id, rows)), next_before)
 
     async def confirm(
         self,
@@ -147,6 +181,7 @@ __all__ = [
     "OperationExecution",
     "OperationHandler",
     "OperationLibrary",
+    "OperationPage",
     "OperationProposal",
     "OperationRegistration",
     "OperationRequestChangesRequest",

@@ -8,7 +8,7 @@ import logging
 from copy import deepcopy
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.facade.projects import ProjectLibrary
@@ -142,6 +142,68 @@ class OperationService:
         apply_expiry(row)
         return row
 
+    async def find_by_idempotency(
+        self, user_id: str, idempotency_key: str
+    ) -> OperationRecordRow | None:
+        row = await self._db.scalar(
+            select(OperationRecordRow).where(
+                OperationRecordRow.user_id == user_id,
+                OperationRecordRow.idempotency_key == idempotency_key,
+            )
+        )
+        if row is not None:
+            apply_expiry(row)
+        return row
+
+    async def list_page(
+        self,
+        user_id: str,
+        *,
+        operation_types: tuple[str, ...] = (),
+        project_id: str | None = None,
+        origin_session_id: str | None = None,
+        limit: int = 100,
+        before: tuple[int, str] | None = None,
+    ) -> tuple[list[OperationRecordRow], tuple[int, str] | None]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("operation_page_limit_invalid")
+        if len(operation_types) > 32 or any(
+            not isinstance(item, str) or not 1 <= len(item) <= 96 for item in operation_types
+        ):
+            raise ValueError("operation_page_types_invalid")
+        if before is not None and (
+            not isinstance(before, tuple)
+            or len(before) != 2
+            or type(before[0]) is not int
+            or not 0 <= before[0] < 2**63
+            or not isinstance(before[1], str)
+            or not 1 <= len(before[1]) <= 36
+        ):
+            raise ValueError("operation_page_position_invalid")
+        statement = select(OperationRecordRow).where(OperationRecordRow.user_id == user_id)
+        if operation_types:
+            statement = statement.where(OperationRecordRow.operation_type.in_(operation_types))
+        if project_id is not None:
+            statement = statement.where(OperationRecordRow.project_id == project_id)
+        if origin_session_id is not None:
+            statement = statement.where(OperationRecordRow.origin_session_id == origin_session_id)
+        if before is not None:
+            statement = statement.where(
+                tuple_(OperationRecordRow.created_at, OperationRecordRow.id) < before
+            )
+        result = await self._db.scalars(
+            statement.order_by(
+                OperationRecordRow.created_at.desc(),
+                OperationRecordRow.id.desc(),
+            ).limit(limit + 1)
+        )
+        candidates = list(result.all())
+        rows = candidates[:limit]
+        for row in rows:
+            apply_expiry(row)
+        next_before = (rows[-1].created_at, rows[-1].id) if len(candidates) > limit else None
+        return rows, next_before
+
     async def _get_for_update(self, user_id: str, operation_id: str) -> OperationRecordRow:
         row = await self._db.scalar(
             select(OperationRecordRow)
@@ -161,13 +223,29 @@ class OperationService:
         """Most recent append-only decision per operation (by decided time)."""
         if not operation_ids:
             return {}
-        rows = await self._db.scalars(
-            select(ConfirmationDecisionRow)
+        ranked = (
+            select(
+                ConfirmationDecisionRow.id,
+                func.row_number()
+                .over(
+                    partition_by=ConfirmationDecisionRow.operation_id,
+                    order_by=(
+                        ConfirmationDecisionRow.created_at.desc(),
+                        ConfirmationDecisionRow.id.desc(),
+                    ),
+                )
+                .label("position"),
+            )
             .where(
                 ConfirmationDecisionRow.user_id == user_id,
                 ConfirmationDecisionRow.operation_id.in_(operation_ids),
             )
-            .order_by(ConfirmationDecisionRow.created_at.asc(), ConfirmationDecisionRow.id.asc())
+            .subquery()
+        )
+        rows = await self._db.scalars(
+            select(ConfirmationDecisionRow)
+            .join(ranked, ranked.c.id == ConfirmationDecisionRow.id)
+            .where(ranked.c.position == 1, ConfirmationDecisionRow.user_id == user_id)
         )
         latest: dict[str, ConfirmationDecisionRow] = {}
         for decision in rows.all():
