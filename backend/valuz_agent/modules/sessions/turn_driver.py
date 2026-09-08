@@ -119,6 +119,33 @@ def _resolve_turn_status(message: Any) -> str:
     return "idle"
 
 
+def _resolve_interrupt_category(message: Any) -> str | None:
+    """The interrupt category behind an ``interrupted`` turn, else ``None``.
+
+    Read off the same AUTHORITATIVE ``run_turn`` result ``_resolve_turn_status``
+    uses, for the same reason: the durable session lags the kernel's local
+    authority, so a re-read can hand back a previous turn's ``stop_reason``.
+
+    This exists because an interrupt that does NOT raise leaves no durable
+    trace of itself. When the user presses Stop, the runtime swallows the
+    cancellation, stamps ``session.stop_reason = Error(category=
+    "user_interrupt")`` and returns normally — so no ``session_idle`` is ever
+    emitted (the orchestrator's ``release_session_idle`` has no pending event)
+    and the terminal ``session_update`` carries the SESSION status, which is a
+    plain ``idle`` (``"cancelled"`` is a ``MessageStatus``, never a session
+    one). The cancellation then survives only on the Message row, which no
+    client surface reads: on reload the turn rebuilds from events as an
+    ordinary finished answer whose reply simply stops mid-thought, with
+    nothing saying why. ``_finalize_session`` turns this category into the
+    durable ``session_error`` marker that closes that gap.
+    """
+    sr = getattr(message, "stop_reason", None)
+    if sr is None:
+        return None
+    category = sr.get("category") if isinstance(sr, dict) else getattr(sr, "category", None)
+    return category if category in _INTERRUPT_CATEGORIES else None
+
+
 def _is_error_turn(message: Any, session: Any) -> bool:
     """True when the runtime returned normally but the turn itself failed."""
     if str(getattr(message, "status", "") or "").lower() in {"errored", "failed"}:
@@ -178,6 +205,10 @@ async def run_session_to_idle(
     final_status: str = "idle"
     encountered_error = False
     turn_error: BaseException | None = None
+    # Set only on the non-raising interrupt path (the user pressed Stop and the
+    # runtime returned normally) — see ``_resolve_interrupt_category``. The
+    # raising paths carry their reason in ``turn_error`` instead.
+    interrupt_category: str | None = None
 
     consumed_attachment_ids: list[str] = []
     try:
@@ -283,6 +314,7 @@ async def run_session_to_idle(
             # that gets finalized.
             after_run = await data_reader().get_session(user_id, session_id)
             final_status = _resolve_turn_status(message)
+            interrupt_category = _resolve_interrupt_category(message)
             if _is_error_turn(message, after_run):
                 encountered_error = True
             if on_message is not None:
@@ -370,6 +402,8 @@ async def run_session_to_idle(
     # failure durable: ``_finalize_session`` appends a ``session_error`` event in
     # the same call so the reason survives reload (the ``emit_live_event`` above
     # is live-only and is missed by any client not connected at failure time).
+    # ``interrupt_category`` does the same for a turn the user stopped, which
+    # ends without raising and would otherwise leave no durable trace at all.
     if is_draining():
         # App shutting down — leave the session ``running`` for boot recovery
         # rather than racing the kernel-store teardown. (The ``KernelUnavailable``
@@ -388,7 +422,13 @@ async def run_session_to_idle(
             # cancellation stop_reason itself.
             kernel_status = "idle" if final_status == "interrupted" else final_status
             try:
-                await _finalize_session(session_id, content, kernel_status, error=turn_error)
+                await _finalize_session(
+                    session_id,
+                    content,
+                    kernel_status,
+                    error=turn_error,
+                    interrupt_category=interrupt_category,
+                )
             except KernelUnavailableError:
                 # Backend shutting down — kernel store already torn down. Finalize
                 # is pointless; boot recovery reconciles this session. Skip quietly
