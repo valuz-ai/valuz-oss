@@ -66,6 +66,8 @@ def apply_expiry(row: OperationRecordRow, *, now: int | None = None) -> bool:
     unit of work flushes/commits, so a read reports the row as expired
     before any writer touched it. Returns whether the row is expired.
     """
+    if row.historical_only:
+        return False
     if row.state == "expired":
         return True
     if row.state not in PENDING_STATES or row.expires_at is None:
@@ -225,6 +227,8 @@ class OperationService:
         )
         if row is None:
             raise LookupError("operation_not_found")
+        if row.historical_only:
+            raise ValueError("operation_historical_only")
         return row
 
     async def latest_decisions(
@@ -334,6 +338,7 @@ class OperationService:
                 OperationRecordRow.user_id == user_id,
                 OperationRecordRow.operation_type == successor.operation_type,
                 OperationRecordRow.state.in_(sorted(SUPERSEDABLE_STATES)),
+                OperationRecordRow.historical_only.is_(False),
                 OperationRecordRow.id != successor.id,
             )
             .with_for_update()

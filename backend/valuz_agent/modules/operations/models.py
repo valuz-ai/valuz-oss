@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import BigInteger, CheckConstraint, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -81,6 +90,11 @@ class OperationRecordRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     #: The newer proposal for the same owner/type/target that replaced
     #: this one (state ``superseded``).
     superseded_by_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # An imported approval is audit history, never a new permission. Keep its
+    # original state, hash and timestamps unchanged behind this separate fence.
+    historical_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
 
 class ConfirmationDecisionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
