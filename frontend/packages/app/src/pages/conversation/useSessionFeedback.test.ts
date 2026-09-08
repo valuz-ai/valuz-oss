@@ -36,6 +36,7 @@ describe("useSessionFeedback", () => {
     api.recordFeedback.mockReset();
     api.withdrawFeedback.mockReset();
     toast.error.mockReset();
+    toast.success.mockReset();
     api.listFeedback.mockResolvedValue({ items: [] });
     api.recordFeedback.mockResolvedValue({});
     api.withdrawFeedback.mockResolvedValue(undefined);
@@ -64,16 +65,38 @@ describe("useSessionFeedback", () => {
     const { result } = renderHook(() => useSessionFeedback("s1"));
     await waitFor(() => expect(api.listFeedback).toHaveBeenCalled());
 
-    await act(() => result.current.rateTurn(turn("m1"), "down", "too_slow"));
+    await act(() => result.current.rateTurn(turn("m1"), "down"));
     expect(result.current.ratings).toEqual({ m1: "down" });
     expect(api.recordFeedback).toHaveBeenCalledWith("s1", {
       message_id: "m1",
       action: "rating",
       value: "down",
-      reason_code: "too_slow",
+      reason_code: null,
+      reason_codes: null,
+      reason: null,
       source: "ui",
       surface: "chat",
     });
+    expect(toast.success).not.toHaveBeenCalled();
+
+    // The details dialog re-records the same row with chips + text and thanks the user.
+    await act(() =>
+      result.current.rateTurn(turn("m1"), "down", {
+        reasonCodes: ["too_slow", "format"],
+        reason: "  took a minute  ",
+      }),
+    );
+    expect(api.recordFeedback).toHaveBeenLastCalledWith("s1", {
+      message_id: "m1",
+      action: "rating",
+      value: "down",
+      reason_code: "too_slow",
+      reason_codes: ["too_slow", "format"],
+      reason: "took a minute",
+      source: "ui",
+      surface: "chat",
+    });
+    expect(toast.success).toHaveBeenCalledTimes(1);
 
     api.recordFeedback.mockRejectedValueOnce(new Error("offline"));
     await act(() => result.current.rateTurn(turn("m1"), "up"));

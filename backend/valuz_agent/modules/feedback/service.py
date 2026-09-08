@@ -20,6 +20,7 @@ from valuz_agent.modules.feedback.schemas import RecordFeedbackRequest
 from valuz_agent.ports.feedback import (
     CLIENT_FEEDBACK_ACTIONS,
     FEEDBACK_REASON_CODES,
+    FEEDBACK_REASON_CODES_METADATA_KEY,
     FeedbackActor,
     FeedbackPort,
     FeedbackRecord,
@@ -49,16 +50,17 @@ class FeedbackService:
     ) -> FeedbackRecord:
         _validate_client_payload(req)
         await self._require_ended_message(user_id, session_id, req.message_id)
+        reason_code, metadata = _normalize_reasons(req)
         return await self.port.record(
             FeedbackActor(user_id),
             FeedbackSubject(session_id, req.message_id, req.block_ref),
             req.action,
             value=req.value,
-            reason_code=req.reason_code,
+            reason_code=reason_code,
             reason=req.reason,
             source=req.source,
             surface=req.surface,
-            metadata=req.metadata,
+            metadata=metadata,
         )
 
     async def withdraw(
@@ -91,10 +93,30 @@ def _validate_client_payload(req: RecordFeedbackRequest) -> None:
     if req.action == "rating":
         if req.value is None:
             raise FeedbackInvalid("rating requires value")
-        if req.reason_code is not None and req.reason_code not in FEEDBACK_REASON_CODES:
-            raise FeedbackInvalid(f"unknown reason_code {req.reason_code!r}")
+        for code in _requested_reason_codes(req):
+            if code not in FEEDBACK_REASON_CODES:
+                raise FeedbackInvalid(f"unknown reason_code {code!r}")
         return
     if req.value is not None:
         raise FeedbackInvalid(f"value is only valid for rating, not {req.action!r}")
-    if req.reason_code is not None or req.reason is not None:
+    if req.reason_code is not None or req.reason is not None or req.reason_codes:
         raise FeedbackInvalid(f"reason is only valid for rating, not {req.action!r}")
+
+
+def _requested_reason_codes(req: RecordFeedbackRequest) -> list[str]:
+    """The multi-select chips, ``reason_code`` first, de-duplicated in order."""
+    codes: list[str] = []
+    for code in [req.reason_code, *(req.reason_codes or [])]:
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _normalize_reasons(req: RecordFeedbackRequest) -> tuple[str | None, dict[str, Any] | None]:
+    """``reason_code`` = first chip (the indexed column); the full list rides
+    ``metadata["reason_codes"]`` so a multi-select needs no schema change."""
+    codes = _requested_reason_codes(req)
+    metadata: dict[str, Any] = dict(req.metadata or {})
+    if codes:
+        metadata[FEEDBACK_REASON_CODES_METADATA_KEY] = codes
+    return (codes[0] if codes else None), (metadata or None)

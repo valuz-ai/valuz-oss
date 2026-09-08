@@ -61,6 +61,7 @@ class FakePort(FeedbackPort):
                 "value": value,
                 "reason_code": reason_code,
                 "source": source,
+                **({"metadata": metadata} if metadata else {}),
             }
         )
         return FeedbackRecord(
@@ -118,6 +119,7 @@ async def test_rating_records_through_port_with_explicit_owner() -> None:
             "value": "down",
             "reason_code": "too_slow",
             "source": "api",
+            "metadata": {"reason_codes": ["too_slow"]},
         }
     ]
 
@@ -167,3 +169,40 @@ async def test_withdraw_only_client_actions() -> None:
     assert port.withdrawn == [(USER, "m1", "rating")]
     with pytest.raises(FeedbackInvalid):
         await svc.withdraw(USER, "s1", message_id="m1", action="regenerate")
+
+
+@pytest.mark.asyncio
+async def test_multi_select_chips_ride_metadata_and_first_becomes_reason_code() -> None:
+    port = FakePort()
+    svc = _service(port, {"m1": _Msg("m1", "s1")})
+    await svc.record_from_client(
+        USER,
+        "s1",
+        RecordFeedbackRequest(
+            message_id="m1",
+            action="rating",
+            value="up",
+            reason_codes=["solved", "fast", "solved"],
+            metadata={"client": "desktop"},
+        ),
+    )
+    assert port.calls[-1]["reason_code"] == "solved"
+    assert port.calls[-1]["metadata"] == {
+        "client": "desktop",
+        "reason_codes": ["solved", "fast"],
+    }
+
+    with pytest.raises(FeedbackInvalid):
+        await svc.record_from_client(
+            USER,
+            "s1",
+            RecordFeedbackRequest(
+                message_id="m1", action="rating", value="up", reason_codes=["nope"]
+            ),
+        )
+    with pytest.raises(FeedbackInvalid):
+        await svc.record_from_client(
+            USER,
+            "s1",
+            RecordFeedbackRequest(message_id="m1", action="copy", reason_codes=["solved"]),
+        )

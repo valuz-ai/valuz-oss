@@ -8716,8 +8716,22 @@ components:
         reason_code:
           type: string
           nullable: true
-          enum: [inaccurate, incomplete, off_topic, too_slow, format, unsafe, other]
-          description: Rating only — closed set shared with the UI chips.
+          enum: [solved, followed_instructions, good_quality, fast, helpful_autonomy,
+                 inaccurate, incomplete, ignored_instructions, off_topic, too_slow,
+                 format, unsafe, other]
+          description: |
+            Rating only — the first selected chip. 👍 offers the positive set
+            (solved … helpful_autonomy), 👎 the negative set (inaccurate …
+            unsafe); ``other`` is in both.
+        reason_codes:
+          type: array
+          nullable: true
+          maxItems: 16
+          items:
+            type: string
+          description: |
+            Rating only — every selected chip (multi-select). Persisted as
+            ``metadata.reason_codes``; ``reason_code`` stays the first entry.
         reason:
           type: string
           nullable: true

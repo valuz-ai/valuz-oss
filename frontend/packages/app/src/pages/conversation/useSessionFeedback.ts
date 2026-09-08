@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ApiError, sessionsApi } from "@valuz/core";
-import type { ConversationTurn, FeedbackValue } from "@valuz/shared";
+import type {
+  ConversationTurn,
+  FeedbackValue,
+  TurnFeedbackDetails,
+} from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import { NEW_SESSION_ID } from "./session-events";
 
@@ -11,8 +15,10 @@ import { NEW_SESSION_ID } from "./session-events";
  *
  * Ratings rehydrate from ``GET /v1/sessions/{id}/feedback`` whenever the
  * session changes, so a reload shows the same thumbs. Writes are optimistic
- * and roll back on failure. ``copy`` is fire-and-forget — the server counts
- * repeats on one row, so there is nothing to show and nothing to retry.
+ * and roll back on failure. A rating lands the moment a side is chosen; the
+ * optional "提交反馈" dialog then re-records the same row with chips + text
+ * (``details``). ``copy`` is fire-and-forget — the server counts repeats on
+ * one row, so there is nothing to show and nothing to retry.
  */
 export function useSessionFeedback(sessionId: string | null | undefined) {
   const [ratings, setRatings] = useState<Record<string, FeedbackValue>>({});
@@ -49,7 +55,7 @@ export function useSessionFeedback(sessionId: string | null | undefined) {
     async (
       turn: ConversationTurn,
       value: FeedbackValue | null,
-      reasonCode?: string,
+      details?: TurnFeedbackDetails,
     ) => {
       const sid = sessionRef.current;
       const messageId = turn.messageId;
@@ -63,15 +69,24 @@ export function useSessionFeedback(sessionId: string | null | undefined) {
       });
       try {
         if (value) {
+          const reasonCodes = details?.reasonCodes?.length
+            ? details.reasonCodes
+            : null;
           await sessionsApi.recordFeedback(sid, {
             message_id: messageId,
             action: "rating",
             value,
-            reason_code:
-              reasonCode && isReasonCode(reasonCode) ? reasonCode : null,
+            reason_code: reasonCodes?.[0] ?? null,
+            reason_codes: reasonCodes,
+            reason: details?.reason?.trim() || null,
             source: "ui",
             surface: "chat",
           });
+          if (details) {
+            toast.success(
+              _t("conversation.feedback.thanks" as Parameters<typeof _t>[0]),
+            );
+          }
         } else {
           await sessionsApi.withdrawFeedback(sid, {
             message_id: messageId,
@@ -112,27 +127,4 @@ export function useSessionFeedback(sessionId: string | null | undefined) {
   }, []);
 
   return { ratings, rateTurn, reportCopy };
-}
-
-const REASON_CODES = new Set([
-  "inaccurate",
-  "incomplete",
-  "off_topic",
-  "too_slow",
-  "format",
-  "unsafe",
-  "other",
-]);
-
-function isReasonCode(
-  value: string,
-): value is
-  | "inaccurate"
-  | "incomplete"
-  | "off_topic"
-  | "too_slow"
-  | "format"
-  | "unsafe"
-  | "other" {
-  return REASON_CODES.has(value);
 }

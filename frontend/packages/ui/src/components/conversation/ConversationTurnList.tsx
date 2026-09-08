@@ -21,8 +21,6 @@ import {
   RotateCw,
   Sparkles,
   Terminal,
-  ThumbsDown,
-  ThumbsUp,
   Wrench,
   Zap,
   type LucideIcon,
@@ -60,11 +58,12 @@ import {
   type ProcessingItem,
   type ToolCategory,
   type FeedbackValue,
-  FEEDBACK_REASON_CODES,
+  type TurnFeedbackDetails,
 } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
 import { t as _t } from "@valuz/shared/i18n";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { TurnFeedbackControl } from "./TurnFeedback";
 import { Spinner } from "../ui/spinner";
 
 function formatFileSize(bytes: number): string {
@@ -92,10 +91,10 @@ const MessageActions = ({
   rating?: FeedbackValue | null;
   /**
    * Rate the turn — ``null`` withdraws. Absent → no thumbs (a turn without
-   * a kernel Message has nothing to attach a rating to). ``reasonCode`` is
-   * the 👎 chip the user picked, from ``FEEDBACK_REASON_CODES``.
+   * a kernel Message has nothing to attach a rating to). ``details`` is what
+   * the optional "提交反馈" dialog adds (chips + free text).
    */
-  onRate?: (value: FeedbackValue | null, reasonCode?: string) => void;
+  onRate?: (value: FeedbackValue | null, details?: TurnFeedbackDetails) => void;
   /** Fired after the text landed on the clipboard (recorded as ``copy``). */
   onCopied?: () => void;
   /**
@@ -110,7 +109,6 @@ const MessageActions = ({
 }) => {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
-  const [reasonOpen, setReasonOpen] = useState(false);
 
   const handleCopy = async () => {
     if (!text) return;
@@ -139,7 +137,7 @@ const MessageActions = ({
         type="button"
         onClick={() => void handleCopy()}
         title={t("common.copy")}
-        className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+        className={ICON_BUTTON}
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
@@ -147,80 +145,13 @@ const MessageActions = ({
           <Copy className="h-3.5 w-3.5" />
         )}
       </button>
-      {onRate ? (
-        <>
-          <button
-            type="button"
-            aria-pressed={rating === "up"}
-            onClick={() => onRate(rating === "up" ? null : "up")}
-            title={t(
-              "conversation.feedback.thumbsUp" as Parameters<typeof t>[0],
-            )}
-            className={`${ICON_BUTTON} ${rating === "up" ? "text-brand" : ""}`}
-          >
-            <ThumbsUp className="h-3.5 w-3.5" />
-          </button>
-          {/* 👎 records immediately (the signal survives a dismissed popover)
-              and opens the reason chips, which refine the same row. A second
-              click on an active 👎 withdraws instead of reopening. */}
-          <Popover open={reasonOpen} onOpenChange={setReasonOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                aria-pressed={rating === "down"}
-                onClick={(event) => {
-                  if (rating === "down") {
-                    event.preventDefault();
-                    onRate(null);
-                    return;
-                  }
-                  onRate("down");
-                }}
-                title={t(
-                  "conversation.feedback.thumbsDown" as Parameters<typeof t>[0],
-                )}
-                className={`${ICON_BUTTON} ${rating === "down" ? "text-brand" : ""}`}
-              >
-                <ThumbsDown className="h-3.5 w-3.5" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" side="bottom" className="w-64 p-3">
-              <div className="mb-2 text-xs font-medium text-ink-heading">
-                {t(
-                  "conversation.feedback.reasonTitle" as Parameters<
-                    typeof t
-                  >[0],
-                )}
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {FEEDBACK_REASON_CODES.map((code) => (
-                  <button
-                    key={code}
-                    type="button"
-                    onClick={() => {
-                      onRate("down", code);
-                      setReasonOpen(false);
-                    }}
-                    className="rounded-full border border-surface-border px-2 py-0.5 text-xs text-ink-body transition-colors hover:bg-surface-muted"
-                  >
-                    {t(
-                      `conversation.feedback.reason.${code}` as Parameters<
-                        typeof t
-                      >[0],
-                    )}
-                  </button>
-                ))}
-              </div>
-            </PopoverContent>
-          </Popover>
-        </>
-      ) : null}
+      {onRate ? <TurnFeedbackControl rating={rating} onRate={onRate} /> : null}
       {onRetry ? (
         <button
           type="button"
           onClick={onRetry}
           title={t("common.retry")}
-          className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+          className={ICON_BUTTON}
         >
           <RotateCw className="h-3.5 w-3.5" />
         </button>
@@ -1015,7 +946,7 @@ interface TurnRowProps {
   onRateTurn?: (
     turn: ConversationTurn,
     value: FeedbackValue | null,
-    reasonCode?: string,
+    details?: TurnFeedbackDetails,
   ) => void;
   onCopyTurn?: (turn: ConversationTurn) => void;
   /**
@@ -1548,7 +1479,7 @@ const TurnRow = memo(
                 // ``messageId`` it carries was borrowed from a neighbour.
                 onRate={
                   onRateTurn && turn.messageId
-                    ? (value, reasonCode) => onRateTurn(turn, value, reasonCode)
+                    ? (value, details) => onRateTurn(turn, value, details)
                     : undefined
                 }
                 onCopied={
@@ -1604,11 +1535,11 @@ interface ConversationTurnListProps {
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
   /** Current 👍/👎 keyed by ``turn.messageId`` (docs/design/feedback-signals.md). */
   turnRatings?: Record<string, FeedbackValue>;
-  /** Rate a turn; ``null`` withdraws; ``reasonCode`` rides a 👎 chip. */
+  /** Rate a turn; ``null`` withdraws; ``details`` = the optional dialog's chips + text. */
   onRateTurn?: (
     turn: ConversationTurn,
     value: FeedbackValue | null,
-    reasonCode?: string,
+    details?: TurnFeedbackDetails,
   ) => void;
   /** Fired after an assistant turn's text was copied. */
   onCopyTurn?: (turn: ConversationTurn) => void;

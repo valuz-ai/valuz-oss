@@ -19,6 +19,8 @@ class RecordFeedbackRequest(BaseModel):
     action: Literal["rating", "copy"]
     value: Literal["up", "down"] | None = None
     reason_code: str | None = Field(default=None, max_length=32)
+    #: Multi-select chips; ``reason_code`` (first chip) stays the indexed column.
+    reason_codes: list[str] | None = Field(default=None, max_length=16)
     reason: str | None = Field(default=None, max_length=FEEDBACK_REASON_MAX_LEN)
     block_ref: str = Field(default="", max_length=FEEDBACK_BLOCK_REF_MAX_LEN)
     source: Literal["ui", "api"] = "api"

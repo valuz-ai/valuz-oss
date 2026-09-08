@@ -112,4 +112,6 @@ class FeedbackDatastore:
             FeedbackRow.block_ref == block_ref,
         )
         result = await self._db.execute(stmt)
-        return bool(result.rowcount)
+        # ``Result`` is typed without ``rowcount``; a DELETE always yields a
+        # ``CursorResult`` at runtime, and every supported dialect reports it.
+        return int(getattr(result, "rowcount", 0) or 0) > 0

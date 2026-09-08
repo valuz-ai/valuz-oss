@@ -2,7 +2,11 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Settings } from "lucide-react";
 import { sessionsApi, useTranslation } from "@valuz/core";
-import type { ConversationTurn, FeedbackValue } from "@valuz/shared";
+import type {
+  ConversationTurn,
+  FeedbackValue,
+  TurnFeedbackDetails,
+} from "@valuz/shared";
 import {
   Button,
   ConversationIndexRail,
@@ -84,11 +88,11 @@ type ConversationBodyProps = {
   /** Current 👍/👎 per ``turn.messageId`` (docs/design/feedback-signals.md);
    *  rehydrated from ``GET /v1/sessions/{id}/feedback`` on open. */
   turnRatings?: Record<string, FeedbackValue>;
-  /** Rate a turn; ``null`` withdraws. ``reasonCode`` rides a 👎 chip. */
+  /** Rate a turn; ``null`` withdraws. ``details`` = the "提交反馈" dialog's chips + text. */
   onRateTurn?: (
     turn: ConversationTurn,
     value: FeedbackValue | null,
-    reasonCode?: string,
+    details?: TurnFeedbackDetails,
   ) => void;
   /** Fired after the assistant text was copied — recorded as a ``copy`` signal. */
   onCopyTurn?: (turn: ConversationTurn) => void;

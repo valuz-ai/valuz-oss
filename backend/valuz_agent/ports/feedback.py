@@ -44,16 +44,31 @@ CLIENT_FEEDBACK_ACTIONS: tuple[str, ...] = ("rating", "copy")
 FEEDBACK_VALUES: tuple[str, ...] = ("up", "down")
 FEEDBACK_SOURCES: tuple[str, ...] = ("ui", "api", "server")
 FEEDBACK_TARGET_TYPES: tuple[str, ...] = ("message", "session", "share", "research_message")
-#: Closed set shared with the frontend reason chips (``conversation.feedback.reason.*``).
-FEEDBACK_REASON_CODES: tuple[str, ...] = (
+#: Closed sets shared with the frontend reason chips (``conversation.feedback.reason.*``).
+#: A 👍 offers the positive set, a 👎 the negative set; ``other`` is in both.
+FEEDBACK_POSITIVE_REASON_CODES: tuple[str, ...] = (
+    "solved",
+    "followed_instructions",
+    "good_quality",
+    "fast",
+    "helpful_autonomy",
+    "other",
+)
+FEEDBACK_NEGATIVE_REASON_CODES: tuple[str, ...] = (
     "inaccurate",
     "incomplete",
+    "ignored_instructions",
     "off_topic",
     "too_slow",
     "format",
     "unsafe",
     "other",
 )
+FEEDBACK_REASON_CODES: tuple[str, ...] = tuple(
+    dict.fromkeys(FEEDBACK_POSITIVE_REASON_CODES + FEEDBACK_NEGATIVE_REASON_CODES)
+)
+#: ``metadata["reason_codes"]`` carries the full multi-select; ``reason_code`` is its first entry.
+FEEDBACK_REASON_CODES_METADATA_KEY = "reason_codes"
 FEEDBACK_REASON_MAX_LEN = 500
 FEEDBACK_BLOCK_REF_MAX_LEN = 128
 
@@ -154,7 +169,10 @@ __all__ = [
     "CLIENT_FEEDBACK_ACTIONS",
     "FEEDBACK_ACTIONS",
     "FEEDBACK_BLOCK_REF_MAX_LEN",
+    "FEEDBACK_NEGATIVE_REASON_CODES",
+    "FEEDBACK_POSITIVE_REASON_CODES",
     "FEEDBACK_REASON_CODES",
+    "FEEDBACK_REASON_CODES_METADATA_KEY",
     "FEEDBACK_REASON_MAX_LEN",
     "FEEDBACK_SOURCES",
     "FEEDBACK_TARGET_TYPES",

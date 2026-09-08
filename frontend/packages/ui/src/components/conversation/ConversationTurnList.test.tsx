@@ -96,7 +96,7 @@ function renderList(
     onRateTurn?: (
       turn: ConversationTurn,
       value: "up" | "down" | null,
-      reasonCode?: string,
+      details?: { reasonCodes?: string[]; reason?: string },
     ) => void;
     onCopyTurn?: (turn: ConversationTurn) => void;
   } = {},
@@ -231,25 +231,44 @@ describe("ConversationTurnList virtualization", () => {
     expect(onRetry).toHaveBeenCalledWith("turn-1");
   });
 
-  it("offers 👍/👎 only on turns that own a kernel Message", () => {
+  it("offers the rating entry only on turns that own a kernel Message", () => {
     virtualState.start = 0;
     const onRateTurn = vi.fn();
-    // No messageId (pre-flight failure / legacy row) → no thumbs at all.
+    // No messageId (pre-flight failure / legacy row) → no entry at all.
     renderList([buildTurn(1)], { onRateTurn });
-    expect(screen.queryByTitle("有帮助")).toBeNull();
-    expect(screen.queryByTitle("没帮助")).toBeNull();
+    expect(screen.queryByTitle("评价回复")).toBeNull();
   });
 
-  it("records 👍, toggles it off, and refines 👎 with a reason chip", () => {
+  it("rates through the menu, refines with the details dialog, and withdraws", () => {
     virtualState.start = 0;
     const onRateTurn = vi.fn();
     const turn = { ...buildTurn(1), messageId: "m1" };
     const { rerender } = renderList([turn], { onRateTurn });
 
-    fireEvent.click(screen.getByTitle("有帮助"));
+    const entry = screen.getByTitle("评价回复");
+    expect(entry.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(entry);
+    // Unrated: no 撤销 item yet.
+    expect(screen.queryByText("撤销评价")).toBeNull();
+    fireEvent.click(screen.getByText("回复优秀"));
+    // The thumb lands immediately …
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", undefined);
+    // … then the optional details dialog opens with the POSITIVE chips.
+    expect(screen.getByText("提交反馈")).toBeTruthy();
+    expect(screen.getByText("解决了我的问题")).toBeTruthy();
+    expect(screen.queryByText("不准确")).toBeNull();
+    const submit = screen.getByRole("button", { name: "提交" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText("解决了我的问题"));
+    fireEvent.click(screen.getByText("快速高效"));
+    fireEvent.click(submit);
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", {
+      reasonCodes: ["solved", "fast"],
+      reason: undefined,
+    });
+    expect(screen.queryByText("提交反馈")).toBeNull();
 
-    // Rehydrated as "up": the same button now withdraws.
+    // Rehydrated as "up": the entry shows pressed and the menu offers 撤销.
     rerender(
       <div>
         <ConversationTurnList
@@ -263,16 +282,28 @@ describe("ConversationTurnList virtualization", () => {
         />
       </div>,
     );
-    const up = screen.getByTitle("有帮助");
-    expect(up.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(up);
+    const pressed = screen.getByTitle("评价回复");
+    expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(pressed);
+    fireEvent.click(screen.getByText("撤销评价"));
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, null, undefined);
+  });
 
-    // 👎 records immediately, then the chip refines the same row.
-    fireEvent.click(screen.getByTitle("没帮助"));
+  it("offers the negative chips for 回复不佳 and lets the dialog be skipped", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    renderList([turn], { onRateTurn });
+
+    fireEvent.click(screen.getByTitle("评价回复"));
+    fireEvent.click(screen.getByText("回复不佳"));
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", undefined);
-    fireEvent.click(screen.getByText("不准确"));
-    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", "inaccurate");
+    expect(screen.getByText("没有遵循指示")).toBeTruthy();
+    expect(screen.queryByText("解决了我的问题")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    expect(screen.queryByText("提交反馈")).toBeNull();
+    // Skipping keeps the thumb: exactly one rating call was made.
+    expect(onRateTurn).toHaveBeenCalledTimes(1);
   });
 
   it("reports a copy of the assistant text as a signal", async () => {
