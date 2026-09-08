@@ -583,6 +583,14 @@ class ProjectService:
         if row.kind == "chat":
             raise ValueError("Chat project cannot be deleted")
 
+        from valuz_agent.ports.project_lifecycle import get_project_lifecycle_hook
+
+        # Shared by HTTP, MCP and ProjectLibrary. Never swallow preparation
+        # failures or start deleting children before an overlay has prepared.
+        await get_project_lifecycle_hook().before_project_delete(
+            db=self._ds._db, user_id=user_id, project_id=project_id
+        )
+
         # Delete kernel sessions for this project (and their events) — ids
         # come from the host index, which is cleared in the same sweep.
         try:

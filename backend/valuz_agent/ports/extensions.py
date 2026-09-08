@@ -73,6 +73,7 @@ from valuz_agent.ports.parser_routing_policy import (
     ParserRoutingPolicyPort,
     UserSettingsParserRoutingPolicy,
 )
+from valuz_agent.ports.project_lifecycle import NoopProjectLifecycleHook, ProjectLifecycleHook
 from valuz_agent.ports.provider_policy import AllowAllProviderPolicy, ProviderPolicyPort
 from valuz_agent.ports.resource_list_hook import NoopResourceListHook, ResourceListHook
 from valuz_agent.ports.runtime_availability import RuntimeAvailabilityPort
@@ -152,6 +153,7 @@ class Extensions:
         self.resource_list_hook: ResourceListHook = NoopResourceListHook()
         self.skill_lifecycle: SkillLifecycleHook = NoopSkillLifecycleHook()
         self.agent_lifecycle: AgentLifecycleHook = NoopAgentLifecycleHook()
+        self.project_lifecycle: ProjectLifecycleHook = NoopProjectLifecycleHook()
         self.connector_lifecycle: ConnectorLifecycleHook = NoopConnectorLifecycleHook()
         # Runtime Resource Control v10 seams. OSS remains local/pass-through;
         # commercial editions replace these attributes at startup.
