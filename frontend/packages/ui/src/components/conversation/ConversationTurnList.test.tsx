@@ -92,6 +92,13 @@ function renderList(
     loading?: boolean;
     sending?: boolean;
     postRunVerificationActive?: boolean;
+    turnRatings?: Record<string, "up" | "down">;
+    onRateTurn?: (
+      turn: ConversationTurn,
+      value: "up" | "down" | null,
+      details?: { reasonCodes?: string[]; reason?: string },
+    ) => void;
+    onCopyTurn?: (turn: ConversationTurn) => void;
   } = {},
 ) {
   const scrollContainerRef = createRef<HTMLDivElement>();
@@ -107,6 +114,9 @@ function renderList(
         loading={opts.loading ?? false}
         error={null}
         onRetry={opts.onRetry}
+        turnRatings={opts.turnRatings}
+        onRateTurn={opts.onRateTurn}
+        onCopyTurn={opts.onCopyTurn}
         onVirtualApiReady={(nextApi) => {
           api = nextApi;
         }}
@@ -219,6 +229,103 @@ describe("ConversationTurnList virtualization", () => {
 
     fireEvent.click(retry);
     expect(onRetry).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("offers the rating entry only on turns that own a kernel Message", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    // No messageId (pre-flight failure / legacy row) → no entry at all.
+    renderList([buildTurn(1)], { onRateTurn });
+    expect(screen.queryByTitle("评价回复")).toBeNull();
+  });
+
+  it("rates through the menu, refines with the details dialog, and withdraws", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    const { rerender } = renderList([turn], { onRateTurn });
+
+    const entry = screen.getByTitle("评价回复");
+    expect(entry.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(entry);
+    fireEvent.click(screen.getByText("回复优秀"));
+    // The thumb lands immediately …
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", undefined);
+    // … then the optional details dialog opens with the POSITIVE chips.
+    expect(screen.getByText("提交反馈")).toBeTruthy();
+    expect(screen.getByText("解决了我的问题")).toBeTruthy();
+    expect(screen.queryByText("不正确或不完整")).toBeNull();
+    const submit = screen.getByRole("button", { name: "提交" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText("解决了我的问题"));
+    fireEvent.click(screen.getByText("快速高效"));
+    fireEvent.click(submit);
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", {
+      reasonCodes: ["solved", "fast"],
+      reason: undefined,
+    });
+    expect(screen.queryByText("提交反馈")).toBeNull();
+
+    // Rehydrated as "up": the entry becomes the one-click remove action.
+    rerender(
+      <div>
+        <ConversationTurnList
+          turns={[turn]}
+          scrollContainerRef={createRef<HTMLDivElement>()}
+          sending={false}
+          loading={false}
+          error={null}
+          turnRatings={{ m1: "up" }}
+          onRateTurn={onRateTurn}
+        />
+      </div>,
+    );
+    expect(screen.queryByTitle("评价回复")).toBeNull();
+    const remove = screen.getByTitle("移除“回复优秀”反馈");
+    expect(remove.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(remove);
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, null, undefined);
+  });
+
+  it("offers the negative chips for 回复不佳 and lets the dialog be skipped", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    renderList([turn], { onRateTurn });
+
+    fireEvent.click(screen.getByTitle("评价回复"));
+    fireEvent.click(screen.getByText("回复不佳"));
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", undefined);
+    expect(screen.getByText("没有遵循我的指示")).toBeTruthy();
+    expect(screen.getByText("丢失上下文")).toBeTruthy();
+    expect(screen.queryByText("解决了我的问题")).toBeNull();
+    // No skip button: the dialog's own close control dismisses it.
+    fireEvent.click(screen.getByRole("button", { name: /close|关闭/i }));
+    expect(screen.queryByText("提交反馈")).toBeNull();
+    // Skipping keeps the thumb: exactly one rating call was made.
+    expect(onRateTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a copy of the assistant text as a signal", async () => {
+    virtualState.start = 0;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const onCopyTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    renderList([turn], { onCopyTurn });
+
+    // Two copy buttons per turn: the user's prompt (not a signal) and the
+    // assistant reply. Only the reply reports.
+    const [userCopy, assistantCopy] = screen.getAllByTitle("复制");
+    fireEvent.click(userCopy);
+    await Promise.resolve();
+    expect(onCopyTurn).not.toHaveBeenCalled();
+    fireEvent.click(assistantCopy);
+    await vi.waitFor(() => expect(onCopyTurn).toHaveBeenCalledWith(turn));
+    expect(writeText).toHaveBeenCalledTimes(2);
   });
 
   it("shows actions for a reloaded cancelled turn without assistant text", () => {

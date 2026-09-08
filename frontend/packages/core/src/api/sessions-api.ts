@@ -289,6 +289,11 @@ export interface SessionRunResponse {
 export type { RuntimeId } from "@valuz/shared";
 
 import type { RuntimeId } from "@valuz/shared";
+import type {
+  FeedbackList,
+  FeedbackRecord,
+  RecordFeedbackRequest,
+} from "@valuz/shared";
 
 export interface SessionCreateRequest {
   project_id: string;
@@ -1050,5 +1055,49 @@ export const sessionsApi = {
       body: JSON.stringify(request),
       baseUrl: sessionBase(sessionId),
     });
+  },
+
+  // ── Feedback signals (docs/design/feedback-signals.md) ──────────────
+  // One row per (user, message, action); repeats bump ``occurrences``.
+  // Routed to the backend that serves the session (multi-target editions).
+
+  /** The caller's feedback rows in this session — rehydrates the 👍/👎 state. */
+  listFeedback(sessionId: string): Promise<FeedbackList> {
+    return fetchJson(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/feedback`,
+      { baseUrl: sessionBase(sessionId) },
+    );
+  },
+
+  /** Upsert a ``rating`` / ``copy`` row on one of the session's messages. */
+  recordFeedback(
+    sessionId: string,
+    request: RecordFeedbackRequest,
+  ): Promise<FeedbackRecord> {
+    return fetchJson(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+        baseUrl: sessionBase(sessionId),
+      },
+    );
+  },
+
+  /** Delete the caller's row (un-rate). Rejects with a 404 ``ApiError`` when none. */
+  withdrawFeedback(
+    sessionId: string,
+    params: { message_id: string; action: "rating" | "copy"; block_ref?: string },
+  ): Promise<void> {
+    const query = new URLSearchParams({
+      message_id: params.message_id,
+      action: params.action,
+      ...(params.block_ref ? { block_ref: params.block_ref } : {}),
+    });
+    return fetchJson(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/feedback?${query.toString()}`,
+      { method: "DELETE", baseUrl: sessionBase(sessionId) },
+    );
   },
 };

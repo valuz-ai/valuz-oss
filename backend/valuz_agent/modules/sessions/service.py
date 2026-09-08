@@ -60,6 +60,7 @@ from valuz_agent.modules.agents.effective_resources import (
 )
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
+from valuz_agent.modules.feedback.emit import record_server_action
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.modules.providers.datastore import ProviderDatastore
@@ -121,6 +122,7 @@ from valuz_agent.modules.sessions.schemas import SessionWorktreeSpec
 from valuz_agent.modules.sessions.task_checks import CONFIG_KEY, fresh_config
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.ports.capability_policy import TaskCheckConfig
+from valuz_agent.ports.feedback import FeedbackTarget
 from valuz_agent.ports.message_context import HostRef
 from valuz_agent.token_usage import read_session_token_usage
 
@@ -1506,6 +1508,15 @@ class SessionService:
                 raise ForkUnsupported(exc.detail) from exc
             raise ForkRuntimeFailed(exc.detail) from exc
 
+        # Outcome signal on the SOURCE session: the anchor message (or the
+        # tail message for a whole-session fork) → the new session.
+        await _emit_turn_signal(
+            user_id,
+            session_id,
+            action="fork",
+            message_id=message_id,
+            target=FeedbackTarget(type="session", id=forked.id),
+        )
         project_id = str(meta.get("project_id") or "")
         if project_id:
             await project_index.record(
@@ -1994,12 +2005,15 @@ class SessionService:
                         "attachments": attachments_json,
                         CONFIG_KEY: fresh_config(task_check_config).model_dump(mode="json"),
                         **(
-                            {"host_ref": {
-                                "host_type": host_ref.host_type,
-                                "host_id": host_ref.host_id,
-                                "slot": host_ref.slot,
-                            }}
-                            if host_ref is not None else {}
+                            {
+                                "host_ref": {
+                                    "host_type": host_ref.host_type,
+                                    "host_id": host_ref.host_id,
+                                    "slot": host_ref.slot,
+                                }
+                            }
+                            if host_ref is not None
+                            else {}
                         ),
                     },
                     status="queued",
@@ -2136,6 +2150,12 @@ class SessionService:
         last_msg = meta.get("last_user_message_text")
         if not last_msg:
             raise SessionNotRunnable("No user message to regenerate from")
+        # Outcome signal (docs/design/feedback-signals): the turn being
+        # replaced is the session's latest ENDED message. The new Message is
+        # minted asynchronously inside the kernel, so no target — lineage is
+        # the next Message in ``started_at`` order.
+        if user_id is not None:
+            await _emit_turn_signal(user_id, session_id, action="regenerate")
         return await self.send_message(session_id, str(last_msg), user_id=user_id)
 
     async def rename_session(
@@ -2437,3 +2457,34 @@ class SessionService:
         for sid in ids:
             await kernel_client.delete_session(user_id, sid)
         return len(ids)
+
+
+async def _emit_turn_signal(
+    user_id: str,
+    session_id: str,
+    *,
+    action: str,
+    message_id: str | None = None,
+    target: FeedbackTarget | None = None,
+) -> None:
+    """Best-effort outcome signal (docs/design/feedback-signals) on a session's turn.
+
+    ``message_id`` is the explicit subject (a message-granularity fork);
+    without it the subject is the session's latest ENDED message — the turn a
+    regenerate replaces / a whole-session fork branches from. A session with
+    no ended turn yields nothing. Whatever fails here (reader, port) is logged
+    and swallowed: a signal must never fail the action that produced it.
+    """
+    try:
+        subject = message_id
+        if subject is None:
+            latest = await data_reader().list_messages(user_id, session_id, limit=1)
+            if latest and latest[0].status != "running":
+                subject = latest[0].id
+        if subject is None:
+            return
+        await record_server_action(
+            user_id, session_id=session_id, message_id=subject, action=action, target=target
+        )
+    except Exception:  # noqa: BLE001 — best-effort by contract
+        logger.warning("feedback: %s signal on %s not recorded", action, session_id, exc_info=True)

@@ -22,6 +22,7 @@ from typing import Any
 from valuz_agent.api.middleware import AuthMiddleware
 from valuz_agent.infra.asset_store import AssetStore, LocalAssetStore
 from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.integrations.feedback_local import LocalFeedbackProvider
 from valuz_agent.integrations.sandbox_credential_hmac import (
     PerOwnerHmacSandboxCredentialVerifier,
 )
@@ -58,6 +59,7 @@ from valuz_agent.ports.docs_dispatch import (
 )
 from valuz_agent.ports.docs_runtime import DocsRuntimeFactory, default_docs_runtime
 from valuz_agent.ports.document_research import DocumentResearchProviderPort
+from valuz_agent.ports.feedback import FeedbackPort
 from valuz_agent.ports.file_address import FileAddressResolverPort, LocalFileAddressResolver
 from valuz_agent.ports.instructions import (
     GlobalInstructionsPort,
@@ -110,6 +112,10 @@ class Extensions:
         # existing single-process tick + FIFO runner and failure monitor.
         self.automation_runtime: AutomationRuntimePort = InProcessAutomationRuntime()
         self.billing: BillingPort = NoopBillingProvider()
+        # User outcome signals (rating / copy / regenerate / fork / share) —
+        # host table ``valuz_feedback``; an overlay decorates the local
+        # provider for org scoping / forwarding (ports/feedback.py).
+        self.feedback: FeedbackPort = LocalFeedbackProvider()
         # ADR-011: an overlay's single LLMProvider — contributes provider
         # rows (list) and resolves their credentials (resolve). OSS default
         # contributes nothing.

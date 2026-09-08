@@ -57,10 +57,13 @@ import {
   summarizeSegmentPhrase,
   type ProcessingItem,
   type ToolCategory,
+  type FeedbackValue,
+  type TurnFeedbackDetails,
 } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
 import { t as _t } from "@valuz/shared/i18n";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { TurnFeedbackControl } from "./TurnFeedback";
 import { Spinner } from "../ui/spinner";
 
 function formatFileSize(bytes: number): string {
@@ -69,15 +72,31 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const ICON_BUTTON =
+  "flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted";
+
 const MessageActions = ({
   text,
   onRetry,
   tokenUsage,
   extraActions,
+  rating,
+  onRate,
+  onCopied,
 }: {
   text: string;
   onRetry?: () => void;
   tokenUsage?: ConversationTokenUsage;
+  /** Current 👍/👎 on this turn (docs/design/feedback-signals.md). */
+  rating?: FeedbackValue | null;
+  /**
+   * Rate the turn — ``null`` withdraws. Absent → no thumbs (a turn without
+   * a kernel Message has nothing to attach a rating to). ``details`` is what
+   * the optional "提交反馈" dialog adds (chips + free text).
+   */
+  onRate?: (value: FeedbackValue | null, details?: TurnFeedbackDetails) => void;
+  /** Fired after the text landed on the clipboard (recorded as ``copy``). */
+  onCopied?: () => void;
   /**
    * Host-supplied controls appended to this row (share, export, …).
    *
@@ -97,6 +116,7 @@ const MessageActions = ({
       await navigator.clipboard.writeText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
+      onCopied?.();
     } catch {
       /* clipboard denied — silent */
     }
@@ -117,7 +137,7 @@ const MessageActions = ({
         type="button"
         onClick={() => void handleCopy()}
         title={t("common.copy")}
-        className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+        className={ICON_BUTTON}
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
@@ -125,12 +145,13 @@ const MessageActions = ({
           <Copy className="h-3.5 w-3.5" />
         )}
       </button>
+      {onRate ? <TurnFeedbackControl rating={rating} onRate={onRate} /> : null}
       {onRetry ? (
         <button
           type="button"
           onClick={onRetry}
           title={t("common.retry")}
-          className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+          className={ICON_BUTTON}
         >
           <RotateCw className="h-3.5 w-3.5" />
         </button>
@@ -918,6 +939,16 @@ interface TurnRowProps {
    * changes this value. Any change re-renders every row.
    */
   turnActionsKey?: string | null;
+  /** This turn's current 👍/👎 — its own memo input, so a rating change
+   *  re-renders exactly the row it belongs to. */
+  turnRating?: FeedbackValue | null;
+  /** See ``ConversationTurnListProps.onRateTurn`` / ``onCopyTurn``. */
+  onRateTurn?: (
+    turn: ConversationTurn,
+    value: FeedbackValue | null,
+    details?: TurnFeedbackDetails,
+  ) => void;
+  onCopyTurn?: (turn: ConversationTurn) => void;
   /**
    * Host control rendered at the START of a turn, before its messages.
    *
@@ -968,6 +999,9 @@ const TurnRow = memo(
     retryCount,
     renderToolCall,
     renderTurnActions,
+    turnRating,
+    onRateTurn,
+    onCopyTurn,
     renderTurnLeading,
     renderPlanActions,
     isToolCardFoldable,
@@ -1439,6 +1473,18 @@ const TurnRow = memo(
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
                 tokenUsage={turn.tokenUsage}
                 extraActions={renderTurnActions?.(turn)}
+                rating={turnRating}
+                // Rating addresses a Message — same gate as fork-from-here:
+                // a pre-flight failure never got one, and whatever
+                // ``messageId`` it carries was borrowed from a neighbour.
+                onRate={
+                  onRateTurn && turn.messageId
+                    ? (value, details) => onRateTurn(turn, value, details)
+                    : undefined
+                }
+                onCopied={
+                  onCopyTurn && turn.messageId ? () => onCopyTurn(turn) : undefined
+                }
               />
             ) : null}
 
@@ -1459,7 +1505,8 @@ const TurnRow = memo(
       return (
         prev.turn === next.turn &&
         prev.retryCount === next.retryCount &&
-        prev.turnActionsKey === next.turnActionsKey
+        prev.turnActionsKey === next.turnActionsKey &&
+        prev.turnRating === next.turnRating
       );
     }
     return false;
@@ -1486,6 +1533,16 @@ interface ConversationTurnListProps {
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
   /** See ``TurnRowProps.renderTurnActions``. */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /** Current 👍/👎 keyed by ``turn.messageId`` (docs/design/feedback-signals.md). */
+  turnRatings?: Record<string, FeedbackValue>;
+  /** Rate a turn; ``null`` withdraws; ``details`` = the optional dialog's chips + text. */
+  onRateTurn?: (
+    turn: ConversationTurn,
+    value: FeedbackValue | null,
+    details?: TurnFeedbackDetails,
+  ) => void;
+  /** Fired after an assistant turn's text was copied. */
+  onCopyTurn?: (turn: ConversationTurn) => void;
   /**
    * External state ``renderTurnActions`` depends on, folded into the memo
    * comparator. Non-latest rows only re-render when their ``turn`` object
@@ -1555,6 +1612,9 @@ export function ConversationTurnList({
   renderToolCall,
   renderTurnActions,
   turnActionsKey,
+  turnRatings,
+  onRateTurn,
+  onCopyTurn,
   renderTurnLeading,
   renderPlanActions,
   isToolCardFoldable,
@@ -1726,6 +1786,13 @@ export function ConversationTurnList({
                     renderToolCall={renderToolCall}
                     renderTurnActions={renderTurnActions}
                     turnActionsKey={turnActionsKey}
+                    turnRating={
+                      turn.messageId
+                        ? (turnRatings?.[turn.messageId] ?? null)
+                        : null
+                    }
+                    onRateTurn={onRateTurn}
+                    onCopyTurn={onCopyTurn}
                     renderTurnLeading={renderTurnLeading}
                     renderPlanActions={renderPlanActions}
                     isToolCardFoldable={isToolCardFoldable}
