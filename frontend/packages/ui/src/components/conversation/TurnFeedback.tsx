@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Check, Plus, ThumbsDown, ThumbsUp, type LucideIcon } from "lucide-react";
 import {
   FEEDBACK_NEGATIVE_REASON_CODES,
@@ -35,33 +35,63 @@ export interface TurnFeedbackControlProps {
 const ENTRY_BUTTON =
   "flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-surface-muted";
 
+const THUMBS_UP_PATHS = (
+  <>
+    <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+    <path d="M7 10v12" />
+  </>
+);
+const THUMBS_DOWN_PATHS = (
+  <>
+    <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
+    <path d="M17 14V2" />
+  </>
+);
+const GLYPH_SCALE = 0.6;
+const GLYPH_STROKE = 3.2; // ≈ 2 after scaling — matches the sibling lucide icons
+const GLYPH_FRONT = "translate(1 0)"; // thumbs-up, top-left, in front
+const GLYPH_BACK = "translate(10.5 9)"; // thumbs-down, bottom-right, behind
+const GLYPH_HALO = 5; // extra mask stroke → ~1.5px transparent rim at 20px
+
 /**
- * 👍👎 in one glyph for the UNRATED entry — lucide's thumbs-up (left) and
- * thumbs-down (right, dropped a little) paths, each scaled to ~62% and
- * overlapping slightly so they read as a pair. Same stroke conventions as lucide (currentColor,
- * round caps/joins); the inner stroke width compensates for the scale so it
- * matches the sibling icons at 14px.
+ * 👍👎 in one glyph for the UNRATED entry: lucide's thumbs-up in front
+ * (top-left), thumbs-down behind it (bottom-right), overlapping. A mask
+ * cuts the back thumb away under the front thumb's body plus a thin
+ * transparent rim around its outline (``GLYPH_HALO``), so the pair reads
+ * as two stacked objects rather than tangled lines. The mask id comes from
+ * ``useId`` so several entries on one page never share one.
  */
 function ThumbsUpDown({ className }: { className?: string }) {
+  const maskId = `${useId()}-thumbs`;
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={3.2}
+      strokeWidth={GLYPH_STROKE}
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
       aria-hidden
     >
-      <g transform="translate(0 0.5) scale(0.62)">
-        <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
-        <path d="M7 10v12" />
+      <defs>
+        <mask id={maskId} maskUnits="userSpaceOnUse" x="-4" y="-4" width="32" height="32">
+          <rect x="-4" y="-4" width="32" height="32" fill="white" />
+          {/* Front thumb, filled + fat-stroked in black = knocked out of the back thumb. */}
+          <g
+            transform={`${GLYPH_FRONT} scale(${GLYPH_SCALE})`}
+            fill="black"
+            stroke="black"
+            strokeWidth={GLYPH_STROKE + GLYPH_HALO}
+          >
+            {THUMBS_UP_PATHS}
+          </g>
+        </mask>
+      </defs>
+      <g mask={`url(#${maskId})`} transform={`${GLYPH_BACK} scale(${GLYPH_SCALE})`}>
+        {THUMBS_DOWN_PATHS}
       </g>
-      <g transform="translate(9.6 6.5) scale(0.62)">
-        <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
-        <path d="M17 14V2" />
-      </g>
+      <g transform={`${GLYPH_FRONT} scale(${GLYPH_SCALE})`}>{THUMBS_UP_PATHS}</g>
     </svg>
   );
 }
