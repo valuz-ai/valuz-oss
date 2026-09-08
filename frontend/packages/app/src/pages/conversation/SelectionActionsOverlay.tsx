@@ -12,18 +12,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * registered the component subscribes to nothing and renders nothing.
  *
  * Slot components receive ``{sessionId, messageId, selectedText,
- * selectedCitationIds, clear, insertDraft}``. Citation IDs come only from
- * markers intersecting this Range, in stable DOM order without duplicates;
- * plain text selections have an empty array. Multiple ranges, spanning two
- * messages or leaving the transcript hides the toolbar instead of guessing.
+ * selectedCitationIds, selectedCitationRefs, clear, insertDraft}``. References
+ * retain each marker's originating message, which may differ from the selected
+ * passage's message in a merged turn. Both arrays have stable DOM order and
+ * are deduplicated by ID and by (messageId, citationId), respectively. Plain
+ * text has empty arrays. Multiple ranges, selections spanning two messages,
+ * or selected markers with no explicit origin hide the toolbar, never guess.
  */
 export const SELECTION_ACTIONS_SLOT = "conversation.selection-actions";
+
+interface SelectedCitationRef {
+  messageId: string;
+  citationId: string;
+}
 
 interface ActiveSelection {
   sessionId: string | null;
   messageId: string;
   text: string;
   selectedCitationIds: string[];
+  selectedCitationRefs: SelectedCitationRef[];
   /** Viewport coordinates of the selection's bounding box. */
   top: number;
   centerX: number;
@@ -51,7 +59,7 @@ function outwardBoundary(
   return [node, offset];
 }
 
-function citationIdsIn(range: Range, host: Element): string[] {
+function citationRefsIn(range: Range, host: Element): SelectedCitationRef[] | null {
   const selected = range.cloneRange();
   selected.setStart(
     ...outwardBoundary(range.startContainer, range.startOffset, host),
@@ -59,12 +67,18 @@ function citationIdsIn(range: Range, host: Element): string[] {
   selected.setEnd(
     ...outwardBoundary(range.endContainer, range.endOffset, host),
   );
-  const ids = new Set<string>();
+  const refs = new Map<string, SelectedCitationRef>();
   for (const marker of host.querySelectorAll("[data-citation-id]")) {
-    const id = marker.getAttribute("data-citation-id");
-    if (id && selected.intersectsNode(marker)) ids.add(id);
+    if (!selected.intersectsNode(marker)) continue;
+    const citationId = marker.getAttribute("data-citation-id");
+    const messageId = marker.getAttribute("data-citation-message-id");
+    // The quote anchor is not a citation origin. Missing metadata must not
+    // silently turn a cited selection into plain text or seal another message.
+    if (!citationId || !messageId) return null;
+    const key = JSON.stringify([messageId, citationId]);
+    if (!refs.has(key)) refs.set(key, { messageId, citationId });
   }
-  return [...ids];
+  return [...refs.values()];
 }
 
 /** jsdom (and some embedders) do not implement Range.getBoundingClientRect. */
@@ -125,12 +139,18 @@ export function SelectionActionsOverlay({
       setActive(null);
       return;
     }
+    const selectedCitationRefs = citationRefsIn(range, host);
+    if (!selectedCitationRefs) {
+      setActive(null);
+      return;
+    }
     const rect = rectOf(range);
     setActive({
       sessionId,
       messageId,
       text,
-      selectedCitationIds: citationIdsIn(range, host),
+      selectedCitationIds: [...new Set(selectedCitationRefs.map((ref) => ref.citationId))],
+      selectedCitationRefs,
       top: rect?.top ?? 0,
       centerX: (rect?.left ?? 0) + (rect?.width ?? 0) / 2,
     });
@@ -192,6 +212,7 @@ export function SelectionActionsOverlay({
             messageId: active.messageId,
             selectedText: active.text,
             selectedCitationIds: active.selectedCitationIds,
+            selectedCitationRefs: active.selectedCitationRefs,
             clear,
             insertDraft,
           }}
