@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Check, Plus, ThumbsDown, ThumbsUp, type LucideIcon } from "lucide-react";
 import {
   FEEDBACK_NEGATIVE_REASON_CODES,
@@ -47,22 +47,17 @@ const THUMBS_DOWN_PATHS = (
     <path d="M17 14V2" />
   </>
 );
-const GLYPH_SCALE = 0.6;
+const GLYPH_SCALE = 0.62;
 const GLYPH_STROKE = 3.2; // ≈ 2 after scaling — matches the sibling lucide icons
-const GLYPH_FRONT = "translate(1 0)"; // thumbs-up, top-left, in front
-const GLYPH_BACK = "translate(10.5 9)"; // thumbs-down, bottom-right, behind
-const GLYPH_HALO = 5; // extra mask stroke → ~1.5px transparent rim at 20px
 
 /**
- * 👍👎 in one glyph for the UNRATED entry: lucide's thumbs-up in front
- * (top-left), thumbs-down behind it (bottom-right), overlapping. A mask
- * cuts the back thumb away under the front thumb's body plus a thin
- * transparent rim around its outline (``GLYPH_HALO``), so the pair reads
- * as two stacked objects rather than tangled lines. The mask id comes from
- * ``useId`` so several entries on one page never share one.
+ * 👍👎 in one glyph for the UNRATED entry — lucide's thumbs-up (left) and
+ * thumbs-down (right, dropped a little) paths side by side, each scaled to
+ * ~62%, no occlusion. Same stroke conventions as lucide (currentColor,
+ * round caps/joins); the inner stroke width compensates for the scale so it
+ * matches the sibling icons at 14px.
  */
 function ThumbsUpDown({ className }: { className?: string }) {
-  const maskId = `${useId()}-thumbs`;
   return (
     <svg
       viewBox="0 0 24 24"
@@ -74,24 +69,8 @@ function ThumbsUpDown({ className }: { className?: string }) {
       className={className}
       aria-hidden
     >
-      <defs>
-        <mask id={maskId} maskUnits="userSpaceOnUse" x="-4" y="-4" width="32" height="32">
-          <rect x="-4" y="-4" width="32" height="32" fill="white" />
-          {/* Front thumb, filled + fat-stroked in black = knocked out of the back thumb. */}
-          <g
-            transform={`${GLYPH_FRONT} scale(${GLYPH_SCALE})`}
-            fill="black"
-            stroke="black"
-            strokeWidth={GLYPH_STROKE + GLYPH_HALO}
-          >
-            {THUMBS_UP_PATHS}
-          </g>
-        </mask>
-      </defs>
-      <g mask={`url(#${maskId})`} transform={`${GLYPH_BACK} scale(${GLYPH_SCALE})`}>
-        {THUMBS_DOWN_PATHS}
-      </g>
-      <g transform={`${GLYPH_FRONT} scale(${GLYPH_SCALE})`}>{THUMBS_UP_PATHS}</g>
+      <g transform={`translate(0 0.5) scale(${GLYPH_SCALE})`}>{THUMBS_UP_PATHS}</g>
+      <g transform={`translate(9.6 6.5) scale(${GLYPH_SCALE})`}>{THUMBS_DOWN_PATHS}</g>
     </svg>
   );
 }
