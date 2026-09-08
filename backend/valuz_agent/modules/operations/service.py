@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy import func, select, tuple_
@@ -101,9 +103,16 @@ def proposal_hash(proposal: OperationProposal) -> str:
 
 
 class OperationService:
-    def __init__(self, db: AsyncSession, projects: ProjectLibrary) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        projects: ProjectLibrary,
+        *,
+        services: Mapping[str, object] | None = None,
+    ) -> None:
         self._db = db
         self._projects = projects
+        self._services = MappingProxyType(dict(services or {}))
 
     def _context(
         self, row: OperationRecordRow, decision: dict[str, Any] | None = None
@@ -113,6 +122,7 @@ class OperationService:
             projects=self._projects,
             user_id=row.user_id,
             decision=deepcopy(decision or {}),
+            services=self._services,
             operation=OperationExecution(
                 id=row.id,
                 operation_type=row.operation_type,

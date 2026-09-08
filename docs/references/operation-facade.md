@@ -21,6 +21,12 @@ The handler receives `OperationContext`, including:
 - `decision`: the confirming user's choices, not authoritative identity;
 - `operation`: persisted operation ID/type/version/hash, creation context,
   actor/origin references, targets and expected revisions.
+- `services`: optional request-scoped execution dependencies supplied by trusted
+  server composition through `OperationLibrary(..., services=...)`. The mapping
+  is copied and read-only; service objects themselves are not copied. They are
+  never serialized, read from proposal/decision JSON, or used to select an owner.
+  Construct a new library for each request/UOW; a later confirmation may inject
+  a fresh source resolver and must recheck current authorization.
 
 All engine invocations provide `operation`. It is optional only to preserve
 existing direct handler/test construction. JSON in the context and handler
@@ -39,7 +45,8 @@ Construct `OperationLibrary(db, projects)` in the caller's unit of work. It
 offers `propose`, `get`, `confirm`, `cancel`, `request_changes` and `status`.
 Every call requires an explicit, non-empty owner; status accepts at most 100 IDs
 and excludes records belonging to other owners. Returned `OperationView`
-values are detached snapshots, including the latest decision, not mutable ORM
+values are detached snapshots, including the latest decision and an
+`attempt_count` derived from approved decisions, not mutable ORM
 objects. Mutating a returned view does not alter the approved proposal.
 
 Adapters can recover an exact owner-scoped proposal with `find_by_idempotency`.
@@ -49,7 +56,8 @@ with detached `items` and a nullable `next_before` position. Pass that position
 with the same filters for the next page. Results use descending `(created_at,
 id)` keyset order; every query reapplies the explicit owner. The position is
 not an access grant. A page fetches at most `limit + 1` operation rows and only
-the latest decision for each returned operation, not the full decision history.
+the latest decision and aggregate attempt count for each returned operation,
+not the full decision history.
 
 The library never commits. Proposal records and any associated pending source
 seals must be created in the same caller-owned transaction. On confirmation,
