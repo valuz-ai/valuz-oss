@@ -14,6 +14,7 @@ import {
   CheckCheck,
   CheckCircle2,
   ChevronRight,
+  Download,
   FileText,
   Flag,
   ListTodo,
@@ -522,9 +523,8 @@ export const TaskDetailPage = () => {
     // to the set instead of replacing what's on screen.
     multiTab: true,
   });
-  // This page has no generated-file rows, so only the viewer's own control
-  // needs the verb.
   const {
+    download: downloadArtifactFile,
     handleDownload: handleArtifactDownload,
     downloading: artifactDownloading,
   } = useArtifactDownload(artifactFile);
@@ -1635,12 +1635,17 @@ export const TaskDetailPage = () => {
                       const basename = path.split(/[\\/]/).pop() || path;
                       const absolute = toAbsoluteProjectPath(path, rootPath);
                       return (
-                        <li key={path}>
+                        <li
+                          key={path}
+                          className="group flex h-[54px] items-center gap-3 px-4 transition-colors hover:bg-[#fafbfd]"
+                        >
+                          {/* The row's own click opens the file; saving it is a
+                              sibling control, not a nested button. */}
                           <button
                             type="button"
                             onClick={() => void openArtifactFile(path)}
                             title={absolute}
-                            className="group flex h-[54px] w-full items-center gap-3 px-4 text-left transition-colors hover:bg-[#fafbfd]"
+                            className="flex min-w-0 flex-1 items-center gap-3 text-left"
                           >
                             <span
                               className={cn(
@@ -1675,8 +1680,21 @@ export const TaskDetailPage = () => {
                                 </span>
                               )}
                             </div>
-                            <ChevronRight className="h-4 w-4 shrink-0 text-[#c4cad4] transition-transform group-hover:translate-x-0.5" />
                           </button>
+                          {/* Hover-revealed: opening the deliverable is the
+                              row's primary action, and a second always-visible
+                              button on every row would compete with it. Kept
+                              focusable so it is reachable without a pointer. */}
+                          <button
+                            type="button"
+                            onClick={() => void downloadArtifactFile(path)}
+                            aria-label={t("ui.artifact.download")}
+                            title={t("ui.artifact.download")}
+                            className="shrink-0 rounded p-1 text-[#c4cad4] opacity-0 transition hover:bg-surface-muted hover:text-ink-heading focus-visible:opacity-100 group-hover:opacity-100"
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-[#c4cad4] transition-transform group-hover:translate-x-0.5" />
                         </li>
                       );
                     })}
