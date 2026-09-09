@@ -40,6 +40,8 @@ from valuz_agent.ports.automation_event_source import (
     EventSubscription,
     InboundEvent,
     UnknownEventSourceError,
+    describe_sources,
+    registered_event_types,
 )
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
 from valuz_agent.ports.extensions import ext
@@ -517,3 +519,38 @@ class TestUpdateEventInvariant:
                 AutomationUpdatePayload(trigger=EventTrigger()),
                 user_id=TEST_USER_ID,
             )
+
+
+# ── One registry, not two ─────────────────────────────────────────────
+
+
+class TestDiscoveryReadsTheRegistryThatMatters:
+    """``describe_sources()`` must report the registry the service actually uses.
+
+    There used to be a second, module-level registry that these helpers read
+    while validate / subscribe / ``fire_from_event`` all read
+    ``ext.automation_event_sources``. An overlay that registered its source the
+    documented way landed in one and was reported by the other, so
+    ``GET /automations/event-sources`` answered ``{"sources": []}`` on a
+    deployment whose automations were firing on that very source — the editor's
+    "what should wake this?" picker was empty for a source that demonstrably
+    worked.
+    """
+
+    def test_a_registered_source_is_advertised(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        registry.register(StubEventSource())
+
+        assert describe_sources() == [
+            {"source": "finance-metric", "event_types": ["metric.updated"]}
+        ]
+        assert registered_event_types() == {"finance-metric": ("metric.updated",)}
+
+    def test_an_empty_registry_advertises_nothing(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        # OSS ships no source, so this is the stock answer — but it has to come
+        # from the same registry, not from a second one that is empty by
+        # construction and would say this no matter what.
+        assert describe_sources() == []
