@@ -22,7 +22,7 @@ from valuz_agent.infra.frontmatter import (
     split_frontmatter,
 )
 from valuz_agent.infra.fs_registry import fs_registry
-from valuz_agent.infra.path_names import sanitize_segment
+from valuz_agent.infra.path_names import sanitize_segment, slugify_segment
 from valuz_agent.integrations.skills_filesystem import (
     FilesystemSkillSource,
     _default_user_skill_root,
@@ -2553,11 +2553,15 @@ class SkillLibraryService:
 
     @staticmethod
     def _slugify(name: str) -> str:
-        cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-")
-        # The charset is already safe; ``sanitize_segment`` is here for the one
-        # case it doesn't cover — a Windows device name (``con``, ``com1``),
-        # which is reserved even with a plain-ASCII spelling.
-        return sanitize_segment(cleaned or "skill")
+        """The skill's directory name, derived from the name the user typed.
+
+        Delegates to the shared rule so the library, the staging validator and
+        the pack importer cannot drift apart. ASCII input derives exactly what
+        it always did; a name in a non-Latin script now keeps its characters
+        instead of reducing to the bare ``skill`` fallback (see
+        ``infra.path_names.slugify_segment``).
+        """
+        return slugify_segment(name)
 
     @staticmethod
     def _collect_session_assistant_text(events: list) -> str:  # type: ignore[type-arg]

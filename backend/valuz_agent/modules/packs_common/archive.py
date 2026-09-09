@@ -33,7 +33,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PureWindowsPath
 
-from valuz_agent.infra.path_names import sanitize_segment
+from valuz_agent.infra.path_names import slugify_segment
 from valuz_agent.modules.packs_common.manifest import (
     PackManifest,
     from_legacy_agent_pack,
@@ -67,15 +67,26 @@ def sanitize_skill_slug(slug: str) -> str:
     bare drive, ``..``, empty) fall back to a character-scrubbed form so the
     result is always a single, non-empty, separator-free segment.
 
-    The trailing component is then run through :func:`sanitize_segment`, because
-    the importer creates ``~/.agents/skills/<slug>/`` from it: a namespaced slug
-    (``react:components``) keeps its colon through ``PureWindowsPath`` — it is
-    not a drive letter — and is uncreatable on Windows.
+    The trailing component is then run through :func:`slugify_segment`, because
+    the importer creates ``~/.agents/skills/<slug>/`` from it and that name is
+    a *slug*, not merely a filename — it goes on to be a path segment in cloud
+    URLs and the ``/mention`` token in a prompt. It used to run through
+    ``sanitize_segment``, the filesystem rule, which let a space or a ``#``
+    through: pack import was the one remaining way to mint a skill directory
+    the rest of the chain then rejected (``prepare_optimize`` raised on it, so
+    the imported skill could never be edited).
+
+    Both export and import derive this the same way, so the swap is
+    self-consistent for a new pack. An older pack whose manifest carries an
+    unsanitized slug still imports: ``_member_relpath`` matches archive members
+    against the RAW manifest slugs and only then maps them through
+    ``slug_map``, so the files are found under their original names and land
+    under the new, stricter one.
     """
     name = PureWindowsPath(str(slug)).name
     if not name or name in (".", ".."):
         name = _SLUG_FALLBACK_RE.sub("-", str(slug)).strip("-._")
-    return sanitize_segment(name or "skill")
+    return slugify_segment(name or "skill")
 
 
 # ----------------------------------------------------------------------------
