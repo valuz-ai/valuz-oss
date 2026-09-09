@@ -5473,7 +5473,8 @@ components:
         exists: {type: boolean}
         previewKind:
           type: string
-          enum: [markdown, code, image, pdf, html, docx, media, spreadsheet, plain, unsupported]
+          enum: [markdown, code, image, pdf, html, docx, presentation, media,
+                 spreadsheet, plain, unsupported]
         capabilities:
           $ref: "#/components/schemas/FileCapabilities"
         error:

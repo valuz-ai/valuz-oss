@@ -11,6 +11,7 @@ import {
   FileText,
   Maximize2,
   Minimize2,
+  Presentation,
   RefreshCw,
   X,
   ZoomIn,
@@ -63,6 +64,11 @@ const DocxRenderer = lazy(() =>
     default: module.DocxRenderer,
   })),
 );
+const PresentationRenderer = lazy(() =>
+  import("./PresentationRenderer").then((module) => ({
+    default: module.PresentationRenderer,
+  })),
+);
 const SpreadsheetRenderer = lazy(() =>
   import("./SpreadsheetRenderer").then((module) => ({
     default: module.SpreadsheetRenderer,
@@ -104,6 +110,7 @@ const PREVIEW_LABELS: Record<ArtifactPreviewKind, string> = {
   pdf: "PDF",
   html: "HTML",
   docx: "DOCX",
+  presentation: "PPTX",
   media: "Media",
   spreadsheet: "Spreadsheet",
   plain: "Text",
@@ -136,6 +143,9 @@ export function ArtifactIcon({ kind }: { kind: ArtifactPreviewKind }) {
   }
   if (kind === "docx") {
     return <FileText className="h-4 w-4 text-ink-meta" />;
+  }
+  if (kind === "presentation") {
+    return <Presentation className="h-4 w-4 text-ink-meta" />;
   }
   if (kind === "spreadsheet") {
     return <FileSpreadsheet className="h-4 w-4 text-ink-meta" />;
@@ -770,6 +780,7 @@ const ARTIFACT_RENDERERS: Partial<
   plain: CodeMirrorRenderer,
   html: HtmlRenderer,
   docx: DocxRenderer,
+  presentation: PresentationRenderer,
   image: ImageRenderer,
   media: MediaRenderer,
   pdf: PdfRenderer,
