@@ -10,6 +10,10 @@ import {
 } from "@valuz/core";
 import type { ArtifactOpenTarget } from "@valuz/ui";
 
+import {
+  downloadResolvedFile,
+  type DownloadOutcome,
+} from "../lib/download-file";
 import { resolvedToArtifactFile } from "../lib/resolve-artifact";
 
 export interface ArtifactFileLocation {
@@ -103,6 +107,15 @@ export interface UseArtifactFileResult {
   error: string | null;
   open: (path: string, target?: ArtifactOpenTarget | null) => Promise<void>;
   reload: () => Promise<void>;
+  /**
+   * Save a file to the user's machine. Defaults to the focused tab; pass a path
+   * to download a file that isn't open (a list row, say) without opening it.
+   *
+   * Always re-resolves first. A remote address is short-lived, so the one a tab
+   * captured when it opened may be long expired — the same reason the viewer's
+   * retry buttons re-resolve rather than re-request.
+   */
+  download: (path?: string) => Promise<DownloadOutcome>;
   /**
    * Re-read the open tabs matching those absolute paths, in place — no focus
    * change, no tab reordering, no blank frame. Surfaces watching an agent
@@ -405,6 +418,28 @@ export function useArtifactFile({
     );
   }, [activeTab, loadDocument, locate]);
 
+  const download = useCallback(
+    async (path?: string): Promise<DownloadOutcome> => {
+      const key = path ?? activePath;
+      if (!key) return { ok: false, reason: "unavailable" };
+      try {
+        const descriptor = await filesApi.resolveOne(
+          buildFileRef(locate(key).absolutePath),
+          { baseRef: resolveBaseRef },
+        );
+        if (!descriptor) return { ok: false, reason: "unavailable" };
+        return await downloadResolvedFile(descriptor, platform);
+      } catch (cause) {
+        return {
+          ok: false,
+          reason: "failed",
+          message: cause instanceof Error ? cause.message : String(cause),
+        };
+      }
+    },
+    [activePath, locate, platform, resolveBaseRef],
+  );
+
   /**
    * Re-read whichever open tabs those absolute paths point at.
    *
@@ -475,7 +510,10 @@ export function useArtifactFile({
         open.length > 0 &&
         (typeof document === "undefined" || !document.hidden)
       ) {
-        const located = open.map((tab) => ({ tab, location: locate(tab.path) }));
+        const located = open.map((tab) => ({
+          tab,
+          location: locate(tab.path),
+        }));
         try {
           const { results } = await filesApi.resolve(
             located.map(({ location }) => buildFileRef(location.absolutePath)),
@@ -517,13 +555,7 @@ export function useArtifactFile({
       if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [
-    effectiveIntervalMs,
-    loadDocument,
-    locate,
-    projectId,
-    resolveBaseRef,
-  ]);
+  }, [effectiveIntervalMs, loadDocument, locate, projectId, resolveBaseRef]);
 
   useEffect(
     () => () => {
@@ -548,6 +580,7 @@ export function useArtifactFile({
     error: activeTab?.error ?? null,
     open,
     reload,
+    download,
     refreshOpen,
     setWatchActive,
     close,

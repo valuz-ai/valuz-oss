@@ -75,6 +75,14 @@ export interface ArtifactViewerShellProps {
   onClose?: () => void;
   onCopyContent?: () => void;
   onOpenExternal?: () => void;
+  /**
+   * Save the file to the user's machine. The shell only signals the intent —
+   * it deliberately holds no address, because a remote one expires and the
+   * host has to re-resolve on the click anyway.
+   */
+  onDownload?: () => void;
+  /** Show the download control as busy (a fetch-and-save can take a while). */
+  downloading?: boolean;
 }
 
 export interface ArtifactRendererProps {
@@ -84,6 +92,12 @@ export interface ArtifactRendererProps {
   /** Wrap long source lines instead of requiring horizontal scrolling. */
   wrapLines?: boolean;
   onOpenExternal?: () => void;
+  /**
+   * Save the file. Chiefly for the unsupported-kind renderer: a format nothing
+   * can preview (pptx, zip, …) has no other way out of a cloud deployment, so
+   * that state is exactly where the offer matters most.
+   */
+  onDownload?: () => void;
   /**
    * Re-resolve the file and rebuild ``content``. Renderers that fetch from
    * ``openUrl`` must offer this on load failure: a remote address is a

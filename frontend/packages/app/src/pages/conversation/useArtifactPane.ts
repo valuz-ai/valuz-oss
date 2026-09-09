@@ -1,9 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import {
-  useTranslation,
-  type SessionListItem,
-} from "@valuz/core";
+import { useTranslation, type SessionListItem } from "@valuz/core";
+// Module-level ``t`` for the toast below: a side-effecting callback must not
+// take the hook's ``t`` as a dependency (see .claude/rules/frontend.md).
+import { t as _t } from "@valuz/shared/i18n";
 import { type ArtifactOpenTarget } from "@valuz/ui";
 import { usePlatform } from "@valuz/app/platform";
 import { useConversationLocalFileLinks } from "@valuz/app/hooks";
@@ -83,7 +83,11 @@ export function useArtifactPane({
     open: openArtifact,
     reload: reloadArtifact,
     close: closeArtifact,
+    download: downloadArtifact,
   } = artifactFile;
+  // Purely presentational: the viewer's download control shows a spinner while
+  // the resolve (and, on the blob fallback, the fetch) is in flight.
+  const [downloading, setDownloading] = useState(false);
 
   const openArtifactFile = useCallback(
     async (path: string, target?: ArtifactOpenTarget) => {
@@ -128,14 +132,46 @@ export function useArtifactPane({
     void revealInFinder(locateArtifactFile(selectedArtifactPath).absolutePath);
   }, [locateArtifactFile, revealInFinder, selectedArtifactPath]);
 
+  /**
+   * Save a file to the user's machine. ``path`` omitted = the open document.
+   *
+   * The only outcome worth a toast is a real failure: the address path hands
+   * off to the browser's own download UI, and a dismissed save dialog is the
+   * user saying no.
+   */
+  const downloadArtifactFile = useCallback(
+    async (path?: string) => {
+      setDownloading(true);
+      try {
+        const outcome = await downloadArtifact(path);
+        if (outcome.ok || outcome.reason === "cancelled") return;
+        toast.error(
+          outcome.reason === "unavailable"
+            ? _t("ui.artifact.downloadUnavailable")
+            : _t("ui.artifact.downloadFailed", { error: outcome.message }),
+        );
+      } finally {
+        setDownloading(false);
+      }
+    },
+    [downloadArtifact],
+  );
+
+  const handleArtifactDownload = useCallback(() => {
+    void downloadArtifactFile();
+  }, [downloadArtifactFile]);
+
   return {
     artifactFile,
     closeArtifact,
     openArtifactFile,
+    downloadArtifactFile,
     localFileLinks,
     handleArtifactReload,
     handleArtifactClose,
     handleArtifactCopy,
     handleArtifactOpenExternal,
+    handleArtifactDownload,
+    artifactDownloading: downloading,
   };
 }

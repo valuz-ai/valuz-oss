@@ -1,6 +1,7 @@
 import {
   Code2,
   Copy,
+  Download,
   Eye,
   ExternalLink,
   File,
@@ -192,10 +193,12 @@ function UnsupportedRenderer({
   artifact,
   content,
   onOpenExternal,
+  onDownload,
 }: {
   artifact: ArtifactDescriptor;
   content: ArtifactContent | null;
   onOpenExternal?: () => void;
+  onDownload?: () => void;
 }) {
   const { t } = useI18n();
   const reason =
@@ -214,23 +217,44 @@ function UnsupportedRenderer({
         <p className="mt-2 text-xs leading-5 text-ink-body">{reason}</p>
         <div className="mt-4 grid grid-cols-[96px_1fr] gap-x-3 gap-y-1 text-2xs">
           <span className="text-ink-meta">{t("ui.artifact.fieldName")}</span>
-          <span className="min-w-0 truncate text-ink-heading">{artifact.name}</span>
+          <span className="min-w-0 truncate text-ink-heading">
+            {artifact.name}
+          </span>
           <span className="text-ink-meta">{t("ui.artifact.fieldPath")}</span>
-          <span className="min-w-0 truncate text-ink-heading">{artifact.path}</span>
+          <span className="min-w-0 truncate text-ink-heading">
+            {artifact.path}
+          </span>
           <span className="text-ink-meta">{t("ui.artifact.fieldType")}</span>
           <span className="text-ink-heading">
             {artifact.mimeType ?? artifact.extension ?? "unknown"}
           </span>
         </div>
-        {onOpenExternal && artifact.capabilities.canOpenExternal ? (
-          <div className="mt-5 flex justify-center border-t border-surface-border pt-4">
-            <button
-              type="button"
-              onClick={onOpenExternal}
-              className="inline-flex h-8 items-center rounded-md border border-surface-border bg-surface px-3 text-xs font-medium text-ink-heading transition hover:bg-surface-muted"
-            >
-              {t("ui.artifact.openLocally")}
-            </button>
+        {/* The only way out of this state. A format nothing can render is
+            still a file the user asked the agent to produce — without this the
+            deliverable is unreachable on any client that is not sitting on the
+            same disk as the bytes. */}
+        {(onDownload && artifact.capabilities.canDownload) ||
+        (onOpenExternal && artifact.capabilities.canOpenExternal) ? (
+          <div className="mt-5 flex justify-center gap-2 border-t border-surface-border pt-4">
+            {onDownload && artifact.capabilities.canDownload ? (
+              <button
+                type="button"
+                onClick={onDownload}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-surface-border bg-surface px-3 text-xs font-medium text-ink-heading transition hover:bg-surface-muted"
+              >
+                <Download className="h-3.5 w-3.5" />
+                {t("ui.artifact.download")}
+              </button>
+            ) : null}
+            {onOpenExternal && artifact.capabilities.canOpenExternal ? (
+              <button
+                type="button"
+                onClick={onOpenExternal}
+                className="inline-flex h-8 items-center rounded-md border border-surface-border bg-surface px-3 text-xs font-medium text-ink-heading transition hover:bg-surface-muted"
+              >
+                {t("ui.artifact.openLocally")}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -241,6 +265,7 @@ function UnsupportedRenderer({
 function TextRenderer({
   artifact,
   content,
+  onDownload,
 }: ArtifactRendererProps) {
   const { t } = useI18n();
   const shellViewMode = useContext(ArtifactViewModeContext);
@@ -248,7 +273,11 @@ function TextRenderer({
   const markdownMode = shellViewMode?.mode ?? localMode;
   const setMarkdownMode = shellViewMode?.onModeChange ?? setLocalMode;
   if (!content || content.kind !== "text") {
-    return <UnsupportedRenderer artifact={artifact} content={content} />;
+    return <UnsupportedRenderer
+        artifact={artifact}
+        content={content}
+        onDownload={onDownload}
+      />;
   }
 
   if (artifact.previewKind === "markdown" && markdownMode === "preview") {
@@ -306,7 +335,12 @@ function TextRenderer({
   );
 }
 
-function ImageRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
+function ImageRenderer({
+  artifact,
+  content,
+  onDownload,
+  onReload,
+}: ArtifactRendererProps) {
   const { t } = useI18n();
   const shellImageZoom = useContext(ArtifactImageZoomContext);
   const [localZoom, setLocalZoom] = useState<ImageZoom>("fit");
@@ -348,8 +382,10 @@ function ImageRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
 
   const handleDragMove = (event: MouseEvent<HTMLDivElement>) => {
     if (!dragStart || !viewportRef.current) return;
-    viewportRef.current.scrollLeft = dragStart.left - (event.clientX - dragStart.x);
-    viewportRef.current.scrollTop = dragStart.top - (event.clientY - dragStart.y);
+    viewportRef.current.scrollLeft =
+      dragStart.left - (event.clientX - dragStart.x);
+    viewportRef.current.scrollTop =
+      dragStart.top - (event.clientY - dragStart.y);
   };
 
   if (imageUrl) {
@@ -399,11 +435,16 @@ function ImageRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
           onMouseUp={() => setDragStart(null)}
           onMouseLeave={() => setDragStart(null)}
           className={`relative min-h-0 flex-1 overflow-auto bg-surface-base p-6 ${
-            zoom !== "fit" && zoom > 1 ? "cursor-grab active:cursor-grabbing" : ""
+            zoom !== "fit" && zoom > 1
+              ? "cursor-grab active:cursor-grabbing"
+              : ""
           }`}
         >
           {loadState === "loading" ? (
-            <LoadingState variant="page" label={t("ui.artifact.loadingImage")} />
+            <LoadingState
+              variant="page"
+              label={t("ui.artifact.loadingImage")}
+            />
           ) : null}
           {loadState === "error" ? (
             <div
@@ -449,17 +490,27 @@ function ImageRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
       </div>
     );
   }
-  return <UnsupportedRenderer artifact={artifact} content={content} />;
+  return <UnsupportedRenderer
+        artifact={artifact}
+        content={content}
+        onDownload={onDownload}
+      />;
 }
 
-function MediaRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
+function MediaRenderer({
+  artifact,
+  content,
+  onDownload,
+  onReload,
+}: ArtifactRendererProps) {
   const { t } = useI18n();
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
   const media =
     content?.kind === "binary" &&
-    (content.mimeType.startsWith("audio/") || content.mimeType.startsWith("video/"))
+    (content.mimeType.startsWith("audio/") ||
+      content.mimeType.startsWith("video/"))
       ? content
       : null;
 
@@ -530,7 +581,11 @@ function MediaRenderer({ artifact, content, onReload }: ArtifactRendererProps) {
       </div>
     );
   }
-  return <UnsupportedRenderer artifact={artifact} content={content} />;
+  return <UnsupportedRenderer
+        artifact={artifact}
+        content={content}
+        onDownload={onDownload}
+      />;
 }
 
 const HTML_PREVIEW_STYLE = `
@@ -584,7 +639,11 @@ function htmlPreviewSrcDoc(source: string): string {
   return `<!doctype html><html><head>${HTML_PREVIEW_STYLE}</head><body>${source}</body></html>`;
 }
 
-function HtmlRenderer({ artifact, content }: ArtifactRendererProps) {
+function HtmlRenderer({
+  artifact,
+  content,
+  onDownload,
+}: ArtifactRendererProps) {
   const { t } = useI18n();
   const shellViewMode = useContext(ArtifactViewModeContext);
   const [localMode, setLocalMode] = useState<PreviewSourceMode>("preview");
@@ -645,7 +704,11 @@ function HtmlRenderer({ artifact, content }: ArtifactRendererProps) {
   }, [htmlSource, mode, resizePreview]);
 
   if (!content || content.kind !== "text") {
-    return <UnsupportedRenderer artifact={artifact} content={content} />;
+    return <UnsupportedRenderer
+        artifact={artifact}
+        content={content}
+        onDownload={onDownload}
+      />;
   }
 
   if (mode === "source") {
@@ -658,11 +721,7 @@ function HtmlRenderer({ artifact, content }: ArtifactRendererProps) {
           </div>
         ) : null}
         <div className="min-h-0 flex-1">
-          <CodeMirrorRenderer
-            artifact={artifact}
-            content={content}
-            wrapLines
-          />
+          <CodeMirrorRenderer artifact={artifact} content={content} wrapLines />
         </div>
       </div>
     );
@@ -725,10 +784,12 @@ export function ArtifactRenderer({
   content,
   target,
   onOpenExternal,
+  onDownload,
   onReload,
 }: ArtifactRendererProps) {
   const { t } = useI18n();
-  const Renderer = ARTIFACT_RENDERERS[artifact.previewKind] ?? UnsupportedRenderer;
+  const Renderer =
+    ARTIFACT_RENDERERS[artifact.previewKind] ?? UnsupportedRenderer;
   return (
     <Suspense
       fallback={
@@ -740,6 +801,7 @@ export function ArtifactRenderer({
         content={content}
         target={target}
         onOpenExternal={onOpenExternal}
+        onDownload={onDownload}
         onReload={onReload}
       />
     </Suspense>
@@ -758,6 +820,8 @@ export function ArtifactViewerShell({
   onClose,
   onCopyContent,
   onOpenExternal,
+  onDownload,
+  downloading = false,
 }: ArtifactViewerShellProps) {
   const { t } = useI18n();
   const shellRef = useRef<HTMLElement | null>(null);
@@ -901,7 +965,9 @@ export function ArtifactViewerShell({
                 </h2>
                 <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-body">
                   {artifact?.path && artifact.path !== artifact.name ? (
-                    <span className="min-w-0 max-w-full truncate">{artifact.path}</span>
+                    <span className="min-w-0 max-w-full truncate">
+                      {artifact.path}
+                    </span>
                   ) : null}
                   {metadata.map((item) => (
                     <Badge key={item} variant="outline">
@@ -1031,6 +1097,23 @@ export function ArtifactViewerShell({
                 <Copy className="h-3.5 w-3.5" />
               </button>
             ) : null}
+            {onDownload ? (
+              <button
+                type="button"
+                onClick={onDownload}
+                disabled={!artifact?.capabilities.canDownload || downloading}
+                aria-label={t("ui.artifact.download")}
+                aria-busy={downloading}
+                className="flex h-9 w-9 items-center justify-center rounded-md text-ink-body transition hover:bg-surface-soft hover:text-ink-heading disabled:pointer-events-none disabled:opacity-40"
+                title={t("ui.artifact.download")}
+              >
+                {downloading ? (
+                  <Spinner />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+              </button>
+            ) : null}
             {onOpenExternal ? (
               <button
                 type="button"
@@ -1077,7 +1160,9 @@ export function ArtifactViewerShell({
               className="max-w-[420px] rounded-xl border border-error-light bg-error-light px-5 py-4 text-error-text"
               role="alert"
             >
-              <div className="text-sm font-medium">{t("ui.artifact.previewFailed")}</div>
+              <div className="text-sm font-medium">
+                {t("ui.artifact.previewFailed")}
+              </div>
               <p className="mt-1 text-xs leading-5">{error}</p>
               {onReload ? (
                 <button
@@ -1102,6 +1187,7 @@ export function ArtifactViewerShell({
                 content={content}
                 target={target}
                 onOpenExternal={onOpenExternal}
+                onDownload={onDownload}
                 onReload={onReload}
               />
             </ArtifactViewModeContext.Provider>

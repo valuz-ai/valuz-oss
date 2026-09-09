@@ -6,7 +6,19 @@ import {
 } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
-import { toFileTree } from "./file-tree-utils";
+import { mergeFolderChildren, toFileTree } from "./file-tree-utils";
+
+/**
+ * How deep the first file-tree listing goes.
+ *
+ * Two levels of folders show up expanded-ready without a second request, which
+ * covers most project layouts; anything below is fetched on expand. Raising it
+ * is not free — the walk stats every entry it lists.
+ */
+const FILE_TREE_INITIAL_DEPTH = 3;
+
+/** Depth per on-expand fetch. One level: the user is looking at one level. */
+const FILE_TREE_EXPAND_DEPTH = 1;
 
 type KbPickerStateParams = {
   selectedProjectId: string | null;
@@ -75,7 +87,7 @@ export function useKbPickerState({
     }
     projectsApi
       .listFiles(selectedProjectId, {
-        depth: 3,
+        depth: FILE_TREE_INITIAL_DEPTH,
         // Worktree sessions show their own checkout, not the shared project cwd.
         worktree: activeWorktree?.name ?? undefined,
       })
@@ -86,6 +98,30 @@ export function useKbPickerState({
   useEffect(() => {
     refreshFileTree();
   }, [refreshFileTree]);
+
+  /**
+   * Load one folder's contents on expand.
+   *
+   * This is what lifts the depth ceiling: the initial listing goes a couple of
+   * levels down (enough for the common case in one request) and marks what it
+   * cut off, then each folder the user actually opens costs exactly one more
+   * request. Asking for a deep tree up front instead would stat every entry in
+   * it — on a cloud object-storage mount, one network round trip apiece.
+   */
+  const expandFileTreeFolder = useCallback(
+    async (path: string) => {
+      if (!selectedProjectId || selectedProjectId === "chat-default") return;
+      const res = await projectsApi.listFiles(selectedProjectId, {
+        depth: FILE_TREE_EXPAND_DEPTH,
+        worktree: activeWorktree?.name ?? undefined,
+        path,
+      });
+      setFileTree((prev) =>
+        mergeFolderChildren(prev, path, toFileTree(res.files, path)),
+      );
+    },
+    [selectedProjectId, activeWorktree],
+  );
 
   return {
     kbPickerOpen,
@@ -99,5 +135,6 @@ export function useKbPickerState({
     fileTree,
     setFileTree,
     refreshFileTree,
+    expandFileTreeFolder,
   };
 }

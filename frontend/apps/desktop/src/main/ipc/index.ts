@@ -109,6 +109,34 @@ export const registerIpcHandlers = () => {
     },
   );
 
+  // "Download" for a file that is already on this machine: ask where to put a
+  // copy. The web shell's download path (navigate to an attachment URL) has
+  // nothing to navigate to for a local file, so the desktop answers the same
+  // user intent with a save dialog instead.
+  ipcMain.handle(
+    "save_file_as",
+    async (_event, args: { path: string; suggestedName?: string }) => {
+      if (!args?.path) return { saved: false, error: "No path" };
+      const win = getMainWindow();
+      const opts: Electron.SaveDialogOptions = {
+        defaultPath: args.suggestedName || args.path.split(/[/\\]/).pop() || "",
+      };
+      const result = win
+        ? await dialog.showSaveDialog(win, opts)
+        : await dialog.showSaveDialog(opts);
+      if (result.canceled || !result.filePath) return { saved: false };
+      try {
+        await copyFile(args.path, result.filePath);
+        return { saved: true, path: result.filePath };
+      } catch (err) {
+        return {
+          saved: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+  );
+
   ipcMain.handle("delete_file", async (_event, args: { path: string }) => {
     if (!args?.path) return { success: false, error: "No path" };
     try {

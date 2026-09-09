@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -149,6 +151,12 @@ class FileNode:
     size: int | None = None
     modified: str | None = None
     children: list[FileNode] = field(default_factory=list)
+    #: Directory only: this walk stopped here, so ``children`` is empty because
+    #: the budget ran out — NOT because the directory is empty. Without it the
+    #: two are indistinguishable on the wire (an empty ``children`` list is
+    #: dropped from the payload), and the client draws a truncated subtree as an
+    #: empty folder. Clients fetch the rest with ``path=``.
+    truncated: bool = False
 
 
 def _row_to_list_item(row: ProjectRow, cwd: str | None = None) -> ProjectListItem:
@@ -655,6 +663,23 @@ class ProjectService:
         resolved = await worktree_service.resolve_session_cwd(user_id, row, worktree)
         return Path(resolved) if resolved else None
 
+    async def _list_root(self, user_id: str, row: ProjectRow, worktree: str | None) -> Path | None:
+        """Directory a file listing for this project (or worktree) starts at."""
+        # A worktree session's file tree reflects the worktree checkout, not the
+        # shared project cwd. A removed/invalid worktree yields no root (the
+        # session self-heals on the next send).
+        if worktree:
+            return await self._worktree_root(user_id, row, worktree)
+        # Projects delegate to the system file system. Chat projects walk their managed cwd under
+        # ``fs_registry.project_root(user_id)`` so any files the agent generates
+        # during the chat (excel exports, reports, scratch outputs, …)
+        # show up in the right-rail "generated files" panel.
+        if row.kind == "project":
+            return _root_path(user_id, row.root_path) if row.root_path else None
+        return fs_registry.project_cwd(
+            user_id, project_id=row.id, kind="chat", root_path=row.root_path
+        )
+
     async def list_files(
         self,
         user_id: str,
@@ -662,35 +687,33 @@ class ProjectService:
         depth: int = 2,
         include_hidden: bool = False,
         worktree: str | None = None,
+        path: str | None = None,
     ) -> list[dict[str, object]]:
+        """List one directory's subtree, ``depth`` levels down.
+
+        ``path`` is a directory relative to the listing root — that is what lets
+        a client expand a folder on demand instead of asking for the whole tree
+        up front. It stays a *relative* path on purpose: the root is the
+        server's to decide (project cwd vs worktree checkout), so a caller can
+        never point this at a directory of its own choosing.
+        """
         row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
-        # A worktree session's file tree reflects the worktree checkout, not the
-        # shared project cwd. Resolve it up front; a removed/invalid worktree
-        # yields an empty tree (the session self-heals on the next send).
-        if worktree:
-            wt_root = await self._worktree_root(user_id, row, worktree)
-            if wt_root is None or not wt_root.exists():
-                return []
-            nodes = _walk_dir(wt_root, depth=depth, include_hidden=include_hidden)
-            return [_node_to_dict(n) for n in nodes]
-        # Projects delegate to the system file system. Chat projects walk their managed cwd under
-        # ``fs_registry.project_root(user_id)`` so any files the agent generates
-        # during the chat (excel exports, reports, scratch outputs, …)
-        # show up in the right-rail "generated files" panel.
-        if row.kind == "project":
-            if not row.root_path:
-                return []
-            nodes = _walk_dir(
-                _root_path(user_id, row.root_path), depth=depth, include_hidden=include_hidden
-            )
-            return [_node_to_dict(n) for n in nodes]
-        else:
-            root = fs_registry.project_cwd(user_id, project_id, "chat", row.root_path)
-        if not root.exists():
+        root = await self._list_root(user_id, row, worktree)
+        if root is None:
             return []
-        nodes = _walk_dir(root, depth=depth, include_hidden=include_hidden)
+        try:
+            target = _resolve_listing_dir(root, path)
+        except ValueError:
+            return []
+        # ``_walk_dir`` is stat-bound, and on a cloud object-storage mount each
+        # stat is a network round trip — a few hundred entries would block the
+        # event loop for seconds. It is the only blocking call here, so hand it
+        # to a thread.
+        nodes = await asyncio.to_thread(
+            _walk_dir, target, depth=depth, include_hidden=include_hidden
+        )
         return [_node_to_dict(n) for n in nodes]
 
     async def write_file(
@@ -762,6 +785,26 @@ def _write_relative_file(root: Path, file_path: str, data: bytes) -> str:
     return target.relative_to(root).as_posix()
 
 
+def _resolve_listing_dir(root: Path, path: str | None) -> Path:
+    """Resolve a listing's ``path`` (relative, may be empty) under ``root``.
+
+    Rejects absolute paths and anything that escapes ``root``, symlinks
+    included — the check runs after ``resolve()`` so a link inside the tree
+    pointing out of it fails, the same posture ``assert_owned`` takes on the
+    resolve endpoint. Raises ``ValueError`` when the path is not usable.
+    """
+    if not path or path in (".", "./"):
+        return root
+    relative = Path(path)
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("Invalid listing path")
+    target = (root / relative).resolve()
+    root = root.resolve()
+    if target != root and root not in target.parents:
+        raise ValueError("Listing path escapes project root")
+    return target
+
+
 def _resolve_project_write_target(root: Path, file_path: str) -> Path:
     relative = Path(file_path)
     if relative.is_absolute() or any(part in {"", "."} for part in relative.parts):
@@ -772,6 +815,36 @@ def _resolve_project_write_target(root: Path, file_path: str) -> Path:
     if root != target and root not in target.parents:
         raise ValueError("File path escapes project root")
     return target
+
+
+def _is_listed(name: str, include_hidden: bool) -> bool:
+    """Whether an entry of this name belongs in a listing.
+
+    One predicate so the walk and the emptiness probe below can never disagree
+    about what "empty" means — a directory holding nothing but ``node_modules``
+    reads as empty to both.
+    """
+    if name in ALWAYS_EXCLUDED_NAMES:
+        return False
+    if include_hidden:
+        return True
+    if name in HIDDEN_NAMES:
+        return False
+    return not (name.startswith(".") and name != ".")
+
+
+def _has_visible_entries(directory: Path, include_hidden: bool) -> bool:
+    """``True`` if ``directory`` holds at least one entry a listing would show.
+
+    Stops at the first hit — this runs once per truncated directory, and on a
+    cloud object-storage mount every extra entry touched is a network round
+    trip.
+    """
+    try:
+        with os.scandir(directory) as entries:
+            return any(_is_listed(entry.name, include_hidden) for entry in entries)
+    except OSError:
+        return False
 
 
 def _walk_dir(
@@ -787,18 +860,23 @@ def _walk_dir(
     except PermissionError:
         return []
     for entry in entries:
-        if entry.name in ALWAYS_EXCLUDED_NAMES:
-            continue
-        if not include_hidden and entry.name in HIDDEN_NAMES:
-            continue
-        if not include_hidden and entry.name.startswith(".") and entry.name != ".":
+        if not _is_listed(entry.name, include_hidden):
             continue
         if entry.is_dir():
-            children = (
-                _walk_dir(entry, depth=depth - 1, include_hidden=include_hidden)
-                if depth > 0
-                else []
-            )
+            # Out of budget: report the directory as truncated instead of as a
+            # childless one. ``_has_visible_entries`` is one cheap scandir that
+            # stops at the first hit, so a genuinely empty directory still says
+            # ``truncated=False`` and the client can draw the difference.
+            if depth <= 0:
+                items.append(
+                    FileNode(
+                        name=entry.name,
+                        type="directory",
+                        truncated=_has_visible_entries(entry, include_hidden),
+                    )
+                )
+                continue
+            children = _walk_dir(entry, depth=depth - 1, include_hidden=include_hidden)
             items.append(FileNode(name=entry.name, type="directory", children=children))
         elif entry.is_file():
             try:
@@ -861,4 +939,8 @@ def _node_to_dict(node: FileNode) -> dict[str, object]:
         result["modified"] = node.modified
     if node.children:
         result["children"] = [_node_to_dict(c) for c in node.children]
+    # Only when set: an absent key means "listed in full", which is what every
+    # existing client already assumes.
+    if node.truncated:
+        result["truncated"] = True
     return result

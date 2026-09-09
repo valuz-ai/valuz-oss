@@ -5455,6 +5455,13 @@ components:
         kind: {type: string, enum: [local, remote, ""]}
         absPath: {type: string, nullable: true}
         url: {type: string, nullable: true}
+        # The same bytes addressed for SAVING rather than for rendering: the
+        # response carries `Content-Disposition: attachment`. Needed because a
+        # cross-origin `<a download>` has its `download` attribute ignored, so
+        # `url` opens the file in a tab under the storage key's name instead of
+        # saving it. Null when the bound resolver offers no separate download
+        # address — clients then fall back to `url`.
+        downloadUrl: {type: string, nullable: true}
         expiresAt: {type: integer, nullable: true}
         name: {type: string}
         mimeType: {type: string, nullable: true}

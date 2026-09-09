@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from "react";
 import {
   ChevronRight,
+  Download,
   Search,
   FileText,
   FolderTree,
@@ -466,6 +467,14 @@ export interface ProjectContextPanelProps {
   onUploadFiles?: (files: File[]) => void;
   onOpenInSystem?: (path: string) => void;
   onDeleteFile?: (path: string) => void;
+  /** Load a truncated folder's contents when the user opens it. Wiring this is
+   *  what lets the tree go deeper than one listing reaches; see
+   *  ``ProjectFileTreeProps.onExpandFolder``. */
+  onExpandFolder?: (path: string) => Promise<void>;
+  /** Save a generated file to the user's machine. Rows show the action only
+   *  when this is wired — a surface with no way to reach the bytes (a preview
+   *  in a browser over a local project) should not offer it. */
+  onDownloadGeneratedFile?: (path: string) => Promise<void> | void;
   /** Initial accordion section. ``null`` starts every section collapsed. */
   initialOpenSection?: string | null;
   /** When ``true``, every section is independently toggleable and starts
@@ -1122,6 +1131,8 @@ export const ProjectDetailContextPanel = ({
   onUploadFiles,
   onOpenInSystem,
   onDeleteFile,
+  onExpandFolder,
+  onDownloadGeneratedFile,
   initialOpenSection,
   multiOpen = false,
   collapsed: controlledCollapsed,
@@ -1313,6 +1324,7 @@ export const ProjectDetailContextPanel = ({
           activeFilePath={selectedFilePath}
           defaultOpenDepth={0}
           hideRootRow
+          onExpandFolder={onExpandFolder}
         />
       </div>
     </div>
@@ -1370,6 +1382,7 @@ export const ProjectDetailContextPanel = ({
         onDeleteFile={onDeleteFile}
         activeFilePath={selectedFilePath}
         defaultOpenDepth={0}
+        onExpandFolder={onExpandFolder}
       />
     </AccordionSection>
   ) : null;
@@ -1520,6 +1533,21 @@ export const ProjectDetailContextPanel = ({
           ) : null}
           {f.size ? (
             <span className="shrink-0 text-2xs text-ink-meta">{f.size}</span>
+          ) : null}
+          {onDownloadGeneratedFile ? (
+            // Hover-revealed: the row's primary action is opening the
+            // deliverable, and a permanently visible second button on every row
+            // would compete with it in a rail this narrow. Kept focusable so
+            // it is reachable without a pointer.
+            <button
+              type="button"
+              onClick={() => void onDownloadGeneratedFile(f.path)}
+              aria-label={t("ui.artifact.download")}
+              title={t("ui.artifact.download")}
+              className="shrink-0 rounded p-0.5 text-ink-meta opacity-0 transition-opacity hover:bg-surface-muted hover:text-ink-heading focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <Download className="h-3 w-3" />
+            </button>
           ) : null}
         </div>
 

@@ -46,6 +46,15 @@ export interface ResolvedFileDescriptor {
   kind: "local" | "remote" | "";
   absPath: string | null;
   url: string | null;
+  /**
+   * The same bytes addressed for **saving** rather than for rendering — the
+   * response carries ``Content-Disposition: attachment``. A cross-origin
+   * ``<a download>`` has its ``download`` attribute ignored by the browser, so
+   * navigating to ``url`` opens the file in a tab under the storage key's name
+   * instead of saving it under the file's own. ``null`` when the deployment's
+   * resolver offers no separate download address — fall back to ``url``.
+   */
+  downloadUrl?: string | null;
   expiresAt: number | null;
   name: string;
   mimeType: string | null;

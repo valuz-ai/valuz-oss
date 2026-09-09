@@ -74,6 +74,22 @@ export const copyFiles = async (
   });
 };
 
+/**
+ * Save a copy of a local file somewhere the user picks — the desktop's answer
+ * to "download this" for a file that already lives on this machine.
+ */
+export const saveFileAs = async (
+  path: string,
+  suggestedName?: string,
+): Promise<{ saved: boolean; path?: string; error?: string }> => {
+  const bridge = getBridge();
+  if (!bridge) return { saved: false, error: "Not in Electron" };
+  return bridge.invoke<{ saved: boolean; path?: string; error?: string }>(
+    "save_file_as",
+    { path, suggestedName },
+  );
+};
+
 export const deleteFile = async (
   path: string,
 ): Promise<{ success: boolean; error?: string }> => {

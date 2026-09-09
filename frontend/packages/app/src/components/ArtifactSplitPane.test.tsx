@@ -87,6 +87,7 @@ describe("ArtifactSplitPane preview shortcut", () => {
       error: null,
       open: vi.fn(async () => undefined),
       reload: vi.fn(async () => undefined),
+      download: vi.fn(async () => ({ ok: true, via: "address" }) as const),
       refreshOpen: vi.fn(async () => undefined),
       setWatchActive: vi.fn(),
       close: closeAll,

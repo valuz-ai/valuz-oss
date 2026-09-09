@@ -48,6 +48,11 @@ class ResolvedFileDescriptor(BaseModel):
     kind: str  # "local" | "remote" | "" (error)
     abs_path: str | None = Field(default=None, serialization_alias="absPath")
     url: str | None = None
+    #: Address for SAVING the file (``Content-Disposition: attachment``), as
+    #: opposed to ``url`` which addresses it for rendering. ``None`` when the
+    #: bound resolver offers no separate download address — the client then
+    #: falls back to ``url``. See ``ResolvedAddress.download_url``.
+    download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
     expires_at: int | None = Field(default=None, serialization_alias="expiresAt")
     name: str
     mime_type: str | None = Field(default=None, serialization_alias="mimeType")
@@ -71,8 +76,13 @@ _NO_CAPS = FileCapabilities(
 def _error(ref: str, error: str) -> ResolvedFileDescriptor:
     # Do not leak name/existence for invalid or forbidden refs.
     return ResolvedFileDescriptor(
-        ref=ref, kind="", name="", exists=False, preview_kind="unsupported",
-        capabilities=_NO_CAPS, error=error,
+        ref=ref,
+        kind="",
+        name="",
+        exists=False,
+        preview_kind="unsupported",
+        capabilities=_NO_CAPS,
+        error=error,
     )
 
 
@@ -103,9 +113,7 @@ async def _resolve_one(ref: str, user_id: str, roots: list[Path]) -> ResolvedFil
     meta = stat_meta(real)
 
     try:
-        addr = await get_file_address_resolver().to_address(
-            owner_user_id=user_id, abs_path=real
-        )
+        addr = await get_file_address_resolver().to_address(owner_user_id=user_id, abs_path=real)
     except PermissionError:
         # Storage-side boundary rejection (overlay defense-in-depth).
         return _error(ref, "forbidden")
@@ -115,6 +123,7 @@ async def _resolve_one(ref: str, user_id: str, roots: list[Path]) -> ResolvedFil
         kind=addr.kind,
         abs_path=str(addr.abs_path) if addr.abs_path is not None else None,
         url=addr.url,
+        download_url=addr.download_url,
         expires_at=addr.expires_at,
         name=meta.name,
         mime_type=meta.mime_type,
