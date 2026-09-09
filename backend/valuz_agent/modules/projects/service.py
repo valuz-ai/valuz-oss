@@ -106,6 +106,11 @@ CODE_EXTENSIONS = frozenset(
 PLAIN_EXTENSIONS = frozenset({"txt", "log", "env", "gitignore", "dockerignore", "editorconfig"})
 HTML_EXTENSIONS = frozenset({"html", "htm"})
 DOCX_EXTENSIONS = frozenset({"docx"})
+#: Only the OOXML form. The legacy binary ``.ppt`` is a different format that
+#: the renderer (which reads the zip) cannot open — leaving it unsupported is
+#: honest, and it is still downloadable.
+PRESENTATION_EXTENSIONS = frozenset({"pptx"})
+PRESENTATION_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 SPREADSHEET_EXTENSIONS = frozenset({"csv", "xls", "xlsx"})
 
 
@@ -941,6 +946,8 @@ def _preview_kind(name: str, mime_type: str | None) -> str:
         return "html"
     if ext in DOCX_EXTENSIONS:
         return "docx"
+    if ext in PRESENTATION_EXTENSIONS or mime_type == PRESENTATION_MIME:
+        return "presentation"
     if ext in SPREADSHEET_EXTENSIONS:
         return "spreadsheet"
     if ext in PLAIN_EXTENSIONS or (mime_type and mime_type.startswith("text/")):

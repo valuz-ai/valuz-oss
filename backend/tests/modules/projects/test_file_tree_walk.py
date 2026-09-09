@@ -123,3 +123,34 @@ def test_symlink_out_of_the_root_is_rejected(tree, tmp_path_factory):
     (tree / "escape").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError):
         _resolve_listing_dir(tree, "escape")
+
+
+def test_pptx_previews_as_a_presentation():
+    """A deck the agent produced is the deliverable, so it must be viewable.
+
+    Before this it fell to ``unsupported``, which on a cloud deployment left
+    the file with no way out at all — the unsupported view's only exit is
+    "open locally", and that is false for a remote file.
+    """
+    from valuz_agent.modules.projects.service import _preview_kind
+
+    assert _preview_kind("deck.pptx", None) == "presentation"
+    # By mime too: an upload can arrive with no useful extension.
+    assert (
+        _preview_kind(
+            "deck",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        == "presentation"
+    )
+
+
+def test_legacy_ppt_stays_unsupported():
+    """``.ppt`` is a different, binary format the renderer cannot open.
+
+    Claiming otherwise would trade "no preview" for "broken preview"; it stays
+    unsupported, and therefore downloadable.
+    """
+    from valuz_agent.modules.projects.service import _preview_kind
+
+    assert _preview_kind("deck.ppt", None) == "unsupported"

@@ -18,7 +18,14 @@ import {
 } from "@valuz/core";
 
 const TEXT_KINDS = new Set(["markdown", "code", "html", "plain"]);
-const BINARY_KINDS = new Set(["image", "pdf", "media", "docx", "spreadsheet"]);
+const BINARY_KINDS = new Set([
+  "image",
+  "pdf",
+  "media",
+  "docx",
+  "presentation",
+  "spreadsheet",
+]);
 export const MAX_TEXT_PREVIEW_BYTES = 5 * 1024 * 1024;
 
 async function readResponseTextPreview(

@@ -181,6 +181,7 @@ export type ArtifactPreviewKind =
   | "pdf"
   | "html"
   | "docx"
+  | "presentation"
   | "media"
   | "spreadsheet"
   | "plain"
