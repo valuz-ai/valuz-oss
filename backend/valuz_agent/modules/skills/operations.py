@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.frontmatter import split_frontmatter
+from valuz_agent.infra.path_names import is_slug_segment
 from valuz_agent.integrations.skills_filesystem import (
     FilesystemSkillSource,
     _default_user_skill_root,
@@ -311,7 +312,7 @@ def _set_manifest_name(manifest_path: Path, name: str) -> None:
 
 def _rename_staged_slug(staging_base: Path, library_root: Path, slug: str, new_slug: str) -> Path:
     chosen = (new_slug or "").strip()
-    if not staging.SLUG_RE.match(chosen):
+    if not is_slug_segment(chosen):
         raise ValueError(f"invalid new_slug: {chosen!r}")
     if chosen == slug:
         raise ValueError("new_slug must differ from the colliding slug")

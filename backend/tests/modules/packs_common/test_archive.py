@@ -102,11 +102,34 @@ def _legacy_agent_pack_dict(slug: str) -> dict:
         (POSIX_ABS, "price-audit"),
         ("./skills/price-audit", "price-audit"),
         ("price-audit/", "price-audit"),
-        ("price.audit_v2", "price.audit_v2"),
+        # Separators collapse to ``-`` like every other minting path: this is
+        # a slug, not just a filename. It used to come back as
+        # ``price.audit_v2`` because the filesystem rule was applied here.
+        ("price.audit_v2", "price-audit-v2"),
     ],
 )
 def test_sanitize_extracts_trailing_segment(raw: str, expected: str) -> None:
     assert sanitize_skill_slug(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # Pack import was the last path that could mint a directory name the
+        # rest of the chain rejects: a space has no delimiter in a
+        # ``/mention``, and ``#`` truncates a cloud URL at the fragment.
+        ("my skill", "my-skill"),
+        ("tag#1", "tag-1"),
+        # A pack authored on a Chinese install keeps its name, same as a
+        # skill created locally.
+        ("天气查询", "天气查询"),
+    ],
+)
+def test_sanitize_produces_a_usable_slug_not_merely_a_filename(raw: str, expected: str) -> None:
+    from valuz_agent.infra.path_names import is_slug_segment
+
+    assert sanitize_skill_slug(raw) == expected
+    assert is_slug_segment(sanitize_skill_slug(raw))
 
 
 @pytest.mark.parametrize(

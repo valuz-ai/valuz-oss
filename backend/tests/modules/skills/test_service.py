@@ -775,6 +775,39 @@ class TestCreateSkill:
         assert 'name: "react-components"' in raw
         assert "react:components" not in raw
 
+    async def test_should_name_the_directory_after_a_chinese_skill_name(self, svc, skill_root):
+        """A name in a non-Latin script is the directory name, not thrown away.
+
+        The ASCII-only charset that used to derive the slug left nothing for
+        such a name, so it fell to the bare ``skill`` fallback — the folder
+        was called ``skill``, and the display name in SKILL.md was the only
+        place the user's own words survived.
+        """
+        service = svc
+        result = await service.create_skill(
+            "u", SkillCreateRequest(name="天气查询", description="A test")
+        )
+        assert Path(result.path).name == "天气查询"
+        assert result.name == "天气查询"
+
+    async def test_should_keep_two_chinese_skills_apart(self, svc, skill_root):
+        """The regression this rule exists for.
+
+        Every Chinese name derived the same slug, so the second skill became
+        ``skill-2`` and the third ``skill-3``: which folder was which depended
+        on the order they happened to be created in, and no folder name told
+        the user anything.
+        """
+        service = svc
+        first = await service.create_skill(
+            "u", SkillCreateRequest(name="天气查询", description="A")
+        )
+        second = await service.create_skill(
+            "u", SkillCreateRequest(name="航锦盘后复盘", description="B")
+        )
+        assert Path(first.path).name == "天气查询"
+        assert Path(second.path).name == "航锦盘后复盘"
+
     async def test_should_dodge_windows_device_name_for_slug(self, svc, skill_root):
         """``con`` / ``com1`` are reserved device names on Windows — a
         directory can't carry one even though the charset is plain ASCII."""

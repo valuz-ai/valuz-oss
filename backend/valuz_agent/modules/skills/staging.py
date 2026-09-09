@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from valuz_agent.infra.path_names import is_slug_segment
 from valuz_agent.integrations.skills_filesystem import (
     _default_user_skill_root,
     _detect_manifest,
@@ -44,7 +45,6 @@ from valuz_agent.integrations.skills_filesystem import (
 )
 
 STAGING_META_FILENAME = ".staging-meta.json"
-SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+?)(?:-v(?P<n>\d+))?$")
 
 
@@ -421,10 +421,20 @@ async def scan_staging(user_id: str, session_id: str) -> StagingScanResult:
     for entry in sorted(session_dir.iterdir()):
         if not entry.is_dir():
             continue
-        if not SLUG_RE.match(entry.name):
-            continue  # ignore stray dirs that don't look like slugs
         if _detect_manifest(entry) is None:
             continue  # no SKILL.md → not a real skill yet, skip silently
+        if not is_slug_segment(entry.name):
+            # ``debug``, not ``warning``: the panel polls this scan every few
+            # seconds, so one unslug-able directory that nobody cleans up
+            # would repeat a warning forever. It is a diagnostic for whoever
+            # is already looking, not an alert. The user-facing half of this
+            # is ``prepare_optimize``, which raises with the reason.
+            logger.debug(
+                "staging: %s carries a SKILL.md but its directory name is not a "
+                "usable slug, so the draft is not offered for saving.",
+                entry,
+            )
+            continue
 
         files, file_count, total_bytes = _list_files(entry)
         name, description, version = _read_manifest_meta(entry)
@@ -518,7 +528,7 @@ async def sync_slug(
 
     if strategy == "fork":
         chosen = (new_slug or _next_versioned_slug(root, slug)).strip()
-        if not SLUG_RE.match(chosen):
+        if not is_slug_segment(chosen):
             raise ValueError(f"invalid fork slug: {chosen!r}")
         dest = root / chosen
         if dest.exists():
@@ -557,8 +567,17 @@ async def prepare_optimize(
 
     session_dir = await staging_dir_for_session(user_id, session_id, mkdir=True)
     slug = source_skill_dir.name
-    if not SLUG_RE.match(slug):
-        raise ValueError(f"source skill slug is not a valid identifier: {slug!r}")
+    # The source here is a skill already installed in the library, so the
+    # question is "can this name be staged", not "would we have minted it" —
+    # hence the admission rule. A library skill the user named in Chinese is
+    # legitimately on disk and must remain editable. The message names the
+    # rule because this is the one place the rejection reaches a person.
+    if not is_slug_segment(slug):
+        raise ValueError(
+            f"skill directory name {slug!r} cannot be staged for editing: a name may "
+            "hold only letters, digits, '-', '_' and '.', must be lowercase, and must "
+            "start with a letter or digit. Rename the directory to edit this skill."
+        )
     dest = session_dir / slug
     _copy_clean(source_skill_dir, dest)
 
