@@ -119,6 +119,39 @@ class TestManualAndIsDue:
         assert ev.next_fire_at(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is None
         assert ev.is_due(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is False
 
+class TestEventTriggerAndCoexistence:
+    """Covers the two invariants from ports/automation_event_source.py:
+    events never replace the clock, and an ``event`` row is never
+    tick-driven."""
+
+    def test_event_kind_never_tick_driven(self) -> None:
+        ev = TriggerEvaluator()
+        row = _row(
+            trigger_kind="event",
+            cron_expr=None,
+            event_source="finance-metric",
+            event_refs=["watch-1"],
+        )
+        assert ev.next_fire_at(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is None
+        assert ev.is_due(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is False
+
+    def test_cron_row_with_event_refs_still_ticks_on_cron(self) -> None:
+        """Rule: an automation may carry a schedule AND an event subscription
+        at once — trigger_kind='event' only means "no clock at all", it is
+        not the only way to attach event_source/event_refs. A cron row that
+        also has event_refs must still fire on its cron schedule."""
+        ev = TriggerEvaluator(default_timezone="UTC")
+        row = _row(
+            trigger_kind="cron",
+            cron_expr="0 9 * * *",
+            event_source="finance-metric",
+            event_refs=["watch-1", "watch-2"],
+            next_run_at=_ms(datetime(2025, 1, 1, tzinfo=UTC)),  # overdue
+        )
+        after = _ms(datetime(2026, 5, 28, 8, 0, tzinfo=UTC))
+        assert ev.next_fire_at(row, after) == _ms(datetime(2026, 5, 28, 9, 0, tzinfo=UTC))
+        assert ev.is_due(row, _ms(datetime(2026, 5, 28, tzinfo=UTC))) is True
+
     def test_paused_row_never_due(self) -> None:
         ev = TriggerEvaluator()
         row = _row(

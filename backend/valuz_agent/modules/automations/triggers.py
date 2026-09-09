@@ -97,7 +97,10 @@ class TriggerEvaluator:
             seconds = row.interval_seconds or MIN_INTERVAL_SECONDS
             return after + seconds * 1000
 
-        # manual / unknown — never tick-driven
+        # manual / event / unknown — never tick-driven. An event row's wakeup
+        # comes from AutomationService.fire_from_event (a delivery matching
+        # event_source/event_refs), not from this evaluator — there is no
+        # "next" instant for the tick loop to compute.
         return None
 
     def is_due(self, row: AutomationRow, now: int) -> bool:
@@ -105,13 +108,16 @@ class TriggerEvaluator:
 
         Cron / interval use the stored ``next_run_at`` (already computed at
         last fire / at create time). Manual is never due via the tick — only
-        ``run_now`` and the future webhook endpoint enqueue manual rows.
+        ``run_now`` enqueues manual rows. Event is likewise never due via the
+        tick — it wakes exclusively through ``fire_from_event`` matching an
+        inbound delivery's refs, never through ``next_run_at`` (which stays
+        NULL per ``next_fire_at`` above).
 
         Instants are epoch ms ints — an int comparison, no tz/naive guard.
         """
         if row.status != "enabled":
             return False
-        if row.trigger_kind == "manual":
+        if row.trigger_kind in ("manual", "event"):
             return False
         if row.next_run_at is None:
             return False

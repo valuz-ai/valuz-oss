@@ -112,6 +112,7 @@
     "title": "Automation",
     "toggleFailed": "Toggle failed: {error}",
     "triggerCron": "Cron",
+    "triggerEvent": "Event",
     "triggerInterval": "Interval",
     "triggerManual": "Manual",
     "updateFailed": "Update failed: {error}",

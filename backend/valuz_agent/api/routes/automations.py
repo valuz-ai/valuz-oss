@@ -16,12 +16,18 @@ file stays a thin pass-through.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends
 
 from valuz_agent.api.deps import get_automation_service, get_current_user_id
+from valuz_agent.modules.automations.errors import AutomationEventSourceUnknown
 from valuz_agent.modules.automations.schemas import (
     AutomationCreatePayload,
     AutomationDetailResponse,
+    AutomationEventDeliveryResponse,
+    AutomationEventSourceDescriptor,
+    AutomationEventSourcesResponse,
     AutomationGroupResponse,
     AutomationItemResponse,
     AutomationProjectTargetsResponse,
@@ -38,8 +44,44 @@ from valuz_agent.modules.automations.schemas import (
     IntervalValidationResultResponse,
 )
 from valuz_agent.modules.automations.service import AutomationService
+from valuz_agent.ports.automation_event_source import UnknownEventSourceError, describe_sources
 
 router = APIRouter(prefix="/v1/automations", tags=["automations"])
+
+
+@router.get("/event-sources")
+async def list_event_sources() -> AutomationEventSourcesResponse:
+    """What this deployment can wake an automation with, other than the
+    clock. Empty on OSS (the registry boots with nothing registered) —
+    the automation editor uses this to build its event-trigger picker from
+    exactly what can actually be delivered, never a hardcoded guess."""
+    return AutomationEventSourcesResponse(
+        sources=[AutomationEventSourceDescriptor(**entry) for entry in describe_sources()]
+    )
+
+
+@router.post("/events/{source}")
+async def receive_automation_event(
+    source: str,
+    payload: dict[str, Any],
+    svc: AutomationService = Depends(get_automation_service),
+) -> AutomationEventDeliveryResponse:
+    """Inbound delivery entrypoint for an event source.
+
+    Deliberately no ``Depends(get_current_user_id)`` — a source's delivery
+    isn't a user request, it's the source posting to its own webhook.
+    Authentication and replay protection are the source's job inside
+    ``resolve_inbound`` (signature checks, timestamps); this route only
+    guards against a ``source`` nobody registered, which is a 404 — an
+    empty (OSS-default) registry must never turn this into a 500.
+    """
+    try:
+        run_ids = await svc.fire_from_event(source, payload)
+    except UnknownEventSourceError as exc:
+        raise AutomationEventSourceUnknown(str(exc)) from exc
+    return AutomationEventDeliveryResponse(
+        source=source, runs_created=len(run_ids), run_ids=run_ids
+    )
 
 
 @router.get("")

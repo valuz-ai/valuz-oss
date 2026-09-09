@@ -27,6 +27,7 @@ from valuz_agent.integrations.sandbox_credential_hmac import (
     PerOwnerHmacSandboxCredentialVerifier,
 )
 from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
+from valuz_agent.ports.automation_event_source import AutomationEventSourceRegistry
 from valuz_agent.ports.agent_lifecycle import AgentLifecycleHook, NoopAgentLifecycleHook
 from valuz_agent.ports.automation_runtime import (
     AutomationRuntimePort,
@@ -189,6 +190,12 @@ class Extensions:
         # registration is live without a process restart. See
         # docs/design/a2ui-dynamic-components.md.
         self.a2ui_components = A2UIComponentRegistry()
+        # Who may wake an automation, other than the clock. Boots EMPTY: OSS
+        # ships no event source and no event type, so every event field is
+        # refused at the API edge until an overlay registers one. Keeps OSS
+        # from learning what any particular upstream is
+        # (ports/automation_event_source.py).
+        self.automation_event_sources = AutomationEventSourceRegistry()
         # What this install treats as builtin (skills / connectors / agent
         # templates / plugins). OSS reads the packaged manifests only; the
         # commercial overlay binds a cloud-backed resolver that falls back to

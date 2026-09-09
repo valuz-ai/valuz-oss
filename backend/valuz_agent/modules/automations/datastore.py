@@ -169,6 +169,26 @@ class AutomationDatastore:
             .all()
         )
 
+    async def list_event_candidates(self, source: str) -> list[AutomationRow]:
+        """SYSTEM SWEEP (cross-owner). Enabled rows subscribed to ``source``.
+
+        A delivery isn't scoped to one caller's ``user_id`` — the source
+        posts once and this fans out to whichever owners subscribed, same
+        shape as the tick-loop sweeps above. ``AutomationService.fire_from_event``
+        threads each row's own ``user_id`` into its enqueue, and does the
+        ref-intersection in-process (``event_refs`` is a JSON list — no
+        portable containment operator across SQLite/Postgres, and the
+        per-source row count is small enough that this is not a hot path).
+
+        ``status == "enabled"`` only: a paused row — whether paused by the
+        user or force-paused after a failed subscribe — must not fire, same
+        rule the tick loop already applies.
+        """
+        stmt = select(AutomationRow).where(
+            AutomationRow.event_source == source, AutomationRow.status == "enabled"
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
     async def find_due_automations(self, now: int) -> list[AutomationRow]:
         """SYSTEM SWEEP (cross-owner). Rows whose ``next_run_at <= now`` and
         ``status == enabled`` — the tick loop fires every owner's due rows. The

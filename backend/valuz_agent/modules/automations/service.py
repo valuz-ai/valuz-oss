@@ -22,9 +22,12 @@ from the legacy schedule:
 from __future__ import annotations
 
 import json
-from typing import Literal
+import logging
+from collections.abc import Mapping
+from typing import Any, Literal
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.i18n import t
@@ -49,6 +52,8 @@ from valuz_agent.modules.automations.errors import (
     AutomationAgentRequired,
     AutomationAlreadyQueued,
     AutomationAlreadyRunning,
+    AutomationEventSourceRequired,
+    AutomationEventSubscribeFailed,
     AutomationNameEmpty,
     AutomationNotFound,
     AutomationPlaybookNotFound,
@@ -59,6 +64,7 @@ from valuz_agent.modules.automations.errors import (
     AutomationTaskOnlyOnProject,
     IntervalTooShort,
     InvalidCronExpression,
+    InvalidEventSubscription,
     InvalidTimeZone,
 )
 from valuz_agent.modules.automations.models import (
@@ -77,6 +83,7 @@ from valuz_agent.modules.automations.schemas import (
     AutomationUpdatePayload,
     CronTrigger,
     CronValidationResultResponse,
+    EventTrigger,
     IntervalTrigger,
     IntervalValidationResultResponse,
     ManualTrigger,
@@ -88,8 +95,11 @@ from valuz_agent.modules.automations.triggers import (
 )
 from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
 from valuz_agent.modules.projects.service import ProjectService
+from valuz_agent.ports.automation_event_source import EventSubscription, UnknownEventSourceError
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
 from valuz_agent.ports.extensions import ext
+
+logger = logging.getLogger(__name__)
 
 
 def _normalise_tz(value: str | None) -> str | None:
@@ -196,6 +206,8 @@ class AutomationService:
             )
         if row.trigger_kind == "interval":
             return IntervalTrigger(seconds=row.interval_seconds or MIN_INTERVAL_SECONDS)
+        if row.trigger_kind == "event":
+            return EventTrigger()
         return ManualTrigger()
 
     def _trigger_human(self, row: AutomationRow) -> str:
@@ -203,6 +215,8 @@ class AutomationService:
             return self._cron.describe(row.cron_expr, locale=self._locale)
         if row.trigger_kind == "interval" and row.interval_seconds:
             return _format_interval_human(row.interval_seconds, locale=self._locale)
+        if row.trigger_kind == "event":
+            return t("automation.triggerEvent", locale=self._locale)
         return t("automation.triggerManual", locale=self._locale)
 
     def _apply_trigger(self, row: AutomationRow, trigger: Trigger) -> None:
@@ -227,6 +241,11 @@ class AutomationService:
             row.cron_expr = None
             row.timezone = None
             row.interval_seconds = trigger.seconds
+        elif isinstance(trigger, EventTrigger):
+            row.trigger_kind = "event"
+            row.cron_expr = None
+            row.timezone = None
+            row.interval_seconds = None
         else:  # ManualTrigger
             row.trigger_kind = "manual"
             row.cron_expr = None
@@ -253,6 +272,63 @@ class AutomationService:
         elif isinstance(trigger, IntervalTrigger):
             if trigger.seconds < MIN_INTERVAL_SECONDS:
                 raise IntervalTooShort()
+
+    # ── Event subscription (ports/automation_event_source.py) ─────────
+
+    def _validate_event_source(
+        self, event_source: str | None, event_refs: list[str] | None
+    ) -> EventSubscription | None:
+        """Check a requested subscription against the registry.
+
+        ``None`` means "no subscription requested" — the caller is
+        responsible for what that implies for the row (leave untouched on
+        create's fully-specified payload it never happens; on update it means
+        "clear"). Deliberately does NOT touch storage or call the source —
+        that happens only after the row commits, so a bad *upstream* call
+        never blocks a row that passed validation from existing at all (see
+        ``_subscribe_event``).
+        """
+        if event_source is None:
+            return None
+        subscription = EventSubscription(source=event_source, refs=tuple(event_refs or ()))
+        try:
+            ext.automation_event_sources.validate(subscription)
+        except (UnknownEventSourceError, ValueError) as exc:
+            # Both an unregistered source name and a source's own refs
+            # rejection are the same kind of client mistake from here —
+            # forward the message verbatim, it's already written to be
+            # user-actionable (see AutomationEventSourceRegistry.validate).
+            raise InvalidEventSubscription(str(exc)) from exc
+        return subscription
+
+    async def _subscribe_event(
+        self, row: AutomationRow, subscription: EventSubscription, *, user_id: str
+    ) -> None:
+        """Start upstream monitoring for a row that is ALREADY committed.
+
+        A failed ``subscribe`` is retryable per the port's docstring, so this
+        never rolls the row back. Instead it force-pauses the row — reusing
+        the existing enabled/paused status semantics rather than adding a
+        column just for this — so a half-subscribed automation can't silently
+        run with events it never actually receives, persists that, and raises
+        a 502 so the failure reaches the caller. Resubmitting the same
+        event_source/event_refs through update tries subscribe again.
+        """
+        try:
+            source = ext.automation_event_sources.require(subscription.source)
+            await source.subscribe(user_id=user_id, automation_id=row.id, subscription=subscription)
+        except Exception as exc:  # noqa: BLE001 — any upstream failure lands here
+            logger.warning(
+                "automation %s: subscribe to event source %r failed: %s",
+                row.id,
+                subscription.source,
+                exc,
+            )
+            row.status = "paused"
+            row.next_run_at = None
+            row.updated_at = now_ms()
+            await self._ds.update_automation(row)
+            raise AutomationEventSubscribeFailed(str(exc)) from exc
 
     async def _resolve_playbook_pin(
         self,
@@ -327,6 +403,8 @@ class AutomationService:
             playbook_version=getattr(row, "playbook_version", None),
             trigger=self._row_to_trigger(row),
             trigger_human_readable=self._trigger_human(row),
+            event_source=row.event_source,
+            event_refs=row.event_refs,
             status=row.status,
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
@@ -902,6 +980,10 @@ class AutomationService:
             user_id=user_id,
         )
 
+        # Validated up front (before the row exists at all); the upstream
+        # subscribe() call itself only happens after the row commits below.
+        subscription = self._validate_event_source(payload.event_source, payload.event_refs)
+
         now = now_ms()
         row = AutomationRow(
             id=uuid4().hex,
@@ -919,6 +1001,8 @@ class AutomationService:
             next_run_at=None,
             last_run_at=None,
             origin_tool_call_id=origin_tool_call_id,
+            event_source=payload.event_source,
+            event_refs=payload.event_refs,
             created_at=now,
             updated_at=now,
         )
@@ -931,6 +1015,8 @@ class AutomationService:
             project_id=row.project_id,
             automation_id=row.id,
         )
+        if subscription is not None:
+            await self._subscribe_event(row, subscription, user_id=user_id)
         return await self._row_to_detail(row, user_id)
 
     async def create_from_row(
@@ -1025,6 +1111,8 @@ class AutomationService:
             worktree=bool(getattr(row, "worktree", False)),
             trigger=self._row_to_trigger(row),
             trigger_human_readable=self._trigger_human(row),
+            event_source=row.event_source,
+            event_refs=row.event_refs,
             status=row.status,
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
@@ -1127,11 +1215,39 @@ class AutomationService:
         if payload.worktree is not None:
             row.worktree = bool(payload.worktree)
 
+        # ── Event subscription ──────────────────────────────────────────
+        # Both fields patchable, but only as a pair (schema-enforced): to
+        # touch refs you resend the whole subscription. Omitted = untouched;
+        # explicit event_source=null = drop it (mirrors playbook_definition_id
+        # null-to-unpin). Validated now; the source is only called (subscribe
+        # / release) once the row itself is safely committed below.
+        old_source = row.event_source
+        pending_subscription: EventSubscription | None = None
+        event_source_cleared = False
+        if payload.model_fields_set & {"event_source", "event_refs"}:
+            if payload.event_source is not None:
+                pending_subscription = self._validate_event_source(
+                    payload.event_source, payload.event_refs
+                )
+                row.event_source = payload.event_source
+                row.event_refs = payload.event_refs
+            else:
+                row.event_source = None
+                row.event_refs = None
+                event_source_cleared = True
+
         trigger_changed = False
         if payload.trigger is not None:
             self._validate_trigger(payload.trigger)
             self._apply_trigger(row, payload.trigger)
             trigger_changed = True
+
+        # Mirrors ck_automation_event_source_when_event: catches the case
+        # where THIS update switches trigger to 'event' while also clearing
+        # (or never having had) an event_source, which the create-time
+        # Pydantic check can't see because it only looks at one payload.
+        if row.trigger_kind == "event" and row.event_source is None:
+            raise AutomationEventSourceRequired()
 
         if trigger_changed and row.status == "enabled":
             row.next_run_at = self._triggers.initial_next_fire(row, now=now_ms())
@@ -1143,6 +1259,22 @@ class AutomationService:
             project_id=row.project_id,
             automation_id=row.id,
         )
+
+        # Subscribe the NEW subscription first; only release the OLD one once
+        # the new one is confirmed live, so a failure mid-switch leaves the
+        # old subscription intact instead of a gap where nothing is watching.
+        if pending_subscription is not None:
+            await self._subscribe_event(row, pending_subscription, user_id=user_id)
+        source_switched = (
+            pending_subscription is not None
+            and old_source is not None
+            and old_source != pending_subscription.source
+        )
+        if old_source is not None and (event_source_cleared or source_switched):
+            stale = ext.automation_event_sources.get(old_source)
+            if stale is not None:
+                await stale.release(user_id=user_id, automation_id=row.id)
+
         return await self._row_to_detail(row, user_id)
 
     async def pause(
@@ -1156,6 +1288,13 @@ class AutomationService:
         row.next_run_at = None
         row.updated_at = now_ms()
         await self._ds.update_automation(row)
+        if row.event_source is not None:
+            # Keep the upstream monitor alive (another automation may share
+            # it) — just stop delivering to THIS one. Best-effort: an
+            # overlay-torn-down source silently no-ops here, same as release.
+            source = ext.automation_event_sources.get(row.event_source)
+            if source is not None:
+                await source.pause(user_id=user_id, automation_id=row.id)
         self._bus.publish(
             "automation.changed",
             project_id=row.project_id,
@@ -1174,6 +1313,10 @@ class AutomationService:
         row.next_run_at = self._triggers.initial_next_fire(row, now=now_ms())
         row.updated_at = now_ms()
         await self._ds.update_automation(row)
+        if row.event_source is not None:
+            source = ext.automation_event_sources.get(row.event_source)
+            if source is not None:
+                await source.resume(user_id=user_id, automation_id=row.id)
         self._bus.publish(
             "automation.changed",
             project_id=row.project_id,
@@ -1187,12 +1330,55 @@ class AutomationService:
         if row is None:
             raise AutomationNotFound()
         ws_id = row.project_id
+        event_source, event_source_id = row.event_source, row.id
         await self._ds.delete_automation(user_id, automation_id)
+        if event_source is not None:
+            source = ext.automation_event_sources.get(event_source)
+            if source is not None:
+                await source.release(user_id=user_id, automation_id=event_source_id)
         self._bus.publish(
             "automation.changed",
             project_id=ws_id,
             automation_id=automation_id,
         )
+
+    async def _enqueue_run(
+        self,
+        row: AutomationRow,
+        *,
+        user_id: str,
+        trigger_type: Literal["manual", "agent", "event"],
+        event_id: str | None = None,
+        invoked_by_session_id: str | None = None,
+        extra_input: str | None = None,
+    ) -> AutomationRunRow:
+        """Shared enqueue path: write the run row, publish, hand to the
+        runtime port. Every entrance that starts a run — ``run_now`` and
+        ``fire_from_event`` alike — goes through here so a run started by an
+        event is indistinguishable downstream from one started by a click.
+        """
+        now = now_ms()
+        run = AutomationRunRow(
+            id=uuid4().hex,
+            automation_id=row.id,
+            project_id=row.project_id,
+            trigger_type=trigger_type,
+            status="queued",
+            triggered_at=now,
+            invoked_by_session_id=invoked_by_session_id,
+            extra_input=(extra_input.strip() or None) if extra_input else None,
+            event_id=event_id,
+        )
+        await self._ds.create_run(user_id, run)
+        self._bus.publish(
+            "automation.run.queued",
+            automation_id=row.id,
+            run_id=run.id,
+        )
+        await ext.automation_runtime.enqueue(
+            AutomationRunCommand(user_id=user_id, automation_id=row.id, run_id=run.id)
+        )
+        return run
 
     async def run_now(
         self,
@@ -1241,34 +1427,64 @@ class AutomationService:
             if existing.status == "running":
                 raise AutomationAlreadyRunning()
 
-        now = now_ms()
-        run = AutomationRunRow(
-            id=uuid4().hex,
-            automation_id=automation_id,
-            project_id=row.project_id,
+        run = await self._enqueue_run(
+            row,
+            user_id=user_id,
             trigger_type=trigger_type,
-            status="queued",
-            triggered_at=now,
             invoked_by_session_id=invoked_by_session_id,
-            extra_input=(extra_input.strip() or None) if extra_input else None,
-        )
-        await self._ds.create_run(user_id, run)
-        self._bus.publish(
-            "automation.run.queued",
-            automation_id=automation_id,
-            run_id=run.id,
-        )
-
-        await ext.automation_runtime.enqueue(
-            AutomationRunCommand(
-                user_id=user_id,
-                automation_id=automation_id,
-                run_id=run.id,
-            )
+            extra_input=extra_input,
         )
         return AutomationRunAcceptedResponse(
             run_id=run.id, automation_id=automation_id, status="queued"
         )
+
+    async def fire_from_event(self, source_name: str, payload: Mapping[str, Any]) -> list[str]:
+        """Dispatch one inbound delivery to every automation waiting on it.
+
+        ``source_name`` addresses the route (``POST
+        /automations/events/{source}``); authentication and parsing are the
+        source's own job inside ``resolve_inbound`` (signature checks, replay
+        windows) — this method trusts whatever it hands back. An unregistered
+        ``source_name`` propagates ``UnknownEventSourceError`` to the caller (the
+        route maps it to a typed 404, never a 500).
+
+        Cross-owner by design — one delivery fans out to whichever owners
+        subscribed, like the tick-loop's own cross-owner sweeps; each row's
+        own ``user_id`` is threaded into its enqueue.
+        """
+        event = ext.automation_event_sources.resolve_inbound(source_name, payload)
+        if event is None:
+            # "Not for us / not trustworthy" per the port's contract — drop
+            # silently rather than dispatch a run on unverified input.
+            return []
+        if not ext.automation_event_sources.accepts_event(event):
+            # The source doesn't actually declare this event_type — dropped
+            # the same as an unresolved delivery, not surfaced as an error.
+            return []
+
+        wanted_refs = set(event.refs)
+        candidates = await self._ds.list_event_candidates(event.source)
+        created: list[str] = []
+        for row in candidates:
+            if not wanted_refs.intersection(row.event_refs or ()):
+                continue
+            try:
+                run = await self._enqueue_run(
+                    row,
+                    user_id=row.user_id,
+                    trigger_type="event",
+                    event_id=event.event_id,
+                )
+            except IntegrityError:
+                # uq_automation_run_event: this automation already has a run
+                # for this event_id — a webhook retry, a reconciliation
+                # replay, or another subscription on the same row matching
+                # the same delivery. Not an error: at most one run per
+                # (automation, event) is the whole point of the constraint.
+                await self._db.rollback()
+                continue
+            created.append(run.id)
+        return created
 
     async def list_runs(
         self,

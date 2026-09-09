@@ -375,6 +375,7 @@ export type KnownI18nKey =
   | "automation.title"
   | "automation.toggleFailed"
   | "automation.triggerCron"
+  | "automation.triggerEvent"
   | "automation.triggerInterval"
   | "automation.triggerManual"
   | "automation.updateFailed"

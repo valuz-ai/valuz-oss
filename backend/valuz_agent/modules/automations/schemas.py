@@ -16,9 +16,16 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from valuz_agent.modules.automations.triggers import MIN_INTERVAL_SECONDS
+
+# Fan-out guard: a delivery that matches this automation's refs is checked in
+# an in-process set intersection per candidate row (see
+# AutomationService.fire_from_event). An unbounded ref list would turn one
+# inbound event into unbounded matching work per delivery for no realistic
+# benefit — no source's watchable-thing count plausibly needs more than this.
+MAX_EVENT_REFS = 64
 
 # ── Trigger discriminated union ───────────────────────────────────────
 
@@ -61,15 +68,31 @@ class IntervalTrigger(BaseModel):
 
 
 class ManualTrigger(BaseModel):
-    """No automated firing — only ``run_now`` (and future webhook). Reserved
-    for the case where the user wants the automation row to exist as a
-    template even though it's not on a schedule."""
+    """No automated firing — only ``run_now``. Reserved for the case where
+    the user wants the automation row to exist as a template even though
+    it's not on a schedule and not wired to any event source."""
 
     kind: Literal["manual"] = "manual"
 
 
+class EventTrigger(BaseModel):
+    """No clock at all — the row fires purely from
+    ``AutomationService.fire_from_event`` matching ``event_source`` /
+    ``event_refs`` (see ``ports/automation_event_source.py``).
+
+    Distinct from ``ManualTrigger``: a manual row is inert until a human (or
+    agent) explicitly runs it; an event row is expected to wake on its own
+    whenever its subscription matches a delivery. Picking this kind does NOT
+    forbid also carrying a cron/interval schedule elsewhere on the API
+    surface — this is the trigger *kind* discriminator, and event_source /
+    event_refs are separate, orthogonal fields available under every kind
+    (rule: events augment triggers, they don't replace them)."""
+
+    kind: Literal["event"] = "event"
+
+
 Trigger = Annotated[
-    Union[CronTrigger, IntervalTrigger, ManualTrigger],  # noqa: UP007
+    Union[CronTrigger, IntervalTrigger, ManualTrigger, EventTrigger],  # noqa: UP007
     Field(discriminator="kind"),
 ]
 
@@ -95,6 +118,26 @@ AgentKind = Literal["project_member", "library_agent"]
 # rendered prompt becomes the task goal. Only valid for project
 # projects (validated at create / update time).
 ActionKind = Literal["chat", "task"]
+
+
+def _normalise_event_refs(value: list[str] | None) -> list[str] | None:
+    """Dedupe (order-preserving), reject blanks, cap the fan-out.
+
+    Shared by create/update so the two payloads can't drift on what counts
+    as a valid ref list.
+    """
+    if value is None:
+        return None
+    deduped: dict[str, None] = {}
+    for ref in value:
+        stripped = ref.strip()
+        if not stripped:
+            raise ValueError("event_refs entries must not be blank")
+        deduped[stripped] = None
+    refs = list(deduped)
+    if len(refs) > MAX_EVENT_REFS:
+        raise ValueError(f"event_refs supports at most {MAX_EVENT_REFS} entries")
+    return refs
 
 
 # ── Create / Update payloads ──────────────────────────────────────────
@@ -151,6 +194,37 @@ class AutomationCreatePayload(BaseModel):
     # non-git (chat-sentinel) projects.
     worktree: bool = False
 
+    # Event subscription — orthogonal to ``trigger`` (rule: events augment,
+    # never replace, the clock). ``event_source`` is a registry key from
+    # ``ports/automation_event_source.py``; whether it's actually registered
+    # is an ``ext`` lookup, so that check lives in the service, not here.
+    event_source: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Event source registry key. Required when trigger.kind='event'.",
+    )
+    event_refs: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque refs the source uses to match deliveries (watch id, symbol, "
+            "…). Requires event_source. Deduped; max "
+            f"{MAX_EVENT_REFS} entries."
+        ),
+    )
+
+    @field_validator("event_refs")
+    @classmethod
+    def _check_event_refs(cls, value: list[str] | None) -> list[str] | None:
+        return _normalise_event_refs(value)
+
+    @model_validator(mode="after")
+    def _check_event_subscription(self) -> AutomationCreatePayload:
+        if self.event_refs is not None and self.event_source is None:
+            raise ValueError("event_refs requires event_source")
+        if isinstance(self.trigger, EventTrigger) and self.event_source is None:
+            raise ValueError("trigger kind 'event' requires event_source")
+        return self
+
 
 class AutomationUpdatePayload(BaseModel):
     """Partial update. ``None`` everywhere = "leave field untouched".
@@ -179,6 +253,35 @@ class AutomationUpdatePayload(BaseModel):
     # that Definition's current version at update time.
     playbook_definition_id: str | None = Field(default=None, max_length=36)
     playbook_version: int | None = Field(default=None, ge=1)
+
+    # Event subscription (see AutomationCreatePayload). ``None`` here is
+    # ambiguous by construction — PATCH semantics elsewhere on this payload
+    # already use ``model_fields_set`` to tell "omitted" from "explicit
+    # null" (see playbook_definition_id), and the service applies the same
+    # trick: omitted = leave untouched, explicit null = clear the
+    # subscription. Whether refs+source together still add up to a valid
+    # subscription against the *stored* row (e.g. trigger already 'event')
+    # needs the row, so that cross-check lives in the service, not here —
+    # this validator only catches an inconsistency visible within one
+    # request (refs without a source in the same payload).
+    event_source: str | None = Field(default=None, max_length=64)
+    event_refs: list[str] | None = None
+
+    @field_validator("event_refs")
+    @classmethod
+    def _check_event_refs(cls, value: list[str] | None) -> list[str] | None:
+        return _normalise_event_refs(value)
+
+    @model_validator(mode="after")
+    def _check_event_subscription(self) -> AutomationUpdatePayload:
+        if (
+            "event_refs" in self.model_fields_set
+            and self.event_refs is not None
+            and self.event_source is None
+            and "event_source" not in self.model_fields_set
+        ):
+            raise ValueError("event_refs requires event_source")
+        return self
 
 
 # ── Response models ──────────────────────────────────────────────────
@@ -212,6 +315,12 @@ class AutomationItemResponse(BaseModel):
     # rendering. Cron rows go through ``cron-descriptor``; interval rows
     # format inline.
     trigger_human_readable: str
+
+    # Event subscription, echoed verbatim from storage (see
+    # AutomationCreatePayload). ``None`` / ``None`` when the row isn't
+    # subscribed to anything — the common case while OSS ships no source.
+    event_source: str | None = None
+    event_refs: list[str] | None = None
 
     status: str
     next_run_at: int | None
@@ -314,6 +423,33 @@ class AutomationProjectTarget(BaseModel):
 
 class AutomationProjectTargetsResponse(BaseModel):
     targets: list[AutomationProjectTarget]
+
+
+# ── Event sources (ports/automation_event_source.py) ──────────────────
+
+
+class AutomationEventSourceDescriptor(BaseModel):
+    """One registered source's closed set of event types — wire shape of
+    ``ports.automation_event_source.describe_sources()``."""
+
+    source: str
+    event_types: list[str]
+
+
+class AutomationEventSourcesResponse(BaseModel):
+    """Empty on OSS by default — the registry boots with nothing registered.
+    The automation editor uses this to build its "what should wake this?"
+    selector from exactly what the deployment can actually deliver."""
+
+    sources: list[AutomationEventSourceDescriptor]
+
+
+class AutomationEventDeliveryResponse(BaseModel):
+    """Result of one inbound delivery — how many automations it woke."""
+
+    source: str
+    runs_created: int
+    run_ids: list[str]
 
 
 # ── MCP tool surface (replaces the legacy ``cronjob`` schema) ────────
