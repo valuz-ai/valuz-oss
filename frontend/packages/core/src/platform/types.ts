@@ -14,6 +14,18 @@ export interface PlatformCapabilities {
     destDir: string,
   ) => Promise<{ copied: number; errors: string[] }>;
   deleteFile: (path: string) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Save a copy of a local file to a location the user picks — the desktop's
+   * answer to "download this" when the file already lives on this machine (a
+   * cloud file is downloaded from its address instead, which needs no host
+   * capability). Absent outside Electron; callers must feature-detect and fall
+   * back to the address path. ``saved: false`` with no ``error`` means the user
+   * cancelled the dialog.
+   */
+  saveFileAs?: (
+    path: string,
+    suggestedName?: string,
+  ) => Promise<{ saved: boolean; path?: string; error?: string }>;
   /** Open a path with the OS. Resolves to the OS's complaint when it could
    *  not — empty string on success — so a caller can say WHY nothing opened
    *  instead of leaving the click silent. Hosts that cannot open anything

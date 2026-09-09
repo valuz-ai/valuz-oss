@@ -9,6 +9,7 @@ import {
   ContextMenuTrigger,
 } from "../ui/context-menu";
 import { useI18n } from "../../hooks/use-i18n";
+import { Spinner } from "../ui/spinner";
 
 /**
  * Render a file/folder name in a single line with truncate-on-overflow,
@@ -63,6 +64,14 @@ export interface FileTreeNode {
   type: "file" | "folder";
   children?: FileTreeNode[];
   path: string;
+  /**
+   * Folder only: its contents were not included in this listing, so the absent
+   * ``children`` means "not loaded yet", not "empty". Opening it asks
+   * ``onExpandFolder`` for the level below. Without this flag a folder deeper
+   * than the listing went is indistinguishable from an empty one — which is
+   * how a whole subtree silently disappears.
+   */
+  truncated?: boolean;
 }
 
 export interface ProjectFileTreeProps {
@@ -88,6 +97,17 @@ export interface ProjectFileTreeProps {
   guideLineOffset?: number;
   /** Pixel spacing between vertical guide lines. */
   guideLineSpacing?: number;
+  /**
+   * Load a truncated folder's contents. Called once, when the folder is first
+   * opened; the caller is expected to merge the result into ``tree`` and clear
+   * that node's ``truncated``.
+   *
+   * This is what removes the depth ceiling: instead of one walk deep enough for
+   * the worst tree, each level is fetched when someone actually looks at it. A
+   * caller that omits it gets the old behaviour (truncated folders open to
+   * nothing) — so the flag stays honest even without a loader.
+   */
+  onExpandFolder?: (path: string) => Promise<void>;
 }
 
 const TreeNode = ({
@@ -101,6 +121,7 @@ const TreeNode = ({
   defaultOpenDepth,
   guideLineOffset,
   guideLineSpacing,
+  onExpandFolder,
 }: {
   node: FileTreeNode;
   onFileClick?: (path: string) => void;
@@ -112,9 +133,45 @@ const TreeNode = ({
   defaultOpenDepth: number;
   guideLineOffset: number;
   guideLineSpacing: number;
+  onExpandFolder?: (path: string) => Promise<void>;
 }) => {
   const { t } = useI18n();
   const [open, setOpen] = useState(depth < defaultOpenDepth);
+  const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  // A refresh replaces the node, so a failure recorded against the previous
+  // one must not outlive it. React keeps this instance alive as long as the
+  // path is stable, so without this reset one transient error would disable
+  // the folder for the rest of the session — ``toggleFolder`` refuses to
+  // retry while ``loadFailed`` is set.
+  // React's "adjust state when a prop changes" pattern: compare during render
+  // and set, rather than an effect (which would paint the stale error first).
+  const nodeIdentity = `${node.truncated ? 1 : 0}:${node.children?.length ?? -1}`;
+  const [seenIdentity, setSeenIdentity] = useState(nodeIdentity);
+  if (seenIdentity !== nodeIdentity) {
+    setSeenIdentity(nodeIdentity);
+    if (loadFailed) setLoadFailed(false);
+  }
+
+  const loadChildren = () => {
+    if (loading || !onExpandFolder) return;
+    if (!node.truncated || node.children?.length) return;
+    setLoading(true);
+    setLoadFailed(false);
+    void onExpandFolder(node.path)
+      .catch(() => setLoadFailed(true))
+      .finally(() => setLoading(false));
+  };
+
+  // Fetch on open, not on every toggle: a folder that already has children has
+  // nothing to fetch, and one that failed shows a retry instead of re-firing
+  // silently.
+  const toggleFolder = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !loadFailed) loadChildren();
+  };
   const guideColumns = Array.from({ length: depth + 1 }, (_, i) => (
     <span
       key={i}
@@ -134,7 +191,7 @@ const TreeNode = ({
       <div>
         <button
           type="button"
-          onClick={() => setOpen(!open)}
+          onClick={toggleFolder}
           className="relative flex w-full items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-label hover:bg-[color:var(--fg-1)]"
           style={rowStyle}
         >
@@ -150,7 +207,27 @@ const TreeNode = ({
             <Folder className="relative h-3.5 w-3.5 shrink-0 text-ink-muted" />
           )}
           <TruncatedName text={node.name} className="relative" />
+          {loading ? <Spinner className="relative shrink-0" /> : null}
         </button>
+        {open && loadFailed ? (
+          <div
+            className="flex items-center gap-2 px-2 py-1 text-2xs text-ink-meta"
+            style={{ paddingLeft: `${(depth + 1) * guideLineSpacing + 24}px` }}
+            role="alert"
+          >
+            <span>{t("project.expandFolderFailed")}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setLoadFailed(false);
+                loadChildren();
+              }}
+              className="rounded px-1 text-ink-body underline-offset-2 transition-colors hover:text-ink-heading hover:underline"
+            >
+              {t("ui.artifact.retry")}
+            </button>
+          </div>
+        ) : null}
         {open &&
           node.children?.map((child) => (
             <TreeNode
@@ -165,6 +242,7 @@ const TreeNode = ({
               defaultOpenDepth={defaultOpenDepth}
               guideLineOffset={guideLineOffset}
               guideLineSpacing={guideLineSpacing}
+              onExpandFolder={onExpandFolder}
             />
           ))}
       </div>
@@ -230,6 +308,7 @@ export const ProjectFileTree = ({
   hideRootRow = false,
   guideLineOffset = -6,
   guideLineSpacing = 18,
+  onExpandFolder,
 }: ProjectFileTreeProps) => {
   const { t } = useI18n();
   if (tree.length === 0) {
@@ -263,6 +342,7 @@ export const ProjectFileTree = ({
             defaultOpenDepth={defaultOpenDepth}
             guideLineOffset={guideLineOffset}
             guideLineSpacing={guideLineSpacing}
+            onExpandFolder={onExpandFolder}
           />
         ))}
       </div>

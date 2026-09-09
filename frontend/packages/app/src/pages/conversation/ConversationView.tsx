@@ -197,7 +197,9 @@ function ConversationViewPage(props: ConversationViewProps) {
     handleLocalFilesAttach: core.handleLocalFilesAttach,
     handleRemoveSessionAttachment: core.handleRemoveSessionAttachment,
     openArtifactFile: core.openArtifactFile,
+    downloadArtifactFile: core.downloadArtifactFile,
     refreshFileTree: core.refreshFileTree,
+    expandFileTreeFolder: core.expandFileTreeFolder,
     panelCollapsed: core.panelCollapsed,
     panelSetCollapsed: core.panelSetCollapsed,
     todos: core.todos,
@@ -216,6 +218,8 @@ function ConversationViewPage(props: ConversationViewProps) {
         onClose={core.handleArtifactClose}
         onCopyContent={core.handleArtifactCopy}
         onOpenExternal={core.handleArtifactOpenExternal}
+        onDownload={core.handleArtifactDownload}
+        downloading={core.artifactDownloading}
       >
         <div className="relative flex h-full min-h-0 flex-col bg-surface">
           <ConversationHeader

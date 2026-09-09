@@ -31,6 +31,12 @@ from valuz_agent.modules.settings.preferences import get_default_effort
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
+#: Ceiling on one file-tree request. Deep trees are reached by expanding a
+#: folder (``path=``), not by asking for more levels at once: the walk stats
+#: every entry it lists, and on a cloud object-storage mount that is a network
+#: round trip apiece, so an unbounded ``depth`` is a denial-of-service knob.
+MAX_FILE_TREE_DEPTH = 8
+
 
 class LastSessionPickResponse(BaseModel):
     """Per-project memory of the last (runtime, provider, model) picked.
@@ -162,9 +168,22 @@ async def list_files(
     depth: int = 2,
     include_hidden: bool = False,
     worktree: str | None = None,
+    path: str | None = None,
     user_id: str = Depends(get_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> dict[str, list[dict[str, object]]]:
+    """One directory's subtree.
+
+    ``path`` (relative to the listing root, omitted = the root itself) is what
+    makes on-demand expansion possible: a client walks a deep tree one level at
+    a time instead of paying for the whole thing up front. A directory whose
+    contents were cut off by ``depth`` comes back with ``truncated: true`` so
+    the client can tell it apart from an empty one and ask for it by path.
+    """
+    if depth < 0 or depth > MAX_FILE_TREE_DEPTH:
+        raise HTTPException(
+            status_code=422, detail=f"depth must be between 0 and {MAX_FILE_TREE_DEPTH}"
+        )
     try:
         return {
             "files": await svc.list_files(
@@ -173,10 +192,16 @@ async def list_files(
                 depth=depth,
                 include_hidden=include_hidden,
                 worktree=worktree,
+                path=path,
             )
         }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Rejected ``path`` (absolute, traversal, or escaping the root). Said
+        # out loud rather than answered with an empty listing — a client that
+        # got ``[]`` would render the folder as empty and never retry.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # File CONTENT is no longer served by the API: the single-file read

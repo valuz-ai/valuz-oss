@@ -165,6 +165,13 @@ export interface ProjectFileNode {
   size: number | null;
   modified: string | null;
   children?: ProjectFileNode[];
+  /**
+   * Directory only: the walk stopped here, so the absent ``children`` means
+   * "not listed yet", not "empty". Fetch the rest with ``listFiles(id, {
+   * path })``. Without this flag the two are indistinguishable and a deep
+   * subtree renders as an empty folder.
+   */
+  truncated?: boolean;
 }
 
 export type ArtifactPreviewKind =
@@ -412,9 +419,20 @@ export const projectsApi = {
     return result;
   },
 
+  /**
+   * One directory's subtree. ``path`` (relative to the listing root, omitted =
+   * the root) is how a client expands a folder on demand instead of paying for
+   * the whole tree up front — the backend caps ``depth`` because it stats every
+   * entry it lists.
+   */
   listFiles(
     projectId: string,
-    opts?: { depth?: number; includeHidden?: boolean; worktree?: string },
+    opts?: {
+      depth?: number;
+      includeHidden?: boolean;
+      worktree?: string;
+      path?: string;
+    },
   ): Promise<{ files: ProjectFileNode[] }> {
     const qs = new URLSearchParams();
     if (opts?.depth !== undefined) qs.set("depth", String(opts.depth));
@@ -422,6 +440,7 @@ export const projectsApi = {
     // Scope the tree to a worktree session's checkout instead of the shared
     // project cwd when a worktree name is supplied.
     if (opts?.worktree) qs.set("worktree", opts.worktree);
+    if (opts?.path) qs.set("path", opts.path);
     const suffix = qs.toString() ? `?${qs}` : "";
     return fetchJson(
       `/v1/projects/${encodeURIComponent(projectId)}/files${suffix}`,

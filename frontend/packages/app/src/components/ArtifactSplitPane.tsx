@@ -51,6 +51,8 @@ export interface ArtifactSplitPaneProps {
   onClose: () => void;
   onCopyContent: () => void;
   onOpenExternal: () => void;
+  onDownload?: () => void;
+  downloading?: boolean;
   /** The surface's own content, rendered as the left column. */
   children: ReactNode;
 }
@@ -69,6 +71,8 @@ export function ArtifactSplitPane({
   onClose,
   onCopyContent,
   onOpenExternal,
+  onDownload,
+  downloading,
   children,
 }: ArtifactSplitPaneProps) {
   const {
@@ -176,6 +180,8 @@ export function ArtifactSplitPane({
           onClose={onClose}
           onCopyContent={onCopyContent}
           onOpenExternal={onOpenExternal}
+          onDownload={onDownload}
+          downloading={downloading}
         />
       </div>
     </div>

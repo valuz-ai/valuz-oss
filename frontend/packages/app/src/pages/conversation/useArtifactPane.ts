@@ -1,14 +1,12 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
-import {
-  useTranslation,
-  type SessionListItem,
-} from "@valuz/core";
+import { useTranslation, type SessionListItem } from "@valuz/core";
 import { type ArtifactOpenTarget } from "@valuz/ui";
 import { usePlatform } from "@valuz/app/platform";
 import { useConversationLocalFileLinks } from "@valuz/app/hooks";
 import { type DirectoryFieldMode } from "@valuz/app/layout";
 import { useArtifactFile } from "../../hooks/use-artifact-file";
+import { useArtifactDownload } from "../../hooks/use-artifact-download";
 import {
   toAbsoluteProjectPath,
   toProjectRelativePath,
@@ -84,6 +82,11 @@ export function useArtifactPane({
     reload: reloadArtifact,
     close: closeArtifact,
   } = artifactFile;
+  const {
+    download: downloadArtifactFile,
+    handleDownload: handleArtifactDownload,
+    downloading: artifactDownloading,
+  } = useArtifactDownload(artifactFile);
 
   const openArtifactFile = useCallback(
     async (path: string, target?: ArtifactOpenTarget) => {
@@ -132,10 +135,13 @@ export function useArtifactPane({
     artifactFile,
     closeArtifact,
     openArtifactFile,
+    downloadArtifactFile,
     localFileLinks,
     handleArtifactReload,
     handleArtifactClose,
     handleArtifactCopy,
     handleArtifactOpenExternal,
+    handleArtifactDownload,
+    artifactDownloading,
   };
 }

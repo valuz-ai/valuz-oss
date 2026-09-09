@@ -63,7 +63,9 @@ type ContextPanelParams = {
     path: string,
     target?: ArtifactOpenTarget,
   ) => Promise<void>;
+  downloadArtifactFile: (path?: string) => Promise<void>;
   refreshFileTree: () => void;
+  expandFileTreeFolder: (path: string) => Promise<void>;
   panelCollapsed: boolean;
   panelSetCollapsed: (collapsed: boolean) => void;
   todos: TodoItem[] | null;
@@ -106,7 +108,9 @@ export function useContextPanel({
   handleLocalFilesAttach,
   handleRemoveSessionAttachment,
   openArtifactFile,
+  downloadArtifactFile,
   refreshFileTree,
+  expandFileTreeFolder,
   panelCollapsed,
   panelSetCollapsed,
   todos,
@@ -290,6 +294,7 @@ export function useContextPanel({
           />
         }
         onOpenGeneratedFile={(path) => void openArtifactFile(path)}
+        onDownloadGeneratedFile={downloadArtifactFile}
         onLoadArtifactVersions={handleLoadArtifactVersions}
         // KB binding tree — project sessions only, **read-only**: we
         // pass ``kbTree`` + ``bindings`` (so the checkbox state shows
@@ -345,6 +350,7 @@ export function useContextPanel({
           );
         }}
         onRefreshFiles={refreshFileTree}
+        onExpandFolder={expandFileTreeFolder}
         collapsed={panelCollapsed}
         onCollapsedChange={(c) => panelSetCollapsed(c)}
         todos={todos}
@@ -355,6 +361,8 @@ export function useContextPanel({
     fileTree,
     activeProjectRootPath,
     openArtifactFile,
+    downloadArtifactFile,
+    expandFileTreeFolder,
     panelCollapsed,
     panelSetCollapsed,
     selectedComposerSkill,

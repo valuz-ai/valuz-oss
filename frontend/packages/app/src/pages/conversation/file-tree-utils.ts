@@ -1,18 +1,10 @@
-import type { ProjectFileNode } from "@valuz/core";
-import type { FileTreeNode } from "@valuz/ui";
-
-export function toFileTree(nodes: ProjectFileNode[], prefix = ""): FileTreeNode[] {
-  return nodes.map((n) => {
-    const path = prefix ? `${prefix}/${n.name}` : n.name;
-    const result: FileTreeNode = {
-      name: n.name,
-      type: n.type === "directory" ? "folder" : "file",
-      path,
-    };
-    if (n.children) result.children = toFileTree(n.children, path);
-    return result;
-  });
-}
+// Re-exported so the conversation page's existing importers are unaffected;
+// the implementations live in the shared lib beside the other tree helpers.
+export {
+  toFileTree,
+  mergeFolderChildren,
+  preserveLoadedChildren,
+} from "../../lib/file-tree";
 
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

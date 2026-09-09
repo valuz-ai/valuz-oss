@@ -6,7 +6,11 @@ import {
 } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
-import { toFileTree } from "./file-tree-utils";
+import { preserveLoadedChildren, toFileTree } from "./file-tree-utils";
+import {
+  useFileTreeExpansion,
+  FILE_TREE_INITIAL_DEPTH,
+} from "../../hooks/use-file-tree-expansion";
 
 type KbPickerStateParams = {
   selectedProjectId: string | null;
@@ -75,17 +79,29 @@ export function useKbPickerState({
     }
     projectsApi
       .listFiles(selectedProjectId, {
-        depth: 3,
+        depth: FILE_TREE_INITIAL_DEPTH,
         // Worktree sessions show their own checkout, not the shared project cwd.
         worktree: activeWorktree?.name ?? undefined,
       })
-      .then((res) => setFileTree(toFileTree(res.files)))
+      // Carry the expanded levels across. A refresh only re-fetches the
+      // initial depth, so without this every folder the user opened past it
+      // would empty out on turn-end — and stay empty, since the tree only
+      // loads a level when the user clicks to open it.
+      .then((res) =>
+        setFileTree((prev) => preserveLoadedChildren(prev, toFileTree(res.files))),
+      )
       .catch(() => setFileTree([]));
   }, [selectedProjectId, activeWorktree]);
 
   useEffect(() => {
     refreshFileTree();
   }, [refreshFileTree]);
+
+  const expandFileTreeFolder = useFileTreeExpansion({
+    projectId: selectedProjectId,
+    worktree: activeWorktree?.name ?? undefined,
+    setFileTree,
+  });
 
   return {
     kbPickerOpen,
@@ -99,5 +115,6 @@ export function useKbPickerState({
     fileTree,
     setFileTree,
     refreshFileTree,
+    expandFileTreeFolder,
   };
 }

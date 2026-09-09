@@ -103,6 +103,9 @@ export interface TaskContextPanelProps {
    *  project home rail uses (see ``FileRefreshButton``). Optional;
    *  hides the button when absent. */
   onRefreshFiles?: () => void;
+  /** Load a truncated folder's contents when the user opens it — what lets
+   *  this tree go deeper than one listing reaches. */
+  onExpandFolder?: (path: string) => Promise<void>;
   /** Reveal the project cwd in the OS file manager. Optional; hides
    *  the button when absent. */
   onOpenInFinder?: () => void;
@@ -143,6 +146,7 @@ export const TaskContextPanel = ({
   fileTree,
   rootPath,
   onRefreshFiles,
+  onExpandFolder,
   onOpenInFinder,
   onPreviewFile,
   onOpenFile,
@@ -500,6 +504,7 @@ export const TaskContextPanel = ({
                 onFileClick={onPreviewFile}
                 onFileDoubleClick={onPreviewFile}
                 onOpenInSystem={onOpenFile}
+                onExpandFolder={onExpandFolder}
               />
             )}
           </div>
