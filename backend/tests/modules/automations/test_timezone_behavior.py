@@ -287,3 +287,105 @@ class TestTimezonePrefNormalisation:
 
         monkeypatch.setattr(p, "_read", _pref)
         assert await p.get_default_timezone(MagicMock()) == "Asia/Kuala_Lumpur"
+
+
+class TestHostWithoutTzDatabase:
+    """A host where stdlib ``zoneinfo`` has NO data to read.
+
+    That is the packaged Windows client without the ``tzdata`` wheel: Windows
+    ships no system tz database, so ``ZoneInfo(key)`` raises for EVERY key —
+    ``ZoneInfo("UTC")`` included. ``tzdata`` is now a declared dependency, so
+    this state should not occur; these tests exist because the degradation path
+    itself was broken. Rendering must fall back to UTC and keep going, never
+    raise out of ``_build_template_variables`` — the escape landed in a region
+    with no ``except``, left the run stuck in ``queued`` and made every later
+    ``run_now`` fail as already-queued.
+    """
+
+    @staticmethod
+    def _no_tz_database(monkeypatch, module) -> None:  # type: ignore[no-untyped-def]
+        """Make every ``ZoneInfo(...)`` in ``module`` raise, "UTC" included."""
+        from zoneinfo import ZoneInfoNotFoundError
+
+        def _always_missing(key: str):  # type: ignore[no-untyped-def]
+            raise ZoneInfoNotFoundError(f"No time zone found with key {key}")
+
+        monkeypatch.setattr(module, "ZoneInfo", _always_missing)
+
+    @staticmethod
+    def _row():  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            id="auto-1",
+            name="Daily digest",
+            project_id="proj-1",
+            agent_slug="analyst",
+            last_run_at=int(dt(2026, 6, 4, 1, 0, tzinfo=UTC).timestamp() * 1000),
+        )
+
+    def test_render_falls_back_to_utc_instead_of_raising(self, monkeypatch) -> None:
+        from valuz_agent.modules.automations import in_process_runner as ipr
+
+        self._no_tz_database(monkeypatch, ipr)
+        variables = ipr._build_template_variables(  # noqa: SLF001
+            row=self._row(), project_name="Research", effective_tz="Asia/Shanghai"
+        )
+
+        assert variables["tz"] == "UTC"
+        assert variables["now"] == variables["now_utc"]
+        assert variables["last_run_at"] == "2026-06-04T01:00:00+00:00"
+
+    def test_artifact_stamp_falls_back_to_utc(self, monkeypatch) -> None:
+        """Same broken-fallback shape in the artifacts context section."""
+        from valuz_agent.modules.artifacts import context as ctx
+
+        self._no_tz_database(monkeypatch, ctx)
+        epoch_ms = int(dt(2026, 6, 4, 1, 30, tzinfo=UTC).timestamp() * 1000)
+        assert ctx._stamp(epoch_ms, "Asia/Shanghai") == "2026-06-04 01:30"  # noqa: SLF001
+
+    def test_artifact_stamp_without_a_tz_name_needs_no_fallback(self, monkeypatch) -> None:
+        """``tz_name=None`` must not route through ``ZoneInfo("UTC")`` at all —
+        that call is exactly the one this whole class says cannot be relied on."""
+        from valuz_agent.modules.artifacts import context as ctx
+
+        self._no_tz_database(monkeypatch, ctx)
+        epoch_ms = int(dt(2026, 6, 4, 1, 30, tzinfo=UTC).timestamp() * 1000)
+        assert ctx._stamp(epoch_ms, None) == "2026-06-04 01:30"  # noqa: SLF001
+
+
+class TestTzDatabaseIsBundled:
+    """``tzdata`` must stay a DECLARED dependency.
+
+    stdlib ``zoneinfo`` reads the SYSTEM tz database first, so on the mac/Linux
+    dev box every ``ZoneInfo(...)`` passes whether or not the wheel is present —
+    the dependency's absence is invisible until a Windows build runs. Two checks,
+    because either alone has a hole: the declaration can be dropped while a
+    transitive dep keeps the venv working, and the declaration can be present
+    while the wheel is missing from the environment under test.
+    """
+
+    def test_tzdata_is_declared_in_pyproject(self) -> None:
+        import tomllib
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+        deps = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["dependencies"]
+        assert any(d.split(">=")[0].split("==")[0].strip() == "tzdata" for d in deps), (
+            "tzdata must stay in [project] dependencies — stdlib zoneinfo has no "
+            "data source on Windows without it, and nothing on mac/Linux notices."
+        )
+
+    def test_zoneinfo_resolves_without_a_system_tz_database(self) -> None:
+        import zoneinfo
+
+        # ``reset_tzpath`` is the only supported way to change what ZoneInfo
+        # reads, and it is process-global — hence the finally, which must not
+        # be narrowed to the happy path.
+        original = list(zoneinfo.TZPATH)
+        try:
+            zoneinfo.reset_tzpath(to=[])
+            # ``no_cache`` bypasses the module cache so the lookup really has to
+            # re-read a source; with TZPATH empty that source can only be tzdata.
+            for key in ("Asia/Shanghai", "UTC"):
+                assert zoneinfo.ZoneInfo.no_cache(key) is not None
+        finally:
+            zoneinfo.reset_tzpath(to=original)

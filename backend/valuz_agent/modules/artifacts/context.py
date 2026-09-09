@@ -24,7 +24,7 @@ compare-and-set are what actually hold; this only reduces how often they have to
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,10 +41,18 @@ MAX_LISTED = 10
 
 
 def _stamp(epoch_ms: int, tz_name: str | None) -> str:
-    try:
-        moment = datetime.fromtimestamp(epoch_ms / 1000, ZoneInfo(tz_name or "UTC"))
-    except Exception:  # noqa: BLE001 — a bad tz must not cost the whole section
-        moment = datetime.fromtimestamp(epoch_ms / 1000, ZoneInfo("UTC"))
+    # ``datetime.UTC``, never ``ZoneInfo("UTC")`` — on a host with no tz database
+    # (Windows without the ``tzdata`` wheel) the "UTC" lookup raises too, so a
+    # ``ZoneInfo``-based default would fail in the no-tz_name case AND make the
+    # handler below re-raise the error it exists to swallow. See the same note in
+    # ``modules/automations/in_process_runner._build_template_variables``.
+    tz: tzinfo = UTC
+    if tz_name:
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:  # noqa: BLE001 — a bad tz must not cost the whole section
+            pass
+    moment = datetime.fromtimestamp(epoch_ms / 1000, tz)
     return f"{moment:%Y-%m-%d %H:%M}"
 
 

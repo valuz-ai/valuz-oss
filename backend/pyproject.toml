@@ -125,6 +125,19 @@ dependencies = [
     "croniter>=6.2.2",
     "cron-descriptor>=2.0.8",
     "pytz>=2026.1.post1",
+    # The IANA tz database for stdlib ``zoneinfo``. ``ZoneInfo(name)`` reads the
+    # SYSTEM database first (``/usr/share/zoneinfo`` & co) and only falls back to
+    # this package — so on mac/Linux it is inert, but WINDOWS ships no system tz
+    # database at all and every ``ZoneInfo(...)`` raises
+    # ``ZoneInfoNotFoundError``, *including* ``ZoneInfo("UTC")``. That killed
+    # every automation run on the packaged Windows client: the cron side reads
+    # its zones from ``pytz`` (which vendors its own copy) so scheduling worked,
+    # while the prompt-variable side uses ``zoneinfo`` and had no data to read.
+    # Declared unconditionally rather than under a ``sys_platform == 'win32'``
+    # marker: a slim/alpine container is the same story, the wheel is ~1 MB, and
+    # a marker would leave the frozen bundle's behaviour depending on which
+    # runner built it.
+    "tzdata>=2026.1",
     "types-pytz>=2026.1.1.20260408",
     "types-croniter>=6.2.2.20260408",
     "types-pyyaml>=6.0",

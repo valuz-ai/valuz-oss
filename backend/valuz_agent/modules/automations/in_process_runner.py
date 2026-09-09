@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -108,15 +108,24 @@ def _build_template_variables(
     ``last_run_at`` is rendered in the effective tz too so successive runs
     build a coherent timeline.
     """
+    tz: tzinfo
     try:
         tz = ZoneInfo(effective_tz)
+        tz_label = effective_tz
     except Exception:
+        # ``datetime.UTC``, NOT ``ZoneInfo("UTC")``. The fallback must not
+        # depend on the same resource whose absence it exists to absorb: on a
+        # host with no tz database (Windows without the ``tzdata`` wheel) even
+        # the "UTC" lookup raises, so this handler used to re-raise out of a
+        # region with no ``except`` — the run stayed ``queued`` forever and
+        # every later ``run_now`` was refused as already-queued.
         logger.warning(
             "Unknown timezone %r for automation %s; rendering prompt vars in UTC",
             effective_tz,
             row.id,
         )
-        tz = ZoneInfo("UTC")
+        tz = UTC
+        tz_label = "UTC"
 
     now_utc = datetime.now(UTC)
     now_local = now_utc.astimezone(tz)
@@ -143,7 +152,7 @@ def _build_template_variables(
         "now_utc": now_utc.isoformat(),
         "today": now_local.strftime("%Y-%m-%d"),
         "yesterday": (now_local - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "tz": tz.key,
+        "tz": tz_label,
         "last_run_at": last_run_at_local,
     }
 
@@ -407,6 +416,9 @@ class InProcessAutomationRunner:
         # work; the spawn happens only AFTER the ``running`` status is committed
         # (below, outside the ``async with``).
         handoff_args: tuple[str, str, TaskCheckConfig] | None = None
+        # Bound before the ``try`` below so the catch-all handler can reach it
+        # however early the failure happened.
+        playbook_run: PlaybookRunRow | None = None
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
             playbooks = PlaybookDatastore(db)
@@ -439,7 +451,6 @@ class InProcessAutomationRunner:
                 if run.extra_input:
                     rendered_prompt = f"{rendered_prompt}\n\n{run.extra_input}"
 
-                playbook_run: PlaybookRunRow | None = None
                 if row.playbook_definition_id is not None:
                     definition = await playbooks.get_definition(
                         user_id,
@@ -641,6 +652,43 @@ class InProcessAutomationRunner:
                 handoff_args = (
                     session.id, rendered_prompt, _automation_check_config(row, run, playbook_run)
                 )
+            except Exception as exc:
+                # Everything before ``create_session`` used to run with NO handler:
+                # the exception escaped ``_execute_run``, the unit of work rolled
+                # back, and the run row stayed ``queued`` forever — after which
+                # ``run_now``'s single-flight check refused every retry with
+                # ``AutomationAlreadyQueued`` until a restart let
+                # ``_reconcile_stranded_runs`` clear it. A run must always reach a
+                # terminal state, so record the failure exactly as the
+                # session-creation branch above does.
+                run.status = "failed"
+                run.error_code = type(exc).__name__
+                run.error_message_key = getattr(exc, "message_key", None)
+                run.error_message = str(exc)[:500]
+                run.completed_at = now_ms()
+                if playbook_run is not None:
+                    playbook_run.status = "failed"
+                    playbook_run.error_code = run.error_code
+                    playbook_run.error_message = run.error_message
+                    playbook_run.completed_at = run.completed_at
+                    playbook_run.checkpoint = {
+                        "automation_run_status": "failed",
+                        "phase": "run_preparation",
+                    }
+                logger.exception(
+                    "Run %s failed before dispatch for automation %s",
+                    run_id,
+                    automation_id,
+                )
+                if not await execution_lease.is_current():
+                    logger.warning("Run %s lost execution lease before failure write", run_id)
+                    return
+                try:
+                    await ds.replace_run(run)
+                except Exception:
+                    # A failed failure-write (a poisoned transaction, say) must not
+                    # mask the original cause — already logged above.
+                    logger.exception("Run %s could not be marked failed", run_id)
             finally:
                 # The background task owns the single-flight release for a
                 # handed-off chat turn; only clear it here for the inline paths
