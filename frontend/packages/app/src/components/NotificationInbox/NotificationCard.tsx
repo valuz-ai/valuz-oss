@@ -6,6 +6,11 @@
  *   notification, so no optimistic removal).
  * - ``task_failed`` → failure summary + a Resume action (``:intervene resume``,
  *   which clears the notification server-side) and a Dismiss.
+ * - a kind an EDITION owns → the card it registered in
+ *   ``notification.card.{kind}``. The ledger is open to new sources
+ *   (notifications.md §3: "各加一个 projector，不动投递层"), so the render layer
+ *   has to be open to their cards too — otherwise an edition's item falls
+ *   through to the failure card and announces itself as a blocked task.
  */
 
 import { useCallback, useState, type ReactElement } from "react";
@@ -18,6 +23,8 @@ import {
   dismissNotification,
   sessionsApi,
   tasksApi,
+  SlotRenderer,
+  useRegistryStore,
   useTranslation,
   type NotificationEntry,
 } from "@valuz/core";
@@ -30,10 +37,21 @@ export interface NotificationCardProps {
   onNavigateAway?: () => void;
 }
 
+/** Slot an edition registers to own the card for one kind. */
+export const notificationCardSlot = (kind: string): string =>
+  `notification.card.${kind}`;
+
 export function NotificationCard({
   entry,
   onNavigateAway,
 }: NotificationCardProps): ReactElement {
+  // Checked after the host's own kinds so an overlay cannot silently take over
+  // ``question`` / ``task_failed``, and before the failure fallback so a kind
+  // the host does not know is rendered by whoever does know it.
+  const editionSlot = notificationCardSlot(entry.kind);
+  const hasEditionCard = useRegistryStore(
+    (state) => (state.slots[editionSlot]?.length ?? 0) > 0,
+  );
   if (entry.kind === "question") {
     return <QuestionCard entry={entry} onNavigateAway={onNavigateAway} />;
   }
@@ -46,6 +64,14 @@ export function NotificationCard({
   // branch, which is how a completed task came to announce itself as blocked.
   if (INFORMATIONAL_KINDS.has(entry.kind)) {
     return <InfoCard entry={entry} onNavigateAway={onNavigateAway} />;
+  }
+  if (hasEditionCard) {
+    return (
+      <SlotRenderer
+        name={editionSlot}
+        context={{ entry, onNavigateAway }}
+      />
+    );
   }
   return <FailureCard entry={entry} onNavigateAway={onNavigateAway} />;
 }
