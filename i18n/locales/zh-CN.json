@@ -112,6 +112,7 @@
     "title": "自动化",
     "toggleFailed": "切换状态失败：{error}",
     "triggerCron": "定时",
+    "triggerEvent": "事件",
     "triggerInterval": "间隔",
     "triggerManual": "手动",
     "updateFailed": "更新失败：{error}",

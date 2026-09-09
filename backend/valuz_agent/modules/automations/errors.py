@@ -10,6 +10,7 @@ from valuz_agent.infra.errors import (
     ForbiddenError,
     NotFoundError,
     UnprocessableEntityError,
+    ValuzError,
 )
 
 # ── 404 ────────────────────────────────────────────────────────────────
@@ -58,6 +59,20 @@ class AutomationPlaybookNotFound(NotFoundError):
 class AutomationPlaybookVersionNotFound(NotFoundError):
     error_code = 404_717
     message = "Automation Playbook version not found"
+
+
+class AutomationEventSourceUnknown(NotFoundError):
+    """The URL/tool call names an event source nobody registered.
+
+    Distinct from ``InvalidEventSubscription`` (422): that one is a bad
+    *subscription payload* on create/update. This is an inbound-delivery
+    entrypoint (``POST /automations/events/{source}``) addressing a source
+    that does not exist in this deployment's registry — a routing miss, not
+    a validation failure — so it reads as 404 rather than 422.
+    """
+
+    error_code = 404_718
+    message = "Unknown automation event source"
 
 
 # ── 422 ────────────────────────────────────────────────────────────────
@@ -121,6 +136,31 @@ class AutomationTaskOnlyOnProject(UnprocessableEntityError):
     message = "Task mode is only available for projects"
 
 
+class InvalidEventSubscription(UnprocessableEntityError):
+    """A subscription the registry could not honour — unknown ``event_source``
+    name, or the source's own ``validate_subscription`` rejected the refs
+    (bad watch id, ref pointing at nothing, …). Raised for both
+    ``UnknownEventSource`` and a plain ``ValueError`` from the registry, with
+    the underlying message forwarded verbatim (it's already user-actionable —
+    see ``AutomationEventSourceRegistry.validate``)."""
+
+    error_code = 422_720
+    message = "Invalid event subscription"
+
+
+class AutomationEventSourceRequired(UnprocessableEntityError):
+    """``trigger_kind='event'`` with no ``event_source`` — waiting on nothing.
+
+    Pydantic catches this within a single create payload; this fires from the
+    service when an *update* would leave that same invariant broken after
+    merging with the stored row (e.g. switching trigger to 'event' while also
+    clearing an existing event_source in the same request).
+    """
+
+    error_code = 422_721
+    message = "Event trigger requires an event_source"
+
+
 class AutomationPlaybookTaskUnsupported(UnprocessableEntityError):
     """Pinned PlaybookRuns currently finalize with synchronous chat turns.
 
@@ -149,6 +189,24 @@ class AutomationAlreadyRunning(ConflictError):
 class AutomationAlreadyQueued(ConflictError):
     error_code = 409_713
     message = "Automation is already queued"
+
+
+# ── 502 ────────────────────────────────────────────────────────────────
+
+
+class AutomationEventSubscribeFailed(ValuzError):
+    """The row is validated and stored (status forced to ``paused``), but the
+    source's ``subscribe`` call itself failed (network blip, upstream 5xx, …).
+
+    502 not 422: the payload was valid, an upstream integration failed. Per
+    the port's docstring this is retryable — the row is NOT rolled back, and
+    resubmitting the same event_source/event_refs via update retries
+    ``subscribe`` with the same arguments.
+    """
+
+    status_code = 502
+    error_code = 502_711
+    message = "Automation saved, but starting the event subscription failed"
 
 
 # ── 403 ────────────────────────────────────────────────────────────────

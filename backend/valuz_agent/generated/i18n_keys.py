@@ -381,6 +381,7 @@ I18nKey = Literal[
     "automation.title",
     "automation.toggleFailed",
     "automation.triggerCron",
+    "automation.triggerEvent",
     "automation.triggerInterval",
     "automation.triggerManual",
     "automation.updateFailed",

@@ -810,14 +810,16 @@ class TestToolSchemaExposure:
             if isinstance(v, dict) and ("oneOf" in v or "anyOf" in v)
         )
         variants = [self._resolve(schema, v) for v in union["oneOf"]]
-        assert len(variants) == 3
+        assert len(variants) == 4
         kinds = set()
         for v in variants:
             if not isinstance(v, dict) or "properties" not in v:
                 continue
             kind = v["properties"]["kind"].get("const") or v["properties"]["kind"].get("enum")
             kinds.add(tuple(kind) if isinstance(kind, list) else (kind,))
-        assert kinds == {("cron",), ("interval",), ("manual",)}
+        # ``event`` joined the union: an automation woken by a registered event
+        # source instead of the clock (ports/automation_event_source.py).
+        assert kinds == {("cron",), ("interval",), ("manual",), ("event",)}
         # The cron branch documents its fields (cron_expr + timezone).
         cron = next(v for v in variants if v["properties"]["kind"].get("const") == "cron")
         assert "cron_expr" in cron["properties"]
