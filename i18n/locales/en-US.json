@@ -2543,6 +2543,7 @@
       "docxRendering": "Rendering DOCX",
       "download": "Download",
       "downloadFailed": "Download failed: {error}",
+      "downloadTooLarge": "Too large to save from the browser",
       "downloadUnavailable": "This file cannot be downloaded on this client",
       "emptyHint": "Click a file in the project tree on the right and it opens here as an artifact.",
       "emptyTitle": "Select a project file",

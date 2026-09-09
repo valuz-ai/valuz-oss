@@ -32,18 +32,35 @@ export type DownloadOutcome =
   | { ok: false; reason: "cancelled" }
   /** No path to the bytes from this client (e.g. a local file in a browser). */
   | { ok: false; reason: "unavailable" }
+  /**
+   * Only reachable through the blob fallback, which has to hold the whole file
+   * in memory. Distinct from ``unavailable`` because the file is perfectly
+   * fine — the deployment is missing an attachment address.
+   */
+  | { ok: false; reason: "too_large" }
   | { ok: false; reason: "failed"; message: string };
 
 /** Bytes above this are not pulled through the blob fallback. */
 export const MAX_BLOB_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
-function clickDownloadAnchor(url: string, fileName: string): void {
+function clickDownloadAnchor(
+  url: string,
+  fileName: string,
+  { sameTab }: { sameTab: boolean },
+): void {
   const anchor = document.createElement("a");
   anchor.href = url;
   // Honoured for the blob path (same-origin). Ignored cross-origin, where the
   // response's Content-Disposition names the file instead.
   anchor.download = fileName;
   anchor.rel = "noopener";
+  // A remote address is only a download as long as the store actually sends
+  // ``Content-Disposition: attachment``. If it ever does not, a same-tab click
+  // NAVIGATES — the user loses the conversation, the composer draft, and every
+  // other piece of client state. A new tab degrades to a stray tab instead.
+  // The blob path needs no such hedge: the download attribute is honoured
+  // there, and a new tab would be blocked as a popup.
+  if (!sameTab) anchor.target = "_blank";
   anchor.style.display = "none";
   document.body.appendChild(anchor);
   anchor.click();
@@ -59,7 +76,7 @@ async function downloadViaBlob(
   // take the tab down with them. The attachment-address path has no such limit
   // — a deployment that hits this is missing a resolver, not a big file.
   if (size != null && size > MAX_BLOB_DOWNLOAD_BYTES) {
-    return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "too_large" };
   }
   let objectUrl: string | null = null;
   try {
@@ -72,7 +89,7 @@ async function downloadViaBlob(
       };
     }
     objectUrl = URL.createObjectURL(await response.blob());
-    clickDownloadAnchor(objectUrl, fileName);
+    clickDownloadAnchor(objectUrl, fileName, { sameTab: true });
     return { ok: true, via: "blob" };
   } catch (cause) {
     return {
@@ -107,7 +124,7 @@ export async function downloadResolvedFile(
 
   if (descriptor.kind === "remote") {
     if (descriptor.downloadUrl) {
-      clickDownloadAnchor(descriptor.downloadUrl, fileName);
+      clickDownloadAnchor(descriptor.downloadUrl, fileName, { sameTab: false });
       return { ok: true, via: "address" };
     }
     if (descriptor.url) {

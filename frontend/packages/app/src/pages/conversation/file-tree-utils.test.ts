@@ -10,7 +10,11 @@ import { describe, expect, it } from "vitest";
 import type { ProjectFileNode } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
 
-import { mergeFolderChildren, toFileTree } from "./file-tree-utils";
+import {
+  mergeFolderChildren,
+  preserveLoadedChildren,
+  toFileTree,
+} from "./file-tree-utils";
 
 const dir = (
   name: string,
@@ -81,5 +85,70 @@ describe("mergeFolderChildren", () => {
     // onto whatever occupies that path now would be worse than dropping them.
     const next = mergeFolderChildren(tree, "a/gone", [file("x") as never]);
     expect(next).toBe(tree);
+  });
+});
+
+describe("preserveLoadedChildren", () => {
+  const loaded: FileTreeNode[] = [
+    {
+      name: "a",
+      type: "folder",
+      path: "a",
+      children: [
+        {
+          name: "b",
+          type: "folder",
+          path: "a/b",
+          truncated: false,
+          children: [{ name: "deep.txt", type: "file", path: "a/b/deep.txt" }],
+        },
+      ],
+    },
+  ];
+
+  /** What a refresh returns: only the initial depth, so ``b`` is unlisted. */
+  const refreshed: FileTreeNode[] = [
+    {
+      name: "a",
+      type: "folder",
+      path: "a",
+      children: [{ name: "b", type: "folder", path: "a/b", truncated: true }],
+    },
+  ];
+
+  it("keeps a level the refresh did not list", () => {
+    // Without this the folder empties on every turn end and never refills:
+    // the tree only loads a level when the user clicks to open it.
+    const next = preserveLoadedChildren(loaded, refreshed);
+    const b = next[0].children![0];
+    expect(b.children).toHaveLength(1);
+    expect(b.truncated).toBe(false);
+  });
+
+  it("lets the refresh win where it has its own children", () => {
+    const withNewFile: FileTreeNode[] = [
+      {
+        name: "a",
+        type: "folder",
+        path: "a",
+        children: [
+          {
+            name: "b",
+            type: "folder",
+            path: "a/b",
+            children: [{ name: "fresh.txt", type: "file", path: "a/b/fresh.txt" }],
+          },
+        ],
+      },
+    ];
+    const next = preserveLoadedChildren(loaded, withNewFile);
+    expect(next[0].children![0].children!.map((n) => n.name)).toEqual([
+      "fresh.txt",
+    ]);
+  });
+
+  it("drops what the refresh says is gone", () => {
+    const next = preserveLoadedChildren(loaded, []);
+    expect(next).toEqual([]);
   });
 });

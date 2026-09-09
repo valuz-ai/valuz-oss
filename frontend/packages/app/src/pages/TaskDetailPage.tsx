@@ -68,7 +68,7 @@ import {
   TaskContextPanel,
   type PlannedSubtask,
 } from "../components/TaskContextPanel";
-import { toFileTree } from "../lib/file-tree";
+import { preserveLoadedChildren, toFileTree } from "../lib/file-tree";
 import { TaskStatusLabel } from "../components/TaskStatusLabel";
 import { TaskTokenUsagePopover } from "../components/TaskTokenUsagePopover";
 import { NotificationCard } from "../components/NotificationInbox";
@@ -80,6 +80,11 @@ import {
 import { deriveDeliverable } from "./task-detail/deliverable";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
+import { useArtifactDownload } from "../hooks/use-artifact-download";
+import {
+  useFileTreeExpansion,
+  FILE_TREE_INITIAL_DEPTH,
+} from "../hooks/use-file-tree-expansion";
 import { eventDetail } from "../lib/task-event-detail";
 import { toAbsoluteProjectPath, toProjectRelativePath } from "../lib/project-paths";
 
@@ -454,8 +459,14 @@ export const TaskDetailPage = () => {
       return;
     }
     void projectsApi
-      .listFiles(projectId, { depth: 3 })
-      .then((res) => setFileTree(toFileTree(res.files)))
+      .listFiles(projectId, { depth: FILE_TREE_INITIAL_DEPTH })
+      // Keep the levels the user expanded; the refresh only re-fetches the
+      // initial depth, and the tree loads a level only on click.
+      .then((res) =>
+        setFileTree((prev) =>
+          preserveLoadedChildren(prev, toFileTree(res.files)),
+        ),
+      )
       .catch(() => setFileTree([]));
   }, [projectId]);
 
@@ -470,13 +481,15 @@ export const TaskDetailPage = () => {
     void Promise.all([
       projectsApi.get(projectId).catch(() => null),
       projectsApi
-        .listFiles(projectId, { depth: 3 })
+        .listFiles(projectId, { depth: FILE_TREE_INITIAL_DEPTH })
         .catch(() => ({ files: [] })),
     ]).then(([ws, filesRes]) => {
       if (cancelled) return;
       setRootPath(ws?.cwd ?? "");
       setProjectName(ws?.name ?? "");
-      setFileTree(toFileTree(filesRes.files));
+      setFileTree((prev) =>
+        preserveLoadedChildren(prev, toFileTree(filesRes.files)),
+      );
     });
     return () => {
       cancelled = true;
@@ -508,6 +521,16 @@ export const TaskDetailPage = () => {
     // The preview pane carries a tab strip, so opening a second document adds
     // to the set instead of replacing what's on screen.
     multiTab: true,
+  });
+  // This page has no generated-file rows, so only the viewer's own control
+  // needs the verb.
+  const {
+    handleDownload: handleArtifactDownload,
+    downloading: artifactDownloading,
+  } = useArtifactDownload(artifactFile);
+  const expandFileTreeFolder = useFileTreeExpansion({
+    projectId: projectId ?? null,
+    setFileTree,
   });
   // The split pane consumes the loaded document itself; the page keeps only
   // what it needs for URL sync and the copy / reveal actions.
@@ -688,6 +711,7 @@ export const TaskDetailPage = () => {
         plannedSubtasks={plannedSubtasks}
         taskStatus={detail.task.status}
         onRefreshFiles={refreshFileTree}
+        onExpandFolder={expandFileTreeFolder}
         onOpenInFinder={rootPath ? handleOpenProjectInFinder : undefined}
         onPreviewFile={
           projectId ? (path) => void openArtifactFile(path) : undefined
@@ -704,6 +728,7 @@ export const TaskDetailPage = () => {
     projectId,
     setRightPanel,
     refreshFileTree,
+    expandFileTreeFolder,
     handleOpenProjectInFinder,
     openArtifactFile,
     handleOpenFileExternal,
@@ -1371,6 +1396,8 @@ export const TaskDetailPage = () => {
       onClose={handleArtifactClose}
       onCopyContent={handleArtifactCopy}
       onOpenExternal={handleArtifactOpenExternal}
+      onDownload={handleArtifactDownload}
+      downloading={artifactDownloading}
     >
       {/* THIS surface owns its scroll. It used to lean on the AppShell's own
           scroll box, which stopped working the moment the page moved inside

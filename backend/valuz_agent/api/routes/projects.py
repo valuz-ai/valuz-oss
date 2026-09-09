@@ -197,6 +197,11 @@ async def list_files(
         }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Rejected ``path`` (absolute, traversal, or escaping the root). Said
+        # out loud rather than answered with an empty listing — a client that
+        # got ``[]`` would render the folder as empty and never retry.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # File CONTENT is no longer served by the API: the single-file read

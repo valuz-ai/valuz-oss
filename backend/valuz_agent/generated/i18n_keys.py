@@ -2870,6 +2870,7 @@ I18nKey = Literal[
     "ui.artifact.docxRendering",
     "ui.artifact.download",
     "ui.artifact.downloadFailed",
+    "ui.artifact.downloadTooLarge",
     "ui.artifact.downloadUnavailable",
     "ui.artifact.emptyHint",
     "ui.artifact.emptyTitle",

@@ -67,9 +67,14 @@ import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import { RUNTIME_DISPLAY_NAME, memoryApi, useTranslation } from "@valuz/core";
 import { useAgentEffectiveSkills } from "../hooks/use-agent-effective-skills";
-import { toFileTree } from "../lib/file-tree";
+import { preserveLoadedChildren, toFileTree } from "../lib/file-tree";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
+import { useArtifactDownload } from "../hooks/use-artifact-download";
+import {
+  useFileTreeExpansion,
+  FILE_TREE_INITIAL_DEPTH,
+} from "../hooks/use-file-tree-expansion";
 import { useForkSession } from "../hooks/use-fork-session";
 import { useProjectPlaybooks } from "../hooks/use-project-playbooks";
 import { toAbsoluteProjectPath } from "../lib/project-paths";
@@ -709,8 +714,14 @@ export const ProjectDetailPage = () => {
   const refreshFileTree = useCallback(() => {
     if (!id) return;
     projectsApi
-      .listFiles(id, { depth: 3 })
-      .then((res) => setFileTree(toFileTree(res.files)))
+      .listFiles(id, { depth: FILE_TREE_INITIAL_DEPTH })
+      // Keep the levels the user expanded; the refresh only re-fetches the
+      // initial depth, and the tree loads a level only on click.
+      .then((res) =>
+        setFileTree((prev) =>
+          preserveLoadedChildren(prev, toFileTree(res.files)),
+        ),
+      )
       .catch(() => setFileTree([]));
   }, [id]);
 
@@ -764,13 +775,15 @@ export const ProjectDetailPage = () => {
     try {
       const [filesRes, schedRes, connRes, mcpRes] = await Promise.all([
         projectsApi
-          .listFiles(id, { depth: 3 })
+          .listFiles(id, { depth: FILE_TREE_INITIAL_DEPTH })
           .catch(() => ({ files: [] as ProjectFileNode[] })),
         automationsApi.listGroups(id).catch(() => null),
         connectorsApi.list().catch(() => null),
         projectsApi.getMcpServers(id).catch(() => ({ slugs: [] as string[] })),
       ]);
-      setFileTree(toFileTree(filesRes.files));
+      setFileTree((prev) =>
+        preserveLoadedChildren(prev, toFileTree(filesRes.files)),
+      );
       // Skills are bound on the Agent now (08-agents-module), not the
       // project. KB tree + bindings are owned by ``useProjectKbBindings``.
       if (schedRes) {
@@ -990,6 +1003,16 @@ export const ProjectDetailPage = () => {
     reload: reloadArtifact,
     close: closeArtifact,
   } = artifactFile;
+  // This page has no generated-file rows, so only the viewer's own control
+  // needs the verb.
+  const {
+    handleDownload: handleArtifactDownload,
+    downloading: artifactDownloading,
+  } = useArtifactDownload(artifactFile);
+  const expandFileTreeFolder = useFileTreeExpansion({
+    projectId: id ?? null,
+    setFileTree,
+  });
 
   const openArtifactFile = useCallback(
     async (relPath: string, options?: { syncUrl?: boolean }) => {
@@ -1586,6 +1609,7 @@ export const ProjectDetailPage = () => {
         fileTreeInTab
         rootPath={project?.root_path ?? ""}
         onRefreshFiles={refreshFileTree}
+        onExpandFolder={expandFileTreeFolder}
         onUploadFiles={handleUploadFiles}
         onFileClick={(path) => {
           void openArtifactFile(path);
@@ -1656,6 +1680,7 @@ export const ProjectDetailPage = () => {
     connectors,
     selectedMcpSlugs,
     refreshFileTree,
+    expandFileTreeFolder,
     openArtifactFile,
     openMember,
     // The right panel is rendered into a layout slot via ``setRightPanel`` —
@@ -1685,6 +1710,8 @@ export const ProjectDetailPage = () => {
       onClose={handleArtifactClose}
       onCopyContent={handleArtifactCopy}
       onOpenExternal={handleArtifactOpenExternal}
+      onDownload={handleArtifactDownload}
+      downloading={artifactDownloading}
     >
       <div className="flex h-full flex-col">
         <>

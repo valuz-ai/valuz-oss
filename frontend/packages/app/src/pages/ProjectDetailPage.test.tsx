@@ -155,7 +155,13 @@ vi.mock("@valuz/app/components", () => ({
 vi.mock("../hooks/use-agent-effective-skills", () => ({
   useAgentEffectiveSkills: () => [],
 }));
-vi.mock("../lib/file-tree", () => ({ toFileTree: () => [] }));
+vi.mock("../lib/file-tree", () => ({
+  toFileTree: () => [],
+  // The page merges each refresh onto what it already had so expanded
+  // levels survive; this page's tests never assert on tree contents.
+  preserveLoadedChildren: (_prev: unknown, next: unknown) => next,
+  mergeFolderChildren: (tree: unknown) => tree,
+}));
 vi.mock("../components/AttachmentParsingDialog", () => ({
   AttachmentParsingDialog: () => null,
 }));

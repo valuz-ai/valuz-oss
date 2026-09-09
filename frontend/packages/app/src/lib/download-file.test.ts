@@ -51,16 +51,22 @@ function platform(
 }
 
 /** The href the code handed to the browser, captured off the anchor click. */
-function captureAnchorClicks(): { hrefs: string[]; names: string[] } {
+function captureAnchorClicks(): {
+  hrefs: string[];
+  names: string[];
+  targets: string[];
+} {
   const hrefs: string[] = [];
   const names: string[] = [];
+  const targets: string[] = [];
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
     this: HTMLAnchorElement,
   ) {
     hrefs.push(this.href);
     names.push(this.download);
+    targets.push(this.target);
   });
-  return { hrefs, names };
+  return { hrefs, names, targets };
 }
 
 afterEach(() => {
@@ -81,6 +87,9 @@ describe("remote files", () => {
     expect(clicks.hrefs).toEqual(["https://store.example/obj?disp=attachment"]);
     // Streamed by the browser — nothing is pulled into the page.
     expect(fetchSpy).not.toHaveBeenCalled();
+    // A store that ever fails to send the attachment header would NAVIGATE a
+    // same-tab click, taking the SPA and its unsaved state with it.
+    expect(clicks.targets).toEqual(["_blank"]);
   });
 
   it("falls back to fetching the bytes when there is no attachment address", async () => {
@@ -96,8 +105,10 @@ describe("remote files", () => {
 
     expect(outcome).toEqual({ ok: true, via: "blob" });
     expect(clicks.hrefs).toEqual(["blob:local"]);
-    // Same-origin blob, so the download attribute is what names the file.
+    // Same-origin blob, so the download attribute is what names the file —
+    // and no new tab, which a popup blocker would eat.
     expect(clicks.names).toEqual(["report.pptx"]);
+    expect(clicks.targets).toEqual([""]);
   });
 
   it("refuses the blob fallback for a file too large to hold in memory", async () => {
@@ -108,7 +119,9 @@ describe("remote files", () => {
       platform(),
     );
 
-    expect(outcome).toEqual({ ok: false, reason: "unavailable" });
+    // Distinct from ``unavailable``: the file is fine, the deployment is just
+    // missing an attachment address, and the message has to say so.
+    expect(outcome).toEqual({ ok: false, reason: "too_large" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

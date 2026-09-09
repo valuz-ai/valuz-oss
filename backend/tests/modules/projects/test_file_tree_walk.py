@@ -2,11 +2,13 @@
 
 Two properties this module has to keep:
 
-1. **A cut-off directory is not an empty one.** Depth-limited listings used to
-   emit ``children: []``, which the wire format drops entirely — so a folder
-   with a whole subtree under it rendered exactly like a folder with nothing in
-   it, and clients silently lost everything below the limit. ``truncated``
-   is what lets a client draw the difference and ask for the rest.
+1. **A directory that was not listed is not an empty one.** Depth-limited
+   listings used to emit ``children: []``, which the wire format drops entirely
+   — so a folder with a whole subtree under it rendered exactly like a folder
+   with nothing in it, and clients silently lost everything below the limit.
+   ``truncated`` is what lets a client draw the difference and ask for the rest.
+   Every directory the walk declines to enter says so, whether it ran out of
+   depth or out of descent budget.
 2. **``path`` is a relative path under the listing root.** It is caller-supplied
    and reaches the filesystem, so traversal and absolute paths must be rejected
    — including via a symlink pointing out of the tree.
@@ -17,10 +19,10 @@ from __future__ import annotations
 import pytest
 
 from valuz_agent.modules.projects.service import (
-    _has_visible_entries,
     _node_to_dict,
     _resolve_listing_dir,
     _walk_dir,
+    _WalkBudget,
 )
 
 
@@ -46,34 +48,51 @@ def test_cut_off_directory_is_marked_truncated(tree):
     assert b.truncated is True
 
 
-def test_genuinely_empty_directory_is_not_truncated(tree):
-    nodes = _by_name(_walk_dir(tree, depth=0, include_hidden=False))
-    assert nodes["empty"].truncated is False
-    # ``a`` is cut off at the same depth, so the flag is what separates them.
-    assert nodes["a"].truncated is True
+def test_every_unlisted_directory_says_so(tree):
+    """``truncated`` means "not in this listing", not "known to have content".
 
-
-def test_directory_of_only_hidden_entries_reads_as_empty(tmp_path):
-    """The walk and the emptiness probe must agree on what counts as listed.
-
-    A folder holding nothing but ``node_modules`` shows no children, so calling
-    it truncated would offer an expansion that comes back empty.
+    Deciding which boundary directories are really empty would cost one
+    directory open apiece, at the widest level of the walk and on the mount
+    where a metadata op is a network round trip. An empty one costs the user a
+    click instead.
     """
-    (tmp_path / "vendored" / "node_modules").mkdir(parents=True)
-    nodes = _by_name(_walk_dir(tmp_path, depth=0, include_hidden=False))
-    assert nodes["vendored"].truncated is False
-    assert _has_visible_entries(tmp_path / "vendored", include_hidden=True) is True
+    nodes = _by_name(_walk_dir(tree, depth=0, include_hidden=False))
+    assert nodes["a"].truncated is True
+    assert nodes["empty"].truncated is True
+    # Files are never truncated — the flag is a directory concept.
+    assert nodes["top.txt"].truncated is False
+
+
+def test_descent_budget_stops_the_walk_and_marks_what_it_skipped(tmp_path):
+    """A shallow tree can still fan out; the budget bounds that, visibly.
+
+    The walk runs on a thread ``asyncio.to_thread`` cannot cancel, so an
+    unbounded one outlives the request that asked for it.
+    """
+    for i in range(5):
+        (tmp_path / f"d{i}" / "inner").mkdir(parents=True)
+    nodes = _by_name(_walk_dir(tmp_path, depth=3, include_hidden=False, budget=_WalkBudget(2)))
+
+    # The budget counts every descent anywhere in the walk, not just top-level
+    # ones: ``d0`` and ``d0/inner`` spend both, so the four siblings after it
+    # are refused.
+    assert nodes["d0"].truncated is False
+    assert [n.name for n in nodes.values() if n.truncated] == ["d1", "d2", "d3", "d4"]
+    # Refused, not dropped — every sibling is still listed and reachable.
+    assert len(nodes) == 5
+    # ``d0/inner`` was entered and really is empty, so it says so.
+    inner = nodes["d0"].children[0]
+    assert (inner.name, inner.truncated, inner.children) == ("inner", False, [])
 
 
 def test_truncated_survives_serialization(tree):
-    nodes = _walk_dir(tree, depth=0, include_hidden=False)
-    payload = _by_name(nodes)
-    a = _node_to_dict(payload["a"])
-    empty = _node_to_dict(payload["empty"])
-    assert a["truncated"] is True
+    nodes = _by_name(_walk_dir(tree, depth=1, include_hidden=False))
+    b = _node_to_dict(_by_name(nodes["a"].children)["b"])
+    a = _node_to_dict(nodes["a"])
+    assert b["truncated"] is True
     # Absent, not ``False``: existing clients read a missing key as "listed in
     # full", which is what an untruncated node means.
-    assert "truncated" not in empty
+    assert "truncated" not in a
 
 
 def test_full_walk_marks_nothing_truncated(tree):

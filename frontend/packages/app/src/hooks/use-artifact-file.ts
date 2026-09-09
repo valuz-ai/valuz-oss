@@ -418,9 +418,15 @@ export function useArtifactFile({
     );
   }, [activeTab, loadDocument, locate]);
 
+  // Read through a ref rather than capturing: ``activePath`` changes on every
+  // tab switch, and this callback is threaded into the context panel's memo —
+  // capturing it would rebuild the whole right rail each time a file is opened.
+  const activePathRef = useRef(activePath);
+  activePathRef.current = activePath;
+
   const download = useCallback(
     async (path?: string): Promise<DownloadOutcome> => {
-      const key = path ?? activePath;
+      const key = path ?? activePathRef.current;
       if (!key) return { ok: false, reason: "unavailable" };
       try {
         const descriptor = await filesApi.resolveOne(
@@ -437,7 +443,7 @@ export function useArtifactFile({
         };
       }
     },
-    [activePath, locate, platform, resolveBaseRef],
+    [locate, platform, resolveBaseRef],
   );
 
   /**

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -58,6 +57,13 @@ HIDDEN_NAMES = frozenset(
         ".env",
     }
 )
+
+#: Directories one walk may descend into before it stops and marks the rest
+#: ``truncated``. Depth alone does not bound the work — a shallow tree can fan
+#: out into thousands of directories — and the walk runs on a thread that
+#: cannot be cancelled, so an abandoned request would keep a worker busy to the
+#: end. Deep or wide trees are reached by expanding a folder instead.
+MAX_FILE_TREE_DIRS = 500
 
 IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "svg"})
 MEDIA_EXTENSIONS = frozenset({"mp3", "wav", "m4a", "ogg", "mp4", "webm", "mov"})
@@ -151,11 +157,13 @@ class FileNode:
     size: int | None = None
     modified: str | None = None
     children: list[FileNode] = field(default_factory=list)
-    #: Directory only: this walk stopped here, so ``children`` is empty because
-    #: the budget ran out — NOT because the directory is empty. Without it the
-    #: two are indistinguishable on the wire (an empty ``children`` list is
-    #: dropped from the payload), and the client draws a truncated subtree as an
-    #: empty folder. Clients fetch the rest with ``path=``.
+    #: Directory only: this walk did not descend into it, so ``children`` is
+    #: empty because it was not listed — NOT because the directory is empty.
+    #: Without the flag the two are indistinguishable on the wire (an empty
+    #: ``children`` list is dropped from the payload) and the client draws a
+    #: whole unlisted subtree as an empty folder. Clients fetch it with
+    #: ``path=``; a folder that turns out to be empty is answered by that call,
+    #: not by probing every boundary directory here.
     truncated: bool = False
 
 
@@ -703,10 +711,11 @@ class ProjectService:
         root = await self._list_root(user_id, row, worktree)
         if root is None:
             return []
-        try:
-            target = _resolve_listing_dir(root, path)
-        except ValueError:
-            return []
+        # A bad ``path`` raises rather than answering ``[]``: the whole point of
+        # ``truncated`` is that "no children" must mean "this directory is
+        # empty", so a rejected or malformed path has to be distinguishable
+        # from one. The route turns it into a 400.
+        target = _resolve_listing_dir(root, path)
         # ``_walk_dir`` is stat-bound, and on a cloud object-storage mount each
         # stat is a network round trip — a few hundred entries would block the
         # event loop for seconds. It is the only blocking call here, so hand it
@@ -833,25 +842,36 @@ def _is_listed(name: str, include_hidden: bool) -> bool:
     return not (name.startswith(".") and name != ".")
 
 
-def _has_visible_entries(directory: Path, include_hidden: bool) -> bool:
-    """``True`` if ``directory`` holds at least one entry a listing would show.
+@dataclass
+class _WalkBudget:
+    """How many more directories one walk may descend into.
 
-    Stops at the first hit — this runs once per truncated directory, and on a
-    cloud object-storage mount every extra entry touched is a network round
-    trip.
+    Depth alone does not bound a walk: a shallow tree can still fan out into
+    thousands of directories, and the walk runs on a thread that
+    ``asyncio.to_thread`` cannot cancel — so a request the client abandoned
+    keeps a worker busy to the end. Counting descents caps that fan-out.
+
+    Nothing is lost silently when the budget runs out: a directory that is not
+    descended into is reported ``truncated``, exactly like one cut off by
+    ``depth``, and the client fetches it by path.
     """
-    try:
-        with os.scandir(directory) as entries:
-            return any(_is_listed(entry.name, include_hidden) for entry in entries)
-    except OSError:
-        return False
+
+    remaining: int
+
+    def spend(self) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        return True
 
 
 def _walk_dir(
     directory: Path,
     depth: int,
     include_hidden: bool,
+    budget: _WalkBudget | None = None,
 ) -> list[FileNode]:
+    budget = budget if budget is not None else _WalkBudget(MAX_FILE_TREE_DIRS)
     if depth < 0 or not directory.is_dir():
         return []
     items: list[FileNode] = []
@@ -863,20 +883,19 @@ def _walk_dir(
         if not _is_listed(entry.name, include_hidden):
             continue
         if entry.is_dir():
-            # Out of budget: report the directory as truncated instead of as a
-            # childless one. ``_has_visible_entries`` is one cheap scandir that
-            # stops at the first hit, so a genuinely empty directory still says
-            # ``truncated=False`` and the client can draw the difference.
-            if depth <= 0:
-                items.append(
-                    FileNode(
-                        name=entry.name,
-                        type="directory",
-                        truncated=_has_visible_entries(entry, include_hidden),
-                    )
-                )
+            # Not descended into — out of depth, or out of descent budget.
+            # Either way its contents are simply not in this listing, which is
+            # what ``truncated`` says; the client asks for them by path. We do
+            # NOT probe whether it is really empty: that costs one directory
+            # open per boundary node, at the widest level of the walk and on
+            # the mount where a metadata op is a network round trip. A folder
+            # that turns out to be empty costs the user one click instead.
+            if depth <= 0 or not budget.spend():
+                items.append(FileNode(name=entry.name, type="directory", truncated=True))
                 continue
-            children = _walk_dir(entry, depth=depth - 1, include_hidden=include_hidden)
+            children = _walk_dir(
+                entry, depth=depth - 1, include_hidden=include_hidden, budget=budget
+            )
             items.append(FileNode(name=entry.name, type="directory", children=children))
         elif entry.is_file():
             try:

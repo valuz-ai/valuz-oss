@@ -140,19 +140,37 @@ const TreeNode = ({
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
 
-  // Fetch on the first open of a truncated folder, and only then: a reopen
-  // after a successful load has children to show, and a reopen after a failed
-  // one would re-fire on every toggle.
-  const toggleFolder = () => {
-    const next = !open;
-    setOpen(next);
-    if (!next || loading || loadFailed) return;
+  // A refresh replaces the node, so a failure recorded against the previous
+  // one must not outlive it. React keeps this instance alive as long as the
+  // path is stable, so without this reset one transient error would disable
+  // the folder for the rest of the session — ``toggleFolder`` refuses to
+  // retry while ``loadFailed`` is set.
+  // React's "adjust state when a prop changes" pattern: compare during render
+  // and set, rather than an effect (which would paint the stale error first).
+  const nodeIdentity = `${node.truncated ? 1 : 0}:${node.children?.length ?? -1}`;
+  const [seenIdentity, setSeenIdentity] = useState(nodeIdentity);
+  if (seenIdentity !== nodeIdentity) {
+    setSeenIdentity(nodeIdentity);
+    if (loadFailed) setLoadFailed(false);
+  }
+
+  const loadChildren = () => {
+    if (loading || !onExpandFolder) return;
     if (!node.truncated || node.children?.length) return;
-    if (!onExpandFolder) return;
     setLoading(true);
+    setLoadFailed(false);
     void onExpandFolder(node.path)
       .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false));
+  };
+
+  // Fetch on open, not on every toggle: a folder that already has children has
+  // nothing to fetch, and one that failed shows a retry instead of re-firing
+  // silently.
+  const toggleFolder = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !loadFailed) loadChildren();
   };
   const guideColumns = Array.from({ length: depth + 1 }, (_, i) => (
     <span
@@ -192,13 +210,23 @@ const TreeNode = ({
           {loading ? <Spinner className="relative shrink-0" /> : null}
         </button>
         {open && loadFailed ? (
-          <p
-            className="px-2 py-1 text-2xs text-ink-meta"
+          <div
+            className="flex items-center gap-2 px-2 py-1 text-2xs text-ink-meta"
             style={{ paddingLeft: `${(depth + 1) * guideLineSpacing + 24}px` }}
             role="alert"
           >
-            {t("project.expandFolderFailed")}
-          </p>
+            <span>{t("project.expandFolderFailed")}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setLoadFailed(false);
+                loadChildren();
+              }}
+              className="rounded px-1 text-ink-body underline-offset-2 transition-colors hover:text-ink-heading hover:underline"
+            >
+              {t("ui.artifact.retry")}
+            </button>
+          </div>
         ) : null}
         {open &&
           node.children?.map((child) => (

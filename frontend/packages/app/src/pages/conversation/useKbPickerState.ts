@@ -6,19 +6,11 @@ import {
 } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
-import { mergeFolderChildren, toFileTree } from "./file-tree-utils";
-
-/**
- * How deep the first file-tree listing goes.
- *
- * Two levels of folders show up expanded-ready without a second request, which
- * covers most project layouts; anything below is fetched on expand. Raising it
- * is not free — the walk stats every entry it lists.
- */
-const FILE_TREE_INITIAL_DEPTH = 3;
-
-/** Depth per on-expand fetch. One level: the user is looking at one level. */
-const FILE_TREE_EXPAND_DEPTH = 1;
+import { preserveLoadedChildren, toFileTree } from "./file-tree-utils";
+import {
+  useFileTreeExpansion,
+  FILE_TREE_INITIAL_DEPTH,
+} from "../../hooks/use-file-tree-expansion";
 
 type KbPickerStateParams = {
   selectedProjectId: string | null;
@@ -91,7 +83,13 @@ export function useKbPickerState({
         // Worktree sessions show their own checkout, not the shared project cwd.
         worktree: activeWorktree?.name ?? undefined,
       })
-      .then((res) => setFileTree(toFileTree(res.files)))
+      // Carry the expanded levels across. A refresh only re-fetches the
+      // initial depth, so without this every folder the user opened past it
+      // would empty out on turn-end — and stay empty, since the tree only
+      // loads a level when the user clicks to open it.
+      .then((res) =>
+        setFileTree((prev) => preserveLoadedChildren(prev, toFileTree(res.files))),
+      )
       .catch(() => setFileTree([]));
   }, [selectedProjectId, activeWorktree]);
 
@@ -99,29 +97,11 @@ export function useKbPickerState({
     refreshFileTree();
   }, [refreshFileTree]);
 
-  /**
-   * Load one folder's contents on expand.
-   *
-   * This is what lifts the depth ceiling: the initial listing goes a couple of
-   * levels down (enough for the common case in one request) and marks what it
-   * cut off, then each folder the user actually opens costs exactly one more
-   * request. Asking for a deep tree up front instead would stat every entry in
-   * it — on a cloud object-storage mount, one network round trip apiece.
-   */
-  const expandFileTreeFolder = useCallback(
-    async (path: string) => {
-      if (!selectedProjectId || selectedProjectId === "chat-default") return;
-      const res = await projectsApi.listFiles(selectedProjectId, {
-        depth: FILE_TREE_EXPAND_DEPTH,
-        worktree: activeWorktree?.name ?? undefined,
-        path,
-      });
-      setFileTree((prev) =>
-        mergeFolderChildren(prev, path, toFileTree(res.files, path)),
-      );
-    },
-    [selectedProjectId, activeWorktree],
-  );
+  const expandFileTreeFolder = useFileTreeExpansion({
+    projectId: selectedProjectId,
+    worktree: activeWorktree?.name ?? undefined,
+    setFileTree,
+  });
 
   return {
     kbPickerOpen,
