@@ -5,7 +5,14 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { initI18n } from "@valuz/shared/i18n";
 import type { NotificationEntry } from "@valuz/core";
 
-import { NotificationCard } from "./NotificationCard";
+import type { ComponentType } from "react";
+
+import { useRegistryStore } from "@valuz/core";
+
+import {
+  NotificationCard,
+  notificationCardSlot,
+} from "./NotificationCard";
 
 const { submitActionMock, interveneMock, dismissNotificationMock } = vi.hoisted(
   () => ({
@@ -119,5 +126,45 @@ describe("NotificationCard — task_failed kind", () => {
     await waitFor(() =>
       expect(dismissNotificationMock).toHaveBeenCalledWith("n2"),
     );
+  });
+});
+
+describe("NotificationCard — edition-owned kind", () => {
+  const editionEntry: NotificationEntry = {
+    ...base,
+    id: "n3",
+    kind: "domain_operation",
+    title: "watchlist · create",
+    body: "",
+    action: "confirm",
+    route: "/projects/p1",
+    task_id: null,
+    pending_id: null,
+    session_id: null,
+    payload: { operation_id: "op-1" },
+  };
+
+  it("renders the card the edition registered for its kind", () => {
+    const unregister = useRegistryStore
+      .getState()
+      .registerSlot(notificationCardSlot("domain_operation"), {
+        id: "test-domain-operation",
+        component: (({ entry }: { entry: NotificationEntry }) => (
+          <div>edition card {String(entry.payload.operation_id)}</div>
+        )) as ComponentType<Record<string, unknown>>,
+      });
+    try {
+      renderCard(editionEntry);
+      expect(screen.getByText("edition card op-1")).toBeTruthy();
+      // NOT the failure fallback — that would label a proposal "受阻".
+      expect(screen.queryByText("watchlist · create")).toBeNull();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("falls back to the failure card when no edition registered", () => {
+    renderCard(editionEntry);
+    expect(screen.queryByText("edition card op-1")).toBeNull();
   });
 });
