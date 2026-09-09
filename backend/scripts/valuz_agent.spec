@@ -104,7 +104,16 @@ _third_party_pkgs = [
     # MCP
     "mcp",
     # Scheduling
-    "croniter", "cron_descriptor", "pytz",
+    # ``tzdata`` is stdlib ``zoneinfo``'s data source on hosts with no system tz
+    # database (Windows), reached via ``importlib.import_module`` — a DYNAMIC
+    # import modulegraph cannot see, so installing the wheel is NOT enough: a
+    # frozen build with no spec entry raises ``ModuleNotFoundError: No module
+    # named 'tzdata'`` (measured on a real onedir build). The entry that
+    # actually fixes it is the ``_data_pkgs`` one below — the collected zone
+    # files land in ``_internal/tzdata/zoneinfo/...``, which makes the
+    # subpackages importable as PEP 420 namespace packages. DON'T DROP IT.
+    # This hiddenimports entry is belt-and-braces on top of that.
+    "croniter", "cron_descriptor", "pytz", "tzdata",
     # Data
     "orjson", "ormsgpack", "packaging",
     # Crypto / security
@@ -144,6 +153,9 @@ _data_pkgs = [
     "codex_cli_bin",      # bin/codex CLI binary (~75MB)
     "pymupdf",            # libmupdf.dylib + ONNX layout models (~51MB)
     "cron_descriptor",    # locale/*.mo translation catalogs
+    "tzdata",             # IANA zone files (~1MB, extensionless) — LOAD-BEARING
+                          #   for Windows: this entry alone makes ZoneInfo work
+                          #   in the frozen build (see _third_party_pkgs above)
     # NOTE: magika used to live here — MarkItDown constructed it eagerly and its
     # ONNX model ships as package data, so a missed entry broke ALL office
     # parsing in the frozen build (PR #231). Both it and MarkItDown are gone:
