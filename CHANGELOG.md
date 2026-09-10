@@ -308,6 +308,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - skill-creator: drop the host sections that do not describe this host, and
   put the two host rules where they are read rather than where they are filed.
   (#1142 #1143 @Ready22Race)
+- Add `pptx-preview` to `pnpm-lock.yaml`. #1198 declared the dependency in
+  `packages/ui/package.json` but left the lockfile behind, so every release
+  job failed at the frontend `--frozen-lockfile` install. (#1207 @St0neWan9)
 
 ## [0.5.1] - 2026-08-28
 
