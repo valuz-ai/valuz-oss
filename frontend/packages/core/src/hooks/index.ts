@@ -1,5 +1,6 @@
 export * from "./use-agent";
 export * from "./use-notifications";
+export * from "./use-page-memory";
 export * from "./use-chat-session";
 export * from "./use-composer-providers";
 export * from "./use-global-shortcuts";
