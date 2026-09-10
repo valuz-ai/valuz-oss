@@ -115,12 +115,28 @@ Operational recipes:
   gh release delete vX.Y.Z --yes --cleanup-tag
   gh release create vX.Y.Z --target main --title "Valuz X.Y.Z" --notes-file <notes>
   ```
+- **One job failed on the tag-push run (transient runner error, e.g. notarytool
+  "offline")** — re-run the failed jobs *inside the original run*, do not
+  dispatch a fresh single-platform build:
+  ```bash
+  gh run rerun <run-id> --failed
+  ```
+  Only the failed job rebuilds; its dependents (`merge-mac-manifest`, which was
+  skipped) re-run in the same attempt, the other jobs' artifacts are reused,
+  and `event_name` stays `push` so the merge job's `if:` still passes.
+  Verified on v0.5.0 (mac-x64 notarization network blip).
 - **Re-run one platform** (uploads to both GitHub Release + COS live feed for that
-  platform, no re-tag):
+  platform, no re-tag) — **safe for linux-arm64 / windows-x64 only**:
   ```bash
   gh workflow run release-desktop.yml --ref main -f version=vX.Y.Z \
-    -f platform={mac-arm64|mac-x64|linux-arm64|windows-x64}
+    -f platform={linux-arm64|windows-x64}
   ```
+  **Do not dispatch `mac-arm64` or `mac-x64` alone.** Each mac job overwrites
+  the LIVE `latest-mac.yml` (COS + `gh release upload --clobber`) with its own
+  single-arch manifest, and `merge-mac-manifest` only runs on `push` or
+  `platform=all` — so a lone mac dispatch leaves the feed single-arch and hands
+  every client of the *other* arch the wrong build. For a mac-only fix use
+  `gh run rerun --failed` on the tag-push run (above) or `platform=all`.
 - **Roll back to vX.Y.Z on the live COS feed** (artifact URLs in the versioned
   manifest already point at `vX.Y.Z/...` which is immutable, so this just
   promotes the old manifest back to live):
