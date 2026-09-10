@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { forwardRef, useState, useRef, useEffect, type ReactNode } from "react";
 import {
+  type LucideProps,
   Activity,
   BookOpen,
   BookOpenText,
@@ -131,6 +132,16 @@ export interface DesktopSidebarNavGroup {
   label: string;
 }
 
+// Lucide's Bot glyph is 16/24 tall while its neighbours (Puzzle, BookOpen and
+// the top-nav icons) fill 20/24, so at the same box it reads a size smaller.
+// Draw it a notch larger so the resource-library row sits on one optical size.
+const AgentsIcon = forwardRef<SVGSVGElement, LucideProps>(function AgentsIcon(
+  { className, ...props },
+  ref,
+) {
+  return <Bot ref={ref} {...props} className={cn("scale-[1.15]", className)} />;
+});
+
 const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   assistant: MessageSquare,
   knowledge: BookOpen,
@@ -140,7 +151,7 @@ const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   activity: Activity,
   system: Activity,
   settings: Settings,
-  agents: Bot,
+  agents: AgentsIcon,
   connectors: Link2,
   plugins: Puzzle,
   marketplace: Store,
@@ -1413,7 +1424,7 @@ export const DesktopSidebar = ({
                       active={isItemActive(activePath, item)}
                       LinkComponent={LinkComponent}
                     >
-                      <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                      <Icon className="h-4 w-4 shrink-0" strokeWidth={2} />
                       <span>{item.label}</span>
                     </SidebarLink>
                   );
