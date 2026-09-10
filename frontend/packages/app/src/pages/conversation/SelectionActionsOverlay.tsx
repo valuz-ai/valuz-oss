@@ -32,9 +32,12 @@ interface ActiveSelection {
   text: string;
   selectedCitationIds: string[];
   selectedCitationRefs: SelectedCitationRef[];
-  /** Viewport coordinates of the selection's bounding box. */
-  top: number;
-  centerX: number;
+  /** Viewport coordinates of the selection's **end** — the toolbar hangs
+   * below where the user stopped dragging, not above the whole span. A long
+   * multi-line selection's bounding box is centred somewhere in the middle of
+   * the text, which puts the toolbar nowhere near either end of it. */
+  bottom: number;
+  endX: number;
 }
 
 /** Lift equivalent text/element edges to their parent boundary. Otherwise
@@ -88,6 +91,20 @@ function rectOf(range: Range): DOMRect | null {
   } catch {
     return null;
   }
+}
+
+/** The last line box of the selection. ``getClientRects`` yields one rect per
+ * line, so the last one ends where the user stopped dragging; the bounding box
+ * would only tell us where the whole span sits. Falls back to the bounding box
+ * where ``getClientRects`` is missing (jsdom, some embedders). */
+function endRectOf(range: Range): DOMRect | null {
+  try {
+    const rects = range.getClientRects();
+    if (rects.length > 0) return rects[rects.length - 1] ?? null;
+  } catch {
+    // fall through to the bounding box
+  }
+  return rectOf(range);
 }
 
 export function SelectionActionsOverlay({
@@ -144,15 +161,15 @@ export function SelectionActionsOverlay({
       setActive(null);
       return;
     }
-    const rect = rectOf(range);
+    const rect = endRectOf(range);
     setActive({
       sessionId,
       messageId,
       text,
       selectedCitationIds: [...new Set(selectedCitationRefs.map((ref) => ref.citationId))],
       selectedCitationRefs,
-      top: rect?.top ?? 0,
-      centerX: (rect?.left ?? 0) + (rect?.width ?? 0) / 2,
+      bottom: rect?.bottom ?? 0,
+      endX: rect?.right ?? 0,
     });
   }, [containerRef, sessionId]);
 
@@ -201,8 +218,11 @@ export function SelectionActionsOverlay({
       // Keep the selection alive while clicking the toolbar: without this the
       // mousedown collapses the selection and unmounts the button mid-click.
       onMouseDown={(event) => event.preventDefault()}
-      className="fixed z-50 -translate-x-1/2 -translate-y-full"
-      style={{ top: Math.max(active.top - 8, 8), left: active.centerX }}
+      // Hangs below the end of the selection: the text the user just
+      // highlighted stays fully visible, and the toolbar lands next to where
+      // the pointer already is.
+      className="fixed z-50 -translate-x-full"
+      style={{ top: active.bottom + 8, left: active.endX }}
     >
       <div className="flex items-center gap-1 rounded-lg border border-surface-border bg-card px-1.5 py-1 shadow-md">
         <SlotRenderer
