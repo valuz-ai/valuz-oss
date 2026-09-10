@@ -92,7 +92,11 @@ def test_claude_subscription_recommends_pinned_anthropic_models() -> None:
 
 
 def test_codex_subscription_recommends_known_codex_models() -> None:
-    """Per https://developers.openai.com/codex/models. Includes the Pro-only
+    """Per https://developers.openai.com/codex/models. ``gpt-6-astra`` is the
+    page's lead recommendation ("most capable model for complex work across
+    code, apps, and research"); the server gates it to codex-cli >= 0.153.1,
+    so the bundled ``openai-codex-cli-bin`` gets a 400 until PyPI catches up
+    (``CODEX_BIN_OVERRIDE`` to a newer binary meanwhile). Includes the Pro-only
     ``gpt-5.3-codex-spark`` preview — listing it lets Pro users pick it;
     lower tiers will fail at SDK call time. The 5.6 family lists the three
     concrete tiers (sol = flagship, terra = price/performance, luna =
@@ -101,6 +105,7 @@ def test_codex_subscription_recommends_known_codex_models() -> None:
     Sourced from resources/subscription_models.json."""
     provider = get_provider("codex-subscription")
     assert set(provider.model_options) == {
+        "gpt-6-astra",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -117,6 +122,7 @@ def test_subscription_models_carry_backend_labels() -> None:
     """The curated subscription_models.json ships server-authoritative display
     names so the frontend doesn't have to label these ids itself."""
     codex = get_provider("codex-subscription")
+    assert codex.model_labels["gpt-6-astra"] == "GPT 6 Astra"
     assert codex.model_labels["gpt-5.6-sol"] == "GPT 5.6 Sol"
     assert codex.model_labels["gpt-5.5"] == "GPT 5.5"
     assert codex.model_labels["gpt-5.3-codex-spark"] == "GPT 5.3 Codex Spark"

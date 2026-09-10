@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-07-26",
+  "last_updated": "2026-09-04",
   "_comment": "Recommended model lists for OAuth subscription channels. LIVE contract: this file is read into the provider descriptors at every boot, and subscription rows keep model_ids NULL so they always track it — editing the arrays (+ bumping last_updated) reaches every install at next boot, no migration needed (unlike seeds/providers.json, whose row updates go through alembic). Each model is either a bare id or {\"id\", \"label\"}; labels are server-authoritative display names (the backend, not the frontend, owns subscription model names). API-key channels are NOT covered here; their models come from /v1/models auto-discovery + user manual entry on channel edit.",
   "_sources": {
     "claude-subscription": "https://code.claude.com/docs/en/model-config",
@@ -23,6 +23,7 @@
     "codex-subscription": {
       "default_model": "gpt-5.5",
       "models": [
+        { "id": "gpt-6-astra", "label": "GPT 6 Astra" },
         { "id": "gpt-5.6-sol", "label": "GPT 5.6 Sol" },
         { "id": "gpt-5.6-terra", "label": "GPT 5.6 Terra" },
         { "id": "gpt-5.6-luna", "label": "GPT 5.6 Luna" },
