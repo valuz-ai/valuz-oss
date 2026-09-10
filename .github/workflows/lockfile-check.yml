@@ -1,0 +1,66 @@
+name: Lockfile check
+
+# A dependency added to a package.json without a matching pnpm-lock.yaml entry
+# is invisible locally — a plain `pnpm install` just resolves it. CI installs
+# with --frozen-lockfile, so the drift only surfaces in a release build, where
+# every platform fails at the frontend install step. That happened to v0.6.0:
+# pptx-preview@^1.0.7 landed in packages/ui/package.json in #1198 and the
+# lockfile stayed behind, so main could not produce a release build until #1207.
+#
+# This job runs the same check a release build runs, on the PR that would
+# introduce the drift.
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**/package.json"
+      - "frontend/pnpm-lock.yaml"
+      - ".github/workflows/lockfile-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**/package.json"
+      - "frontend/pnpm-lock.yaml"
+
+concurrency:
+  group: lockfile-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-lockfile:
+    name: frontend lockfile is in sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # --lockfile-only keeps this to a resolution check: it compares every
+      # workspace package.json against pnpm-lock.yaml and writes no node_modules,
+      # so the job stays seconds rather than minutes. --frozen-lockfile is what
+      # turns a mismatch into a failure instead of a lockfile rewrite.
+      - name: Verify pnpm-lock.yaml matches every package.json
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile --lockfile-only
+
+      - name: Explain a failure
+        if: failure()
+        run: |
+          echo "::error::frontend/pnpm-lock.yaml is out of sync with a package.json."
+          echo "Fix it by running, from frontend/:"
+          echo "  pnpm install --lockfile-only"
+          echo "then commit the updated pnpm-lock.yaml."
