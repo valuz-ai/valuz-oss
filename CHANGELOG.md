@@ -7,20 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-10
+
 ### Added
 
-- **Feedback signals on assistant turns** — 👍/👎 (with reason chips) and
-  copy are recorded per message, and regenerate / fork / research-share are
-  written server-side, all into one host table `valuz_feedback` (one row per
-  `(user, message, action)`, repeats counted). New `GET`/`POST`/`DELETE
-  /v1/sessions/{id}/feedback`; `FeedbackPort` lets an edition decorate the
-  local provider. Nothing touches the kernel or the event stream. (#1174)
-- **Artifacts: `skill` kind and a bytes delivery form** — `ArtifactKind.SKILL`
-  labels an installable skill package, and `DeliveryRequest.content_bytes`
-  records opaque bytes (an archive, an image) that arrive as content rather
-  than as a file. Bytes are stored as a file snapshot only, never inline. This
-  is the artifacts-side groundwork for versioning skill-creator output; the
-  skills module owns the rest.
 - **Skill versions** — every skill saved through the library (skill-creator
   confirm, staging-panel sync into the user library) is recorded as a version:
   a deterministic zip of the skill directory delivered as a `kind=skill`
@@ -33,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST …/versions/{rev}/restore` (restore = a new version on top of the
   history). `valuz_skill_index.artifact_id` links a skill folder to its
   lineage (migration 0044). Local backup now includes `skill-versions/`.
+  (#1120 @Ready22Race)
+- **Artifacts: `skill` kind and a bytes delivery form** — `ArtifactKind.SKILL`
+  labels an installable skill package, and `DeliveryRequest.content_bytes`
+  records opaque bytes (an archive, an image) that arrive as content rather
+  than as a file. Bytes are stored as a file snapshot only, never inline. This
+  is the artifacts-side groundwork for versioning skill-creator output; the
+  skills module owns the rest. (#1119 @Ready22Race)
 - **skill-creator submissions are durable operations** — `submit_skill` now
   proposes a `skill.submit` operation (staged file list, tree hash, how the
   draft collides with the library, the version a save would create) and
@@ -48,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gained `decision` on confirm, an optional cancel hook, and run handlers
   with commits deferred (`infra.db.defer_commits`). The legacy
   `/v1/skills/submissions/*` endpoints are deprecated and kept one release.
+  (#1121 @Ready22Race)
+- **Skill versions in the UI** — the review card now renders from the
+  `skill.submit` record, so a reloaded page shows "saved as v2" or
+  "discarded" instead of falling back to "waiting for files"; it names the
+  version a save would create, and when the slug collides with a library
+  skill the draft was not prepared from it asks the user to pick between
+  saving as that skill's next version and saving under a new name. The
+  skill detail page gains a version list with restore, the skill-creator
+  panel lists what this conversation already saved, and saved-skill
+  archives no longer appear in a session's generated files (session
+  artifacts now carry `kind`). (#1122 @Ready22Race)
 - **Skill versions became a view, not a footnote** — the version list hung
   off the detail page's metadata sidebar, where it sat at a different scale to
   everything around it and could only be read, never opened. The page now has
@@ -59,26 +67,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /v1/skills/{id}/versions/{revision_id}` returns a version's file list —
   which files a version holds is part of what changed, so reusing the current
   tree would mis-describe every version where a file was added or removed.
+  (#1127 @Ready22Race)
 - **Skill panel proportions** — the skill-creator panel's "saved in this
   conversation" list is a real section (rows with a version badge, one click
   to the skill) instead of a strip of fine print, and its empty state no
   longer says "nothing generated yet" directly under the skills that session
   just saved — saving empties staging, so that is exactly when the two
   contradicted each other. The detail page's version list reads at the same
-  scale as the rest of that sidebar.
-- **Skill versions in the UI** — the review card now renders from the
-  `skill.submit` record, so a reloaded page shows "saved as v2" or
-  "discarded" instead of falling back to "waiting for files"; it names the
-  version a save would create, and when the slug collides with a library
-  skill the draft was not prepared from it asks the user to pick between
-  saving as that skill's next version and saving under a new name. The
-  skill detail page gains a version list with restore, the skill-creator
-  panel lists what this conversation already saved, and saved-skill
-  archives no longer appear in a session's generated files (session
-  artifacts now carry `kind`).
+  scale as the rest of that sidebar. (#1126 #1128 @Ready22Race)
+- **Protected skill and plugin packages** — a package can be marked
+  `protected`: a runtime may load and run it, but its contents are never
+  disclosed through any read, list, export or download path. The library
+  shows it as a real entry (name, description, the fact that it is protected)
+  rather than a broken card, the detail panel explains why there are no files
+  to browse instead of rendering an empty tree, and the plugin view carries
+  the same flag so clients stop offering an export that would be refused.
+  (#1103 #1104 #1106 #1110 @Ready22Race)
+- **Agent tools reach what the UI reaches** — one toolkit exposes skills,
+  plugins, projects, agents and memory to the agent with the same operations
+  the UI performs, so a conversation can create and maintain the workstation's
+  own resources instead of asking the user to leave and click. (#1149
+  @St0neWan9)
+- **Connectors are editable, and the agent can manage them** — a custom MCP
+  connector can be edited after it is added (URL, headers, args, env,
+  transport) instead of being deleted and recreated, and the agent can edit,
+  delete, enable, disable and test connectors through its own tools. MCP
+  connectors also support OAuth Client ID Metadata Documents, so a server that
+  advertises CIMD registration no longer needs a hand-registered client.
+  (#1115 #1146 #1153 @St0neWan9)
+- **An event source can wake an automation, not only the clock** — a clock
+  finds nothing changed on most ticks, and the change that mattered happened
+  between two of them. `ports/automation_event_source.py` defines the
+  protocol and `ext.automation_event_sources` is the registry; it boots empty,
+  OSS ships no source and no event type, and with nothing registered every
+  event field is refused at the API edge and behaviour is exactly as before. A
+  source declares its own closed set of event types (so "what is this
+  automation waiting for?" always has an answer), validates its subscription
+  parameters, and owns the upstream lifecycle including authenticating inbound
+  deliveries. `event_source` / `event_refs` are additive to any `trigger_kind`
+  — events do not replace schedules. (#1202 @St0neWan9)
+- **Headless CLI execution** — the `valuz` CLI gains a product-aligned command
+  surface for running work without a GUI, plus commercial authentication.
+  (#1105 @Ready22Race)
+- **Feedback signals on assistant turns** — Thumbs-up / thumbs-down (with reason chips) and
+  copy are recorded per message, and regenerate / fork / research-share are
+  written server-side, all into one host table `valuz_feedback` (one row per
+  `(user, message, action)`, repeats counted). New `GET`/`POST`/`DELETE
+  /v1/sessions/{id}/feedback`; `FeedbackPort` lets an edition decorate the
+  local provider. Nothing touches the kernel or the event stream. (#1179
+  @Ready22Race)
+- **Deliverables can be kept, not only opened** — generated files and a task's
+  delivery rows carry a save control wired to the same download path (cloud
+  attachment address, save-a-copy dialog, or bounded blob fallback), `.pptx`
+  files preview instead of reporting "unsupported", and the file tree no
+  longer stops at a fixed depth. (#1196 #1198 #1200 @Ready22Race)
+- **Playbook and automation template libraries** — the marketplace carries
+  reusable playbook and automation templates alongside skills and connectors,
+  and Finance gains secondary category filters. (#1107 #1100 @St0neWan9)
+- **Operations platform** — a shared operation facade with a trusted execution
+  context (#1182), a durable evidence and provenance library (#1184),
+  request-scoped handler services and attempt projection (#1185),
+  `request_changes` / expiry / supersede on `OperationRecord` (#1165),
+  imported history that carries no execution authority (#1187), bounded
+  owner-scoped reference reads for playbooks (#1189) and for automations and
+  artifacts (#1191), bounded playbook pagination (#1176), and a fail-closed
+  project deletion lifecycle hook that prepares external references before a
+  project is removed (#1193). (@St0neWan9)
+- **Model input modalities are declared, not guessed** — a provider declares
+  `input_modalities` in three states, and an image gate refuses a modality the
+  model cannot read; an unreadable attachment is marked as such instead of
+  falling under a blanket rule that hid readable ones too. `gpt-6-astra` joins
+  the codex subscription models. (#1085 #1091 @Ready22Race, #1161 @jiaoqsh)
+- **Generative UI: charts, schemas and citations** — cartesian charts get a
+  value-axis scale and value labels (#1172), task checks are scoped per run
+  and native `generate_ui` schemas are validated (#1168), and the conversation
+  slot exposes the exact citation ids the user selected (#1177). (@St0neWan9)
+- **Edition seams** — an edition can supply runs no target can list (#1092),
+  own the notification drawer card for its own kind (#1195), and a host can
+  pin quick chats to one execution target (#1159); the kernel scrubs
+  host-declared private tools from every user surface (#1109 @Ready22Race) and
+  built-in MCP server instructions are trusted (#1124). (@St0neWan9 unless
+  noted)
+- **Navigation and page state** — one Automation sidebar entry with a title switch
+  to Playbook (#1167), sidebar icons for the watchlist and portfolio items
+  (#1166), a sidebar project list capped at ten behind a show-more toggle with
+  edition worker sessions kept out of it (#1173), and `usePageMemoryState` /
+  `useRestoredScroll` in `@valuz/core` so a list page returning from a detail
+  route shows its previous data, filters, selection and scroll position at
+  once and refreshes in the background (#1205). (@St0neWan9)
+
+### Changed
+
+- **One loading-state design across the app** — `LoadingState` (page and
+  section tiers) plus an inline `Spinner` replace the assorted centred
+  spinners, logo shimmers and text-only loading blocks. The page loader
+  anchors to the top of the content area instead of centring in the viewport,
+  so it lands at the same height everywhere. DESIGN.md v2.7 documents the
+  tiers. (#1170 @St0neWan9)
+- **The automation hub reads as one table** — a single table with a sticky
+  header, project section rows, human-readable schedules and project filter
+  chips; the My / Templates tabs and New moved out of the page header into the
+  content area; rows match the activity feed's proportions and show the agent
+  behind each automation and playbook. (#1169 @St0neWan9)
+- **Template and marketplace browsing simplified** — the category rail is gone
+  from the libraries in favour of promoted filter pills, connector labels and
+  the category menu are plainer, and secondary categories show their counts.
+  (#1108 #1101 #1102 @St0neWan9)
+- **Connector provenance** — the connector detail shows official links, and
+  brokerage OAuth requirements are supported. (#1099 @St0neWan9)
+- **The reader stopped warning about its own internals** — the summary
+  degraded and citation-resolution banners are removed. (#1171 @St0neWan9)
 
 ### Fixed
 
+- **Restoring a backup could silently empty every data directory** — the
+  pre-restore safety snapshot ran retention pruning into the same destination,
+  which could delete the very version being restored; the apply step then
+  mirrored the missing payload as an empty directory and reported success.
+  The safety snapshot no longer prunes, every restore target is validated
+  against the manifest before anything on disk is touched (a missing payload
+  fails the whole restore and leaves live data alone), recorded symlinks are
+  recreated on restore, and a manifest newer than the app is refused.
+  (#1118 @Ready22Race)
+- **Backup coverage caught up with the data-dir layout** — the source list was a
+  hardcoded four-name tuple that never learned about Agent Plugins
+  (`plugins/`, `plugins-data/`), the DeepAgents checkpoint store, DeepSeek
+  Harness state, or knowledge-base roots routed by a host resolver. Sources are
+  now resolved through `FsRegistry`, exclusions are explicit with a reason, and
+  a registry tripwire test fails on any new data directory the backup has not
+  taken a position on. First-run preflight sizes the whole payload instead of
+  the DBs alone. (#1118 @Ready22Race)
 - **Re-submitting a skill after `prepare_skill_edit` failed with a conflict** —
   `skill.submit` derived its idempotency key from the slug and the staged
   bytes, while `OperationService` compares the whole proposal. The flow the
@@ -90,32 +208,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the `{ok: false, ...}` envelope now: a bare error string was
   indistinguishable from a card predating the operation record, so it fell
   back to a staging scan and rendered a failure as "waiting for the AI to
-  write files".
-- **The skill-creator told the agent two incompatible things** — the host
-  section says "call `prepare_skill_edit`", while two upstream passages still
-  said to copy the installed skill path into `/tmp` and edit there. On this
-  host the agent has neither that path (the skill is not in its session) nor
-  `/tmp` as a staging location, so with both instructions present it wrote the
-  skill again from memory — observed on qa, right after it had listed the
-  library and seen the skill. Those passages now defer to the host rule.
-  `list_skills` says outright that it returns metadata only and points at
-  `prepare_skill_edit`, which now returns the skill's SKILL.md so the agent
-  can see what it says today without a second read, and refuses to re-seed
-  over a staged draft that differs from the library (`discard_existing: true`
-  to override) — staging is the one place with no version history behind it.
+  write files". (#1127 @Ready22Race)
 - **A failing skill-lifecycle hook rolled back a save that had already
   touched disk** — a save writes the library directory (not transactional)
   and the version history (transactional), and the overlay's mirror-to-cloud
   hook runs after both inside the same savepoint. Its failure left the
   directory on the new content while the history and `list_skills` reported
   the previous version. A mirror cannot veto a save that already happened;
-  the hook's failure is now logged and the save stands.
+  the hook's failure is now logged and the save stands. (#1127 @Ready22Race)
 - **A skill file in any non-Latin script could not be previewed** — the skill
   detail viewer decided "binary" by the share of printable-ASCII characters,
   so a Chinese `SKILL.md` (most of them) scored near zero and rendered as
   `[Binary file - cannot preview]`. The backend already decodes tolerantly and
   always returns a string, so the test is now the density of replacement and
-  control characters, i.e. whether the decode produced text.
+  control characters, i.e. whether the decode produced text. (#1126
+  @Ready22Race)
 - **Skill-creator required an agent** — the composer lets a conversation run
   agentless on a picked runtime + model, but the skill-creator launcher
   refused to start without an agent and forwarded only provider/model, so a
@@ -123,29 +230,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bound, an explicit brain runs agentless on exactly that brain, and only a
   launch that chose nothing falls back to the default assistant. The
   capability rides the always-on baseline, so an agentless session authors
-  skills fine.
+  skills fine. (#1125 @Ready22Race)
 - **Skill version endpoints mounted at the application root** — `routes/skills.py`
   carries no router prefix (every path is written in full), so the three
   version routes' relative paths landed on `/{skill_id}/versions` instead of
   `/v1/skills/{skill_id}/versions`. Because the auth dependency still ran,
   the stray paths answered 401 while the documented ones 404'd. A test now
-  pins the mounted paths.
-- **Restoring a backup could silently empty every data directory** — the
-  pre-restore safety snapshot ran retention pruning into the same destination,
-  which could delete the very version being restored; the apply step then
-  mirrored the missing payload as an empty directory and reported success.
-  The safety snapshot no longer prunes, every restore target is validated
-  against the manifest before anything on disk is touched (a missing payload
-  fails the whole restore and leaves live data alone), recorded symlinks are
-  recreated on restore, and a manifest newer than the app is refused.
-- **Backup coverage caught up with the data-dir layout** — the source list was a
-  hardcoded four-name tuple that never learned about Agent Plugins
-  (`plugins/`, `plugins-data/`), the DeepAgents checkpoint store, DeepSeek
-  Harness state, or knowledge-base roots routed by a host resolver. Sources are
-  now resolved through `FsRegistry`, exclusions are explicit with a reason, and
-  a registry tripwire test fails on any new data directory the backup has not
-  taken a position on. First-run preflight sizes the whole payload instead of
-  the DBs alone.
+  pins the mounted paths. (#1123 @Ready22Race)
+- **Skill identity and storage** — one rule decides which copy of a slug wins
+  and a version number survives a skill older than the versioning (#1129); a
+  saved skill no longer points at the directory it was written in (#1132); a
+  skill named in Chinese keeps its name as its directory (#1197); three
+  bundled descriptions are restored and the write that lost them is guarded
+  (#1089); and a skills root expands into its skill directories when
+  materialized for a runtime (#1150 @jiaoqsh). (@Ready22Race unless noted)
+- **Skill indexing off the event loop** — a skill scan (#1090), the reindex a
+  release runs for every owner (#1134) and the snapshot that reindex takes
+  (#1145, now under the scan lock rather than before it) no longer block the
+  event loop; a landing indexes only the packages it changed (#1134). The
+  skill detail preview stopped flashing every 30 seconds (#1112).
+  (@Ready22Race)
+- **Attachments follow the backend that took them** — a staged file belongs to
+  the backend that accepted it (#1094), the upload backend is resolved when
+  the upload happens rather than at composer render (#1095), a quick chat's
+  upload follows the picked service (#1097), and named ids that fail to bind
+  are accounted for instead of disappearing (#1093). (@Ready22Race)
+- **Automations** — the tool contract is exposed and a failed create returns an
+  error instead of a 500, with timezone and slug handling corrected (#1096
+  @Ready22Race); the tz database ships with the app and a failed run reaches a
+  terminal state (#1201 @Ready22Race); run-now works while an automation is
+  paused (#1160); the Playbook writer is released before session creation
+  (#1154); there is one event-source registry rather than two (#1203); and
+  structural workbench outputs and automation controls are finalized (#1155).
+  (@St0neWan9 unless noted)
+- **Playbooks** — `agent_slug` and `clear_project` are exposed on the playbook
+  tool (#1164), project-scoped definitions route to their owner runtime
+  (#1194), and project-scoped lists preserve execution origin. (@St0neWan9)
+- **Connectors** — `create_mcp` takes args and env as real arrays instead of
+  JSON strings (#1114), a broken custom connector is fixable in place (#1116),
+  the Settings edit form reads env's new shape (#1117), and every outbound MCP
+  request identifies itself (#1130). (@St0neWan9)
+- **A turn's identity** — keying a turn by its `Message` mis-anchored a turn
+  that never started; the first attempt gave such a turn its own message
+  anchor (#1147) and was reverted (#1151), and the turn is now keyed by its
+  `user_message` event (#1152). A turn the user stopped records a durable
+  marker (#1180). (@Ready22Race)
+- **Generative UI** — the param grammar is parsed strictly and gateway markers
+  survive the kernel path (#1162), planned data refs are carried onto every
+  re-declaration of a component id (#1163), and an explicit homepage update
+  request is recognized as one (#1157). (@St0neWan9)
+- **Reader and kernel text handling** — pdf.js CMaps and standard fonts ship,
+  so non-embedded CJK text renders (#1171); an untitled web page's opening
+  chunk is titled by its headline (#1175); citation origins are retained in
+  selection slot references (#1178). (@St0neWan9)
+- **A deck preview framed the slide in black and could not be paged** —
+  the `.pptx` viewer drew a black frame around the slide and offered no way
+  to move between slides; the frame is gone and the viewer has a pager.
+  (#1199 @Ready22Race)
+- **CLI hardening** — P0/P1 fixes after the squad-comparison review (#1111)
+  and a four-way review pass covering auth exit codes, usage exit 1, the
+  password prompt, the event subset and dead code (#1113). (@Ready22Race)
+- **DeepAgents sends an explicit output cap on every protocol** (#1133
+  @jiaoqsh).
+- **Runtime prewarm is skipped for unnamed conversations** (#1156 @St0neWan9).
+- **UI details** — composer mode tooltips wrap inside a narrow box and every
+  tooltip sits 6px off its trigger (#1136 #1137 #1138 #1139 #1141 #1144),
+  operation detail dialogs are narrower (#1135), the resource-library sidebar
+  icons match the top nav (#1158), the selection toolbar anchors below the end
+  of the selection (#1204), and the Skill copy submenu and Connector
+  organization actions are restored (#1098 @homeant). (@St0neWan9 unless
+  noted)
+
+### Docs & Chore
+
+- Release runbook: re-run failed jobs inside the original run, and never
+  dispatch a lone mac platform. (#1055 @St0neWan9)
+- skill-creator: drop the host sections that do not describe this host, and
+  put the two host rules where they are read rather than where they are filed.
+  (#1142 #1143 @Ready22Race)
 
 ## [0.5.1] - 2026-08-28
 
