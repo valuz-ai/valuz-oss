@@ -40,7 +40,6 @@ __all__ = [
     "InboundEvent",
     "UnknownEventSourceError",
     "UnknownEventTypeError",
-    "automation_event_sources",
 ]
 
 
@@ -237,8 +236,25 @@ class AutomationEventSourceRegistry:
         return self.require(source_name).resolve_inbound(payload)
 
 
-# Single process-wide registry. Overlays register at startup; OSS never does.
-automation_event_sources = AutomationEventSourceRegistry()
+def _registry() -> AutomationEventSourceRegistry:
+    """The one registry, which lives on ``ext``.
+
+    Imported lazily because ``ports.extensions`` imports this module for the
+    registry class — a module-level import here would be circular.
+
+    There used to be a second, module-level ``automation_event_sources``
+    singleton right here, and these two helpers read *it* while everything that
+    matters (``AutomationService``'s validate / subscribe / release /
+    ``fire_from_event``) reads ``ext.automation_event_sources``. An overlay
+    registering its source the documented way therefore ended up in one registry
+    while ``GET /automations/event-sources`` reported the other, so the endpoint
+    answered ``{"sources": []}`` on a deployment whose automations were happily
+    firing on that very source. Two registries for one concept can only ever
+    disagree; there is now one.
+    """
+    from valuz_agent.ports.extensions import ext
+
+    return ext.automation_event_sources
 
 
 def registered_event_types() -> dict[str, tuple[str, ...]]:
@@ -248,9 +264,10 @@ def registered_event_types() -> dict[str, tuple[str, ...]]:
     selector, so the choices a user sees are exactly what the deployment can
     actually deliver.
     """
+    registry = _registry()
     return {
-        name: tuple(sorted(automation_event_sources.require(name).event_types()))
-        for name in automation_event_sources.names()
+        name: tuple(sorted(registry.require(name).event_types()))
+        for name in registry.names()
     }
 
 
