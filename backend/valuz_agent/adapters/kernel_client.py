@@ -62,6 +62,7 @@ import valuz_agent.boot.kernel  # noqa: F401  (sys.path side-effect)
 from fastapi import HTTPException  # noqa: E402
 
 from valuz_agent.ports.sandbox_allocator import SandboxScope  # noqa: E402
+from valuz_agent.ports.sandbox_provider import SandboxEndpoint  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -884,6 +885,40 @@ async def _control_kernel(user_id: str, session_id: str) -> KernelClient:
 
 _endpoint_clients: dict[str, KernelClient] = {}
 
+
+def _endpoint_key(ep: SandboxEndpoint) -> str:
+    """Cache / identity key for an endpoint: what actually decides which
+    sandbox a client talks to.
+
+    ``base_url`` alone is enough for every provider that hands each instance
+    its own address. It is NOT enough for one that fronts a whole fleet behind
+    a single gateway domain and selects the instance by header (veFaaS):
+    keying on ``base_url`` there would hand every owner the same cached client
+    — one instance serving everyone's turns, no error anywhere. So the headers
+    join the key.
+
+    Empty headers reduce to plain ``base_url``, which keeps the key (and
+    ``current_kernel_id``, which shares it) byte-identical to before for local,
+    seatbelt and per-URL cloud drivers.
+    """
+    if not ep.headers:
+        return ep.base_url
+    suffix = "\x00".join(f"{k}={ep.headers[k]}" for k in sorted(ep.headers))
+    return f"{ep.base_url}\x00{suffix}"
+
+
+def _client_for_endpoint(ep: SandboxEndpoint) -> KernelClient:
+    """The cached ``HttpKernelClient`` for ``ep`` (one per distinct endpoint)."""
+    key = _endpoint_key(ep)
+    cached = _endpoint_clients.get(key)
+    if cached is None:
+        from valuz_agent.adapters.kernel_client_http import HttpKernelClient
+
+        cached = HttpKernelClient(ep.base_url, token=ep.token, extra_headers=ep.headers)
+        _endpoint_clients[key] = cached
+    return cached
+
+
 # ---------------------------------------------------------------------------
 # Sandbox scope resolution (per-session / per-task on-demand sandboxes).
 #
@@ -982,14 +1017,7 @@ async def _kernel_for(
     lease = await alloc.ensure(**kwargs)
     if lease is None or lease.endpoint is None:
         return client  # "use the process/global client" (BootSingletonAllocator default)
-    ep = lease.endpoint
-    cached = _endpoint_clients.get(ep.base_url)
-    if cached is None:
-        from valuz_agent.adapters.kernel_client_http import HttpKernelClient
-
-        cached = HttpKernelClient(ep.base_url, token=ep.token)
-        _endpoint_clients[ep.base_url] = cached
-    return cached
+    return _client_for_endpoint(lease.endpoint)
 
 
 async def _kernel_for_existing(
@@ -1019,14 +1047,7 @@ async def _kernel_for_existing(
         return None  # no live kernel for this owner → no live tap
     if lease.endpoint is None:
         return client  # boot-singleton default → process-global client
-    ep = lease.endpoint
-    cached = _endpoint_clients.get(ep.base_url)
-    if cached is None:
-        from valuz_agent.adapters.kernel_client_http import HttpKernelClient
-
-        cached = HttpKernelClient(ep.base_url, token=ep.token)
-        _endpoint_clients[ep.base_url] = cached
-    return cached
+    return _client_for_endpoint(lease.endpoint)
 
 
 # Identity of "the process-global client". A host with no allocator, or one on
@@ -1044,8 +1065,10 @@ async def current_kernel_id(user_id: str, session_id: str) -> str | None:
     allocation: chat provisions a fresh instance per turn, so a long-lived
     subscriber has to be able to notice that the session it follows has been
     handed to a different sandbox. Callers only ever compare the value for
-    equality; ``base_url`` backs it because that is what actually decides which
-    endpoint a client connects to (see ``_endpoint_clients``).
+    equality; ``_endpoint_key`` backs it because that is what actually decides
+    which endpoint a client connects to (see ``_endpoint_clients``) — for a
+    header-routed fleet every instance shares one ``base_url``, so keying on
+    the URL alone would report "same kernel" across a real handover.
     """
     from valuz_agent.ports.extensions import ext
 
@@ -1062,7 +1085,7 @@ async def current_kernel_id(user_id: str, session_id: str) -> str | None:
         lease = await peek(owner_user_id=user_id)
     if lease is None:
         return None
-    return _PROCESS_KERNEL_ID if lease.endpoint is None else lease.endpoint.base_url
+    return _PROCESS_KERNEL_ID if lease.endpoint is None else _endpoint_key(lease.endpoint)
 
 
 async def create_session(
