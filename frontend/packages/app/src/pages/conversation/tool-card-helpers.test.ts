@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   automationProposalGate,
+  bareToolName,
   hostDocumentFileName,
+  isToolNamed,
   normalizeAutomationTrigger,
   parseAutomationCreateInput,
   resolveGenUiHost,
@@ -195,5 +197,43 @@ describe("automationProposalGate — the confirm gate", () => {
       rejected: false,
       submittable: false,
     });
+  });
+});
+
+describe("bareToolName", () => {
+  // The three namespacing forms ``isToolNamed`` accepts. An edition registers
+  // its card once, by the tool's own name, and must get it on every runtime —
+  // keying on the raw title would make a card appear on one and vanish on
+  // another, which is the bug the three-form matcher exists to prevent.
+  it("strips Claude-style and slash-style namespaces", () => {
+    expect(bareToolName("mcp__valuz_sites__site_deploy")).toBe("site_deploy");
+    expect(bareToolName("valuz_sites/site_deploy")).toBe("site_deploy");
+    expect(bareToolName("site_deploy")).toBe("site_deploy");
+  });
+
+  it("keeps the LAST segment when a name contains both separators", () => {
+    // Real shape: an MCP server whose own name carries a slash.
+    expect(bareToolName("mcp__a/b__tool")).toBe("tool");
+    expect(bareToolName("mcp__a__b/tool")).toBe("tool");
+  });
+
+  it("is total — a missing or non-string title is the empty name", () => {
+    // The caller builds a slot key from this unconditionally; returning
+    // ``undefined`` would produce the key "…tool-card.undefined", which an
+    // edition could then register for by accident.
+    expect(bareToolName(undefined)).toBe("");
+    expect(bareToolName(null)).toBe("");
+    expect(bareToolName("")).toBe("");
+    expect(bareToolName(42)).toBe("");
+  });
+
+  it("agrees with isToolNamed on every form", () => {
+    for (const title of [
+      "mcp__valuz_sites__site_deploy",
+      "valuz_sites/site_deploy",
+      "site_deploy",
+    ]) {
+      expect(isToolNamed(title, bareToolName(title))).toBe(true);
+    }
   });
 });

@@ -87,6 +87,24 @@ export function isToolNamed(title: unknown, tool: string): boolean {
   );
 }
 
+/**
+ * The tool's own name, with any runtime namespacing stripped — the inverse of
+ * the three forms {@link isToolNamed} accepts.
+ *
+ * Used to build a stable slot name for edition tool cards. Stripping matters:
+ * an edition registers for the tool it owns, and the SAME tool arrives as
+ * ``mcp__valuz_sites__site_deploy`` on one runtime and
+ * ``valuz_sites/site_deploy`` on another. Keying the slot on the raw title
+ * would make a card appear on Claude and silently vanish on Codex — the exact
+ * class of bug the three-form matcher above was written to kill.
+ */
+export function bareToolName(title: unknown): string {
+  if (typeof title !== "string" || !title) return "";
+  const cut = Math.max(title.lastIndexOf("__"), title.lastIndexOf("/"));
+  if (cut < 0) return title;
+  return title.slice(cut + (title[cut] === "/" ? 1 : 2));
+}
+
 // ── VALUZ-CHATPLAN S3 helpers ────────────────────────────────────────────
 
 /** Compact one-line status pill for chatplan tool results. Each pill is a
