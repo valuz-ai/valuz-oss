@@ -63,7 +63,10 @@ class SandboxLease:
     ``endpoint=None`` is the sentinel for "use the host's process/global kernel
     client" (in-process kernel, or the single boot-attached sandbox) — the OSS
     default. A non-None endpoint is a per-user kernel the caller reaches over
-    HTTP (``HttpKernelClient(endpoint.base_url, token=endpoint.token)``).
+    HTTP — build the client through
+    ``kernel_client._client_for_endpoint(endpoint)`` rather than by hand, so
+    ``endpoint.headers`` (the per-instance routing a header-routed fleet needs)
+    reaches every channel and the client cache keys on it.
     """
 
     endpoint: SandboxEndpoint | None = None

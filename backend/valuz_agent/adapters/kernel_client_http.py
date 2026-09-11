@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from urllib.parse import quote
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, NoReturn
 
 import httpx
@@ -89,10 +89,22 @@ class HttpKernelClient:
         *,
         token: str | None = None,
         timeout: float = 30.0,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._token = token
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        # Per-instance routing headers from ``SandboxEndpoint.headers`` — the
+        # only way to name the instance when a provider fronts its whole fleet
+        # behind one gateway domain. They must ride EVERY channel this client
+        # opens, so they go on the AsyncClient defaults (REST + the SSE
+        # ``stream`` below) and are re-applied by hand on the ``run`` WS, which
+        # bypasses httpx entirely. ``Authorization`` is set after them on
+        # purpose: the kernel credential is this client's to own, never
+        # something a driver can override through routing metadata.
+        self._extra_headers: dict[str, str] = dict(extra_headers or {})
+        headers = dict(self._extra_headers)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             headers=headers,
@@ -484,7 +496,13 @@ class HttpKernelClient:
 
         ws_base = self._base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         url = f"{ws_base}{self._prefix}/v1/sessions/{session_id}/run"
-        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        # The WS handshake does not go through ``self._http``, so the
+        # per-instance routing headers have to be re-applied here — dropping
+        # them on a header-routed fleet sends the turn to an arbitrary instance
+        # of the same function, silently.
+        headers = dict(self._extra_headers)
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         headers["X-Valuz-Owner-Id"] = user_id
         payload: dict[str, Any] = {
             "message": {

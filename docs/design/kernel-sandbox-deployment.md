@@ -645,6 +645,7 @@ class SandboxEndpoint:
     sandbox_id: str
     base_url: str                    # HttpKernelClient 直接可用
     token: str                       # KERNEL_AUTH_TOKEN
+    headers: Mapping[str, str] = {}  # 选实例用的每实例请求头；默认空
 
 class SandboxProvider(Protocol):
     async def provision(self, spec: SandboxSpec) -> SandboxEndpoint: ...
@@ -656,6 +657,15 @@ class SandboxProvider(Protocol):
 自己的 API），换驱动只换一个文件。provision 负责自举（迁移 + 等
 `/health`），返回 `(base_url, token)` 直接构造 `HttpKernelClient`，
 供给面与控制面在此交棒。
+
+**`headers` 什么时候非空**：只有当驱动把整个 fleet 放在**同一个网关域名**
+后面、靠请求头选实例时（如 Volcengine veFaaS 的 `X-Faas-Instance-Name`）。
+此时 `base_url` 不再唯一标识实例，所以这组头必须
+① 跟着每一条请求走（REST / SSE 走 httpx 默认头，`run` 的 WS 握手单独补一次）、
+② 进 `_endpoint_clients` 的缓存键、③ 进 `current_kernel_id`。
+漏掉任一条的表现都是**静默打到别人的实例**，不报错。
+每实例一个 URL 的驱动（seatbelt、多数云驱动）留空即可，行为与加此字段前逐字相同。
+这里只放路由/选实例信息，kernel 凭据仍只在 `token`。
 
 ### B.5 最小本地形态：SeatbeltSandboxProvider
 

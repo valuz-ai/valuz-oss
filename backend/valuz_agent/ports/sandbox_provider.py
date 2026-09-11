@@ -25,6 +25,7 @@ The default OSS implementation is ``integrations/sandbox_seatbelt`` (a
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -95,9 +96,27 @@ class SandboxEndpoint:
 
     sandbox_id: str
     base_url: str
-    """Directly usable as ``HttpKernelClient(base_url, token=...)``."""
+    """Directly usable as
+    ``HttpKernelClient(base_url, token=..., extra_headers=headers)``."""
     token: str
     """The ``KERNEL_AUTH_TOKEN`` the kernel was started with."""
+    headers: Mapping[str, str] = field(default_factory=dict)
+    """Per-instance request headers the transport MUST send on every call to
+    this endpoint — HTTP and the ``run`` WebSocket alike.
+
+    Empty for every provider that gives each sandbox its own address (the
+    seatbelt subprocess, a per-instance URL from a cloud driver): there
+    ``base_url`` alone picks the instance. A provider that fronts its whole
+    fleet behind ONE gateway domain and selects the instance by header
+    (Volcengine veFaaS: ``X-Faas-Instance-Name``) has no other way to say
+    *which* sandbox — so the value is load-bearing, not decoration: drop it
+    and the call lands on an arbitrary instance of the same function with no
+    error. Because of that, headers are part of the client cache key and of
+    ``current_kernel_id`` (see ``adapters/kernel_client``) — with one shared
+    ``base_url`` those two would otherwise conflate every instance into one.
+
+    Carries routing/selection only. The kernel credential stays in ``token``;
+    a driver must not smuggle a second identity in here."""
 
 
 @dataclass(frozen=True)
