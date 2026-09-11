@@ -1,5 +1,11 @@
 import { resolveApiBase } from "./base-resolver";
 import { createFetchJson } from "./fetch-json";
+import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
+import {
+  getEntityOrigin,
+  recordEntityOrigin,
+  recordEntityOrigins,
+} from "../edition/entity-origin";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -108,6 +114,10 @@ export interface Task {
   updated_at: number;
   /** Trigger provenance, resolved server-side. ``null`` for legacy tasks. */
   trigger?: TaskTrigger | null;
+  /** Client-side tag: which execution target answered for this row. Never a
+   * server column — set by the list fan-out on multi-target editions, absent
+   * on OSS single-backend builds. */
+  exec_origin?: string;
 }
 
 /** One kernel session that belongs to a task (lead or dispatched subtask). */
@@ -286,34 +296,92 @@ const projectBase = (projectId: string): string =>
 const taskBase = (taskId: string): string =>
   resolveApiBase({ taskId }, _apiBase);
 
+/**
+ * Tag every task of a project with that project's execution origin.
+ *
+ * A task lives on whichever backend owns its project, and every later call
+ * for it (`getTask`, events, usage, plan, commit) routes by ``taskId`` alone.
+ * Without this, a task the user did not create in THIS app instance — one
+ * listed from the project page, or created in another client — has no entry
+ * in the origin index, so ``resolveApiBase({ taskId })`` falls through to the
+ * module default (the LOCAL backend) and the read 404s against a backend that
+ * never held the task.
+ */
+function inheritProjectOrigin(projectId: string, tasks: Task[]): void {
+  const origin = getEntityOrigin(projectId, "project");
+  if (!origin || tasks.length === 0) return;
+  recordEntityOrigins(tasks.map((task) => [task.id, origin]));
+}
+
 export const tasksApi = {
-  kickoff(projectId: string, payload: KickoffTaskPayload): Promise<Task> {
-    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      baseUrl: projectBase(projectId),
-    });
+  async kickoff(projectId: string, payload: KickoffTaskPayload): Promise<Task> {
+    const task: Task = await fetchJson(
+      `/v1/projects/${encodeURIComponent(projectId)}/tasks`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        baseUrl: projectBase(projectId),
+      },
+    );
+    // Tasks follow their project's execution origin — record it here, at the
+    // one place every kickoff goes through, so the task detail / event stream
+    // / commit calls route to the owning backend.
+    const origin = getEntityOrigin(projectId, "project");
+    if (origin) recordEntityOrigin(task.id, origin);
+    return task;
   },
 
-  listTasks(
+  async listTasks(
     projectId: string,
     init?: { signal?: AbortSignal },
   ): Promise<{ tasks: Task[] }> {
     // ``init`` (e.g. an ``AbortSignal`` for the project-detail auto-refresh
     // poller) is forwarded to ``fetchJson`` → ``fetch``. Existing callers pass
     // nothing, so their behaviour is unchanged.
-    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, {
-      ...init,
-      baseUrl: projectBase(projectId),
-    });
+    const result: { tasks: Task[] } = await fetchJson(
+      `/v1/projects/${encodeURIComponent(projectId)}/tasks`,
+      {
+        ...init,
+        baseUrl: projectBase(projectId),
+      },
+    );
+    inheritProjectOrigin(projectId, result.tasks);
+    return result;
   },
 
   /** Global cross-project task list, newest activity first. Backs the
    * sidebar TASKS section so users see what's running regardless of
-   * which project page they're on. */
-  listAllTasks(limit = 50): Promise<{ tasks: Task[] }> {
-    return fetchJson(`/v1/tasks?limit=${encodeURIComponent(limit)}`);
+   * which project page they're on.
+   *
+   * Multi-target editions fan out and merge, same as the global session and
+   * project lists: a cross-project list that asked only the module-default
+   * backend would silently hide every cloud task. */
+  async listAllTasks(limit = 50): Promise<{ tasks: Task[] }> {
+    const path = `/v1/tasks?limit=${encodeURIComponent(limit)}`;
+    if (getListFanOutTargets().length === 0) {
+      return fetchJson(path);
+    }
+    const outcome = await fanOutTargets((target, signal) =>
+      fetchJson<{ tasks: Task[] }>(path, {
+        baseUrl: target.baseUrl,
+        signal,
+      }),
+    );
+    const seen = new Set<string>();
+    const merged: Task[] = [];
+    for (const { target, value } of outcome.values) {
+      recordEntityOrigins(value.tasks.map((task) => [task.id, target.id]));
+      for (const task of value.tasks) {
+        if (seen.has(task.id)) continue;
+        seen.add(task.id);
+        merged.push({ ...task, exec_origin: target.id });
+      }
+    }
+    // Newest activity first across the merged set — each target answered in
+    // its own order, so the concatenation is not sorted on its own.
+    merged.sort((a, b) => b.updated_at - a.updated_at);
+    return { tasks: merged.slice(0, limit) };
   },
 
   getTask(taskId: string): Promise<TaskDetail> {
