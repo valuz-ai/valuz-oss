@@ -30,12 +30,16 @@ at the API edge and OSS behaves exactly as it did before.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
     "AutomationEventSource",
     "AutomationEventSourceRegistry",
+    "EventFieldOption",
+    "EventFieldSpec",
+    "EventRefOption",
+    "EventTypeSpec",
     "EventSubscription",
     "InboundEvent",
     "UnknownEventSourceError",
@@ -75,6 +79,58 @@ class EventSubscription:
     source: str
     refs: tuple[str, ...] = ()
     params: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class EventRefOption:
+    """One thing a user may subscribe an automation to, as the source names it.
+
+    Refs are opaque ids (a watch id, a symbol) — nobody types those into a
+    form. A source that can enumerate what the user is allowed to watch
+    implements the optional ``list_refs`` capability (see
+    ``AutomationEventSource``) and returns these; the editor renders them as a
+    checklist grouped by ``group`` and stores ``ref``. ``kind`` is the event
+    type this ref produces, shown as a badge; ``None`` when a ref spans types.
+    """
+
+    ref: str
+    label: str
+    group: str | None = None
+    kind: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EventFieldOption:
+    value: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class EventFieldSpec:
+    """One input of the editor's "new subscription" form for an event type.
+
+    ``kind`` is one of ``text`` / ``number`` / ``select`` / ``symbols``
+    (``symbols`` = a comma-separated instrument list the source parses). The
+    editor renders the form from this and posts ``{field.name: value}`` back
+    through ``create_ref``; validation stays with the source.
+    """
+
+    name: str
+    label: str
+    kind: str = "text"
+    required: bool = False
+    options: tuple[EventFieldOption, ...] = ()
+    placeholder: str | None = None
+    help: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EventTypeSpec:
+    """How to build a new subscription of one event type, for the editor."""
+
+    type: str
+    label: str
+    fields: tuple[EventFieldSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +212,26 @@ class AutomationEventSource(Protocol):
         is the only side that knows how many subscribers are left.
         """
         ...
+
+    # Optional capabilities — deliberately NOT protocol members, so a source
+    # that cannot enumerate or create refs (a webhook that fires on anything)
+    # still satisfies the protocol. The module-level helpers below probe for
+    # them with ``getattr``.
+    #
+    #     async def list_refs(self, *, user_id: str) -> Sequence[EventRefOption]:
+    #         """What this user may already subscribe to, grouped for the editor."""
+    #
+    #     def describe_event_types(self) -> Sequence[EventTypeSpec]:
+    #         """Form specs so the editor can create a new subscription per type."""
+    #
+    #     async def create_ref(
+    #         self, *, user_id: str, event_type: str, params: Mapping[str, Any],
+    #         authorization: str | None,
+    #     ) -> EventRefOption:
+    #         """Create the upstream subscription and answer its ref. Raise
+    #         ``ValueError`` with a user-actionable message on bad params.
+    #         ``authorization`` is the caller's own credential — upstreams that
+    #         own subscriptions per user need it; never a service key."""
 
     def resolve_inbound(self, payload: Mapping[str, Any]) -> InboundEvent | None:
         """Turn a raw delivery into an event, or ``None`` to drop it.
@@ -272,8 +348,62 @@ def registered_event_types() -> dict[str, tuple[str, ...]]:
 
 
 def describe_sources() -> Sequence[Mapping[str, Any]]:
-    """Wire-shaped view of the registry for ``GET /automations/event-sources``."""
-    return [
-        {"source": name, "event_types": list(types)}
-        for name, types in sorted(registered_event_types().items())
-    ]
+    """Wire-shaped view of the registry for ``GET /automations/event-sources``.
+
+    ``event_type_specs`` is the optional ``describe_event_types`` capability —
+    empty for a source that offers no "create a new subscription" form.
+    """
+    registry = _registry()
+    out: list[Mapping[str, Any]] = []
+    for name, types in sorted(registered_event_types().items()):
+        describe = getattr(registry.require(name), "describe_event_types", None)
+        specs = [asdict(spec) for spec in describe()] if describe is not None else []
+        out.append({"source": name, "event_types": list(types), "event_type_specs": specs})
+    return out
+
+
+async def create_source_ref(
+    source_name: str,
+    *,
+    user_id: str,
+    event_type: str,
+    params: Mapping[str, Any],
+    authorization: str | None,
+) -> EventRefOption:
+    """Create a new subscription on ``source_name`` for the editor
+    (``POST /automations/event-sources/{source}/refs``).
+
+    ``ValueError`` for a source without the ``create_ref`` capability or for
+    params the source rejects (both 422 at the route); ``UnknownEventTypeError``
+    for a type outside the source's closed set; ``UnknownEventSourceError``
+    for a source nobody registered (404).
+    """
+    source = _registry().require(source_name)
+    create = getattr(source, "create_ref", None)
+    if create is None:
+        raise ValueError(f"event source {source_name!r} cannot create subscriptions")
+    if event_type not in source.event_types():
+        raise UnknownEventTypeError(
+            f"event source {source_name!r} does not produce {event_type!r}"
+        )
+    return await create(
+        user_id=user_id,
+        event_type=event_type,
+        params=dict(params),
+        authorization=authorization,
+    )
+
+
+async def list_source_refs(source_name: str, *, user_id: str) -> list[EventRefOption]:
+    """What ``user_id`` may subscribe to on ``source_name``, for the editor's
+    ref picker (``GET /automations/event-sources/{source}/refs``).
+
+    A source without the optional ``list_refs`` capability answers ``[]`` — the
+    editor then falls back to a free-text refs field. An unregistered source
+    raises ``UnknownEventSourceError`` (the route turns that into a 404).
+    """
+    source = _registry().require(source_name)
+    list_refs = getattr(source, "list_refs", None)
+    if list_refs is None:
+        return []
+    return list(await list_refs(user_id=user_id))

@@ -14,7 +14,7 @@ ported with minimal reshape) with two key differences:
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -428,12 +428,46 @@ class AutomationProjectTargetsResponse(BaseModel):
 # ── Event sources (ports/automation_event_source.py) ──────────────────
 
 
+class AutomationEventFieldOption(BaseModel):
+    value: str
+    label: str
+
+
+class AutomationEventFieldSpec(BaseModel):
+    """One input of the editor's "new subscription" form
+    (``ports.automation_event_source.EventFieldSpec``)."""
+
+    name: str
+    label: str
+    kind: Literal["text", "number", "select", "symbols"] = "text"
+    required: bool = False
+    options: list[AutomationEventFieldOption] = Field(default_factory=list)
+    placeholder: str | None = None
+    help: str | None = None
+
+
+class AutomationEventTypeSpec(BaseModel):
+    type: str
+    label: str
+    fields: list[AutomationEventFieldSpec] = Field(default_factory=list)
+
+
 class AutomationEventSourceDescriptor(BaseModel):
     """One registered source's closed set of event types — wire shape of
-    ``ports.automation_event_source.describe_sources()``."""
+    ``ports.automation_event_source.describe_sources()``. ``event_type_specs``
+    is empty for a source that offers no "create a new subscription" form."""
 
     source: str
     event_types: list[str]
+    event_type_specs: list[AutomationEventTypeSpec] = Field(default_factory=list)
+
+
+class AutomationEventRefCreatePayload(BaseModel):
+    """``POST /automations/event-sources/{source}/refs`` — one filled-in
+    ``AutomationEventTypeSpec`` form. Validation belongs to the source."""
+
+    event_type: str = Field(min_length=1, max_length=64)
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class AutomationEventSourcesResponse(BaseModel):
@@ -442,6 +476,24 @@ class AutomationEventSourcesResponse(BaseModel):
     selector from exactly what the deployment can actually deliver."""
 
     sources: list[AutomationEventSourceDescriptor]
+
+
+class AutomationEventRefOption(BaseModel):
+    """One subscribable thing as the source names it — wire shape of
+    ``ports.automation_event_source.EventRefOption``."""
+
+    ref: str
+    label: str
+    group: str | None = None
+    kind: str | None = None
+
+
+class AutomationEventRefsResponse(BaseModel):
+    """``GET /automations/event-sources/{source}/refs``. Empty when the source
+    cannot enumerate (the editor then offers a free-text refs field)."""
+
+    source: str
+    refs: list[AutomationEventRefOption]
 
 
 class AutomationEventDeliveryResponse(BaseModel):

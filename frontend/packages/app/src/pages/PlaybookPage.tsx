@@ -9,7 +9,9 @@ import { toast } from "sonner";
 import {
   agentsApi,
   automationsApi,
+  getDefaultExecutionTarget,
   getEntityOrigin,
+  getExecutionTargets,
   playbooksApi,
   recordEntityOrigin,
   resolveApiBase,
@@ -60,6 +62,13 @@ export const PlaybookPage = () => {
   const [projectAgents, setProjectAgents] = useState<
     Record<string, PlaybookAgentChoice[]>
   >({});
+  // Chat-standalone location choice (multi-target editions) — drives which
+  // backend the library-agent list is sourced from, so a cloud Definition is
+  // never pinned to an agent slug that only exists in the local library.
+  const [selectedExecLocation, setSelectedExecLocation] = useState<
+    string | null
+  >(null);
+  const [chatAgents, setChatAgents] = useState<Agent[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<PlaybookDetail | null>(null);
   const [templatePrefill, setTemplatePrefill] =
@@ -151,6 +160,31 @@ export const PlaybookPage = () => {
     void load();
   }, [load]);
 
+  // Re-source the Chat-standalone agent list whenever the chosen location
+  // changes — the same wiring as AutomationPage. Project-bound Definitions
+  // are unaffected: their members come from ``listMembers`` per project.
+  useEffect(() => {
+    const loc = selectedExecLocation;
+    if (!loc || loc === getDefaultExecutionTarget()?.id) {
+      // Module-default (local) — already loaded by ``load``.
+      setChatAgents(agents);
+      return;
+    }
+    const target = getExecutionTargets().find((item) => item.id === loc);
+    let cancelled = false;
+    agentsApi
+      .listAgents(undefined, target ? { baseUrl: target.baseUrl } : undefined)
+      .then((res) => {
+        if (!cancelled) setChatAgents(res.agents);
+      })
+      .catch(() => {
+        if (!cancelled) setChatAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agents, selectedExecLocation]);
+
   const groups = useMemo(() => {
     const chatGroupId = "chat";
     const projectTargets = targets.filter(
@@ -213,6 +247,7 @@ export const PlaybookPage = () => {
   const openCreate = useCallback(() => {
     setEditing(null);
     setTemplatePrefill(null);
+    setSelectedExecLocation(null);
     setDialogOpen(true);
   }, []);
 
@@ -220,6 +255,7 @@ export const PlaybookPage = () => {
     (detail: Parameters<typeof playbookTemplatePrefill>[0]) => {
       setEditing(null);
       setTemplatePrefill(playbookTemplatePrefill(detail, locale));
+      setSelectedExecLocation(null);
       setDialogOpen(true);
     },
     [locale],
@@ -264,10 +300,26 @@ export const PlaybookPage = () => {
     status: PlaybookStatus;
     reference_metadata: Record<string, unknown>[];
     default_executor: Record<string, unknown>;
+    /** Chat-standalone only: chosen execution-location target id. */
+    exec_location?: string;
   }) => {
+    const { exec_location, ...payload } = data;
     try {
       if (!editing) {
-        await playbooksApi.create(data);
+        // Route the create to the picker's backend so a Chat-standalone
+        // Definition lands there; project-bound ones are routed by the API
+        // client via the project's origin. Record the origin BEFORE ``load``
+        // so detail / edit / run route to the owning backend.
+        const target = exec_location
+          ? getExecutionTargets().find((item) => item.id === exec_location)
+          : undefined;
+        const created = await playbooksApi.create(
+          payload,
+          target ? { baseUrl: target.baseUrl } : undefined,
+        );
+        if (exec_location) {
+          recordEntityOrigin(created.definition.id, exec_location);
+        }
         toast.success(t("playbook.createSuccess", { name: data.name }));
       } else {
         const definition = editing.definition;
@@ -531,8 +583,13 @@ export const PlaybookPage = () => {
         initial={editing}
         prefill={templatePrefill}
         targets={targets}
-        agents={agents.map((agent) => ({ slug: agent.slug, name: agent.name }))}
+        agents={chatAgents.map((agent) => ({
+          slug: agent.slug,
+          name: agent.name,
+        }))}
         agentsByProject={projectAgents}
+        selectedExecLocation={selectedExecLocation}
+        onSelectExecLocation={setSelectedExecLocation}
         onSubmit={submit}
         onDelete={deleteDefinition}
       />

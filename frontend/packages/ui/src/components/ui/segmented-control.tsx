@@ -6,6 +6,9 @@ export interface SegmentedControlOption<T extends string> {
   value: T;
   label: ReactNode;
   icon?: ComponentType<{ className?: string }>;
+  /** Render the segment non-interactive (dimmed); ``title`` carries the reason. */
+  disabled?: boolean;
+  title?: string;
 }
 
 export interface SegmentedControlProps<T extends string> {
@@ -31,13 +34,15 @@ export function SegmentedControl<T extends string>({
       )}
       style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
     >
-      {options.map(({ value: optionValue, label, icon: Icon }) => (
+      {options.map(({ value: optionValue, label, icon: Icon, disabled, title }) => (
         <button
           key={optionValue}
           type="button"
-          onClick={() => onValueChange(optionValue)}
+          disabled={disabled}
+          title={title}
+          onClick={() => !disabled && onValueChange(optionValue)}
           className={cn(
-            "box-border flex h-full min-h-0 items-center justify-center gap-1.5 rounded-md px-3 py-0 text-xs font-medium leading-none transition-colors",
+            "box-border flex h-full min-h-0 items-center justify-center gap-1.5 rounded-md px-3 py-0 text-xs font-medium leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
             value === optionValue
               ? "bg-surface text-ink-heading shadow-sm"
               : "text-ink-body hover:bg-surface-soft hover:text-ink-heading dark:text-ink-body dark:hover:bg-surface-border/60",

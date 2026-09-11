@@ -269,7 +269,8 @@ export function normalizeAutomationTrigger(value: unknown): Trigger | null {
     return { kind: "interval", seconds };
   }
 
-  return trigger.kind === "manual" ? { kind: "manual" } : null;
+  if (trigger.kind === "manual") return { kind: "manual" };
+  return trigger.kind === "event" ? { kind: "event" } : null;
 }
 
 /**
@@ -368,6 +369,7 @@ export function automationTriggerSummary(
       return t(tk("automation.intervalEveryMinutes"), { count: s / 60 });
     return t(tk("automation.intervalEverySeconds"), { count: s });
   }
+  if (trigger.kind === "event") return t(tk("automation.triggerEvent"));
   return t(tk("automation.triggerManual"));
 }
 

@@ -15,10 +15,13 @@
  *    project is fixed and hidden.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { Maximize2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, Maximize2 } from "lucide-react";
 import type {
   ActionKind,
+  AutomationEventRefOption,
+  AutomationEventSourceDescriptor,
+  AutomationEventTypeSpec,
   AutomationPlaybookChoice,
   AutomationProjectTarget,
   Trigger,
@@ -33,6 +36,7 @@ import {
 import { browserTimezone, timezoneLabel, timezoneOptions } from "@valuz/shared";
 import {
   Button,
+  Checkbox,
   CronInput,
   Dialog,
   DialogContent,
@@ -42,6 +46,7 @@ import {
   DialogTitle,
   FormField,
   Input,
+  SegmentedControl,
   Select,
   SelectContent,
   SelectItem,
@@ -53,6 +58,7 @@ import {
   TabsList,
   TabsTrigger,
   Textarea,
+  cn,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
 import {
@@ -104,6 +110,8 @@ export interface AutomationEditInitial {
   worktree?: boolean;
   playbook_definition_id?: string | null;
   playbook_version?: number | null;
+  event_source?: string | null;
+  event_refs?: string[] | null;
 }
 
 export interface CreateAutomationDialogProps {
@@ -125,6 +133,11 @@ export interface CreateAutomationDialogProps {
     worktree: boolean;
     playbook_definition_id: string | null;
     playbook_version: number | null;
+    /** Event subscription. Set from the 事件 tab; a subscription the row
+     * already carried is preserved on the other tabs (events may augment a
+     * schedule), otherwise ``null``. */
+    event_source: string | null;
+    event_refs: string[] | null;
     /** Execution-location target id (``"local"``/``"cloud"``) for a
      * Chat-standalone automation on multi-target editions; ``undefined`` for
      * project-bound targets (they inherit the project's origin), in edit
@@ -264,6 +277,7 @@ export const CreateAutomationDialog = ({
   const execTargets = useExecutionTargets();
   const isChatStandaloneTarget =
     showTargetSelector && selectedTarget?.kind !== "project";
+  const showExecLocation = showTargetSelector && execTargets.length >= 2;
 
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -275,8 +289,31 @@ export const CreateAutomationDialog = ({
 
   // Trigger state — discriminated union driven by the tab.
   const [triggerKind, setTriggerKind] = useState<
-    "cron" | "interval" | "manual"
+    "cron" | "interval" | "manual" | "event"
   >("cron");
+  // Event subscription (ports/automation_event_source.py). Sources come from
+  // the backend that will own the row; refs are opaque to the UI — one per
+  // line, the source says what they mean (watch id, symbol, …).
+  const [eventSources, setEventSources] = useState<
+    AutomationEventSourceDescriptor[]
+  >([]);
+  const [eventSource, setEventSource] = useState("");
+  const [eventRefsText, setEventRefsText] = useState("");
+  // What the chosen source lets this user subscribe to. ``null`` = not
+  // loaded yet; ``[]`` = the source cannot enumerate, so the dialog falls
+  // back to a free-text refs field.
+  const [eventRefOptions, setEventRefOptions] = useState<
+    AutomationEventRefOption[] | null
+  >(null);
+  // "New watch" form: one of the source's ``event_type_specs`` plus its
+  // answers. Created on save (``createEventRef``) and appended to the refs;
+  // the form clears once the ref exists so a retry never creates a second one.
+  const [newWatchType, setNewWatchType] = useState("");
+  const [newWatchParams, setNewWatchParams] = useState<Record<string, string>>(
+    {},
+  );
+  const [newWatchError, setNewWatchError] = useState<string | null>(null);
+  const [creatingWatch, setCreatingWatch] = useState(false);
   const [cron, setCron] = useState("0 9 * * *");
   // Scheduling timezone — the IANA zone the cron rule is read in. Defaults to
   // the live BROWSER timezone (the user's real local zone, correct for desktop
@@ -326,6 +363,8 @@ export const CreateAutomationDialog = ({
   // whenever a real (git-repo) project is bound. ``chat`` runs each fire in its
   // own worktree; ``task`` runs lead + every member in one worktree.
   const [worktree, setWorktree] = useState(false);
+  // 高级选项 disclosure (Playbook + worktree). Seeded per open cycle below.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // The agent picker is linked to the target: switching projects swaps the
   // candidate list out from under the stored ``agentSlug``. Rather than chase
@@ -395,6 +434,19 @@ export const CreateAutomationDialog = ({
           : "",
       );
       setWorktree(Boolean(seed.worktree));
+      setEventSource(("event_source" in seed && seed.event_source) || "");
+      setEventRefsText(
+        "event_refs" in seed && seed.event_refs ? seed.event_refs.join("\n") : "",
+      );
+      setNewWatchType("");
+      setNewWatchParams({});
+      setNewWatchError(null);
+      setAdvancedOpen(
+        Boolean(
+          ("playbook_definition_id" in seed && seed.playbook_definition_id) ||
+          seed.worktree,
+        ),
+      );
       if (seed.trigger.kind === "cron") {
         setTriggerKind("cron");
         setCron(seed.trigger.cron_expr || "0 9 * * *");
@@ -425,10 +477,11 @@ export const CreateAutomationDialog = ({
           setIntervalUnit("seconds");
         }
       } else {
-        // Manual: no schedule — the automation only runs on demand
-        // (``run_now``). Keep the other tabs' fields at sensible defaults so
-        // switching away lands on a valid value.
-        setTriggerKind("manual");
+        // Manual / event: no schedule — the automation only runs on demand
+        // (``run_now``) or when its event source delivers. Keep the other
+        // tabs' fields at sensible defaults so switching away lands on a
+        // valid value.
+        setTriggerKind(seed.trigger.kind === "event" ? "event" : "manual");
         setCron("0 9 * * *");
         setIntervalValue(5);
         setIntervalUnit("minutes");
@@ -446,6 +499,12 @@ export const CreateAutomationDialog = ({
     setActionKind("chat");
     setPlaybookDefinitionId("");
     setWorktree(false);
+    setEventSource("");
+    setEventRefsText("");
+    setNewWatchType("");
+    setNewWatchParams({});
+    setNewWatchError(null);
+    setAdvancedOpen(false);
   }, [
     open,
     initial,
@@ -456,13 +515,11 @@ export const CreateAutomationDialog = ({
     taskModeAllowed,
   ]);
 
-  // Definitions are listed from the same backend that will own the
-  // Automation. Their owner Project does not constrain where they execute:
-  // Definition Project and PlaybookRun Project are intentionally independent.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const routedProjectId = selectedTarget?.project_id ?? fixedProjectId;
+  // The backend that will own the row — Playbooks, event sources and their
+  // refs are all listed from there, never from the module default.
+  const selectedTargetProjectId = selectedTarget?.project_id;
+  const resolveOwnerBaseUrl = useCallback((): string | undefined => {
+    const routedProjectId = selectedTargetProjectId ?? fixedProjectId;
     let baseUrl = routedProjectId
       ? resolveApiBase({ projectId: routedProjectId }, "") || undefined
       : undefined;
@@ -471,6 +528,21 @@ export const CreateAutomationDialog = ({
         (target) => target.id === selectedExecLocation,
       )?.baseUrl;
     }
+    return baseUrl;
+  }, [
+    selectedTargetProjectId,
+    fixedProjectId,
+    isChatStandaloneTarget,
+    selectedExecLocation,
+  ]);
+
+  // Definitions are listed from the same backend that will own the
+  // Automation. Their owner Project does not constrain where they execute:
+  // Definition Project and PlaybookRun Project are intentionally independent.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const baseUrl = resolveOwnerBaseUrl();
     automationsApi
       .listPlaybooks(baseUrl ? { baseUrl } : undefined)
       .then((items) => {
@@ -479,16 +551,44 @@ export const CreateAutomationDialog = ({
       .catch(() => {
         if (!cancelled) setPlaybooks([]);
       });
+    // Event sources are per-backend too: what wakes a cloud row is whatever
+    // the cloud registered, never the local list.
+    automationsApi
+      .listEventSources(baseUrl ? { baseUrl } : undefined)
+      .then((items) => {
+        if (cancelled) return;
+        setEventSources(items);
+        // A single registered source (the usual edition case) is picked
+        // silently — the picker only appears when several compete.
+        if (items.length === 1) {
+          setEventSource((prev) => prev || items[0]!.source);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setEventSources([]);
+      });
     return () => {
       cancelled = true;
     };
-  }, [
-    open,
-    selectedTarget?.project_id,
-    fixedProjectId,
-    isChatStandaloneTarget,
-    selectedExecLocation,
-  ]);
+  }, [open, resolveOwnerBaseUrl]);
+
+  // Refs the chosen source can enumerate for this user (grouped checklist).
+  useEffect(() => {
+    if (!open || !eventSource) return;
+    let cancelled = false;
+    const baseUrl = resolveOwnerBaseUrl();
+    automationsApi
+      .listEventRefs(eventSource, baseUrl ? { baseUrl } : undefined)
+      .then((items) => {
+        if (!cancelled) setEventRefOptions(items);
+      })
+      .catch(() => {
+        if (!cancelled) setEventRefOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, eventSource, resolveOwnerBaseUrl]);
 
   // Debounced next-run preview: re-validate the cron in the selected tz and
   // surface the next fire instant. Only for cron triggers; interval/manual
@@ -542,6 +642,10 @@ export const CreateAutomationDialog = ({
       // No schedule — fires only via ``run_now`` (or a future webhook).
       return { kind: "manual" };
     }
+    if (triggerKind === "event") {
+      // No clock — fires only when ``eventSource`` delivers a matching event.
+      return { kind: "event" };
+    }
     return {
       kind: "interval",
       seconds: Math.max(intervalSeconds, MIN_INTERVAL_SECONDS),
@@ -558,14 +662,110 @@ export const CreateAutomationDialog = ({
     actionKind === "task" &&
     selectedTarget?.kind !== "project";
 
+  // The advanced group is dropped only when neither field applies (Task mode
+  // without a project — unreachable in practice, but keeps the divider from
+  // rendering above nothing).
+  const hasAdvanced = actionKind === "chat" || taskModeAllowed;
+
+  // Refs are opaque: split on newlines / commas, drop blanks and duplicates.
+  const eventRefs = Array.from(
+    new Set(
+      eventRefsText
+        .split(/[\n,，;；]+/)
+        .map((ref) => ref.trim())
+        .filter(Boolean),
+    ),
+  );
+  // Events augment schedules: a subscription the row already carried stays
+  // attached when the user edits on another tab; a fresh row only gets one
+  // from the 事件 tab.
+  const keepsEvent = triggerKind === "event" || Boolean(initial?.event_source);
+  const selectedEventSource = eventSources.find(
+    (source) => source.source === eventSource,
+  );
+  const eventTypeSpecs: AutomationEventTypeSpec[] =
+    selectedEventSource?.event_type_specs ?? [];
+  const newWatchSpec = eventTypeSpecs.find((spec) => spec.type === newWatchType);
+  // The form is "ready" once every required field has an answer; an untouched
+  // form is simply not part of the save.
+  const newWatchReady =
+    newWatchSpec !== undefined &&
+    newWatchSpec.fields.every(
+      (field) => !field.required || (newWatchParams[field.name] ?? "").trim(),
+    );
+  const toggleEventRefs = (refs: string[], on: boolean) => {
+    const next = new Set(eventRefs);
+    for (const ref of refs) {
+      if (on) next.add(ref);
+      else next.delete(ref);
+    }
+    setEventRefsText([...next].join("\n"));
+  };
+  // Options grouped in the order the source returned them; ``null`` group =
+  // ungrouped rows listed first without a header.
+  const eventRefGroups = useMemo(() => {
+    const groups = new Map<string | null, AutomationEventRefOption[]>();
+    for (const option of eventRefOptions ?? []) {
+      const key = option.group ?? null;
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(option);
+      else groups.set(key, [option]);
+    }
+    return [...groups.entries()];
+  }, [eventRefOptions]);
+  // Refs the row carries that the source no longer lists (a retired watch,
+  // or one seeded elsewhere) — shown so they can be dropped, never silently
+  // rewritten.
+  const knownRefs = new Set((eventRefOptions ?? []).map((option) => option.ref));
+  const unknownEventRefs =
+    eventRefOptions && eventRefOptions.length > 0
+      ? eventRefs.filter((ref) => !knownRefs.has(ref))
+      : [];
+
   const submitDisabled =
     !effectiveAgentSlug ||
     (!prompt.trim() && !playbookDefinitionId) ||
     taskNeedsProject ||
+    (triggerKind === "event" &&
+      (!eventSource || (eventRefs.length === 0 && !newWatchReady))) ||
+    creatingWatch ||
     (triggerKind === "interval" && intervalSeconds < MIN_INTERVAL_SECONDS);
 
   const handleSubmit = async () => {
     if (submitDisabled) return;
+    // A filled-in "new watch" form becomes a ref first. The ref is pinned
+    // into the form state before the automation is saved, so a failed save
+    // retried later reuses it instead of creating a duplicate upstream.
+    let refsForSave = eventRefs;
+    if (triggerKind === "event" && newWatchReady && newWatchSpec) {
+      setCreatingWatch(true);
+      setNewWatchError(null);
+      try {
+        const baseUrl = resolveOwnerBaseUrl();
+        const created = await automationsApi.createEventRef(
+          eventSource,
+          {
+            event_type: newWatchSpec.type,
+            params: Object.fromEntries(
+              Object.entries(newWatchParams)
+                .map(([key, value]) => [key, value.trim()])
+                .filter(([, value]) => value),
+            ),
+          },
+          baseUrl ? { baseUrl } : undefined,
+        );
+        refsForSave = [...eventRefs.filter((ref) => ref !== created.ref), created.ref];
+        setEventRefsText(refsForSave.join("\n"));
+        setEventRefOptions((prev) => [created, ...(prev ?? [])]);
+        setNewWatchType("");
+        setNewWatchParams({});
+      } catch (error) {
+        setNewWatchError(String(error));
+        return;
+      } finally {
+        setCreatingWatch(false);
+      }
+    }
     const selectedPlaybook = playbooks.find(
       (playbook) => playbook.id === playbookDefinitionId,
     );
@@ -587,6 +787,8 @@ export const CreateAutomationDialog = ({
       worktree: taskModeAllowed ? worktree : false,
       playbook_definition_id: playbookDefinitionId || null,
       playbook_version: playbookDefinitionId ? pinnedVersion : null,
+      event_source: keepsEvent && eventSource ? eventSource : null,
+      event_refs: keepsEvent && eventSource ? refsForSave : null,
       // Only a Chat-standalone target carries a location choice; project-bound
       // targets inherit the project's origin and the parent routes via the
       // project id.
@@ -600,7 +802,7 @@ export const CreateAutomationDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(640px,85vh)] max-w-xl gap-0 overflow-hidden p-0">
+      <DialogContent className="h-[min(740px,85vh)] max-w-xl gap-0 overflow-hidden p-0">
         {promptFullscreen ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="px-[18px] pt-[18px] pb-2">
@@ -660,157 +862,6 @@ export const CreateAutomationDialog = ({
                   )}
                 />
               </FormField>
-
-              {/* Execution mode — Chat (single agent run) vs Task (kick off
-              project task with this agent as Lead). Placed above the
-              instruction so the user picks the mode before writing the
-              prompt — the same prompt reads differently depending on
-              whether it's a single turn or a task goal. Task mode is
-              only valid on project projects; on chat we render the
-              toggle but disable the Task pill with a hint. */}
-              <FormField
-                label={t(
-                  "automation.actionKindLabel" as Parameters<typeof t>[0],
-                )}
-              >
-                <div className="flex items-stretch gap-2">
-                  {(
-                    [
-                      {
-                        value: "chat" as const,
-                        label: t(
-                          "automation.actionKindChat" as Parameters<
-                            typeof t
-                          >[0],
-                        ),
-                        hint: t(
-                          "automation.actionKindChatHint" as Parameters<
-                            typeof t
-                          >[0],
-                        ),
-                        disabled: false,
-                      },
-                      {
-                        value: "task" as const,
-                        label: t(
-                          "automation.actionKindTask" as Parameters<
-                            typeof t
-                          >[0],
-                        ),
-                        hint: taskModeAllowed
-                          ? t(
-                              "automation.actionKindTaskHint" as Parameters<
-                                typeof t
-                              >[0],
-                            )
-                          : t(
-                              "automation.actionKindTaskDisabledHint" as Parameters<
-                                typeof t
-                              >[0],
-                            ),
-                        disabled: !taskModeAllowed,
-                      },
-                    ] as const
-                  ).map((opt) => {
-                    const active = actionKind === opt.value;
-                    return (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        disabled={opt.disabled}
-                        onClick={() =>
-                          !opt.disabled && handlePickMode(opt.value)
-                        }
-                        className={
-                          "flex-1 rounded-lg border px-3 py-2 text-left text-xs transition-colors " +
-                          (opt.disabled
-                            ? "cursor-not-allowed border-surface-border bg-surface-soft text-ink-meta opacity-60"
-                            : active
-                              ? "border-brand bg-brand/5 text-ink-heading"
-                              : "border-surface-border bg-card text-ink-body hover:border-brand/40")
-                        }
-                      >
-                        <div className="font-medium">{opt.label}</div>
-                        <div className="mt-0.5 text-2xs leading-4 text-ink-meta">
-                          {opt.hint}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </FormField>
-
-              {actionKind === "chat" ? (
-                <FormField
-                  label={t(
-                    "automation.playbookLabel" as Parameters<typeof t>[0],
-                  )}
-                >
-                  <Select
-                    value={playbookDefinitionId || "__none__"}
-                    onValueChange={(value) =>
-                      setPlaybookDefinitionId(
-                        value === "__none__" ? "" : value,
-                      )
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">
-                        {t(
-                          "automation.playbookNone" as Parameters<typeof t>[0],
-                        )}
-                      </SelectItem>
-                      {playbooks.map((playbook) => {
-                        const version =
-                          playbook.id === initial?.playbook_definition_id
-                            ? (initial.playbook_version ??
-                              playbook.current_version)
-                            : playbook.current_version;
-                        return (
-                          <SelectItem key={playbook.id} value={playbook.id}>
-                            {playbook.name} · v{version}
-                            {playbook.status === "retired"
-                              ? ` · ${t(
-                                  "automation.playbookRetired" as Parameters<
-                                    typeof t
-                                  >[0],
-                                )}`
-                              : ""}
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-1 text-2xs leading-4 text-ink-meta">
-                    {t(
-                      "automation.playbookHint" as Parameters<typeof t>[0],
-                    )}
-                  </p>
-                </FormField>
-              ) : null}
-
-              {/* Worktree toggle — shown whenever a real (git-repo) project is
-              bound, for BOTH chat and task actions. Off = the fire works in the
-              project directory; on = it runs in an isolated git worktree (a
-              chat fire gets its own session worktree; a task shares one across
-              lead + members) whose branch merges back / is discarded at end. */}
-              {taskModeAllowed && (
-                <FormField
-                  label={t(
-                    "automation.worktreeLabel" as Parameters<typeof t>[0],
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-border bg-card px-3 py-2">
-                    <p className="text-2xs leading-4 text-ink-meta">
-                      {t("automation.worktreeHint" as Parameters<typeof t>[0])}
-                    </p>
-                    <Switch checked={worktree} onCheckedChange={setWorktree} />
-                  </div>
-                </FormField>
-              )}
 
               {/* "所属项目" — where this automation lives, picked before who runs
               it. Two presentations of the SAME control so the global and
@@ -886,29 +937,6 @@ export const CreateAutomationDialog = ({
                         </Select>
                       </FormField>
                     )}
-                    {showTargetSelector && execTargets.length >= 2 ? (
-                      <div className="mt-2">
-                        <FormField
-                          label={t(
-                            "project.execLocation" as Parameters<typeof t>[0],
-                          )}
-                        >
-                          {isChatStandaloneTarget ? (
-                            <ExecutionLocationPicker
-                              value={selectedExecLocation ?? null}
-                              onChange={(id) => onSelectExecLocation?.(id)}
-                            />
-                          ) : (
-                            // Project-bound: the automation inherits the
-                            // target project's execution origin — read-only.
-                            <OriginBadge
-                              entityId={selectedTarget?.project_id ?? null}
-                              kind="project"
-                            />
-                          )}
-                        </FormField>
-                      </div>
-                    ) : null}
                   </div>
                 )}
 
@@ -958,6 +986,80 @@ export const CreateAutomationDialog = ({
                 </div>
               </div>
 
+              {/* 执行模式 + 运行位置 share one row. The location column
+              only exists on multi-target editions in create mode; on
+              single-target builds (and in edit mode) the mode picker spans
+              the full width. Task mode is only valid on project projects;
+              on chat we render the toggle but disable the Task pill. */}
+              <div className="grid grid-cols-2 items-start gap-2">
+                <FormField
+                  className={showExecLocation ? "min-w-0" : "col-span-2"}
+                  label={t(
+                    "automation.actionKindLabel" as Parameters<typeof t>[0],
+                  )}
+                >
+                  <SegmentedControl
+                    value={actionKind}
+                    onValueChange={handlePickMode}
+                    className="h-8 w-fit"
+                    options={[
+                      {
+                        value: "chat" as const,
+                        label: t(
+                          "automation.actionKindChat" as Parameters<typeof t>[0],
+                        ),
+                      },
+                      {
+                        value: "task" as const,
+                        label: t(
+                          "automation.actionKindTask" as Parameters<typeof t>[0],
+                        ),
+                        disabled: !taskModeAllowed,
+                        title: taskModeAllowed
+                          ? undefined
+                          : t(
+                              "automation.actionKindTaskDisabledHint" as Parameters<
+                                typeof t
+                              >[0],
+                            ),
+                      },
+                    ]}
+                  />
+                  {/* One line for the active mode; the disabled reason rides
+                  the Task segment's tooltip. */}
+                  <p className="mt-1 text-2xs leading-4 text-ink-meta">
+                    {t(
+                      (actionKind === "task"
+                        ? "automation.actionKindTaskHint"
+                        : "automation.actionKindChatHint") as Parameters<
+                        typeof t
+                      >[0],
+                    )}
+                  </p>
+                </FormField>
+                {showExecLocation ? (
+                  <FormField
+                    label={t("project.execLocation" as Parameters<typeof t>[0])}
+                  >
+                    {isChatStandaloneTarget ? (
+                      <ExecutionLocationPicker
+                        value={selectedExecLocation ?? null}
+                        onChange={(id) => onSelectExecLocation?.(id)}
+                      />
+                    ) : (
+                      // Project-bound: the automation inherits the target
+                      // project's execution origin — read-only.
+                      <div className="flex h-8 items-center">
+                        <OriginBadge
+                          entityId={selectedTarget?.project_id ?? null}
+                          kind="project"
+                        />
+                      </div>
+                    )}
+                  </FormField>
+                ) : null}
+              </div>
+
               <FormField
                 label={t("cron.instruction" as Parameters<typeof t>[0])}
                 labelAction={
@@ -985,11 +1087,13 @@ export const CreateAutomationDialog = ({
                   placeholder={t(
                     "cron.instructionPlaceholder" as Parameters<typeof t>[0],
                   )}
-                  rows={4}
+                  rows={3}
                   // Fixed height with its own scroll — ``field-sizing-fixed``
                   // overrides the Textarea's default content-sizing auto-grow so a
-                  // long instruction can't grow the dialog past the viewport.
-                  className="field-sizing-fixed h-32 resize-none"
+                  // long instruction can't grow the dialog past the viewport. Kept
+                  // short so the schedule below stays visible without scrolling;
+                  // the expand button opens the full-height editor.
+                  className="field-sizing-fixed h-24 resize-none"
                 />
               </FormField>
 
@@ -998,7 +1102,9 @@ export const CreateAutomationDialog = ({
                 <Tabs
                   value={triggerKind}
                   onValueChange={(v) =>
-                    setTriggerKind(v as "cron" | "interval" | "manual")
+                    setTriggerKind(
+                      v as "cron" | "interval" | "manual" | "event",
+                    )
                   }
                 >
                   <TabsList>
@@ -1012,6 +1118,9 @@ export const CreateAutomationDialog = ({
                     </TabsTrigger>
                     <TabsTrigger value="manual">
                       {t("automation.triggerManual" as Parameters<typeof t>[0])}
+                    </TabsTrigger>
+                    <TabsTrigger value="event">
+                      {t("automation.triggerEvent" as Parameters<typeof t>[0])}
                     </TabsTrigger>
                   </TabsList>
                   <TabsContent value="cron" className="pt-3 space-y-2">
@@ -1147,8 +1256,384 @@ export const CreateAutomationDialog = ({
                       {t("automation.manualHint" as Parameters<typeof t>[0])}
                     </p>
                   </TabsContent>
+                  <TabsContent value="event" className="pt-3 space-y-2">
+                    {/* Nothing registered (plain OSS) = say so instead of an
+                    empty form. Refs are opaque ids nobody types by hand, so a
+                    source that can enumerate them gets a grouped checklist;
+                    only a source that cannot falls back to free text. */}
+                    {eventSources.length === 0 ? (
+                      <p className="text-xs leading-5 text-ink-meta">
+                        {t(
+                          "automation.eventNoSources" as Parameters<typeof t>[0],
+                        )}
+                      </p>
+                    ) : (
+                      <>
+                        {eventSources.length > 1 ? (
+                          <FormField
+                            label={t(
+                              "automation.eventSourceLabel" as Parameters<
+                                typeof t
+                              >[0],
+                            )}
+                          >
+                            <Select
+                              value={eventSource}
+                              onValueChange={(v) => v && setEventSource(v)}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue
+                                  placeholder={t(
+                                    "automation.eventSourcePlaceholder" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )}
+                                />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {eventSources.map((source) => (
+                                  <SelectItem
+                                    key={source.source}
+                                    value={source.source}
+                                  >
+                                    {source.source}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </FormField>
+                        ) : null}
+                        {eventTypeSpecs.length > 0 ? (
+                          <div className="space-y-2 rounded-lg border border-surface-border bg-surface-soft/40 p-3">
+                            <FormField
+                              label={t(
+                                "automation.eventNewWatch" as Parameters<typeof t>[0],
+                              )}
+                            >
+                              <Select
+                                value={newWatchType || "__none__"}
+                                onValueChange={(v) => {
+                                  setNewWatchType(v === "__none__" ? "" : v);
+                                  setNewWatchParams({});
+                                  setNewWatchError(null);
+                                }}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__none__">
+                                    {t(
+                                      "automation.eventTypePlaceholder" as Parameters<
+                                        typeof t
+                                      >[0],
+                                    )}
+                                  </SelectItem>
+                                  {eventTypeSpecs.map((spec) => (
+                                    <SelectItem key={spec.type} value={spec.type}>
+                                      {spec.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </FormField>
+                            {newWatchSpec ? (
+                              <div className="grid grid-cols-2 items-start gap-2">
+                                {newWatchSpec.fields.map((field) => {
+                                  const value = newWatchParams[field.name] ?? "";
+                                  const setValue = (next: string) =>
+                                    setNewWatchParams((prev) => ({
+                                      ...prev,
+                                      [field.name]: next,
+                                    }));
+                                  const label = field.required
+                                    ? `${field.label} *`
+                                    : field.label;
+                                  return (
+                                    <FormField
+                                      key={field.name}
+                                      label={label}
+                                      className={
+                                        field.kind === "symbols" || field.name === "name"
+                                          ? "col-span-2"
+                                          : "min-w-0"
+                                      }
+                                    >
+                                      {field.kind === "select" ? (
+                                        <Select
+                                          value={value || "__none__"}
+                                          onValueChange={(v) =>
+                                            setValue(v === "__none__" ? "" : v)
+                                          }
+                                        >
+                                          <SelectTrigger className="w-full">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {!field.required ? (
+                                              <SelectItem value="__none__">
+                                                —
+                                              </SelectItem>
+                                            ) : null}
+                                            {field.options.map((option) => (
+                                              <SelectItem
+                                                key={option.value}
+                                                value={option.value}
+                                              >
+                                                {option.label}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      ) : (
+                                        <Input
+                                          type={field.kind === "number" ? "number" : "text"}
+                                          value={value}
+                                          onChange={(e) => setValue(e.target.value)}
+                                          placeholder={field.placeholder ?? undefined}
+                                        />
+                                      )}
+                                      {field.help ? (
+                                        <p className="mt-1 text-2xs leading-4 text-ink-meta">
+                                          {field.help}
+                                        </p>
+                                      ) : null}
+                                    </FormField>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
+                            {newWatchError ? (
+                              <p className="text-xs leading-4 text-error-text">
+                                {t(
+                                  "automation.eventCreateFailed" as Parameters<
+                                    typeof t
+                                  >[0],
+                                  { error: newWatchError },
+                                )}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {eventRefOptions === null ? null : eventRefOptions.length >
+                          0 ? (
+                          <FormField
+                            label={t(
+                              (eventTypeSpecs.length > 0
+                                ? "automation.eventExisting"
+                                : "automation.eventRefsLabel") as Parameters<
+                                typeof t
+                              >[0],
+                            )}
+                          >
+                            <div className="max-h-40 overflow-y-auto rounded-lg border border-surface-border">
+                              {eventRefGroups.map(([group, items]) => {
+                                const on = items.filter((item) =>
+                                  eventRefs.includes(item.ref),
+                                ).length;
+                                return (
+                                  <div
+                                    key={group ?? "__ungrouped__"}
+                                    className="border-b border-surface-border last:border-b-0"
+                                  >
+                                    {group !== null ? (
+                                      <label className="flex cursor-pointer items-center gap-2 bg-surface-soft px-3 py-1.5 text-xs font-medium text-ink-heading">
+                                        <Checkbox
+                                          checked={
+                                            on === items.length
+                                              ? true
+                                              : on > 0
+                                                ? "indeterminate"
+                                                : false
+                                          }
+                                          onCheckedChange={(v) =>
+                                            toggleEventRefs(
+                                              items.map((item) => item.ref),
+                                              v === true,
+                                            )
+                                          }
+                                        />
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {group}
+                                        </span>
+                                      </label>
+                                    ) : null}
+                                    {items.map((item) => (
+                                      <label
+                                        key={item.ref}
+                                        className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs text-ink-body"
+                                      >
+                                        <Checkbox
+                                          checked={eventRefs.includes(item.ref)}
+                                          onCheckedChange={(v) =>
+                                            toggleEventRefs([item.ref], v === true)
+                                          }
+                                        />
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {item.label}
+                                        </span>
+                                        {item.kind ? (
+                                          <span className="shrink-0 rounded-full border border-surface-border px-1.5 text-2xs leading-4 text-ink-meta">
+                                            {eventTypeSpecs.find(
+                                              (spec) => spec.type === item.kind,
+                                            )?.label ?? item.kind}
+                                          </span>
+                                        ) : null}
+                                      </label>
+                                    ))}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {unknownEventRefs.length > 0 ? (
+                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                <span className="text-2xs text-ink-meta">
+                                  {t(
+                                    "automation.eventRefsKept" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )}
+                                </span>
+                                {unknownEventRefs.map((ref) => (
+                                  <button
+                                    key={ref}
+                                    type="button"
+                                    onClick={() => toggleEventRefs([ref], false)}
+                                    className="rounded-full border border-surface-border bg-surface-soft px-2 py-0.5 font-mono text-2xs text-ink-body"
+                                  >
+                                    {ref} ×
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </FormField>
+                        ) : eventTypeSpecs.length > 0 ? null : (
+                          <FormField
+                            label={t(
+                              "automation.eventRefsLabel" as Parameters<
+                                typeof t
+                              >[0],
+                            )}
+                          >
+                            <Textarea
+                              value={eventRefsText}
+                              onChange={(e) => setEventRefsText(e.target.value)}
+                              placeholder={t(
+                                "automation.eventRefsPlaceholder" as Parameters<
+                                  typeof t
+                                >[0],
+                              )}
+                              rows={2}
+                              className="field-sizing-fixed h-16 resize-none font-mono text-xs"
+                            />
+                          </FormField>
+                        )}
+                        <p className="text-xs leading-5 text-ink-meta">
+                          {t("automation.eventHint" as Parameters<typeof t>[0])}
+                        </p>
+                      </>
+                    )}
+                  </TabsContent>
                 </Tabs>
               </FormField>
+
+              {/* 高级选项 — process contract (Playbook) and worktree
+              isolation. Both refine a plain Trigger × Agent instruction, so
+              they sit last behind one toggle; the group opens itself when
+              the row being edited already uses either. */}
+              {hasAdvanced ? (
+                <div className="border-t border-surface-border pt-3">
+                  <button
+                    type="button"
+                    aria-expanded={advancedOpen}
+                    onClick={() => setAdvancedOpen((prev) => !prev)}
+                    className="flex items-center gap-1 text-xs font-medium text-ink-heading"
+                  >
+                    <ChevronRight
+                      className={cn(
+                        "h-3.5 w-3.5 text-ink-meta transition-transform",
+                        advancedOpen && "rotate-90",
+                      )}
+                    />
+                    {t("automation.advancedOptions" as Parameters<typeof t>[0])}
+                  </button>
+                  {advancedOpen ? (
+                    <div className="mt-3 flex flex-col gap-[14px]">
+                      {actionKind === "chat" ? (
+                        <FormField
+                          label={t(
+                            "automation.playbookLabel" as Parameters<typeof t>[0],
+                          )}
+                        >
+                          <Select
+                            value={playbookDefinitionId || "__none__"}
+                            onValueChange={(value) =>
+                              setPlaybookDefinitionId(
+                                value === "__none__" ? "" : value,
+                              )
+                            }
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">
+                                {t(
+                                  "automation.playbookNone" as Parameters<typeof t>[0],
+                                )}
+                              </SelectItem>
+                              {playbooks.map((playbook) => {
+                                const version =
+                                  playbook.id === initial?.playbook_definition_id
+                                    ? (initial.playbook_version ??
+                                      playbook.current_version)
+                                    : playbook.current_version;
+                                return (
+                                  <SelectItem key={playbook.id} value={playbook.id}>
+                                    {playbook.name} · v{version}
+                                    {playbook.status === "retired"
+                                      ? ` · ${t(
+                                          "automation.playbookRetired" as Parameters<
+                                            typeof t
+                                          >[0],
+                                        )}`
+                                      : ""}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <p className="mt-1 text-2xs leading-4 text-ink-meta">
+                            {t(
+                              "automation.playbookHint" as Parameters<typeof t>[0],
+                            )}
+                          </p>
+                        </FormField>
+                      ) : null}
+
+                      {/* Worktree toggle — shown whenever a real (git-repo) project is
+                      bound, for BOTH chat and task actions. Off = the fire works in the
+                      project directory; on = it runs in an isolated git worktree (a
+                      chat fire gets its own session worktree; a task shares one across
+                      lead + members) whose branch merges back / is discarded at end. */}
+                      {taskModeAllowed && (
+                        <FormField
+                          label={t(
+                            "automation.worktreeLabel" as Parameters<typeof t>[0],
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-border bg-card px-3 py-2">
+                            <p className="text-2xs leading-4 text-ink-meta">
+                              {t("automation.worktreeHint" as Parameters<typeof t>[0])}
+                            </p>
+                            <Switch checked={worktree} onCheckedChange={setWorktree} />
+                          </div>
+                        </FormField>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <DialogFooter className="px-[18px] pt-1 pb-4">

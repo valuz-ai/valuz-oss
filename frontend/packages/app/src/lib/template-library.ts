@@ -99,6 +99,7 @@ function parseTrigger(value: unknown): Trigger {
     };
   }
   if (trigger.kind === "manual") return { kind: "manual" };
+  if (trigger.kind === "event") return { kind: "event" };
   return {
     kind: "cron",
     cron_expr:
