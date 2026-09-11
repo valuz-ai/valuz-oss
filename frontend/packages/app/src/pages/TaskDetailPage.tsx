@@ -327,6 +327,12 @@ function formatDuration(ms: number, t: Translator): string {
 
 export const TaskDetailPage = () => {
   const { taskId = "" } = useParams<{ taskId: string }>();
+  // Cold deep-link recovery: on a multi-target edition the task lives on one
+  // backend, and an id this app instance has never observed (deep link, fresh
+  // profile, task created in another client) resolves to the local one. On a
+  // cache miss this fires ensureOrigin, which probes both backends; adding it
+  // to loadData's deps re-fetches against the owning backend once it lands.
+  const taskOrigin = useEntityOrigin(taskId, "task");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
@@ -381,7 +387,7 @@ export const TaskDetailPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [taskId, t]);
+  }, [taskId, taskOrigin, t]);
 
   useEffect(() => {
     void Promise.resolve().then(loadData);
@@ -394,7 +400,7 @@ export const TaskDetailPage = () => {
       // Usage is diagnostic metadata; a read failure must not obscure the task.
       setTokenUsage(null);
     }
-  }, [taskId]);
+  }, [taskId, taskOrigin]);
 
   useEffect(() => {
     // Task detail is self-titled (the goal card carries the task name +

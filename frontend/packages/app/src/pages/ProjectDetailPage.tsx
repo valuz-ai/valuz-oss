@@ -1432,11 +1432,9 @@ export const ProjectDetailPage = () => {
           // worktree; clean ones auto-remove at finish.
           worktree: worktreeEnabled,
         });
-        // Tasks follow their project's execution origin (multi-target
-        // editions) — record it so the task detail / event stream / commit
-        // calls route to the owning backend.
-        const projectOrigin = getEntityOrigin(id, "project");
-        if (projectOrigin) recordEntityOrigin(task.id, projectOrigin);
+        // The task's execution origin is recorded inside ``tasksApi.kickoff``
+        // (tasks follow their project's target), so it is already routable by
+        // the time the detail page mounts.
         toast.success(t("task.kickedOff"));
         setComposerValue("");
         navigate(`/tasks/${encodeURIComponent(task.id)}`);
