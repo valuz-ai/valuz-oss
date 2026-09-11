@@ -4,6 +4,7 @@ import { Sparkles } from "lucide-react";
 import {
   SESSION_ACTION_RESOLVED_EVENT,
   SlotRenderer,
+  useRegisteredSlotNames,
   parseOperationToolOutput,
   parseActionResolved,
   useTranslation,
@@ -32,6 +33,7 @@ import type { computePlanAnchors } from "../conversation-plan-anchors";
 import {
   automationProposalGate,
   automationTriggerSummary,
+  bareToolName,
   hostDocumentFileName,
   isToolNamed,
   normalizeAutomationTrigger,
@@ -189,6 +191,11 @@ export function useToolCallCards({
     [askUserQuestionAnswersByToolId, askUserQuestionLocalAnswers],
   );
 
+  // Subscribed once here, not inside ``renderToolCall`` — that is a plain
+  // callback, and a hook inside it would break the rules of hooks. Membership
+  // is then a cheap Set lookup per tool.
+  const registeredSlots = useRegisteredSlotNames();
+
   const renderToolCall = useCallback(
     (tool: {
       id: string;
@@ -199,6 +206,43 @@ export function useToolCallCards({
       thinking?: string;
     }) => {
       const name = tool.title || "";
+
+      // ── Edition tool cards ────────────────────────────────────────────
+      // An edition may own the card for a tool OSS knows nothing about — a
+      // commercial MCP server's tools, for instance. Checked FIRST, and only
+      // when something is actually registered for this tool, so:
+      //
+      //  * OSS behaviour is byte-identical when no edition registers (the
+      //    membership test fails and every branch below runs as before);
+      //  * an edition cannot accidentally shadow a built-in card by
+      //    registering a slot whose name happens to collide — the built-ins
+      //    it could shadow are matched by tool name below, and a deliberate
+      //    override is the only way to reach them;
+      //  * the host never commits to a slot that renders nothing. That is why
+      //    this is a set-membership test and not ``return <SlotRenderer/>``:
+      //    an empty slot renders null, which would swallow the generic card.
+      //
+      // The key is the BARE tool name, so an edition registers once and its
+      // card survives whichever way the runtime namespaces MCP tools.
+      const editionCardSlot = `conversation.tool-card.${bareToolName(name)}`;
+      if (registeredSlots.has(editionCardSlot)) {
+        return (
+          <SlotRenderer
+            name={editionCardSlot}
+            context={{
+              tool,
+              // Same context shape the other tool slots get, so an edition
+              // component can be moved between them without a rewrite.
+              toolUseId: tool.id,
+              status: tool.status ?? "success",
+              input: tool.input,
+              output: tool.output,
+              thinking: tool.thinking,
+              hostRef: hostRef ?? null,
+            }}
+          />
+        );
+      }
 
       // generate_ui — generative UI. The MCP tool returns an A2UI stream as
       // ``tool.output`` (growing token-by-token while running, as the host
@@ -324,12 +368,7 @@ export function useToolCallCards({
       // persisted proposal card in this slot. The host owns only placement;
       // it neither knows Finance entities nor duplicates their confirm API.
       if (isToolNamed(name, "domain_operation")) {
-        return (
-          <SlotRenderer
-            name="domain.operation-card"
-            context={{ tool }}
-          />
-        );
+        return <SlotRenderer name="domain.operation-card" context={{ tool }} />;
       }
 
       const isPlaybook = isToolNamed(name, "playbook");
@@ -401,7 +440,7 @@ export function useToolCallCards({
             ? tool.status === "error"
               ? tool.output ||
                 t("automation.proposalFailed" as Parameters<typeof t>[0])
-              : result?.message ?? null
+              : (result?.message ?? null)
             : null;
           const submittable = gate.submittable;
           // Nothing to show yet (no parsed input, no proposal, no error) —
@@ -755,6 +794,11 @@ export function useToolCallCards({
       hostRef,
       navigate,
       t,
+      // An edition registers its slots during overlay boot, which can land
+      // after the first render of a conversation. Without this the callback
+      // stays pinned to the pre-registration set and the card never appears
+      // until something else happens to invalidate it.
+      registeredSlots,
     ],
   );
 
