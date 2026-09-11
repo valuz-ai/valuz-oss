@@ -208,6 +208,8 @@ export const AutomationDetailPage = () => {
     worktree: boolean;
     playbook_definition_id: string | null;
     playbook_version: number | null;
+    event_source: string | null;
+    event_refs: string[] | null;
   }) => {
     try {
       await automationsApi.update(automationId, data);
@@ -450,6 +452,8 @@ export const AutomationDetailPage = () => {
           worktree: detail.worktree ?? false,
           playbook_definition_id: detail.playbook_definition_id,
           playbook_version: detail.playbook_version,
+          event_source: detail.event_source ?? null,
+          event_refs: detail.event_refs ?? null,
         }}
         title={t(k("automation.dialogTitleEditNamed"), { name: detail.name })}
       />

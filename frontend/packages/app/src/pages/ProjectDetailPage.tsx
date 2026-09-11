@@ -873,6 +873,8 @@ export const ProjectDetailPage = () => {
     worktree: boolean;
     playbook_definition_id: string | null;
     playbook_version: number | null;
+    event_source: string | null;
+    event_refs: string[] | null;
   }) => {
     // Edit mode: PATCH the existing row. The dialog is stateless and calls the
     // same submit handler for create + edit; ``editTask`` decides which.
@@ -886,6 +888,8 @@ export const ProjectDetailPage = () => {
         worktree: data.worktree,
         playbook_definition_id: data.playbook_definition_id,
         playbook_version: data.playbook_version,
+        event_source: data.event_source,
+        event_refs: data.event_refs,
       });
       toast.success(t("common.saved" as Parameters<typeof t>[0]));
       await reloadScheduledTasks();
@@ -907,6 +911,8 @@ export const ProjectDetailPage = () => {
       worktree: data.worktree,
       playbook_definition_id: data.playbook_definition_id,
       playbook_version: data.playbook_version,
+      event_source: data.event_source,
+      event_refs: data.event_refs,
     });
     toast.success(t("project.taskCreated" as Parameters<typeof t>[0]));
     const schedRes = await automationsApi.listGroups(id);
@@ -1979,6 +1985,8 @@ export const ProjectDetailPage = () => {
                   worktree: editTask.worktree ?? false,
                   playbook_definition_id: editTask.playbook_definition_id,
                   playbook_version: editTask.playbook_version,
+                  event_source: editTask.event_source ?? null,
+                  event_refs: editTask.event_refs ?? null,
                 }
               : undefined
           }

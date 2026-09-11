@@ -18,14 +18,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 
 from valuz_agent.api.deps import get_automation_service, get_current_user_id
-from valuz_agent.modules.automations.errors import AutomationEventSourceUnknown
+from valuz_agent.modules.automations.errors import (
+    AutomationEventSourceUnknown,
+    InvalidEventSubscription,
+)
 from valuz_agent.modules.automations.schemas import (
     AutomationCreatePayload,
     AutomationDetailResponse,
     AutomationEventDeliveryResponse,
+    AutomationEventRefCreatePayload,
+    AutomationEventRefOption,
+    AutomationEventRefsResponse,
     AutomationEventSourceDescriptor,
     AutomationEventSourcesResponse,
     AutomationGroupResponse,
@@ -44,7 +50,13 @@ from valuz_agent.modules.automations.schemas import (
     IntervalValidationResultResponse,
 )
 from valuz_agent.modules.automations.service import AutomationService
-from valuz_agent.ports.automation_event_source import UnknownEventSourceError, describe_sources
+from valuz_agent.ports.automation_event_source import (
+    UnknownEventSourceError,
+    UnknownEventTypeError,
+    create_source_ref,
+    describe_sources,
+    list_source_refs,
+)
 
 router = APIRouter(prefix="/v1/automations", tags=["automations"])
 
@@ -57,6 +69,57 @@ async def list_event_sources() -> AutomationEventSourcesResponse:
     exactly what can actually be delivered, never a hardcoded guess."""
     return AutomationEventSourcesResponse(
         sources=[AutomationEventSourceDescriptor(**entry) for entry in describe_sources()]
+    )
+
+
+@router.get("/event-sources/{source}/refs")
+async def list_event_source_refs(
+    source: str,
+    user_id: str = Depends(get_current_user_id),
+) -> AutomationEventRefsResponse:
+    """What this user may subscribe an automation to on ``source`` — the
+    editor's ref picker. Empty when the source cannot enumerate; 404 for a
+    source nobody registered."""
+    try:
+        refs = await list_source_refs(source, user_id=user_id)
+    except UnknownEventSourceError as exc:
+        raise AutomationEventSourceUnknown(str(exc)) from exc
+    return AutomationEventRefsResponse(
+        source=source,
+        refs=[
+            AutomationEventRefOption(
+                ref=option.ref, label=option.label, group=option.group, kind=option.kind
+            )
+            for option in refs
+        ],
+    )
+
+
+@router.post("/event-sources/{source}/refs", status_code=201)
+async def create_event_source_ref(
+    source: str,
+    payload: AutomationEventRefCreatePayload,
+    user_id: str = Depends(get_current_user_id),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> AutomationEventRefOption:
+    """Create a new subscription on ``source`` from one filled-in form
+    (``event_type_specs``) and answer its ref for ``event_refs``. The caller's
+    own ``Authorization`` is forwarded because upstreams that own
+    subscriptions per user need the user's credential, not a service key."""
+    try:
+        option = await create_source_ref(
+            source,
+            user_id=user_id,
+            event_type=payload.event_type,
+            params=payload.params,
+            authorization=authorization,
+        )
+    except UnknownEventSourceError as exc:
+        raise AutomationEventSourceUnknown(str(exc)) from exc
+    except (UnknownEventTypeError, ValueError) as exc:
+        raise InvalidEventSubscription(str(exc)) from exc
+    return AutomationEventRefOption(
+        ref=option.ref, label=option.label, group=option.group, kind=option.kind
     )
 
 

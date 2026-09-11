@@ -45,7 +45,61 @@ export interface ManualTrigger {
   kind: "manual";
 }
 
-export type Trigger = CronTrigger | IntervalTrigger | ManualTrigger;
+/** No clock at all — fires only when ``event_source`` delivers a matching
+ * event. ``event_source`` / ``event_refs`` live beside the trigger on the row
+ * (events may also augment a cron/interval schedule). */
+export interface EventTrigger {
+  kind: "event";
+}
+
+export type Trigger =
+  | CronTrigger
+  | IntervalTrigger
+  | ManualTrigger
+  | EventTrigger;
+
+/** One registered event source and the closed set of types it can deliver
+ * (``GET /automations/event-sources``). Empty on plain OSS. */
+export interface AutomationEventFieldOption {
+  value: string;
+  label: string;
+}
+
+/** One input of the editor's "new subscription" form; ``symbols`` is a
+ * comma-separated instrument list the source parses itself. */
+export interface AutomationEventFieldSpec {
+  name: string;
+  label: string;
+  kind: "text" | "number" | "select" | "symbols";
+  required: boolean;
+  options: AutomationEventFieldOption[];
+  placeholder?: string | null;
+  help?: string | null;
+}
+
+export interface AutomationEventTypeSpec {
+  type: string;
+  label: string;
+  fields: AutomationEventFieldSpec[];
+}
+
+export interface AutomationEventSourceDescriptor {
+  source: string;
+  event_types: string[];
+  /** Per-type form specs; empty when the source offers no "create a new
+   * subscription" form (the editor then only lists existing refs). */
+  event_type_specs?: AutomationEventTypeSpec[];
+}
+
+/** One subscribable thing as the source names it
+ * (``GET /automations/event-sources/{source}/refs``). ``ref`` is the opaque
+ * id stored in ``event_refs``; ``label`` / ``group`` are for the picker. */
+export interface AutomationEventRefOption {
+  ref: string;
+  label: string;
+  group?: string | null;
+  kind?: string | null;
+}
 
 /**
  * Agent reference kind. `project_member` references a member already
@@ -88,6 +142,10 @@ export interface AutomationItem {
   /** Optional immutable Playbook contract executed by each fire. */
   playbook_definition_id: string | null;
   playbook_version: number | null;
+  /** Event subscription (registry key + opaque refs the source matches on);
+   * orthogonal to ``trigger`` — a row may carry both a schedule and this. */
+  event_source?: string | null;
+  event_refs?: string[] | null;
 
   trigger: Trigger;
   /** Localized "every day at 9" / "every 5 minutes". */
@@ -213,6 +271,10 @@ export interface AutomationCreatePayload {
    * backend to resolve and persist the Definition's current version once. */
   playbook_definition_id?: string | null;
   playbook_version?: number | null;
+  /** Event subscription; ``event_source`` is required when
+   * ``trigger.kind === "event"`` and must be a registered source. */
+  event_source?: string | null;
+  event_refs?: string[] | null;
 }
 
 export interface AutomationUpdatePayload {
@@ -224,6 +286,8 @@ export interface AutomationUpdatePayload {
   worktree?: boolean | null;
   playbook_definition_id?: string | null;
   playbook_version?: number | null;
+  event_source?: string | null;
+  event_refs?: string[] | null;
 }
 
 /** Minimal Definition projection needed by the Automation contract picker. */
@@ -315,6 +379,50 @@ export const automationsApi = {
     baseUrl?: string;
   }): Promise<AutomationPlaybookChoice[]> {
     return fetchJson("/v1/playbooks", { baseUrl: opts?.baseUrl });
+  },
+
+  /** Registered event sources on the backend that will own the automation —
+   * the editor builds its event picker from this, never from a guess. */
+  async listEventSources(opts?: {
+    baseUrl?: string;
+  }): Promise<AutomationEventSourceDescriptor[]> {
+    const res = await fetchJson<{ sources: AutomationEventSourceDescriptor[] }>(
+      "/v1/automations/event-sources",
+      { baseUrl: opts?.baseUrl },
+    );
+    return res.sources;
+  },
+
+  /** What the user may subscribe to on ``source`` — empty when the source
+   * cannot enumerate (the dialog then falls back to free-text refs). */
+  async listEventRefs(
+    source: string,
+    opts?: { baseUrl?: string },
+  ): Promise<AutomationEventRefOption[]> {
+    const res = await fetchJson<{ refs: AutomationEventRefOption[] }>(
+      `/v1/automations/event-sources/${encodeURIComponent(source)}/refs`,
+      { baseUrl: opts?.baseUrl },
+    );
+    return res.refs;
+  },
+
+  /** Create a new subscription from one filled-in ``event_type_specs`` form;
+   * the answer's ``ref`` goes into ``event_refs``. Validation errors come
+   * back as 422 with the source's own message. */
+  createEventRef(
+    source: string,
+    payload: { event_type: string; params: Record<string, string> },
+    opts?: { baseUrl?: string },
+  ): Promise<AutomationEventRefOption> {
+    return fetchJson(
+      `/v1/automations/event-sources/${encodeURIComponent(source)}/refs`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        baseUrl: opts?.baseUrl,
+      },
+    );
   },
 
   async listGroups(projectId?: string): Promise<{ groups: AutomationGroup[] }> {

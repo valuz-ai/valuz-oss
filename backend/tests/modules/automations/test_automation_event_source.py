@@ -37,10 +37,16 @@ from valuz_agent.modules.automations.schemas import (
 from valuz_agent.modules.automations.service import AutomationService
 from valuz_agent.ports.automation_event_source import (
     AutomationEventSourceRegistry,
+    EventFieldSpec,
+    EventRefOption,
     EventSubscription,
+    EventTypeSpec,
     InboundEvent,
     UnknownEventSourceError,
+    UnknownEventTypeError,
+    create_source_ref,
     describe_sources,
+    list_source_refs,
     registered_event_types,
 )
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
@@ -179,6 +185,10 @@ class StubEventSource:
         self.resume_calls: list[tuple[str, str]] = []
         self.release_calls: list[tuple[str, str]] = []
         self._staged: dict[str, InboundEvent] = {}
+        # Optional capabilities (see the port): enumerate / describe / create.
+        self.ref_options: list[EventRefOption] = []
+        self.type_specs: list[EventTypeSpec] = []
+        self.created: list[tuple[str, str, dict[str, Any], str | None]] = []
 
     @property
     def name(self) -> str:
@@ -209,6 +219,25 @@ class StubEventSource:
 
     def stage_event(self, delivery_id: str, event: InboundEvent) -> None:
         self._staged[delivery_id] = event
+
+    async def list_refs(self, *, user_id: str) -> list[EventRefOption]:
+        return [option for option in self.ref_options if option.ref != f"not-for-{user_id}"]
+
+    def describe_event_types(self) -> list[EventTypeSpec]:
+        return self.type_specs
+
+    async def create_ref(
+        self,
+        *,
+        user_id: str,
+        event_type: str,
+        params: Mapping[str, Any],
+        authorization: str | None,
+    ) -> EventRefOption:
+        if not params.get("symbol"):
+            raise ValueError("symbol is required")
+        self.created.append((user_id, event_type, dict(params), authorization))
+        return EventRefOption(ref=f"w-{len(self.created)}", label=str(params["symbol"]), kind=event_type)
 
     def resolve_inbound(self, payload: Mapping[str, Any]) -> InboundEvent | None:
         delivery_id = payload.get("id")
@@ -543,7 +572,11 @@ class TestDiscoveryReadsTheRegistryThatMatters:
         registry.register(StubEventSource())
 
         assert describe_sources() == [
-            {"source": "finance-metric", "event_types": ["metric.updated"]}
+            {
+                "source": "finance-metric",
+                "event_types": ["metric.updated"],
+                "event_type_specs": [],
+            }
         ]
         assert registered_event_types() == {"finance-metric": ("metric.updated",)}
 
@@ -554,3 +587,124 @@ class TestDiscoveryReadsTheRegistryThatMatters:
         # from the same registry, not from a second one that is empty by
         # construction and would say this no matter what.
         assert describe_sources() == []
+
+
+class TestRefEnumeration:
+    """``list_source_refs`` is how the editor avoids asking for raw ids."""
+
+    async def test_a_source_that_enumerates_answers_grouped_options(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        source = StubEventSource()
+        source.ref_options = [
+            EventRefOption(ref="w1", label="毛利率 ≥ 40%", group="NVDA 还行", kind="metric.updated"),
+            EventRefOption(ref="not-for-u1", label="someone else's", group="x"),
+        ]
+        registry.register(source)
+
+        assert await list_source_refs("finance-metric", user_id="u1") == [source.ref_options[0]]
+
+    async def test_a_source_without_the_capability_answers_empty(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        class Bare(StubEventSource):
+            list_refs = None  # type: ignore[assignment]
+
+        registry.register(Bare())
+
+        assert await list_source_refs("finance-metric", user_id="u1") == []
+
+    async def test_an_unregistered_source_is_a_lookup_error(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        with pytest.raises(UnknownEventSourceError):
+            await list_source_refs("nobody", user_id="u1")
+
+
+class TestRefCreation:
+    """``create_source_ref`` is the editor's "new subscription" form — the
+    source describes the form, validates the answers, owns the upstream."""
+
+    async def test_form_specs_are_advertised_beside_the_types(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        source = StubEventSource()
+        source.type_specs = [
+            EventTypeSpec(
+                type="metric.updated",
+                label="Metric",
+                fields=(EventFieldSpec(name="symbol", label="Symbol", kind="symbols", required=True),),
+            )
+        ]
+        registry.register(source)
+
+        [described] = describe_sources()
+        assert described["event_type_specs"] == [
+            {
+                "type": "metric.updated",
+                "label": "Metric",
+                "fields": (
+                    {
+                        "name": "symbol",
+                        "label": "Symbol",
+                        "kind": "symbols",
+                        "required": True,
+                        "options": (),
+                        "placeholder": None,
+                        "help": None,
+                    },
+                ),
+            }
+        ]
+
+    async def test_a_filled_form_becomes_a_ref_with_the_callers_credential(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        source = StubEventSource()
+        registry.register(source)
+
+        option = await create_source_ref(
+            "finance-metric",
+            user_id="u1",
+            event_type="metric.updated",
+            params={"symbol": "US:NVDA"},
+            authorization="Bearer jwt",
+        )
+
+        assert option == EventRefOption(ref="w-1", label="US:NVDA", kind="metric.updated")
+        assert source.created == [("u1", "metric.updated", {"symbol": "US:NVDA"}, "Bearer jwt")]
+
+    async def test_the_sources_own_validation_surfaces_as_value_error(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        registry.register(StubEventSource())
+
+        with pytest.raises(ValueError, match="symbol is required"):
+            await create_source_ref(
+                "finance-metric", user_id="u1", event_type="metric.updated", params={}, authorization=None
+            )
+
+    async def test_a_type_outside_the_closed_set_is_refused_before_the_source(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        source = StubEventSource()
+        registry.register(source)
+
+        with pytest.raises(UnknownEventTypeError):
+            await create_source_ref(
+                "finance-metric", user_id="u1", event_type="made.up", params={"symbol": "x"}, authorization=None
+            )
+        assert source.created == []
+
+    async def test_a_source_without_the_capability_is_a_value_error(
+        self, registry: AutomationEventSourceRegistry
+    ) -> None:
+        class Bare(StubEventSource):
+            create_ref = None  # type: ignore[assignment]
+
+        registry.register(Bare())
+
+        with pytest.raises(ValueError, match="cannot create"):
+            await create_source_ref(
+                "finance-metric", user_id="u1", event_type="metric.updated", params={"symbol": "x"}, authorization=None
+            )

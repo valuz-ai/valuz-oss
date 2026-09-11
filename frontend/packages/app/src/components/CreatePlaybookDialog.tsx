@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, Trash2 } from "lucide-react";
 import {
+  getDefaultExecutionTarget,
+  useExecutionTargets,
   type AutomationProjectTarget,
   type PlaybookDefinition,
   type PlaybookDetail,
@@ -25,6 +27,10 @@ import {
   Textarea,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
+import {
+  ExecutionLocationPicker,
+  OriginBadge,
+} from "./ExecutionLocationPicker";
 import type { PlaybookTemplatePrefill } from "../lib/template-library";
 
 export interface PlaybookAgentChoice {
@@ -42,6 +48,12 @@ export interface CreatePlaybookDialogProps {
     status: PlaybookStatus;
     reference_metadata: Record<string, unknown>[];
     default_executor: Record<string, unknown>;
+    /** Execution-location target id (``"local"``/``"cloud"``) for a
+     * Chat-standalone Definition on multi-target editions; ``undefined`` for
+     * project-bound Definitions (they inherit the project's origin), in edit
+     * mode, and on single-backend builds. The parent resolves it to a
+     * ``baseUrl`` for the create call. */
+    exec_location?: string;
   }) => Promise<void>;
   onDelete?: (definition: PlaybookDefinition) => Promise<void>;
   initial?: PlaybookDetail | null;
@@ -53,6 +65,13 @@ export interface CreatePlaybookDialogProps {
    * ``project_id``. This mirrors Automation's target-linked agent picker. */
   agents: PlaybookAgentChoice[];
   agentsByProject?: Record<string, PlaybookAgentChoice[]>;
+  /** Currently-selected execution location for a Chat-standalone Definition
+   *  (``"local"``/``"cloud"``), owned by the parent so it can re-source the
+   *  library agent list from the matching backend — the same wiring as
+   *  CreateAutomationDialog. ``undefined`` on single-target builds. */
+  selectedExecLocation?: string | null;
+  /** Notify the parent the user changed the Chat-standalone location. */
+  onSelectExecLocation?: (id: string) => void;
   /**
    * Lock the Playbook to the project page that opened the dialog. The product
    * calls this a workspace in Finance, but persistence deliberately remains
@@ -73,6 +92,8 @@ export const CreatePlaybookDialog = ({
   targets,
   agents,
   agentsByProject = {},
+  selectedExecLocation,
+  onSelectExecLocation,
   fixedProjectId,
   fixedProjectName,
 }: CreatePlaybookDialogProps) => {
@@ -88,6 +109,17 @@ export const CreatePlaybookDialog = ({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const contentBeforeExpanded = useRef("");
+
+  // Execution location (multi-target editions only). A project-bound
+  // Definition inherits its project's origin (read-only badge); only a
+  // Chat-standalone one (no project_id) needs a picker, and the chosen
+  // backend is where the Definition lands. The choice is locked once
+  // created, so edit mode shows the stored origin. The column is dropped on
+  // single-target builds (the picker would render null anyway).
+  const execTargets = useExecutionTargets();
+  const showExecLocation = execTargets.length >= 2;
+  const isChatStandalone =
+    !initial && !fixedProjectId && projectId === "chat-default";
 
   useEffect(() => {
     if (!open) return;
@@ -142,6 +174,12 @@ export const CreatePlaybookDialog = ({
         status,
         reference_metadata: selectedVersionRecord?.reference_metadata ?? [],
         default_executor: { agent_slug: effectiveAgentSlug },
+        // Only a Chat-standalone Definition carries a location choice;
+        // project-bound ones are routed by the API client via the project.
+        exec_location:
+          isChatStandalone && showExecLocation
+            ? (selectedExecLocation ?? getDefaultExecutionTarget()?.id)
+            : undefined,
       });
       onOpenChange(false);
     } finally {
@@ -317,6 +355,34 @@ export const CreatePlaybookDialog = ({
                   </Select>
                 </FormField>
               </div>
+
+              {/* 运行位置 — its own row; only on multi-target editions. */}
+              {showExecLocation ? (
+                <FormField label={t("project.execLocation")}>
+                  {isChatStandalone ? (
+                    <ExecutionLocationPicker
+                      value={selectedExecLocation ?? null}
+                      onChange={(id) => onSelectExecLocation?.(id)}
+                    />
+                  ) : (
+                    <div className="flex h-8 items-center">
+                      {initial ? (
+                        <OriginBadge
+                          origin={initial.definition.exec_origin}
+                          entityId={initial.definition.id}
+                          kind="playbook"
+                        />
+                      ) : (
+                        // Project-bound: inherits the project's origin.
+                        <OriginBadge
+                          entityId={fixedProjectId ?? projectId}
+                          kind="project"
+                        />
+                      )}
+                    </div>
+                  )}
+                </FormField>
+              ) : null}
 
               <FormField
                 className="min-h-0 flex-1"
