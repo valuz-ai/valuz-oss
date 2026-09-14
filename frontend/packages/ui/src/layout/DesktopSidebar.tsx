@@ -24,6 +24,7 @@ import {
   Star,
   ListChecks,
   Briefcase,
+  Globe,
   Store,
   Trash2,
   Upload,
@@ -164,6 +165,10 @@ const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   // ``activity`` was the closest existing key and collided with the Activity
   // item one row above it in the same sidebar.
   dashboard: LayoutDashboard,
+  // Anything published to a public web address. Distinct from ``connectors``
+  // (links to other systems) and ``marketplace`` (things to install): this one
+  // is "your thing, reachable by URL".
+  globe: Globe,
 };
 
 /** Icon lookup with a gear fallback for unknown (plugin-supplied) ids. */
