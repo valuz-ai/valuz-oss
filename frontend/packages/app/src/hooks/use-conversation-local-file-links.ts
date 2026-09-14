@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext } from "react";
 import { parseFileRef } from "@valuz/shared";
 
 import {
+  hasUriScheme,
   isAbsolutePath,
   isWindowsDrivePath,
   toProjectRelativePath,
@@ -151,22 +152,16 @@ export function resolveDefaultLocalFileHref(
   const target = parseArtifactOpenTarget(href);
   const path = normalizeLocalFileHref(href);
   // Normalization only strips ``valuz-file://`` / ``file://``. Anything that
-  // still carries a scheme here (``https:``, ``mailto:``, ``data:``) was never
-  // a local file — reject it. ``file://`` is exempt because its own prefix
-  // survives normalization.
+  // still opens with a scheme here (``https:``, ``mailto:``, ``data:``) was
+  // never a local file — reject it. ``file://`` is exempt because its own
+  // prefix survives normalization.
   //
-  // A Windows drive specifier has to be subtracted BEFORE that test: ``C:`` is
-  // syntactically a one-character scheme, so ``C:/Users/…`` matched it and the
-  // whole of Windows fell out of this function — every ``valuz-file://`` link a
-  // Windows client rendered came back null, was left un-rewritten, and lost its
-  // href to the markdown sanitizer's protocol allowlist (shown as "[blocked]").
-  // ``file:///C:/…`` was unaffected, which is why this stayed invisible.
-  if (
-    !path ||
-    (!isFileHref &&
-      !isWindowsDrivePath(path) &&
-      /^[a-z][a-z0-9+.-]*:/i.test(path))
-  ) {
+  // This used to be an inline ``/^[a-z][a-z0-9+.-]*:/i``, which matched the
+  // ``C:`` of every Windows path: the whole platform fell out of this function,
+  // links were left un-rewritten, and the markdown sanitizer's protocol
+  // allowlist then stripped their href and rendered them "[blocked]".
+  // ``hasUriScheme`` owns the drive-vs-scheme tie-break; see its doc comment.
+  if (!path || (!isFileHref && hasUriScheme(path))) {
     return null;
   }
 

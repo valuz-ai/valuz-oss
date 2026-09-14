@@ -13,15 +13,37 @@
  * was classified as relative there and as absolute everywhere else.
  */
 
-/**
- * ``C:\x`` or ``C:/x`` — a Windows drive specifier, either spelling.
- *
- * Exported because a drive letter is *syntactically* a one-character URI
- * scheme, so anything that asks "does this string still carry a scheme?" has
- * to subtract this first or it classifies every Windows path as a URL.
- */
+/** ``C:\x`` or ``C:/x`` — a Windows drive specifier, either spelling. */
 export function isWindowsDrivePath(path: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(path);
+}
+
+/**
+ * True when ``value`` opens with a URI scheme rather than a filesystem path.
+ *
+ * The naive test — ``/^[a-z][a-z0-9+.-]*:/i`` — cannot be used on its own,
+ * because a Windows drive specifier IS a syntactically valid one-character
+ * scheme: it matches ``C:/Users/…`` and declares the whole of Windows to be
+ * URLs. Subtracting every drive-shaped prefix is the opposite error, and just
+ * as wrong: it hands back ``s://evil.example/x`` as a "path".
+ *
+ * The tie-breaker is the authority marker. ``scheme://host`` opens an
+ * authority with two slashes; a drive specifier is a root, and a root is one
+ * separator. So a drive-shaped prefix followed by a SECOND separator is a
+ * scheme, not a drive.
+ *
+ * One case stays genuinely undecidable and is resolved in favour of the path:
+ * a one-letter scheme with no authority (``a:/x``) is character-for-character
+ * a drive specifier. No amount of parsing separates them — ``a:`` is a real
+ * Windows drive — so this returns false there, same as Node's
+ * ``path.win32.isAbsolute``. Nothing in the product emits a one-letter scheme,
+ * and every dangerous one (``javascript:``, ``data:``, ``vbscript:``,
+ * ``file:``) is multi-character and unaffected.
+ */
+export function hasUriScheme(value: string): boolean {
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) return false;
+  if (!isWindowsDrivePath(value)) return true;
+  return /^[a-zA-Z]:[\\/][\\/]/.test(value);
 }
 
 /** ``/x``, ``C:\x`` or ``C:/x`` — POSIX and both Windows spellings. */

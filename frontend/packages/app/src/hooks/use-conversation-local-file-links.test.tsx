@@ -213,19 +213,20 @@ describe("useConversationLocalFileLinks", () => {
         Parameters<typeof useConversationLocalFileLinks>[0]
       > = {},
     ) => {
-      const previewFile = vi.fn();
-      const openFile = vi.fn();
-      const blockFile = vi.fn();
+      // Build the options FIRST and hand back the ones actually wired into the
+      // hook — returning locally-made mocks that ``overrides`` may have
+      // replaced would make every assertion on them vacuous.
+      const options = {
+        projectRootPath: root,
+        previewFile: vi.fn(),
+        openFile: vi.fn(),
+        blockFile: vi.fn(),
+        ...overrides,
+      };
       const { result } = renderHook(() =>
-        useConversationLocalFileLinks({
-          projectRootPath: root,
-          previewFile,
-          openFile,
-          blockFile,
-          ...overrides,
-        }),
+        useConversationLocalFileLinks(options),
       );
-      return { result, previewFile, openFile, blockFile };
+      return { result, ...options };
     };
 
     it("previews a valuz-file:// ref inside the project root", () => {
@@ -323,11 +324,43 @@ describe("useConversationLocalFileLinks", () => {
       "http://example.com/report.pdf",
       "mailto:ada@example.com",
       "data:text/plain,hello",
+      "javascript:alert(1)",
       "evidence://ev_mcp_abc123",
       "valuz-local://f/Users/ada/project/report.md",
+      // Single-character schemes: these are drive-shaped, so teaching the
+      // guard about drive letters is exactly what could have let them through.
+      // They must stay rejected on a POSIX host — this is the regression guard
+      // for the whole Windows fix.
+      "s://evil.example/report.pdf",
+      "a://host/report.pdf",
+      "x:\\\\server\\share",
     ]) {
       expect(result.current.resolveLocalFileHref(href)).toBeNull();
     }
+  });
+
+  it("treats a bare drive path as a path even on a POSIX host", () => {
+    // The accepted residual of the Windows fix, asserted so it cannot drift
+    // silently. `C:/x` and `a:/x` are indistinguishable from a filesystem path
+    // without knowing the platform, and this resolver is not told the platform
+    // — it only ever sees a project root, which is empty for a quick chat.
+    // Resolving them as paths is harmless: `openFile` hands them to
+    // `shell.openPath`, which no-ops on a path that does not exist.
+    const { result } = renderHook(() =>
+      useConversationLocalFileLinks({
+        projectRootPath: "/Users/ada/project",
+        previewFile: vi.fn(),
+        openFile: vi.fn(),
+      }),
+    );
+
+    expect(
+      result.current.resolveLocalFileHref("C:/Users/ada/report.pdf"),
+    ).toEqual({ kind: "open", path: "C:/Users/ada/report.pdf" });
+    expect(result.current.resolveLocalFileHref("a:/host/report.pdf")).toEqual({
+      kind: "open",
+      path: "a:/host/report.pdf",
+    });
   });
 
   it("allows an overlay provider to replace local file link handling", () => {
