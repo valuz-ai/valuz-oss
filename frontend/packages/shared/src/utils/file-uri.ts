@@ -56,27 +56,39 @@ function encodeAbsPath(absPath: string): string {
     .join("/");
 }
 
+/** ``scheme://`` NOT followed by a third slash — i.e. a two-slash ref. */
+const TWO_SLASH_REF = /^([a-z][a-z0-9+.-]*:)\/\/(?!\/)/i;
+
 /**
  * Decode the absolute path back out of a ``scheme://<abs>`` URI.
  *
- * ``tolerant`` governs the two-slash case (``scheme://Users/…``): fold the
- * mis-parsed host back onto the front of the path so ``//abs`` and ``///abs``
+ * ``tolerant`` governs the two-slash case (``scheme://Users/…``), where the
+ * producer dropped the authority separator and the path sits where the
+ * authority belongs: insert the missing slash so ``//abs`` and ``///abs``
  * resolve identically. Use it only where the producer is untrusted (a MODEL
  * emitting ``valuz-file://`` in prose may drop a slash). For a URL we built
  * ourselves (``valuz-local://``) parse STRICTLY so a malformed URL fails loudly
  * — surfacing a builder/build bug instead of silently "repairing" it.
+ *
+ * The repair is TEXTUAL, before ``new URL`` ever sees the ref. Folding
+ * ``url.host`` back on afterwards — which is what this did — loses whatever the
+ * authority grammar ate, and on Windows it eats the drive colon: ``C:`` parses
+ * as host ``C`` plus an empty port, so ``valuz-file://C:/Users/x`` folded back
+ * to ``/C/Users/x``, a path that exists nowhere. The Python mirror
+ * (``modules/files/uri.py``) never had this, because ``urlsplit`` leaves the
+ * colon in ``netloc`` — the two halves of a codec whose whole premise is being
+ * mirrored 1:1 had drifted on exactly the refs a Windows client produces.
  */
 function decodeUriToAbsPath(uri: string, tolerant: boolean): string | null {
   let url: URL;
   try {
-    url = new URL(uri);
+    url = new URL(tolerant ? uri.replace(TWO_SLASH_REF, "$1///") : uri);
   } catch {
     return null;
   }
-  const host = tolerant && url.host ? `/${url.host}` : "";
   let path: string;
   try {
-    path = decodeURIComponent(host + url.pathname);
+    path = decodeURIComponent(url.pathname);
   } catch {
     return null;
   }

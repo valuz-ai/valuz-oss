@@ -52,6 +52,20 @@ class TestUri:
             == "/Users/river/untitled folder/x.md"
         )
 
+    def test_tolerates_two_slash_windows_drive(self) -> None:
+        # ``urlsplit`` keeps the colon in ``netloc``, so the drive survives the
+        # fold. The TS mirror parsed with WHATWG ``new URL``, where ``C:`` is a
+        # host plus an empty port, and folding ``url.host`` back produced
+        # ``/C/Users/u/x.txt`` — the two halves of a codec that is supposed to be
+        # mirrored 1:1 disagreed on exactly the refs a Windows client emits.
+        # Pinned here so this side cannot drift into the same bug.
+        assert (
+            parse_valuz_file_uri("valuz-file://C:/Users/u/x.txt")
+            == parse_valuz_file_uri("valuz-file:///C:/Users/u/x.txt")
+            == parse_valuz_file_uri("valuz-file:///C%3A/Users/u/x.txt")
+            == "C:/Users/u/x.txt"
+        )
+
     @pytest.mark.parametrize("bad", ["http://x/y", "valuz-file://", "/a/b.md", ""])
     def test_rejects(self, bad: str) -> None:
         with pytest.raises(ValueError):
