@@ -82,7 +82,29 @@ export function toProjectRelativePath(
   if (!rootPath) return null;
   const normalizedRoot = rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
   if (!normalizedRoot) return null;
-  if (normalizedPath === normalizedRoot) return null;
-  if (!normalizedPath.startsWith(`${normalizedRoot}/`)) return null;
-  return normalizedPath.slice(normalizedRoot.length + 1);
+
+  // Windows filesystems are case-insensitive, POSIX ones are not, and the root
+  // comparison has to follow the filesystem or it is wrong on one of them:
+  // folding everything breaks Linux, where ``/home/ada/Proj`` and
+  // ``/home/ada/proj`` are two directories, and folding nothing breaks Windows,
+  // where a model that lowercases ``C:/Users`` in prose makes a file INSIDE the
+  // project read as outside it — it then opens in Explorer instead of the
+  // artifact pane. A drive letter is the signal: only a Windows path has one.
+  const caseInsensitive =
+    isWindowsDrivePath(normalizedPath) && isWindowsDrivePath(normalizedRoot);
+  const rootLength = normalizedRoot.length;
+  if (normalizedPath.length < rootLength) return null;
+  // Compare a prefix of the ORIGINAL string and slice by its length, rather
+  // than folding both whole strings and slicing the folded one: ``toLowerCase``
+  // is not length-preserving for every code point (``İ`` becomes two units), so
+  // an index taken from a folded string can land mid-character.
+  const head = normalizedPath.slice(0, rootLength);
+  const sameRoot = caseInsensitive
+    ? head.toLowerCase() === normalizedRoot.toLowerCase()
+    : head === normalizedRoot;
+  if (!sameRoot) return null;
+  const rest = normalizedPath.slice(rootLength);
+  if (!rest) return null; // the root itself, not a file in it
+  if (!rest.startsWith("/")) return null; // a sibling sharing the root's prefix
+  return rest.slice(1);
 }

@@ -138,6 +138,36 @@ describe("toProjectRelativePath", () => {
     expect(toProjectRelativePath("C:\\proj\\a.md", "C:\\proj")).toBe("a.md");
   });
 
+  it("matches a Windows root regardless of case", () => {
+    // A model that lowercases the drive or a segment in prose must not make a
+    // file inside the project read as outside it.
+    expect(toProjectRelativePath("c:/proj/a.md", "C:\\proj")).toBe("a.md");
+    expect(toProjectRelativePath("C:\\PROJ\\a.md", "c:/proj")).toBe("a.md");
+    expect(toProjectRelativePath("C:/Proj/Sub/A.md", "C:\\proj")).toBe(
+      "Sub/A.md",
+    );
+  });
+
+  it("preserves the real casing of the returned relative path", () => {
+    expect(toProjectRelativePath("c:/proj/Reports/Q3.md", "C:\\Proj")).toBe(
+      "Reports/Q3.md",
+    );
+  });
+
+  it("keeps a POSIX root case-sensitive", () => {
+    // Linux really does have two directories here; folding would merge them.
+    expect(toProjectRelativePath("/Users/u/PROJ/a.md", ROOT)).toBeNull();
+    expect(toProjectRelativePath("/users/u/proj/a.md", ROOT)).toBeNull();
+  });
+
+  it("is not fooled by a Windows sibling with the same prefix", () => {
+    expect(toProjectRelativePath("c:/proj-evil/a.md", "C:\\proj")).toBeNull();
+  });
+
+  it("returns null for a Windows root itself, in any case", () => {
+    expect(toProjectRelativePath("c:/proj", "C:\\Proj")).toBeNull();
+  });
+
   it("passes an already-relative path through", () => {
     expect(toProjectRelativePath("reports/q3.md", ROOT)).toBe("reports/q3.md");
   });

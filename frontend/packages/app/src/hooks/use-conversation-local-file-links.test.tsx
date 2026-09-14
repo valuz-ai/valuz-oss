@@ -270,6 +270,31 @@ describe("useConversationLocalFileLinks", () => {
       ).toEqual({ kind: "preview", path: "看板.html" });
     });
 
+    it("previews when the model lowercases the drive or a segment", () => {
+      // Windows is case-insensitive, so this is the same file as the project
+      // root's. A case-sensitive root compare demoted it to a shell open.
+      const { result } = renderWindows();
+
+      expect(
+        result.current.resolveLocalFileHref(
+          "valuz-file:///c:/users/ada/valuz/chats/2026/09/13/nznnggqz/看板.html",
+        ),
+      ).toEqual({ kind: "preview", path: "看板.html" });
+    });
+
+    it("previews a two-slash ref, the form a model drops a slash into", () => {
+      // `C:` lands in the URL authority as host `C` + empty port, so the
+      // tolerant repair has to happen before parsing or the drive colon is lost
+      // and the path resolves to `/C/Users/…`.
+      const { result } = renderWindows();
+
+      expect(
+        result.current.resolveLocalFileHref(
+          "valuz-file://C:/Users/ada/Valuz/chats/2026/09/13/NZNNGGQZ/看板.html",
+        ),
+      ).toEqual({ kind: "preview", path: "看板.html" });
+    });
+
     it("opens a drive path outside the project in the system", () => {
       const { result, openFile } = renderWindows();
 
