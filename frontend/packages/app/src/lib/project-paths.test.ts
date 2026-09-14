@@ -2,11 +2,29 @@ import { describe, expect, it } from "vitest";
 
 import {
   isAbsolutePath,
+  isWindowsDrivePath,
   toAbsoluteProjectPath,
   toProjectRelativePath,
 } from "./project-paths";
 
 const ROOT = "/Users/u/proj";
+
+describe("isWindowsDrivePath", () => {
+  it("accepts both spellings of a drive specifier", () => {
+    expect(isWindowsDrivePath("C:\\proj\\a.md")).toBe(true);
+    expect(isWindowsDrivePath("c:/proj/a.md")).toBe(true);
+  });
+
+  it("requires a separator, so a real URI scheme is not a drive", () => {
+    // The point of the predicate: callers use it to subtract drive letters
+    // from a "does this still look like scheme:..." test. A multi-character
+    // scheme must stay on the scheme side of that line.
+    expect(isWindowsDrivePath("https://example.com/a.md")).toBe(false);
+    expect(isWindowsDrivePath("mailto:ada@example.com")).toBe(false);
+    expect(isWindowsDrivePath("/Users/u/proj/a.md")).toBe(false);
+    expect(isWindowsDrivePath("reports/q3.md")).toBe(false);
+  });
+});
 
 describe("isAbsolutePath", () => {
   it("accepts both Windows spellings", () => {

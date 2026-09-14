@@ -13,9 +13,20 @@
  * was classified as relative there and as absolute everywhere else.
  */
 
+/**
+ * ``C:\x`` or ``C:/x`` — a Windows drive specifier, either spelling.
+ *
+ * Exported because a drive letter is *syntactically* a one-character URI
+ * scheme, so anything that asks "does this string still carry a scheme?" has
+ * to subtract this first or it classifies every Windows path as a URL.
+ */
+export function isWindowsDrivePath(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(path);
+}
+
 /** ``/x``, ``C:\x`` or ``C:/x`` — POSIX and both Windows spellings. */
 export function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path);
+  return path.startsWith("/") || isWindowsDrivePath(path);
 }
 
 /**

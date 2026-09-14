@@ -1,7 +1,11 @@
 import { createContext, useCallback, useContext } from "react";
 import { parseFileRef } from "@valuz/shared";
 
-import { isAbsolutePath, toProjectRelativePath } from "../lib/project-paths";
+import {
+  isAbsolutePath,
+  isWindowsDrivePath,
+  toProjectRelativePath,
+} from "../lib/project-paths";
 import type { ArtifactOpenTarget } from "@valuz/ui";
 
 export interface ConversationLocalFileLinkOptions {
@@ -146,7 +150,23 @@ export function resolveDefaultLocalFileHref(
   const isFileHref = href.toLowerCase().startsWith("file://");
   const target = parseArtifactOpenTarget(href);
   const path = normalizeLocalFileHref(href);
-  if (!path || (!isFileHref && /^[a-z][a-z0-9+.-]*:/i.test(path))) {
+  // Normalization only strips ``valuz-file://`` / ``file://``. Anything that
+  // still carries a scheme here (``https:``, ``mailto:``, ``data:``) was never
+  // a local file — reject it. ``file://`` is exempt because its own prefix
+  // survives normalization.
+  //
+  // A Windows drive specifier has to be subtracted BEFORE that test: ``C:`` is
+  // syntactically a one-character scheme, so ``C:/Users/…`` matched it and the
+  // whole of Windows fell out of this function — every ``valuz-file://`` link a
+  // Windows client rendered came back null, was left un-rewritten, and lost its
+  // href to the markdown sanitizer's protocol allowlist (shown as "[blocked]").
+  // ``file:///C:/…`` was unaffected, which is why this stayed invisible.
+  if (
+    !path ||
+    (!isFileHref &&
+      !isWindowsDrivePath(path) &&
+      /^[a-z][a-z0-9+.-]*:/i.test(path))
+  ) {
     return null;
   }
 
@@ -168,7 +188,7 @@ export function resolveDefaultLocalFileHref(
     return null;
   }
 
-  if (isFileHref || /^[a-zA-Z]:[\\/]/.test(path)) {
+  if (isFileHref || isWindowsDrivePath(path)) {
     return { kind: "open", path };
   }
 
