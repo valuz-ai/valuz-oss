@@ -1,10 +1,13 @@
 import {
+  Children,
   memo,
   useCallback,
   useMemo,
   useState,
   type AnchorHTMLAttributes,
+  type HTMLAttributes,
 } from "react";
+import { isFileRef } from "@valuz/shared";
 import type {
   CitationBundleV1,
   CitationClaimAuditV1,
@@ -88,6 +91,10 @@ const STREAMDOWN_ICONS = {
 };
 
 const LOCAL_FILE_HREF_PREFIX = "https://valuz.local-file.invalid/";
+
+/** rehype-harden's signature for a link it refused; see the ``span`` override. */
+const BLOCKED_URL_TITLE = "Blocked URL: ";
+const BLOCKED_MARKER = " [blocked]";
 const QUALITY_CLAIM_HREF_PREFIX = "https://valuz.quality-claim.invalid/";
 
 interface LocalizedClaimQualityEntry {
@@ -207,9 +214,7 @@ function ClaimQualityMarker({
         <button
           type="button"
           data-citation-claim-quality
-          data-citation-claim-tone={
-            hasCriticalIssue ? "critical" : "unsourced"
-          }
+          data-citation-claim-tone={hasCriticalIssue ? "critical" : "unsourced"}
           data-quality-claim-id={entry.targetId}
           aria-label={`${
             unsourcedOnly
@@ -595,7 +600,9 @@ function normalizedMarkdownTableCell(value: string): string {
     .trim();
 }
 
-function markdownTableCellSpans(line: string): Array<{ start: number; end: number }> {
+function markdownTableCellSpans(
+  line: string,
+): Array<{ start: number; end: number }> {
   const pipes: number[] = [];
   for (let index = 0; index < line.length; index += 1) {
     if (line[index] === "|" && line[index - 1] !== "\\") pipes.push(index);
@@ -612,7 +619,9 @@ function isMarkdownTableDelimiter(line: string): boolean {
   const spans = markdownTableCellSpans(line);
   return (
     spans.length > 0 &&
-    spans.every(({ start, end }) => /^:?-{3,}:?$/u.test(line.slice(start, end).trim()))
+    spans.every(({ start, end }) =>
+      /^:?-{3,}:?$/u.test(line.slice(start, end).trim()),
+    )
   );
 }
 
@@ -669,8 +678,9 @@ function markdownTableCellClaimEnd(
     if (rowSpans.length <= location.columnIndex) continue;
     const rowCell = rowSpans[0]!;
     if (
-      normalizedMarkdownTableCell(row.text.slice(rowCell.start, rowCell.end)) !==
-      expectedRow
+      normalizedMarkdownTableCell(
+        row.text.slice(rowCell.start, rowCell.end),
+      ) !== expectedRow
     ) {
       continue;
     }
@@ -708,8 +718,8 @@ function injectQualityClaimMarkers(
         entry.location?.kind === "table-cell"
           ? tableCellEnd
           : found >= 0
-          ? found + entry.exact.length
-          : claimSourceEnd(entry.location);
+            ? found + entry.exact.length
+            : claimSourceEnd(entry.location);
       return {
         entry,
         insertion:
@@ -769,13 +779,42 @@ function decodeLocalFileHref(href: string): string {
   }
 }
 
+/**
+ * True for a href that is a Valuz file reference BY CONSTRUCTION — the product's
+ * own schemes, recognizable from syntax alone.
+ *
+ * Deliberately needs no host knowledge, so every surface can recognize one,
+ * including a surface that never wires up a place to open files.
+ */
+function isProductFileHref(href: string): boolean {
+  return isFileRef(href) || href.toLowerCase().startsWith("file://");
+}
+
+/**
+ * Carry local-file links across the markdown pipeline.
+ *
+ * NOT gated on ``isLocalFileHref``, and that is the whole point. Two unrelated
+ * questions were being answered by one boolean: "is this a local file?" — which
+ * genuinely needs host knowledge (a project root, a runtime mode) — and "may
+ * this link keep its href?", which is pure syntax. A surface that does not
+ * answer the first used to forfeit the second: the raw ``valuz-file:`` href
+ * reached rehype-sanitize, whose ``protocols.href`` allowlist is
+ * http/https/irc/ircs/mailto/xmpp/tel, the attribute was dropped, and
+ * rehype-harden then replaced the whole anchor with "<text> [blocked]".
+ *
+ * So the destruction was silent, three layers away from the prop that caused
+ * it, and it hit every file link on the share viewer — which passes no
+ * predicate. A host that has nowhere to open files should render a link it
+ * cannot action, not lose it.
+ */
 function rewriteLocalFileMarkdownLinks(
   content: string,
   isLocalFileHref?: (href: string) => boolean,
 ): string {
-  if (!isLocalFileHref) return content;
+  const claims = (href: string) =>
+    isProductFileHref(href) || (isLocalFileHref?.(href) ?? false);
   return content.replace(/(\[[^\]\n]+\]\()([^)\n]+)(\))/g, (match) =>
-    rewriteMarkdownLinkMatch(match, isLocalFileHref),
+    rewriteMarkdownLinkMatch(match, claims),
   );
 }
 
@@ -1670,11 +1709,11 @@ export const MarkdownContent = memo(function MarkdownContent({
         sourceEnd! <= displayContent.length;
       const canPlaceAtClaim = Boolean(
         hasClaimScope &&
-          exact &&
-          (hasStableSourceLocation ||
-            (!exact.includes("\n") &&
-              !exact.includes("|") &&
-              displayContent.includes(exact))),
+        exact &&
+        (hasStableSourceLocation ||
+          (!exact.includes("\n") &&
+            !exact.includes("|") &&
+            displayContent.includes(exact))),
       );
       // Advisory support/translation uncertainty is useful inside an actual
       // citation hover card, but must not create a standalone orange warning
@@ -1874,6 +1913,25 @@ export const MarkdownContent = memo(function MarkdownContent({
             </a>
           );
         }
+        // A local-file link this surface cannot open. ``href !== localHref``
+        // means the link went through the carrier rewrite, so the href is
+        // ``https://valuz.local-file.invalid/…`` and following it would
+        // navigate to a domain that does not exist. Render the label with the
+        // real path in the tooltip, styled as prose rather than as a link — an
+        // anchor the user cannot action is a worse lie than plain text.
+        if (href && localHref && href !== localHref) {
+          return (
+            <span
+              title={localHref}
+              className={cn(
+                "wrap-anywhere font-medium text-ink-heading",
+                anchorClassName,
+              )}
+            >
+              {children}
+            </span>
+          );
+        }
         if (isExternalHref(href)) {
           return (
             <a
@@ -1894,6 +1952,34 @@ export const MarkdownContent = memo(function MarkdownContent({
           <a {...rest} href={href} className={baseClass} onClick={onClick}>
             {children}
           </a>
+        );
+      },
+      span: ({
+        title,
+        children,
+        className: spanClassName,
+        ...rest
+      }: HTMLAttributes<HTMLSpanElement>) => {
+        // rehype-harden renders a link it refuses as
+        // ``<span title="Blocked URL: …">{children}{" [blocked]"}</span>``.
+        // Downgrade that to harden's own ``text-only`` policy — the anchor is
+        // already gone either way, so the only thing "[blocked]" adds is a
+        // security accusation against, usually, one of our own file paths.
+        // (The policy knob exists in rehype-harden but Streamdown hardcodes its
+        // options, so this is the layer we can reach.)
+        if (typeof title === "string" && title.startsWith(BLOCKED_URL_TITLE)) {
+          const parts = Children.toArray(children);
+          const last = parts[parts.length - 1];
+          const text =
+            typeof last === "string" && last.endsWith(BLOCKED_MARKER)
+              ? [...parts.slice(0, -1), last.slice(0, -BLOCKED_MARKER.length)]
+              : parts;
+          return <span className={spanClassName}>{text}</span>;
+        }
+        return (
+          <span {...rest} title={title} className={spanClassName}>
+            {children}
+          </span>
         );
       },
     }),

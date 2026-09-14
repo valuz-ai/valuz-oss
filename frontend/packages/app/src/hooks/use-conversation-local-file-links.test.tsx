@@ -501,10 +501,91 @@ describe("MarkdownContent with the default local-file resolver", () => {
     expect(onLocalFileLinkClick).not.toHaveBeenCalled();
   });
 
-  it("still blocks a scheme the sanitizer does not allow", () => {
+  /**
+   * The invariant, asserted as an invariant rather than as a list of cases.
+   *
+   * Every test above pins one instance, which is exactly why the original bug
+   * shipped: the suite proved particular links worked and proved nothing about
+   * the ones nobody had thought of. What actually has to hold is a rule — a
+   * link never silently loses its href, on any surface, for any shape a model
+   * can write — and the second dimension is the one that was missing: whether
+   * the host wired up ``isLocalFileHref`` at all. The share viewer does not,
+   * and that is where every file link used to die.
+   */
+  describe("invariant: a link is never silently destroyed", () => {
+    const SHAPES = [
+      "valuz-file:///Users/ada/proj/a.md",
+      "valuz-file:///C:/Users/ada/proj/a.md",
+      "valuz-file:///C%3A/Users/ada/proj/a.md",
+      "valuz-file://C:/Users/ada/proj/a.md",
+      "file:///Users/ada/proj/a.md",
+      "file:///C:/Users/ada/proj/a.md",
+      "/Users/ada/proj/a.md",
+      "/Users/ada/proj/a.md:12",
+      "C:\\Users\\ada\\proj\\a.md",
+      "reports/q3.md",
+      "./reports/q3.md",
+      "https://example.com/a.md",
+      "ftp://example.com/a.md",
+      "javascript:alert(1)",
+    ];
+
+    const HOSTS: Array<[string, Record<string, unknown>]> = [
+      // A host that can open files (desktop / webui conversation).
+      [
+        "with a local-file host",
+        {
+          isLocalFileHref: (href: string) =>
+            isDefaultLocalFileHref(href, "/Users/ada/proj"),
+          onLocalFileLinkClick: () => {},
+        },
+      ],
+      // A host that cannot (the share viewer passes neither prop).
+      ["without a local-file host", {}],
+    ];
+
+    for (const [hostLabel, hostProps] of HOSTS) {
+      for (const href of SHAPES) {
+        it(`keeps "${href}" readable ${hostLabel}`, () => {
+          const { container } = render(
+            <MarkdownContent
+              content={`看这个 [文件名.md](${href}) 谢谢`}
+              mode="static"
+              {...hostProps}
+            />,
+          );
+          const body = container.querySelector("p");
+          const text = body?.textContent ?? "";
+
+          // 1. The label survives — the user can always read what was linked.
+          expect(text).toContain("文件名.md");
+          // 2. The sentence around it survives.
+          expect(text).toContain("看这个");
+          expect(text).toContain("谢谢");
+          // 3. No accusatory marker, ever.
+          expect(text).not.toContain("[blocked]");
+          // 4. Nothing is left pointing at the internal carrier domain, which
+          //    would 404 the user out of the app if they clicked it.
+          const anchor = body?.querySelector("a");
+          expect(anchor?.getAttribute("href") ?? "").not.toContain(
+            "valuz.local-file.invalid",
+          );
+        });
+      }
+    }
+  });
+
+  it("still neutralizes a scheme the sanitizer does not allow", () => {
+    // The link must not be followable — that part is unchanged. What changed is
+    // how the refusal reads: this used to assert the "[blocked]" marker, and
+    // that marker is now removed everywhere (see the ``span`` override in
+    // MarkdownContent). The anchor is gone either way, so the marker added
+    // nothing but a security accusation against, most often, one of our own
+    // file paths.
     renderLink("[not a file](ftp://example.com/report.pdf)", WINDOWS_ROOT);
 
     expect(screen.queryByRole("link", { name: "not a file" })).toBeNull();
-    expect(document.body.textContent).toContain("[blocked]");
+    expect(screen.getByText("not a file")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("[blocked]");
   });
 });
