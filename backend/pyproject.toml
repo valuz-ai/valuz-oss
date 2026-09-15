@@ -153,14 +153,18 @@ dependencies = [
     # explode with ``ModuleNotFoundError: No module named 'openai_codex'``.
     # Kernel pin eec331f moved codex off the vendored 0.131.0a4 wheel
     # (``AppServerConfig``) to the published PyPI package (``CodexConfig``).
-    # Floored at ``0.144.4`` — the first STABLE release (upstream PR #33213):
-    # the SDK version line switched from ``0.1.0bX`` betas to tracking the
-    # Codex CLI version, and its pinned ``openai-codex-cli-bin==0.144.4``
-    # ships wheels for every ``required-environment`` (manylinux glibc both
-    # arches, Intel + arm64 macOS — see the ``[tool.uv]`` note below). The
-    # binary is pulled transitively and KEPT on every platform so
-    # ``_resolve_codex_bin`` prefers it over a stray PATH ``codex``.
-    "openai-codex>=0.144.4",
+    # The SDK version line tracks the Codex CLI version since the first STABLE
+    # release ``0.144.4`` (upstream PR #33213), and every release since pins
+    # its own ``openai-codex-cli-bin==<same>`` with wheels for every
+    # ``required-environment`` (manylinux glibc both arches, Intel + arm64
+    # macOS — see the ``[tool.uv]`` note below). The binary is pulled
+    # transitively and KEPT on every platform so ``_resolve_codex_bin``
+    # prefers it over a stray PATH ``codex``.
+    # Floored at ``0.154.0``: the OpenAI server refuses ``gpt-6-astra`` from
+    # any codex-cli older than 0.153.1 (``400 "requires a newer version of
+    # Codex"``, measured on 0.144.4 / 0.147.0 / 0.149.0), and 0.154.0 is the
+    # first PyPI release past that gate.
+    "openai-codex>=0.154.0",
     "python-socks[asyncio]>=2.4",
     "lark-oapi>=1.7.1",
 ]
