@@ -530,19 +530,6 @@ describe("MarkdownContent with the default local-file resolver", () => {
       "javascript:alert(1)",
     ];
 
-    const HOSTS: Array<[string, Record<string, unknown>]> = [
-      // A host that can open files (desktop / webui conversation).
-      [
-        "with a local-file host",
-        {
-          isLocalFileHref: (href: string) =>
-            isDefaultLocalFileHref(href, "/Users/ada/proj"),
-          onLocalFileLinkClick: () => {},
-        },
-      ],
-      // A host that cannot (the share viewer passes neither prop).
-      ["without a local-file host", {}],
-    ];
 
     for (const [hostLabel, hostProps] of HOSTS) {
       for (const href of SHAPES) {
@@ -573,6 +560,95 @@ describe("MarkdownContent with the default local-file resolver", () => {
         });
       }
     }
+  });
+
+  /**
+   * The rewrite is a rewrite of SOURCE text, and a source has code in it. A
+   * link written inside inline code or a fence is the author showing the
+   * syntax, and it must come out exactly as typed — on every host, since the
+   * rewrite is no longer gated on one.
+   */
+  /** The two kinds of host every rendering assertion has to hold for. */
+  const HOSTS: Array<[string, Record<string, unknown>]> = [
+    // A host that can open files (desktop / webui conversation).
+    [
+      "with a local-file host",
+      {
+        isLocalFileHref: (href: string) =>
+          isDefaultLocalFileHref(href, "/Users/ada/proj"),
+        onLocalFileLinkClick: () => {},
+      },
+    ],
+    // A host that cannot (the share viewer passes neither prop).
+    ["without a local-file host", {}],
+  ];
+
+  describe("a file link written inside code is left exactly as typed", () => {
+    const LITERAL = "[报告](valuz-file:///Users/ada/proj/r.md)";
+    const CASES: Array<[string, string]> = [
+      ["inline code", "写法是 `" + LITERAL + "` 这样"],
+      ["fenced code", "```md\n" + LITERAL + "\n```"],
+      ["tilde fence", "~~~\n" + LITERAL + "\n~~~"],
+      ["unterminated fence", "```\n" + LITERAL],
+      ["double-backtick span", "看 ``" + LITERAL + "`` 这里"],
+    ];
+    for (const [hostLabel, hostProps] of HOSTS) {
+      for (const [label, content] of CASES) {
+        it(`${label} ${hostLabel}`, () => {
+          const { container } = render(
+            <MarkdownContent content={content} mode="static" {...hostProps} />,
+          );
+          const code = container.querySelector("code");
+          expect(code?.textContent?.trim()).toBe(LITERAL);
+          expect(container.textContent).not.toContain("valuz.local-file.invalid");
+        });
+      }
+    }
+
+    it("still rewrites the prose link that sits next to the code", () => {
+      const { container } = render(
+        <MarkdownContent
+          content={"打开 [报告](valuz-file:///Users/ada/r.md)，写法是 `" + LITERAL + "`"}
+          mode="static"
+        />,
+      );
+      const p = container.querySelector("p");
+      expect(p?.querySelector("code")?.textContent).toBe(LITERAL);
+      expect(
+        p?.querySelector("span[title]")?.getAttribute("title"),
+      ).toBe("valuz-file:///Users/ada/r.md");
+    });
+
+    it("does not treat a lone backtick as the start of code", () => {
+      const { container } = render(
+        <MarkdownContent content={"it`s [报告](valuz-file:///Users/ada/r.md)"} mode="static" />,
+      );
+      expect(
+        container.querySelector("p span[title]")?.getAttribute("title"),
+      ).toBe("valuz-file:///Users/ada/r.md");
+    });
+  });
+
+  it("keeps the URL harden refused as the tooltip", () => {
+    // rehype-sanitize allows a bare relative path, so harden is the one that
+    // refuses it — and harden's title still carries the URL. Show it the way
+    // an unopenable file link is shown rather than throwing it away.
+    const { container } = render(
+      <MarkdownContent content={"看 [季报](reports/q3.md)"} mode="static" />,
+    );
+    const span = container.querySelector("p span[title]");
+    expect(span?.getAttribute("title")).toBe("reports/q3.md");
+    expect(span?.textContent).toBe("季报");
+    expect(container.textContent).not.toContain("[blocked]");
+  });
+
+  it("recognizes the product scheme regardless of case", () => {
+    const { container } = render(
+      <MarkdownContent content={"[r](VALUZ-FILE:///Users/ada/r.md)"} mode="static" />,
+    );
+    expect(
+      container.querySelector("p span[title]")?.getAttribute("title"),
+    ).toBe("VALUZ-FILE:///Users/ada/r.md");
   });
 
   it("still neutralizes a scheme the sanitizer does not allow", () => {
