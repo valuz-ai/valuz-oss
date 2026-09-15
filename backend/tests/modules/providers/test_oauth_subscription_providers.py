@@ -95,14 +95,13 @@ def test_codex_subscription_recommends_known_codex_models() -> None:
     """Per https://developers.openai.com/codex/models. ``gpt-6-astra`` is the
     page's lead recommendation ("most capable model for complex work across
     code, apps, and research"); the server gates it to codex-cli >= 0.153.1,
-    so the bundled ``openai-codex-cli-bin`` gets a 400 until PyPI catches up
-    (``CODEX_BIN_OVERRIDE`` to a newer binary meanwhile). Includes the Pro-only
-    ``gpt-5.3-codex-spark`` preview — listing it lets Pro users pick it;
-    lower tiers will fail at SDK call time. The 5.6 family lists the three
-    concrete tiers (sol = flagship, terra = price/performance, luna =
-    high-volume); the ``gpt-5.6`` alias routes to sol and is intentionally
-    NOT listed (concrete version ids over aliases, same as the claude list).
-    Sourced from resources/subscription_models.json."""
+    which the ``openai-codex`` floor in pyproject satisfies. The 5.6 family
+    lists the three concrete tiers (sol = flagship, terra = price/performance,
+    luna = high-volume); the ``gpt-5.6`` alias routes to sol and is
+    intentionally NOT listed (concrete version ids over aliases, same as the
+    claude list). ``gpt-5.4`` / ``gpt-5.4-mini`` (retired 2026-08-31 per the
+    same page), ``gpt-5.3-codex`` / ``gpt-5.3-codex-spark`` and ``gpt-5.2``
+    were dropped on 2026-09-14. Sourced from resources/subscription_models.json."""
     provider = get_provider("codex-subscription")
     assert set(provider.model_options) == {
         "gpt-6-astra",
@@ -110,11 +109,6 @@ def test_codex_subscription_recommends_known_codex_models() -> None:
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
-        "gpt-5.2",
     }
 
 
@@ -125,7 +119,6 @@ def test_subscription_models_carry_backend_labels() -> None:
     assert codex.model_labels["gpt-6-astra"] == "GPT 6 Astra"
     assert codex.model_labels["gpt-5.6-sol"] == "GPT 5.6 Sol"
     assert codex.model_labels["gpt-5.5"] == "GPT 5.5"
-    assert codex.model_labels["gpt-5.3-codex-spark"] == "GPT 5.3 Codex Spark"
     claude = get_provider("claude-subscription")
     assert claude.model_labels["claude-opus-4-8"] == "Opus 4.8"
     assert claude.model_labels["claude-fable-5"] == "Fable 5"
