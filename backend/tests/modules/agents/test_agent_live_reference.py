@@ -215,6 +215,36 @@ async def test_list_deployments_service_resolves_projects(db) -> None:
     svc = AgentService(db)  # type: ignore[arg-type]
     deployments = await svc.list_deployments("local-test-owner", "reviewer")
     assert {d["project_id"] for d in deployments} == {"w1", "w2"}
+    # The project's own name and kind ride along: the page shows those, never the id.
+    assert {(d["project_name"], d["project_kind"]) for d in deployments} == {
+        ("W1", "project"),
+        ("W2", "project"),
+    }
+
+
+async def test_list_deployments_labels_chat_projects_by_kind(db) -> None:
+    await _deploy_row(db, slug="helper", project_id="w1", handle="helper")
+    await ProjectDatastore(db).create(
+        "local-test-owner",
+        ProjectRow(
+            id="chat-1", user_id="local-test-owner", name="Chat", kind="chat", root_path=None
+        ),
+    )
+    await ProjectMemberDatastore(db).create(
+        "local-test-owner",
+        ProjectMemberRow(
+            user_id="local-test-owner",
+            project_id="chat-1",
+            agent_slug="helper",
+            source_agent_slug="helper",
+        ),
+    )
+    svc = AgentService(db)  # type: ignore[arg-type]
+    deployments = await svc.list_deployments("local-test-owner", "helper")
+    assert {(d["project_id"], d["project_kind"]) for d in deployments} == {
+        ("w1", "project"),
+        ("chat-1", "chat"),
+    }
 
 
 async def test_should_ignore_orphan_deployment_rows_for_deleted_projects(db) -> None:
@@ -231,7 +261,14 @@ async def test_should_ignore_orphan_deployment_rows_for_deleted_projects(db) -> 
 
     svc = AgentService(db)  # type: ignore[arg-type]
     deployments = await svc.list_deployments("local-test-owner", "archivist")
-    assert deployments == [{"project_id": "live", "agent_slug": "archivist"}]
+    assert deployments == [
+        {
+            "project_id": "live",
+            "agent_slug": "archivist",
+            "project_name": "LIVE",
+            "project_kind": "project",
+        }
+    ]
 
     with pytest.raises(AgentStillDeployedError) as exc:
         await svc.delete_agent("local-test-owner", "archivist")
