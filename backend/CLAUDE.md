@@ -362,12 +362,24 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   `cache_write_tokens`, and `output_tokens` already contains reasoning
   tokens. Consumers add all four up, so any bucket that is a *subset*
   upstream must be subtracted out in the runtime: codex's
-  `cached_input_tokens` ⊂ `input_tokens` and `reasoning_output_tokens` ⊂
-  `output_tokens` (its `total_tokens = input + output` is the proof);
+  `cached_input_tokens` and `cache_write_input_tokens` (codex-cli 0.154+) are
+  both ⊂ `input_tokens` — they are the Responses
+  `usage.input_tokens_details.{cached,cache_write}_tokens` — and
+  `reasoning_output_tokens` ⊂ `output_tokens` (its `total_tokens = input +
+  output` is the proof);
   LangChain's `usage_metadata.input_tokens` is the sum of every input bucket
   with `input_token_details.cache_read` / `cache_creation` inside it.
   Anthropic's shape is natively disjoint and dsh declares disjointness in its
-  `TokenUsage` contract, so those two pass through.
+  `TokenUsage` contract, so those two pass through. `cache_write_tokens`
+  means the same thing on every runtime — input tokens the provider wrote
+  to its prompt cache this turn, never counted in `input_tokens`: Anthropic
+  `cache_creation_input_tokens` (claude), LangChain
+  `input_token_details.cache_creation` (deepagents), codex
+  `cache_write_input_tokens`; dsh's wire usage has no write bucket
+  (DeepSeek reports cache hit/miss only and does not bill writes), so it
+  stays 0 there by design. Pricing the write bucket is per provider and
+  lives behind `BillingPort` — every meter call already carries all four
+  fields in its metadata.
 - **`rg`** (ripgrep) is a runtime helper for `integrations/docs_embedded`,
   located via the `VALUZ_RG_PATH` env the Electron sidecar sets to the packaged
   `libexec/rg`. The binary is vendored per platform at

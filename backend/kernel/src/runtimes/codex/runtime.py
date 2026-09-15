@@ -2336,6 +2336,9 @@ def _stop_reason_from_turn(turn_done: TurnCompletedNotification) -> StopReason:
 _BREAKDOWN_FIELDS = (
     "input_tokens",
     "cached_input_tokens",
+    # Added in codex-cli 0.154 (``usage.input_tokens_details.cache_write_tokens``
+    # on the Responses wire); ``getattr`` below reads 0 from an older SDK.
+    "cache_write_input_tokens",
     "output_tokens",
     "reasoning_output_tokens",
     "total_tokens",
@@ -2407,20 +2410,25 @@ class _TurnUsageTracker:
 def _usage_payload_from_turn_totals(totals: dict[str, int], model: str) -> dict[str, Any]:
     """Project one turn's codex totals onto our four flat fields.
 
-    Codex reports cached input as a subset of ``input_tokens`` (so the
-    uncached remainder is the cross-runtime ``input_tokens``) and reasoning
-    as a subset of ``output_tokens`` — its own ``total_tokens`` is
-    ``input_tokens + output_tokens`` with reasoning nowhere added, which is
-    how we know. Adding reasoning on top of output, as this used to, counted
-    the reasoning tokens twice.
+    Codex reports cached input AND cache-written input as subsets of
+    ``input_tokens`` (so the remainder is the cross-runtime ``input_tokens``)
+    and reasoning as a subset of ``output_tokens`` — its own ``total_tokens``
+    is ``input_tokens + output_tokens`` with neither cache bucket nor
+    reasoning added, which is how we know. Both cache counts come from the
+    Responses ``usage.input_tokens_details`` (``cached_tokens`` /
+    ``cache_write_tokens``); upstream's own parser fixture is
+    ``input 100 = cached 40 + cache_write 60`` (codex-rs ``responses.rs``,
+    ``parses_cache_write_token_usage``). Adding reasoning on top of output,
+    as this used to, counted the reasoning tokens twice.
     """
     cache_read = totals["cached_input_tokens"]
+    cache_write = totals["cache_write_input_tokens"]
     reasoning_output = totals["reasoning_output_tokens"]
     flat = {
-        "input_tokens": max(0, totals["input_tokens"] - cache_read),
+        "input_tokens": max(0, totals["input_tokens"] - cache_read - cache_write),
         "output_tokens": totals["output_tokens"],
         "cache_read_tokens": cache_read,
-        "cache_write_tokens": 0,
+        "cache_write_tokens": cache_write,
     }
     payload: dict[str, Any] = dict(flat)
     payload["model_usage"] = {
