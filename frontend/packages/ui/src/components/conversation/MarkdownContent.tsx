@@ -95,6 +95,44 @@ const LOCAL_FILE_HREF_PREFIX = "https://valuz.local-file.invalid/";
 /** rehype-harden's signature for a link it refused; see the ``span`` override. */
 const BLOCKED_URL_TITLE = "Blocked URL: ";
 const BLOCKED_MARKER = " [blocked]";
+/**
+ * How a link label reads when this surface cannot follow it: prose, not a
+ * link. An anchor the user cannot action is a worse lie than plain text.
+ */
+const INERT_LINK_CLASS = "wrap-anywhere font-medium text-ink-heading";
+
+/**
+ * Fenced code blocks and inline code spans — the parts of a markdown source a
+ * TEXT-level rewrite must never touch, because inside them a link is a literal
+ * the author wants shown, not a link.
+ *
+ * Fences: an opening run of 3+ backticks or tildes at up to 3 spaces of
+ * indent, closed by the same run (or by end of input — CommonMark reads an
+ * unterminated fence as code to the end, and so does the renderer, so the
+ * split here matches what the user will see). Inline: a backtick run closed by
+ * a run of the same length. A lone backtick never closes, so it stays prose.
+ */
+const MARKDOWN_CODE =
+  /(?:^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]{0,3}\1[ \t]*(?=\n|$)|$)|(`+)[\s\S]*?[^`]\2(?!`)/g;
+
+/**
+ * Apply ``rewrite`` to the prose of a markdown source and leave its code
+ * untouched. Segments are re-joined verbatim, so nothing outside the prose
+ * moves; a rewrite that needs source offsets must not go through here.
+ */
+function mapMarkdownProse(
+  content: string,
+  rewrite: (prose: string) => string,
+): string {
+  let out = "";
+  let last = 0;
+  for (const match of content.matchAll(MARKDOWN_CODE)) {
+    const start = match.index ?? 0;
+    out += rewrite(content.slice(last, start)) + match[0];
+    last = start + match[0].length;
+  }
+  return out + rewrite(content.slice(last));
+}
 const QUALITY_CLAIM_HREF_PREFIX = "https://valuz.quality-claim.invalid/";
 
 interface LocalizedClaimQualityEntry {
@@ -787,7 +825,8 @@ function decodeLocalFileHref(href: string): string {
  * including a surface that never wires up a place to open files.
  */
 function isProductFileHref(href: string): boolean {
-  return isFileRef(href) || href.toLowerCase().startsWith("file://");
+  const lower = href.toLowerCase();
+  return isFileRef(lower) || lower.startsWith("file://");
 }
 
 /**
@@ -806,6 +845,12 @@ function isProductFileHref(href: string): boolean {
  * it, and it hit every file link on the share viewer — which passes no
  * predicate. A host that has nowhere to open files should render a link it
  * cannot action, not lose it.
+ *
+ * Prose only. This is a rewrite of the SOURCE text, and a source has code in
+ * it: ``\`[报告](valuz-file:///…)\``` is an author showing the syntax, and
+ * rewriting it displayed the carrier URL as the code. Making the rewrite
+ * unconditional widened that from hosted surfaces to every surface, which is
+ * how it was finally noticed.
  */
 function rewriteLocalFileMarkdownLinks(
   content: string,
@@ -813,8 +858,10 @@ function rewriteLocalFileMarkdownLinks(
 ): string {
   const claims = (href: string) =>
     isProductFileHref(href) || (isLocalFileHref?.(href) ?? false);
-  return content.replace(/(\[[^\]\n]+\]\()([^)\n]+)(\))/g, (match) =>
-    rewriteMarkdownLinkMatch(match, claims),
+  return mapMarkdownProse(content, (prose) =>
+    prose.replace(/(\[[^\]\n]+\]\()([^)\n]+)(\))/g, (match) =>
+      rewriteMarkdownLinkMatch(match, claims),
+    ),
   );
 }
 
@@ -1923,10 +1970,7 @@ export const MarkdownContent = memo(function MarkdownContent({
           return (
             <span
               title={localHref}
-              className={cn(
-                "wrap-anywhere font-medium text-ink-heading",
-                anchorClassName,
-              )}
+              className={cn(INERT_LINK_CLASS, anchorClassName)}
             >
               {children}
             </span>
@@ -1974,6 +2018,21 @@ export const MarkdownContent = memo(function MarkdownContent({
             typeof last === "string" && last.endsWith(BLOCKED_MARKER)
               ? [...parts.slice(0, -1), last.slice(0, -BLOCKED_MARKER.length)]
               : parts;
+          // Two different refusals arrive here. When rehype-sanitize stripped
+          // the href first, harden saw nothing and the title says
+          // ``undefined`` — the link's origin is unknowable at this layer, so
+          // keep harden's muted styling and no tooltip. When harden itself
+          // refused a URL the sanitizer had allowed (a bare relative path such
+          // as ``reports/q3.md``), the URL is right there in the title: show it
+          // the way an unopenable file link is shown, label plus path on hover.
+          const url = title.slice(BLOCKED_URL_TITLE.length);
+          if (url && url !== "undefined") {
+            return (
+              <span title={url} className={INERT_LINK_CLASS}>
+                {text}
+              </span>
+            );
+          }
           return <span className={spanClassName}>{text}</span>;
         }
         return (
