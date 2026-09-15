@@ -6,6 +6,7 @@ import {
   BookOpen,
   Bot,
   ChevronRight,
+  FolderOpen,
   KeyRound,
   Plug,
   Plus,
@@ -179,6 +180,16 @@ export const AgentDetailView = ({
     useState<EffectiveAgentResources | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [deployments, setDeployments] = useState<AgentDeployment[]>([]);
+  const [activeTab, setActiveTab] = useState("model");
+  const projectsTabRef = useRef<HTMLButtonElement | null>(null);
+  // The header count opens the projects tab. Besides setting the value, click
+  // the real trigger: an edition may append look-alike tabs after this row's
+  // triggers that hand control back on trigger clicks, and a value that is
+  // already "projects" would not re-render radix at all.
+  const showProjectsTab = useCallback(() => {
+    setActiveTab("projects");
+    projectsTabRef.current?.click();
+  }, []);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [targetProject, setTargetProject] = useState("");
@@ -247,6 +258,38 @@ export const AgentDetailView = ({
   const [testingFeishuChannel, setTestingFeishuChannel] = useState(false);
 
   const { canDelete } = useResourceGuard(agent ?? {});
+
+  // One row per project the agent is a member of, by the project's own name
+  // (the server resolves it; the local list is only a fallback for older
+  // servers). Chat projects are per-conversation containers the user never
+  // manages, so they stay out of both the count and the list — and a raw id
+  // is never shown.
+  const joinedProjects = useMemo(() => {
+    const byId = new Map<
+      string,
+      { id: string; name: string; note: string; members: number }
+    >();
+    for (const d of deployments) {
+      const known = projects.find((p) => p.id === d.project_id);
+      const kind = d.project_kind ?? (known ? "project" : "chat");
+      if (kind !== "project") continue;
+      const entry = byId.get(d.project_id);
+      if (entry) {
+        entry.members += 1;
+        continue;
+      }
+      byId.set(d.project_id, {
+        id: d.project_id,
+        name:
+          d.project_name ||
+          known?.name ||
+          t("agent.projectUnnamed" as Parameters<typeof t>[0]),
+        note: known?.root_path ?? "",
+        members: 1,
+      });
+    }
+    return [...byId.values()];
+  }, [deployments, projects, t]);
 
   const pageHeader = useMemo(() => {
     if (!onBack) return null;
@@ -1150,33 +1193,16 @@ export const AgentDetailView = ({
           <span className="font-mono text-2xs">{agent.slug}</span>
           {/* vertical separator before the deployment status */}
           <span className="h-3 w-px bg-surface-border" aria-hidden />
-          {deployments.length > 0 ? (
-            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-              {deployments.map((d, i) => {
-                const name =
-                  projects.find((p) => p.id === d.project_id)?.name ??
-                  d.project_id;
-                return (
-                  <span
-                    key={`${d.project_id}:${d.agent_slug}`}
-                    className="flex items-center gap-1.5"
-                  >
-                    {i > 0 && <span className="text-ink-muted">·</span>}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        navigate(
-                          `/projects/${encodeURIComponent(d.project_id)}`,
-                        )
-                      }
-                      className="text-ink-body transition-colors hover:text-ink-heading"
-                    >
-                      {name}
-                    </button>
-                  </span>
-                );
+          {joinedProjects.length > 0 ? (
+            <button
+              type="button"
+              onClick={showProjectsTab}
+              className="text-ink-body transition-colors hover:text-ink-heading"
+            >
+              {t("agent.deployedCount" as Parameters<typeof t>[0], {
+                count: joinedProjects.length,
               })}
-            </span>
+            </button>
           ) : (
             <span>{t("agent.notDeployedYet")}</span>
           )}
@@ -1186,7 +1212,7 @@ export const AgentDetailView = ({
       {/* ── Tabs — flat section. System line-style tabs (gray baseline +
           black active underline), same as the Activity page. */}
       <div className="px-5 py-4">
-        <Tabs defaultValue="model">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <div className="border-b border-surface-border">
             <TabsList
               variant="line"
@@ -1210,6 +1236,9 @@ export const AgentDetailView = ({
                   {t("agent.tabKnowledge" as Parameters<typeof t>[0])}
                 </TabsTrigger>
               ) : null}
+              <TabsTrigger value="projects" ref={projectsTabRef}>
+                {t("agent.tabProjects" as Parameters<typeof t>[0])}
+              </TabsTrigger>
               <TabsTrigger value="channels">
                 {t("agent.tabChannels" as Parameters<typeof t>[0])}
               </TabsTrigger>
@@ -1764,6 +1793,58 @@ export const AgentDetailView = ({
                 </div>
               </div>
             }
+          </TabsContent>
+
+          <TabsContent value="projects" className="mt-4">
+            <p className="text-xs leading-5 text-ink-meta">
+              {t("agent.projectsHint" as Parameters<typeof t>[0])}
+            </p>
+            {/* Same rows as the skills tab: icon tile, name, one-line path. */}
+            <div className="mt-3 flex flex-col gap-2">
+              {joinedProjects.length === 0 ? (
+                <div className="rounded-[14px] border border-dashed border-surface-border bg-card px-4 py-6 text-center text-xs text-ink-meta">
+                  {t("agent.projectsEmpty" as Parameters<typeof t>[0])}
+                </div>
+              ) : (
+                joinedProjects.map((p) => (
+                  <div
+                    key={p.id}
+                    className="flex items-start gap-3 rounded-[14px] bg-card p-3 shadow-[var(--shadow-1)] transition-colors"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-soft text-ink-meta">
+                      <FolderOpen className="h-4 w-4" />
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(`/projects/${encodeURIComponent(p.id)}`)
+                      }
+                      className="min-w-0 flex-1 cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-sm font-medium text-ink-heading">
+                          {p.name}
+                        </span>
+                        {p.members > 1 ? (
+                          <span className="shrink-0 text-2xs text-ink-meta">
+                            {t(
+                              "agent.projectMembers" as Parameters<typeof t>[0],
+                              { count: p.members },
+                            )}
+                          </span>
+                        ) : null}
+                      </div>
+                      {p.note ? (
+                        <div className="mt-0.5 truncate font-mono text-2xs text-ink-meta">
+                          {p.note}
+                        </div>
+                      ) : null}
+                    </button>
+                    <ChevronRight className="mt-2 h-3.5 w-3.5 shrink-0 text-ink-muted" />
+                  </div>
+                ))
+              )}
+            </div>
           </TabsContent>
         </Tabs>
       </div>

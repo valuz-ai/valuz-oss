@@ -69,6 +69,10 @@ export interface AgentDeployment {
   project_id: string;
   /** Project-local member handle. */
   agent_slug: string;
+  /** The project's own name and kind, resolved server-side so the page
+   *  never has to show a raw id. Absent from servers older than this field. */
+  project_name?: string;
+  project_kind?: "chat" | "project";
 }
 
 /** Membership row linking a project to a kernel agent. */

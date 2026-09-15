@@ -11,6 +11,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentDeployment, ProjectListItem } from "@valuz/core";
 
 const agentFixture = {
   id: "a1",
@@ -35,6 +36,12 @@ const agentFixture = {
 const stableTranslation = { t: (key: string) => key };
 const getAgent = vi.fn();
 const updateAgent = vi.fn();
+const listDeployments = vi.fn(
+  async (..._args: unknown[]) => ({ deployments: [] as AgentDeployment[] }),
+);
+const projectsList = vi.fn(
+  async (..._args: unknown[]) => ({ projects: [] as ProjectListItem[] }),
+);
 
 vi.mock("@valuz/core", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("@valuz/core");
@@ -48,10 +55,10 @@ vi.mock("@valuz/core", async () => {
     agentsApi: {
       getAgent: (...args: unknown[]) => getAgent(...args),
       updateAgent: (...args: unknown[]) => updateAgent(...args),
-      listDeployments: async () => ({ deployments: [] }),
+      listDeployments: (...args: unknown[]) => listDeployments(...args),
       getEffectiveResources: async () => null,
     },
-    projectsApi: { list: async () => ({ projects: [] }) },
+    projectsApi: { list: (...args: unknown[]) => projectsList(...args) },
     channelsApi: {
       getWeComAIBotBinding: async () => null,
       getFeishuBinding: async () => null,
@@ -67,6 +74,19 @@ vi.mock("@valuz/core", async () => {
 vi.mock("react-router-dom", () => ({
   useNavigate: () => vi.fn(),
   useOutletContext: () => null,
+  Link: ({
+    to,
+    className,
+    children,
+  }: {
+    to: string;
+    className?: string;
+    children?: React.ReactNode;
+  }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -86,6 +106,8 @@ describe("AgentDetailView — instructions draft", () => {
     // exactly the behaviour under test.
     getAgent.mockImplementation(async () => ({ ...agentFixture }));
     updateAgent.mockImplementation(async () => ({ ...agentFixture }));
+    listDeployments.mockResolvedValue({ deployments: [] });
+    projectsList.mockResolvedValue({ projects: [] });
   });
 
   it("keeps characters typed while a save is still in flight", async () => {
@@ -152,5 +174,91 @@ describe("AgentDetailView — instructions draft", () => {
     fireEvent.click(screen.getByRole("switch"));
 
     await waitFor(() => expect(textarea.value).toBe("别处改过的指令"));
+  });
+});
+
+describe("AgentDetailView — joined projects", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAgent.mockImplementation(async () => ({ ...agentFixture }));
+    updateAgent.mockImplementation(async () => ({ ...agentFixture }));
+    listDeployments.mockResolvedValue({ deployments: [] });
+    projectsList.mockResolvedValue({ projects: [] });
+  });
+
+  it("counts the projects in the header and lists them by name in their own tab", async () => {
+    // Two members in the same project collapse into one row; the chat
+    // project (a per-conversation container) is not a project the user
+    // manages, so it is neither counted nor listed; nothing shows a raw id.
+    listDeployments.mockResolvedValue({
+      deployments: [
+        {
+          project_id: "p-alpha",
+          agent_slug: "researcher",
+          project_name: "Alpha 研究",
+          project_kind: "project",
+        },
+        {
+          project_id: "p-alpha",
+          agent_slug: "researcher-2",
+          project_name: "Alpha 研究",
+          project_kind: "project",
+        },
+        {
+          project_id: "c-chat",
+          agent_slug: "researcher",
+          project_name: "Chat",
+          project_kind: "chat",
+        },
+      ],
+    });
+
+    render(<AgentDetailView slug="researcher" />);
+    await waitFor(() => expect(listDeployments).toHaveBeenCalled());
+
+    const count = await screen.findByRole("button", {
+      name: "agent.deployedCount",
+    });
+    expect(screen.queryByText("agent.notDeployedYet")).toBeNull();
+
+    await userEvent.click(count);
+    const tab = screen.getByRole("tab", { name: "agent.tabProjects" });
+    expect(tab.getAttribute("data-state")).toBe("active");
+    expect(screen.getByText("Alpha 研究")).toBeTruthy();
+    expect(screen.getByText("agent.projectMembers")).toBeTruthy();
+    expect(screen.queryByText("Chat")).toBeNull();
+    expect(screen.queryByText("p-alpha")).toBeNull();
+    expect(screen.queryByText("c-chat")).toBeNull();
+  });
+
+  it("falls back to the local project list, then a placeholder, never the id", async () => {
+    listDeployments.mockResolvedValue({
+      deployments: [
+        { project_id: "p-old-server", agent_slug: "researcher" },
+        { project_id: "p-unknown", agent_slug: "researcher" },
+      ],
+    });
+    projectsList.mockResolvedValue({
+      projects: [
+        {
+          id: "p-old-server",
+          name: "Legacy",
+          kind: "project",
+          root_path: "/tmp/legacy",
+          icon: null,
+          cwd: "/tmp/legacy",
+        },
+      ],
+    });
+
+    render(<AgentDetailView slug="researcher" />);
+    await userEvent.click(
+      await screen.findByRole("tab", { name: "agent.tabProjects" }),
+    );
+    expect(screen.getByText("Legacy")).toBeTruthy();
+    // A row the local list does not know either is a chat container on an
+    // older server: not listed, and its id never surfaces.
+    expect(screen.queryByText("p-unknown")).toBeNull();
+    expect(screen.queryByText("p-old-server")).toBeNull();
   });
 });

@@ -189,6 +189,27 @@ class ProjectMemberDatastore:
             .first()
         )
 
+    async def list_by_source_agent_slug_with_projects(
+        self, user_id: str, source_agent_slug: str
+    ) -> list[tuple[ProjectMemberRow, ProjectRow]]:
+        """The rows of ``list_by_source_agent_slug`` paired with the project
+        each one lives in, so a caller can show the project's name and kind
+        without a second lookup (and never a raw id)."""
+        result = await self._db.execute(
+            select(ProjectMemberRow, ProjectRow)
+            .join(
+                ProjectRow,
+                (ProjectRow.id == ProjectMemberRow.project_id)
+                & (ProjectRow.user_id == ProjectMemberRow.user_id),
+            )
+            .where(
+                ProjectMemberRow.source_agent_slug == source_agent_slug,
+                ProjectMemberRow.user_id == user_id,
+            )
+            .order_by(ProjectMemberRow.created_at)
+        )
+        return [(member, project) for member, project in result.all()]
+
     async def list_by_source_agent_slug(
         self, user_id: str, source_agent_slug: str
     ) -> list[ProjectMemberRow]:

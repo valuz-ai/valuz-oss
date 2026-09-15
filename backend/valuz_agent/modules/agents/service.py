@@ -663,14 +663,24 @@ class AgentService:
     async def list_deployments(self, user_id: str, slug: str) -> list[dict[str, Any]]:
         """List every派驻 of an agent — the projects it's deployed into.
 
-        Powers the agent detail page's「派驻于 N 个项目」panel + the delete-guard
-        UX. Returns ``[{project_id, agent_slug}]`` (the project-local handle);
-        the frontend resolves project display names from its own store. Empty
-        when the agent has never been deployed (no shared kernel config yet).
+        Powers the agent detail page's projects tab + the delete-guard UX.
+        Returns ``[{project_id, agent_slug, project_name, project_kind}]``
+        (``agent_slug`` is the project-local handle); the project's name and
+        kind come along so the page never has to fall back to a raw id. Rows
+        whose project is gone are dropped. Empty when the agent has never
+        been deployed (no shared kernel config yet).
         """
         row = await self.get_agent(user_id, slug)
-        members = await self._members.list_by_source_agent_slug(user_id, row.slug)
-        return [{"project_id": m.project_id, "agent_slug": m.agent_slug} for m in members]
+        pairs = await self._members.list_by_source_agent_slug_with_projects(user_id, row.slug)
+        return [
+            {
+                "project_id": member.project_id,
+                "agent_slug": member.agent_slug,
+                "project_name": project.name,
+                "project_kind": project.kind,
+            }
+            for member, project in pairs
+        ]
 
     async def list_members(self, user_id: str, project_id: str) -> list[dict[str, Any]]:
         """Return members with their resolved kernel agent summary.
