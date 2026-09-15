@@ -29,14 +29,20 @@ def _breakdown(
     output_tokens: int,
     reasoning_output_tokens: int,
     total_tokens: int,
+    cache_write_input_tokens: int | None = None,
 ) -> SimpleNamespace:
-    return SimpleNamespace(
+    """``cache_write_input_tokens`` arrived with codex-cli 0.154; ``None``
+    leaves the attribute off entirely, the shape an older SDK hands us."""
+    fields = dict(
         input_tokens=input_tokens,
         cached_input_tokens=cached_input_tokens,
         output_tokens=output_tokens,
         reasoning_output_tokens=reasoning_output_tokens,
         total_tokens=total_tokens,
     )
+    if cache_write_input_tokens is not None:
+        fields["cache_write_input_tokens"] = cache_write_input_tokens
+    return SimpleNamespace(**fields)
 
 
 def _usage(total: SimpleNamespace | None, last: SimpleNamespace | None) -> SimpleNamespace:
@@ -192,3 +198,77 @@ def test_uncached_input_is_clamped_when_the_provider_is_inconsistent() -> None:
     assert payload is not None
     assert payload["input_tokens"] == 0
     assert payload["cache_read_tokens"] == 2
+
+
+# --- cache writes (codex-cli 0.154+) ---------------------------------------------
+#
+# Upstream's own parser fixture (codex-rs ``responses.rs``,
+# ``parses_cache_write_token_usage``): input 100 = cached 40 + cache_write 60,
+# total 110 = input 100 + output 10. Both cache buckets are SUBSETS of
+# ``input_tokens``, so the flat ``input_tokens`` we report is what is left
+# after taking both out — otherwise the four-field sum counts them twice.
+
+_UPSTREAM_FIXTURE = _breakdown(
+    input_tokens=100,
+    cached_input_tokens=40,
+    cache_write_input_tokens=60,
+    output_tokens=10,
+    reasoning_output_tokens=5,
+    total_tokens=110,
+)
+
+
+def test_cache_writes_are_a_subset_of_input_not_an_extra_bucket() -> None:
+    payload = _run(_usage(_UPSTREAM_FIXTURE, _UPSTREAM_FIXTURE))
+    assert payload is not None
+    assert payload["cache_read_tokens"] == 40
+    assert payload["cache_write_tokens"] == 60
+    assert payload["input_tokens"] == 0  # 100 - 40 - 60: nothing left uncached
+    assert payload["output_tokens"] == 10
+    four = (
+        payload["input_tokens"]
+        + payload["output_tokens"]
+        + payload["cache_read_tokens"]
+        + payload["cache_write_tokens"]
+    )
+    assert four == 110 == payload["model_usage"][MODEL]["total_tokens"]
+    assert payload["model_usage"][MODEL]["cache_write_tokens"] == 60
+
+
+def test_cache_writes_are_differenced_across_the_turn_like_every_other_field() -> None:
+    """A thread already carrying 60 written tokens writes 25 more this turn.
+
+    The pre-turn baseline is ``total - last`` of the first notification
+    (100/40/60/10/5/110 here), so only this turn's request is reported."""
+    after = _breakdown(
+        input_tokens=300,
+        cached_input_tokens=190,
+        cache_write_input_tokens=85,
+        output_tokens=30,
+        reasoning_output_tokens=12,
+        total_tokens=330,
+    )
+    last = _breakdown(
+        input_tokens=200,
+        cached_input_tokens=150,
+        cache_write_input_tokens=25,
+        output_tokens=20,
+        reasoning_output_tokens=7,
+        total_tokens=220,
+    )
+    payload = _run(_usage(after, last))
+    assert payload is not None
+    assert payload["cache_write_tokens"] == 25
+    assert payload["cache_read_tokens"] == 150
+    assert payload["input_tokens"] == 25  # 200 - 150 - 25
+    assert payload["output_tokens"] == 20
+
+
+def test_an_sdk_without_the_field_reports_zero_cache_writes() -> None:
+    """Every recorded-session fixture above predates the field; the payload
+    must keep reporting the bucket as 0, not raise."""
+    payload = _run(_T1_FIRST, _T1_SECOND)
+    assert payload is not None
+    assert not hasattr(_T1_FIRST.total, "cache_write_input_tokens")
+    assert payload["cache_write_tokens"] == 0
+    assert payload["input_tokens"] == 70_974
