@@ -198,7 +198,7 @@ def _kernel_session(*, metadata: dict | None = None) -> SimpleNamespace:
                 transport="http",
             ),
             McpHttpServerConfigSchema(
-                name="valuz_docs",
+                name="valuz-docs",
                 url="http://localhost/docs",
                 transport="http",
             ),
@@ -249,7 +249,7 @@ async def test_independent_research_session_uses_valurion_and_locks_capabilities
     assert sessions.created_kwargs["project_id"] == "chat-default"
     assert sessions.created_kwargs["agent_slug"] == "valurion"
     assert updates[0].skills == ["/tmp/citation", "/tmp/valuz-project-docs"]
-    assert [item.name for item in updates[0].mcp_servers] == ["valuz_docs"]
+    assert [item.name for item in updates[0].mcp_servers] == ["valuz-docs"]
     assert "server-enforced locked source scope" in updates[0].instructions
 
 

@@ -95,7 +95,7 @@ async def _mark_external_document_tool_called(observer: _MessageObserverSink) ->
             type="tool_use",
             data={
                 "id": "external-document-tool",
-                "name": "mcp__valuz_docs__document_search",
+                "name": "mcp__valuz-docs__document_search",
                 "input": {},
             },
         )

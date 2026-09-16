@@ -155,7 +155,7 @@ def test_edition_always_on_mcp_mounts_under_each_base_path(
         "always_on_mcp_specs",
         [
             AlwaysOnMcpServerSpec(
-                name="valuz_finance",
+                name="valuz-finance",
                 path="/_internal/mcp/finance",
                 app_factory=lambda: _app,
             )
@@ -179,7 +179,7 @@ def test_edition_spec_without_a_factory_mounts_nothing(
     monkeypatch.setattr(
         ext,
         "always_on_mcp_specs",
-        [AlwaysOnMcpServerSpec(name="valuz_finance", path="/_internal/mcp/finance")],
+        [AlwaysOnMcpServerSpec(name="valuz-finance", path="/_internal/mcp/finance")],
     )
 
     assert "/_internal/mcp/finance" not in _mount_paths(create_app())

@@ -123,7 +123,7 @@ class DocumentResearchService:
                 filename=detail.filename,
                 document_version=_document_version(detail),
                 provider_id="docs",
-                mcp_server_names=("valuz_docs",),
+                mcp_server_names=("valuz-docs",),
                 source_category="files",
             ),
             detail,
@@ -675,7 +675,7 @@ def _summary_prompt(detail: DocumentDetail, *, profile: str) -> str:
     return (
         f"Summarize only the current locked document `{detail.id}` "
         f"({detail.title or detail.filename}). {length} "
-        "First call mcp__valuz_docs__doc_search one or more times with "
+        "First call mcp__valuz-docs__doc_search one or more times with "
         f'document_ids=["{detail.id}"] to retrieve evidence. '
         "Every factual bullet or paragraph must end with at least one Markdown "
         "evidence link using the exact `_valuz_evidence.evidenceHandle` returned "

@@ -74,8 +74,8 @@ export const isWorkflowRunning = (status: string): boolean =>
 /**
  * True when a tool title refers to *tool* regardless of how the runtime
  * namespaces MCP tools: bare ("automation"), Claude-style
- * ("mcp__valuz_automations__automation"), or slash-style
- * ("valuz_automations/automation" — the codex runtime; verified live).
+ * ("mcp__valuz-automations__automation"), or slash-style
+ * ("valuz-automations/automation" — the codex runtime; verified live).
  * The old `__`-suffix-only checks silently dropped every special card
  * (automation proposal, create_task, AskUserQuestion, …) back to the
  * generic tool renderer on slash-namespacing runtimes.

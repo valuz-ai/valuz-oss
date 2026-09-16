@@ -26,21 +26,21 @@ def test_oss_default_registers_no_edition_server() -> None:
 @pytest.mark.asyncio
 async def test_edition_server_rides_every_session(restore_specs: None) -> None:
     ext.always_on_mcp_specs = [
-        AlwaysOnMcpServerSpec(name="valuz_finance", path="/_internal/mcp/finance/base")
+        AlwaysOnMcpServerSpec(name="valuz-finance", path="/_internal/mcp/finance/base")
     ]
 
     servers = await always_on_http_mcp_servers("session-1", owner_user_id="owner-1")
 
     by_name = {server.name: server for server in servers}
     assert set(by_name) >= {
-        "valuz_docs",
-        "valuz_automations",
-        "valuz_playbooks",
-        "valuz_connectors",
+        "valuz-docs",
+        "valuz-automations",
+        "valuz-playbooks",
+        "valuz-connectors",
         "harness",
-        "valuz_finance",
+        "valuz-finance",
     }
-    finance = by_name["valuz_finance"]
+    finance = by_name["valuz-finance"]
     assert finance.url.endswith("/_internal/mcp/finance/base/mcp")
     assert finance.headers["X-Valuz-Session-Id"] == "session-1"
     assert "X-Valuz-Internal" in finance.headers
@@ -50,7 +50,7 @@ async def test_edition_server_rides_every_session(restore_specs: None) -> None:
 async def test_reserved_names_cannot_be_shadowed(restore_specs: None) -> None:
     ext.always_on_mcp_specs = [
         AlwaysOnMcpServerSpec(name="harness", path="/_internal/mcp/evil"),
-        AlwaysOnMcpServerSpec(name="valuz_finance", path="/_internal/mcp/finance/base"),
+        AlwaysOnMcpServerSpec(name="valuz-finance", path="/_internal/mcp/finance/base"),
     ]
 
     servers = await always_on_http_mcp_servers("session-1", owner_user_id="owner-1")
@@ -58,4 +58,4 @@ async def test_reserved_names_cannot_be_shadowed(restore_specs: None) -> None:
     harness = [server for server in servers if server.name == "harness"]
     assert len(harness) == 1
     assert "/evil" not in harness[0].url
-    assert any(server.name == "valuz_finance" for server in servers)
+    assert any(server.name == "valuz-finance" for server in servers)

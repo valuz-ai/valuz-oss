@@ -22,7 +22,7 @@ def test_code_face_selection_rule():
     servers = [
         _http("valuz-search", "https://data.valuz.cn/mcp/search"),
         _http("valuz-data-67b487", "https://data.valuz.cn/mcp"),  # manual copy → by host
-        _http("valuz_docs", "http://127.0.0.1:8000/_internal/mcp/docs/mcp"),
+        _http("valuz-docs", "http://127.0.0.1:8000/_internal/mcp/docs/mcp"),
         _http("harness", "http://127.0.0.1:8000/_internal/mcp/toolkit/base/mcp"),
         _http("github", "https://api.githubcopilot.com/mcp/"),
         SimpleNamespace(name="stdio-one", command="echo"),  # no url → skipped

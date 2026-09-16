@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Built-in MCP servers are hyphenated** — `valuz_docs` / `valuz_automations`
+  / `valuz_playbooks` / `valuz_connectors` are now `valuz-docs` /
+  `valuz-automations` / `valuz-playbooks` / `valuz-connectors`, matching the
+  spelling every catalog connector already uses. Models see
+  `mcp__valuz-docs__doc_search` and friends. Living with both conventions cost
+  real turns: models reached for the hyphen at the underscore servers and got
+  "No such tool" six times in three production days. Existing sessions converge
+  on their next turn — the always-on re-stamp now drops the pre-rename spelling
+  instead of mistaking it for a user-attached MCP and registering the server
+  twice. Editions get the same treatment for the names they register through
+  `AlwaysOnMcpServerSpec`.
+
 ## [0.6.0] - 2026-09-10
 
 ### Added

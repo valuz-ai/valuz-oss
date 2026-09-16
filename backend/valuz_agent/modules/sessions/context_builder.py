@@ -200,7 +200,7 @@ async def _format_kb_scope(ds, bindings, user_id: str) -> str:  # type: ignore[n
     Walks ``ProjectKbBindingRow`` rows (kb / folder / document kinds)
     into a small tree keyed by KB name. Each KB lists a few document
     titles (capped to keep the additional-context block bounded — the
-    agent can call ``mcp__valuz_docs__list_doc_scope`` for the full
+    agent can call ``mcp__valuz-docs__list_doc_scope`` for the full
     tree). Returns an empty string when nothing resolves (orphaned
     bindings, etc.).
     """
@@ -251,8 +251,8 @@ async def _format_kb_scope(ds, bindings, user_id: str) -> str:  # type: ignore[n
         return ""
 
     out: list[str] = [
-        "Project knowledge-base scope (use mcp__valuz_docs__doc_search / "
-        "mcp__valuz_docs__list_doc_scope to query):"
+        "Project knowledge-base scope (use mcp__valuz-docs__doc_search / "
+        "mcp__valuz-docs__list_doc_scope to query):"
     ]
     for entry in by_kb.values():
         name = entry["name"]

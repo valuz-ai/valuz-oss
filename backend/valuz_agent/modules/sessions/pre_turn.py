@@ -77,7 +77,7 @@ async def restamp_always_on_mcp(session_id: str, user_id: str | None) -> None:
 
 
 async def _refresh_docs_capabilities(session_id: str, user_id: str | None) -> None:
-    """Re-install the docs skill + ``valuz_docs`` MCP if a KB binding appeared
+    """Re-install the docs skill + ``valuz-docs`` MCP if a KB binding appeared
     after the session was created.
 
     ``capability_resolver`` only fires at create time. The

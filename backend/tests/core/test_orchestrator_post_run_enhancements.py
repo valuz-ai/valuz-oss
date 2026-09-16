@@ -332,7 +332,7 @@ async def test_primary_prompt_is_not_rewritten_or_short_circuited_by_host(
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
         runtime = _RecordingRuntime(
             args[2],
-            called_tool_name="valuz_docs/document_search",
+            called_tool_name="valuz-docs/document_search",
         )
         runtimes.append(runtime)
         return runtime
@@ -367,7 +367,7 @@ async def test_task_coverage_is_one_continuation_on_same_runtime_and_thread(
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
         runtime = _RecordingRuntime(
             args[2],
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtimes.append(runtime)
         return runtime
@@ -582,14 +582,14 @@ async def test_namespaced_generate_ui_skips_post_run_checks_for_that_turn(
 @pytest.mark.parametrize(
     ("tool_name", "tool_input"),
     [
-        ("mcp__valuz_automations__automation", {"action": "create"}),
+        ("mcp__valuz-automations__automation", {"action": "create"}),
         ("valuz-playbooks/playbook", {"action": "create"}),
-        ("mcp__valuz_playbooks__playbook", {"action": "update"}),
+        ("mcp__valuz-playbooks__playbook", {"action": "update"}),
         ("valuz-playbooks/playbook", {"action": "delete"}),
-        ("mcp__valuz_finance__domain_operation", {"action": "propose"}),
-        ("mcp__valuz_finance__domain_operation", {"action": "workbench_change"}),
+        ("mcp__valuz-finance__domain_operation", {"action": "propose"}),
+        ("mcp__valuz-finance__domain_operation", {"action": "workbench_change"}),
         (
-            "valuz_finance/domain_operation",
+            "valuz-finance/domain_operation",
             {"action": "workbench_library", "input_payload": {"command": "adopt"}},
         ),
     ],
@@ -663,7 +663,7 @@ async def test_read_only_resource_tool_still_runs_post_run_checks(
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
         runtime = _RecordingRuntime(
             args[2],
-            called_tool_name="mcp__valuz_finance__domain_operation",
+            called_tool_name="mcp__valuz-finance__domain_operation",
             called_tool_input=tool_input,
         )
         runtimes.append(runtime)
@@ -685,8 +685,8 @@ async def test_read_only_resource_tool_still_runs_post_run_checks(
     "name",
     [
         "automation_output",
-        "valuz_finance/automation_output",
-        "mcp__valuz_finance__automation_output",
+        "valuz-finance/automation_output",
+        "mcp__valuz-finance__automation_output",
     ],
 )
 async def test_output_receipts_alone_skip_post_run_checks(tmp_path, monkeypatch, coverage, name):
@@ -725,7 +725,7 @@ async def test_output_receipts_do_not_exempt_actual_research(tmp_path, monkeypat
     )
     store = _FakeStore(session)
     runtimes = []
-    names = ["mcp__valuz_docs__document_search", "mcp__valuz_finance__automation_output"]
+    names = ["mcp__valuz-docs__document_search", "mcp__valuz-finance__automation_output"]
     if reverse:
         names.reverse()
 
@@ -755,8 +755,8 @@ async def test_output_receipts_do_not_exempt_actual_research(tmp_path, monkeypat
     [
         ("mcp__harness__generate_ui", {}),
         ("valuz-playbooks/playbook", {"action": "create"}),
-        ("mcp__valuz_automations__automation", {"action": "create"}),
-        ("valuz_finance/domain_operation", {"action": "workbench_change"}),
+        ("mcp__valuz-automations__automation", {"action": "create"}),
+        ("valuz-finance/domain_operation", {"action": "workbench_change"}),
     ],
 )
 async def test_structural_delivery_does_not_exempt_research_in_same_turn(
@@ -774,7 +774,7 @@ async def test_structural_delivery_does_not_exempt_research_in_same_turn(
             called_tool_name=tool_name,
             called_tool_input=tool_input,
             tool_result_is_error=failed_card,
-            extra_tool_names=("mcp__valuz_docs__document_search",),
+            extra_tool_names=("mcp__valuz-docs__document_search",),
             extra_tools_first=research_first,
             primary_text="The research result and its supporting evidence.",
         )
@@ -806,7 +806,7 @@ async def test_multiple_structural_deliveries_and_receipts_stay_silent(tmp_path,
         runtime = _RecordingRuntime(
             args[2],
             called_tool_name="generate_ui",
-            extra_tool_names=("valuz-playbooks/playbook", "valuz_finance/automation_output"),
+            extra_tool_names=("valuz-playbooks/playbook", "valuz-finance/automation_output"),
             extra_tool_inputs=({"action": "create"}, {}),
             primary_text="The preview and confirmation card are ready.",
         )
@@ -831,7 +831,7 @@ async def test_structural_exemption_does_not_carry_to_next_turn(tmp_path, monkey
     def create_runtime(*args, **kwargs):
         runtime = _RecordingRuntime(
             args[2],
-            called_tool_name="generate_ui" if not runtimes else "mcp__valuz_docs__document_search",
+            called_tool_name="generate_ui" if not runtimes else "mcp__valuz-docs__document_search",
         )
         runtimes.append(runtime)
         return runtime
@@ -843,7 +843,7 @@ async def test_structural_exemption_does_not_carry_to_next_turn(tmp_path, monkey
     # The orchestrator reuses the warm runtime, but installs a fresh observer.
     # Reset the fake's primary/continuation script for the next user turn.
     runtimes[0].prompts.clear()
-    runtimes[0].called_tool_name = "mcp__valuz_docs__document_search"
+    runtimes[0].called_tool_name = "mcp__valuz-docs__document_search"
     await orchestrator.run_turn(
         "owner-1", session.id, UserMessage(text="Now research the subject.")
     )
@@ -982,7 +982,7 @@ async def test_citation_audit_emits_post_run_verification_lifecycle_without_cove
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
         return _RecordingRuntime(
             args[2],
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
 
     monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
@@ -1033,7 +1033,7 @@ async def test_task_coverage_continuation_receives_static_layer_guidance_only(
         runtime = _RecordingRuntime(
             args[2],
             silent_continuation=True,
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtimes.append(runtime)
         return runtime
@@ -1064,7 +1064,7 @@ async def test_task_coverage_skips_runtime_without_native_continuation(
         runtime = _RecordingRuntime(
             args[2],
             supports_native_continuation=False,
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -1122,7 +1122,7 @@ async def test_task_coverage_may_finish_silently_without_host_confirmation(
         runtime = _RecordingRuntime(
             args[2],
             silent_continuation=True,
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -1167,7 +1167,7 @@ async def test_task_coverage_no_gap_uses_private_runtime_noop_without_assistant_
         runtime = _RecordingRuntime(
             args[2],
             coverage_noop=True,
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -1324,7 +1324,7 @@ async def test_failed_task_coverage_preserves_primary_output(
         runtime = _RecordingRuntime(
             args[2],
             fail_continuation=True,
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -1356,7 +1356,7 @@ async def test_task_coverage_exception_preserves_and_finalizes_primary_output(
         runtime = _RecordingRuntime(
             args[2],
             raise_continuation=True,
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -1395,7 +1395,7 @@ async def test_task_coverage_stray_cancellation_preserves_and_finalizes_primary_
         runtime = _RecordingRuntime(
             args[2],
             cancel_continuation="stray",
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -1450,7 +1450,7 @@ async def test_task_coverage_genuine_cancellation_still_propagates(
         return _RecordingRuntime(
             args[2],
             cancel_continuation="genuine",
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
 
     monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
@@ -1664,7 +1664,7 @@ async def test_audit_only_registers_evidence_without_public_citation_projection(
             args[2],
             primary_text=original,
             evidence_payload=_text_evidence(),
-            called_tool_name="mcp__valuz_docs__document_search",
+            called_tool_name="mcp__valuz-docs__document_search",
         )
 
     monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)

@@ -228,7 +228,7 @@ session-id residue, dsh composition row + bridge registration, host mount).
 ## 8. Deferred
 
 - **P3** — per-connector `code_callable` flag replacing the host/slug
-  rule; extend the face to `valuz_docs` and user data connectors
+  rule; extend the face to `valuz-docs` and user data connectors
   (untrusted codegen branch: name de-collision, docstring sanitization).
 - **P4** — Evidence registration: the kernel-observed trace already
   carries the `dev.valuz/source-metadata` descriptors; surface them on the

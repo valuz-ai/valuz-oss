@@ -39,18 +39,18 @@ docs?". Summarize what you found, cite document titles back to the user.
 ## How to search
 
 Three host-provided MCP tools are available when this skill is loaded.
-The kernel exposes them under the `valuz_docs` MCP namespace, so the
+The kernel exposes them under the `valuz-docs` MCP namespace, so the
 literal tool names you'll see at runtime are:
 
-- `mcp__valuz_docs__list_doc_scope` — enumerate the document tree that's
+- `mcp__valuz-docs__list_doc_scope` — enumerate the document tree that's
   bound to this project. Pass no arguments for the root, or `folder_id`
   to drill into a subfolder. Use this first when you're unsure what's
   available.
-- `mcp__valuz_docs__doc_search` — keyword search over bound documents.
+- `mcp__valuz-docs__doc_search` — keyword search over bound documents.
   Required arg `query`. Optional `folder_ids` / `document_ids` narrow
   scope; `top_k` defaults to 5. Returns ranked snippets with the
   document id and filename.
-- `mcp__valuz_docs__doc_read` — open one document by the `document_id` a
+- `mcp__valuz-docs__doc_read` — open one document by the `document_id` a
   search returned: its parsed text, plus `source_path` (the original
   file) and `parsed_path` (that markdown on disk). Both paths are
   readable with your ordinary file tools, so for a long document prefer

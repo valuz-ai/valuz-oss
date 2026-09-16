@@ -49,10 +49,10 @@ def _always_on_set(token: str, *, base: str, tool_timeout_sec: float | None = No
             tool_timeout_sec=tool_timeout_sec,
         )
         for name, slug in (
-            ("valuz_docs", "docs"),
-            ("valuz_automations", "automations"),
-            ("valuz_playbooks", "playbooks"),
-            ("valuz_connectors", "connectors"),
+            ("valuz-docs", "docs"),
+            ("valuz-automations", "automations"),
+            ("valuz-playbooks", "playbooks"),
+            ("valuz-connectors", "connectors"),
         )
     )
     harness = McpHttpServerConfigSchema(
@@ -132,15 +132,70 @@ async def test_restamps_stale_token_and_preserves_external(monkeypatch):
     by_name = {m.name: m for m in req.mcp_servers}
     # Every always-on entry (incl. the harness toolkit) carries the live per-owner token.
     for name in (
-        "valuz_docs",
-        "valuz_automations",
-        "valuz_playbooks",
-        "valuz_connectors",
+        "valuz-docs",
+        "valuz-automations",
+        "valuz-playbooks",
+        "valuz-connectors",
         "harness",
     ):
         assert by_name[name].headers["X-Valuz-Internal"] == current
     # The user-attached external connector is untouched.
     assert by_name["valuz-search"].headers == {"Authorization": "Bearer xyz"}
+
+
+async def test_restamp_drops_the_pre_rename_spelling(monkeypatch):
+    """A session stamped before the separator was unified carries
+    ``valuz_docs`` & co. Those names are not in the fresh set, so the preserve
+    filter would read them as the user's own external MCPs and keep them —
+    registering every built-in twice, under both spellings. They must be
+    dropped, and a genuinely external entry must still survive.
+    """
+    from valuz_agent.adapters import capability_resolver as cr
+
+    monkeypatch.setattr(cr, "_mcp_token_cache", {})
+    current = cr._mint_internal_mcp_token("local-test-owner")
+
+    legacy = tuple(
+        McpHttpServerConfigSchema(
+            name=name,
+            url=f"http://127.0.0.1:8000/_internal/mcp/{slug}/mcp",
+            transport="http",
+            headers={"X-Valuz-Internal": "OLDTOKEN", "X-Valuz-Session-Id": "sess-1"},
+        )
+        for name, slug in (
+            ("valuz_docs", "docs"),
+            ("valuz_automations", "automations"),
+            ("valuz_playbooks", "playbooks"),
+            ("valuz_connectors", "connectors"),
+        )
+    )
+    external = McpHttpServerConfigSchema(
+        name="third_party",
+        url="https://mcp.example.com/mcp",
+        transport="http",
+        headers={"Authorization": "Bearer xyz"},
+    )
+    session = _make_session(mcp_servers=(external, *legacy))
+    updates = _patch_client(monkeypatch, session)
+
+    changed = await capabilities.refresh_always_on_mcp_for_session("sess-1", "local-test-owner")
+
+    assert changed is True
+    names = [m.name for m in updates[0][1].mcp_servers]
+    assert not [name for name in names if "_" in name and name != "third_party"], names
+    assert sorted(names) == sorted(
+        [
+            "third_party",
+            "valuz-docs",
+            "valuz-automations",
+            "valuz-playbooks",
+            "valuz-connectors",
+            "harness",
+        ]
+    )
+    by_name = {m.name: m for m in updates[0][1].mcp_servers}
+    assert by_name["valuz-docs"].headers["X-Valuz-Internal"] == current
+    assert by_name["third_party"].headers == {"Authorization": "Bearer xyz"}
 
 
 async def test_noop_when_token_already_current(monkeypatch):
