@@ -57,7 +57,7 @@ def _registry(*items: dict) -> EvidenceRegistry:
     registry = EvidenceRegistry()
     payload = [{"snippet": "visible to model", "_valuz_evidence": item} for item in items]
     assert registry.register_tool_result(
-        json.dumps(payload), tool_name="valuz_docs/doc_search"
+        json.dumps(payload), tool_name="valuz-docs/doc_search"
     ) == len(items)
     return registry
 
@@ -108,7 +108,7 @@ def test_registry_accepts_nested_valid_envelope_and_first_writer_wins() -> None:
     record = registry.get("ev_revenue_2025")
     assert record is not None
     assert record.locator == {"kind": "pdf", "page": 12}
-    assert record.tool_name == "valuz_docs/doc_search"
+    assert record.tool_name == "valuz-docs/doc_search"
 
 
 def test_verified_structured_table_cell_is_projection_not_claim() -> None:

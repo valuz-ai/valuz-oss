@@ -25,7 +25,7 @@ def _session() -> Session:
         cwd="/tmp",
         mcp_servers=(
             McpHttpServerConfig(
-                name="valuz_docs",
+                name="valuz-docs",
                 url="http://127.0.0.1:8000/_internal/mcp/docs/mcp",
                 headers={
                     "X-Valuz-Internal": "internal-secret-token",
@@ -40,10 +40,10 @@ def _builder_style_overrides() -> tuple[str, ...]:
     toml_key = codex_runtime._toml_key
     toml_quote = codex_runtime._toml_quote
     return (
-        f"mcp_servers.valuz_docs.url={toml_quote('http://127.0.0.1:8000/_internal/mcp/docs/mcp')}",
-        f"mcp_servers.valuz_docs.http_headers.{toml_key('X-Valuz-Internal')}="
+        f"mcp_servers.valuz-docs.url={toml_quote('http://127.0.0.1:8000/_internal/mcp/docs/mcp')}",
+        f"mcp_servers.valuz-docs.http_headers.{toml_key('X-Valuz-Internal')}="
         f"{toml_quote('internal-secret-token')}",
-        f"mcp_servers.valuz_docs.http_headers.{toml_key('X-Valuz-Session-Id')}="
+        f"mcp_servers.valuz-docs.http_headers.{toml_key('X-Valuz-Session-Id')}="
         f"{toml_quote(_SESSION_ID)}",
         # The kernel toolkit bridge URL legally embeds the session id.
         f"mcp_servers.harness_toolkit.url="
@@ -64,7 +64,7 @@ def test_session_id_stays_plain_while_the_toolkit_url_embeds_it() -> None:
     # probe value — so the toolkit URL's legal embedding cannot trip the guard.
     assert _SESSION_ID not in secret_env.values()
     assert (
-        f"mcp_servers.valuz_docs.http_headers."
+        f"mcp_servers.valuz-docs.http_headers."
         f"{codex_runtime._toml_key('X-Valuz-Session-Id')}" in serialized
     )
     assert f"/mcp/toolkit/{_SESSION_ID}" in serialized

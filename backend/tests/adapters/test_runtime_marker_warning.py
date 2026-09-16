@@ -20,7 +20,7 @@ class _Session:
 
 def _docs_server(credential: str) -> McpHttpServerConfig:
     return McpHttpServerConfig(
-        name="valuz_docs",
+        name="valuz-docs",
         url="https://host/_internal/mcp/docs/mcp",
         transport="http",
         headers={"X-Valuz-Internal": credential, "X-Valuz-Session-Id": "s1"},
@@ -38,7 +38,7 @@ def test_an_unfilled_marker_is_named(caplog):
         _warn_on_unfillable_markers("s1", session, {"some.other.key": "v"})
 
     assert "commercial.execution" in caplog.text
-    assert "valuz_docs" in caplog.text
+    assert "valuz-docs" in caplog.text
 
 
 def test_a_filled_marker_is_quiet(caplog):
@@ -75,7 +75,7 @@ def test_an_unbound_contributor_is_named_too(caplog):
         _warn_on_unfillable_markers("s1", session, None)
 
     assert "no contributor supplied a value" in caplog.text
-    assert "valuz_docs" in caplog.text
+    assert "valuz-docs" in caplog.text
 
 
 class _NoContributorSession:

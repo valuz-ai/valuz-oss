@@ -18,11 +18,32 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+# Model-visible server names are hyphenated, the spelling every catalog
+# connector already uses (``valuz-data``, ``valuz-search``, ``valuz-following``).
+# The built-ins used to be spelled with underscores, and living with both
+# conventions cost real turns: models reached for the hyphen at the underscore
+# servers — ``mcp__valuz-automations__automation``,
+# ``mcp__valuz-finance__automation_output`` — six wrong tool names in three
+# production days (valuz/valuz#13). One separator, nothing left to guess.
 RESERVED_ALWAYS_ON_NAMES = frozenset(
-    {"valuz_docs", "valuz_automations", "valuz_playbooks", "valuz_connectors", "harness"}
+    {"valuz-docs", "valuz-automations", "valuz-playbooks", "valuz-connectors", "harness"}
 )
 
-__all__ = ["AlwaysOnMcpServerSpec", "RESERVED_ALWAYS_ON_NAMES"]
+
+def retired_always_on_name(name: str) -> str:
+    """Pre-rename spelling of an always-on server name.
+
+    Session rows stamped before the rename still carry the underscore name.
+    The re-stamp in ``modules/sessions/capabilities`` preserves entries it does
+    not recognise (that is how a user's own external MCPs survive), so without
+    this the old entry would sit alongside the new one and the same server
+    would be registered twice. Deriving the old spelling rather than listing it
+    covers edition-registered names (``valuz-finance``) for free.
+    """
+    return name.replace("-", "_")
+
+
+__all__ = ["AlwaysOnMcpServerSpec", "RESERVED_ALWAYS_ON_NAMES", "retired_always_on_name"]
 
 
 @dataclass(frozen=True)

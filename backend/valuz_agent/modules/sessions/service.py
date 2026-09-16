@@ -935,7 +935,7 @@ class SessionService:
         #    bind via AgentConfig.tools, so ensure the bound agent carries them
         #    (idempotent; only re-saves when something was missing — no per-send
         #    save churn once the agent is prepared).
-        #  - HTTP MCP (valuz_docs / valuz_schedules / valuz_connectors) + the
+        #  - HTTP MCP (valuz-docs / valuz-schedules / valuz-connectors) + the
         #    baseline skills (valuz-project-docs / skill-creator) are session
         #    fields, injected here on top of the agent's own connectors/skills.
         if all_available_manifest is not None:

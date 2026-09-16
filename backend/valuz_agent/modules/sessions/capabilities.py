@@ -2,7 +2,7 @@
 
 ADR-006 freezes ``session.model`` at create time, but skills + MCP stay
 mutable. These helpers (re)install the ``valuz-project-docs`` skill +
-``valuz_docs`` MCP on a session — or across every active session in a
+``valuz-docs`` MCP on a session — or across every active session in a
 project when a KB binding changes. Deliberately **sync**: invoked from sync
 service code (``send_message``) and from the synchronous in-process eventbus
 (``project.bindings.changed``); the async host store is driven via the
@@ -253,7 +253,7 @@ async def refresh_citation_policy_for_session(
 
 
 async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -> bool:
-    """Ensure the valuz-project-docs skill + ``valuz_docs`` MCP are
+    """Ensure the valuz-project-docs skill + ``valuz-docs`` MCP are
     present on an existing session row.
 
     Why this exists
@@ -321,7 +321,7 @@ async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -
     current_mcp = list(session.mcp_servers or ())
 
     has_docs_skill = docs_skill_path in current_skills
-    has_docs_mcp = any(getattr(m, "name", None) == "valuz_docs" for m in current_mcp)
+    has_docs_mcp = any(getattr(m, "name", None) == "valuz-docs" for m in current_mcp)
 
     if has_docs_skill and has_docs_mcp:
         return False
@@ -331,7 +331,7 @@ async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -
     if not has_docs_mcp:
         new_mcp.append(
             _McpHttpServerConfig(
-                name="valuz_docs",
+                name="valuz-docs",
                 url=docs_mcp_url(base_url=_settings.backend_base_url),
                 transport="http",
                 headers={
@@ -516,6 +516,7 @@ async def refresh_always_on_mcp_for_session(session_id: str, user_id: str) -> bo
         always_on_http_mcp_servers,
         harness_toolkit_for_run_kind,
     )
+    from valuz_agent.ports.mcp_always_on import retired_always_on_name
 
     session = await kernel_client.get_session(user_id, session_id)
     if session is None or session.status in ("terminated",):
@@ -536,17 +537,30 @@ async def refresh_always_on_mcp_for_session(session_id: str, user_id: str) -> bo
         # session can only call the owner-scoped docs MCP. Do not reintroduce
         # connectors, automations, harness tools or external MCPs while
         # restamping credentials.
-        fresh = [item for item in fresh if item.name == "valuz_docs"]
+        fresh = [item for item in fresh if item.name == "valuz-docs"]
     fresh_names = {m.name for m in fresh}
     current = list(session.mcp_servers or ())
     # Drop any existing always-on entry (stale token/url), keep everything
     # else (external catalog connectors the user attached), then re-append the
     # freshly-stamped trio. Order mirrors capability_resolver (external first,
     # always-on last) so an unchanged token yields an identical tuple → no save.
+    # Also drop the pre-rename spelling of each always-on name. These servers
+    # were ``valuz_docs`` / ``valuz_automations`` / … before the separator was
+    # unified with the connector catalog's; a row stamped back then holds a name
+    # this process no longer produces, so the filter above would read it as one
+    # of the user's own external MCPs and keep it — leaving the same server
+    # registered twice, under both spellings. Converging here means an existing
+    # conversation heals on its next turn with no migration.
+    retired_names = {retired_always_on_name(name) for name in fresh_names}
     preserved = (
         []
         if locked_document_research
-        else [m for m in current if getattr(m, "name", None) not in fresh_names]
+        else [
+            m
+            for m in current
+            if getattr(m, "name", None) not in fresh_names
+            and getattr(m, "name", None) not in retired_names
+        ]
     )
     # External catalog connectors carry credentials baked at resolve time —
     # an OAuth bearer header with ~1h expiry for Reportify-backed connectors.

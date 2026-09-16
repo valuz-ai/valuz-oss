@@ -295,7 +295,7 @@ async def resolve_session_capabilities(
     #
     #      Why unconditional: the skill + MCP form a stable,
     #      prompt-cache-friendly capability layer that mirrors the
-    #      ``valuz_automations`` automation pattern. Whether the project
+    #      ``valuz-automations`` automation pattern. Whether the project
     #      actually has KB bindings (or per-turn attachments) is
     #      announced inside ``UserMessage.additional_context`` — that's
     #      the channel for dynamic state. Putting that state in the
@@ -415,7 +415,7 @@ def always_on_skill_paths(*, user_id: str) -> list[str]:
 
     These are the skill half of the always-on baseline (the MCP half lives in
     ``always_on_http_mcp_servers``). ``valuz-project-docs`` teaches the
-    ``doc_search`` / ``list_doc_scope`` tools that pair with the ``valuz_docs``
+    ``doc_search`` / ``list_doc_scope`` tools that pair with the ``valuz-docs``
     MCP; ``skill-creator`` (+ its ``submit_skill`` in-process tool) lets any
     session author skills; ``browser`` teaches the ``chrome-devtools`` CLI that
     pairs with the ``browser_start``/``browser_stop`` toolkit tools (injected
@@ -543,28 +543,28 @@ async def always_on_http_mcp_servers(
     base = _settings.backend_base_url
     return [
         McpHttpServerConfig(
-            name="valuz_docs",
+            name="valuz-docs",
             url=docs_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
             tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
         McpHttpServerConfig(
-            name="valuz_automations",
+            name="valuz-automations",
             url=automations_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
             tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
         McpHttpServerConfig(
-            name="valuz_playbooks",
+            name="valuz-playbooks",
             url=playbooks_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
             tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
         McpHttpServerConfig(
-            name="valuz_connectors",
+            name="valuz-connectors",
             url=connectors_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
