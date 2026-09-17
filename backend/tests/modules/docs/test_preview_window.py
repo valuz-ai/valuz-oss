@@ -11,13 +11,18 @@ from __future__ import annotations
 
 import pytest
 
-pytest_plugins = ["tests.modules.docs.test_kb_e2e"]
-
 from valuz_agent.modules.docs.service import PREVIEW_WINDOW_BYTES
 
+# ``svc`` and ``db`` come from ``conftest.py`` beside this file. This module
+# used to reach them with ``pytest_plugins = ["tests.modules.docs.test_kb_e2e"]``,
+# which promoted that test module to a session-wide plugin and leaked its
+# autouse data-dir patch onto every test collected afterwards.
+pytestmark = pytest.mark.usefixtures("isolate_data_dir")
 
 
-async def _preview(svc, db, user_id: str, body: bytes, *, offset: int = 0, limit: int | None = None):
+async def _preview(
+    svc, db, user_id: str, body: bytes, *, offset: int = 0, limit: int | None = None
+):
     """Store ``body`` as a document's parsed text, then read it back for real.
 
     Goes through ``get_document_preview`` rather than reimplementing the

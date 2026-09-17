@@ -11,12 +11,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
-from valuz_agent.infra.database import Base
-from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.docs.errors import (
     KbNotFound,
@@ -28,84 +23,13 @@ from valuz_agent.modules.docs.service import (
     DocumentLibraryService,
 )
 
-# ── Fakes ────────────────────────────────────────────────────────────
+# ``svc``, ``db``, ``session_factory``, ``tmp_kb_root``, ``svc_with_root`` and
+# ``isolate_data_dir`` live in ``conftest.py`` beside this file. The data-dir
+# isolation is opt-in there rather than autouse, so declare it here.
+pytestmark = pytest.mark.usefixtures("isolate_data_dir")
 
 
-class FakeParser:
-    def parse_sync(self, file_path: str, options=None):
-        from valuz_agent.ports.parser_backend import ParseResult
-
-        return ParseResult(
-            markdown=f"Parsed: {file_path}",
-            metadata={"engine": "fake"},
-        )
-
-
-class FakeDocsRuntime:
-    def __init__(self) -> None:
-        self.preview_dir = None
-        self.runtime_id = None
-
-    def search_sync(self, query, doc_scope_ids, top_k=5, doc_paths=None):
-        return []
-
-    async def search(self, query, doc_scope_ids, top_k=5, doc_paths=None):
-        return []
-
-
-# ── Fixtures ─────────────────────────────────────────────────────────
-
-
-@pytest_asyncio.fixture()
-async def db_engine():
-    """Shared in-memory async SQLite for the test + all inline bg work.
-
-    ``StaticPool`` keeps a single aiosqlite connection that every session
-    shares, so the inline rescan/reindex runners (which open their own
-    sessions against the same factory) see the same DB as the test.
-    """
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture()
-def session_factory(db_engine):
-    return async_sessionmaker(bind=db_engine, expire_on_commit=False)
-
-
-@pytest_asyncio.fixture()
-async def db(session_factory):
-    session = session_factory()
-    yield session
-    await session.close()
-
-
-@pytest.fixture()
-def tmp_kb_root(tmp_path):
-    """Create a temp dir with sample files mimicking a KB root."""
-    root = tmp_path / "kb_root"
-    root.mkdir()
-
-    (root / "report.pdf").write_bytes(b"%PDF-1.4 fake")
-    (root / "notes.md").write_text("# Notes\nSome content", encoding="utf-8")
-
-    sub = root / "nvidia"
-    sub.mkdir()
-    (sub / "Q4-report.pdf").write_bytes(b"%PDF-1.4 Q4 data")
-    (sub / "Q3-report.pdf").write_bytes(b"%PDF-1.4 Q3 data")
-
-    drafts = sub / "drafts"
-    drafts.mkdir()
-    (drafts / "draft.txt").write_text("draft content", encoding="utf-8")
-
-    return root
+# ── Helpers ──────────────────────────────────────────────────────────
 
 
 async def _drain(service: DocumentLibraryService) -> None:
@@ -115,9 +39,10 @@ async def _drain(service: DocumentLibraryService) -> None:
     ``_schedule_background_reindex``) each spawn a daemon thread that hosts
     its own event loop. That's correct but racy under test — the assertions
     would fire before the threads populate the DB. ``_run_bg_work_inline``
-    replaces those dispatchers with ones that append a coroutine factory to
-    ``service._pending`` instead of spawning a thread; this helper drains
-    that queue against the service's own (test-owned) async session.
+    (in ``conftest.py``) replaces those dispatchers with ones that append a
+    coroutine factory to ``service._pending`` instead of spawning a thread;
+    this helper drains that queue against the service's own (test-owned)
+    async session.
 
     A rescan dispatch can itself enqueue a follow-up reindex, so we loop
     until the queue is empty.
@@ -126,70 +51,6 @@ async def _drain(service: DocumentLibraryService) -> None:
     while pending:
         make_coro = pending.pop(0)
         await make_coro()
-
-
-def _run_bg_work_inline(service: DocumentLibraryService) -> None:
-    """Patch the service's two background dispatchers so they enqueue
-    inline coroutine factories (drained via ``_drain``) instead of
-    spawning daemon threads. Tests want deterministic state, so we run the
-    work on the test thread against the service's own async session."""
-
-    service._pending = []  # type: ignore[attr-defined]
-
-    def _inline_rescan(kb_id: str, task_id: str) -> None:
-        async def _work() -> None:
-            kb = await service._ds.get_kb("local-test-owner", kb_id)
-            task = await service._ds.get_import_task("local-test-owner", task_id)
-            if kb is None or task is None:
-                return
-            await service._run_rescan(kb, task)
-
-        service._pending.append(_work)  # type: ignore[attr-defined]
-
-    async def _inline_reindex(
-        doc_ids: list[str], task_id: str, user_id: str = "local-test-owner"
-    ) -> None:
-        async def _work() -> None:
-            task = await service._ds.get_import_task("local-test-owner", task_id)
-            if task is None:
-                return
-            await service._run_reindex_loop(doc_ids, task)
-
-        service._pending.append(_work)  # type: ignore[attr-defined]
-
-    service._schedule_background_rescan = _inline_rescan  # type: ignore[method-assign]
-    service._schedule_background_reindex = _inline_reindex  # type: ignore[method-assign]
-
-
-def _make_service(db, session_factory, parser=None) -> DocumentLibraryService:
-    service = DocumentLibraryService(
-        datastore=DocumentDatastore(db),
-        parser=parser or FakeParser(),
-        docs_runtime=FakeDocsRuntime(),
-        event_bus=EventBus(),
-        session_factory=session_factory,
-    )
-    _run_bg_work_inline(service)
-    return service
-
-
-@pytest.fixture(autouse=True)
-def _isolate_data_dir(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
-    """Point VALUZ_DATA_DIR at a tmp local root so preview writes do not
-    touch the real data_dir."""
-    from valuz_agent.infra import fs_registry
-
-    monkeypatch.setattr(fs_registry.fs_registry, "data_dir", lambda user_id: tmp_path / "_assets")
-
-
-@pytest.fixture()
-def svc(db, session_factory):
-    return _make_service(db, session_factory)
-
-
-@pytest.fixture()
-def svc_with_root(db, tmp_kb_root, session_factory):
-    return _make_service(db, session_factory), tmp_kb_root
 
 
 async def _create_kb_and_settle(service: DocumentLibraryService, **kwargs):
@@ -469,6 +330,7 @@ class TestRescan:
         db,
         session_factory,
         tmp_kb_root,
+        make_service,
     ):
         """When the user switches parser routing (e.g. MinerU → light_local
         for PDFs), rescan should detect that the doc's recorded engine
@@ -499,7 +361,7 @@ class TestRescan:
                 return "light_local"
 
         parser = _RoutingProbeParser()
-        service = _make_service(db, session_factory, parser=parser)
+        service = make_service(db, session_factory, parser=parser)
 
         kb = await _create_kb_and_settle(service, name="EngineSwap", root_path=str(tmp_kb_root))
 
