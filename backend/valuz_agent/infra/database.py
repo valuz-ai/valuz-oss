@@ -67,9 +67,25 @@ class UserMixin:
 # the next checkout raises asyncpg "connection is closed" mid-request.
 # pre_ping validates on checkout; recycle retires connections before typical
 # idle-timeout windows. SQLite needs neither (in-process file handles).
-_pool_kwargs: dict[str, object] = (
-    {} if is_sqlite_runtime() else {"pool_pre_ping": True, "pool_recycle": 1800}
-)
+# Pool BOUNDS are set explicitly for the same reason: unset, they are the
+# library's 5 + 10 with a 30-second wait — a default nobody chose, invisible
+# until a concurrent burst hits it. See ``Settings.db_pool_size`` for why the
+# sizes are not raised here and the wait is.
+def pool_kwargs(*, sqlite: bool) -> dict[str, object]:
+    """Engine pool arguments for this runtime. A function so the server's
+    bounds can be asserted from a test that runs on SQLite."""
+    if sqlite:
+        return {}
+    return {
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout_seconds,
+    }
+
+
+_pool_kwargs: dict[str, object] = pool_kwargs(sqlite=is_sqlite_runtime())
 
 async_engine: AsyncEngine = create_async_engine(db_url_async(), echo=settings.debug, **_pool_kwargs)
 

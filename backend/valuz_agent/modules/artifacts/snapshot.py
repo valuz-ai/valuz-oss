@@ -29,6 +29,8 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
+from valuz_agent.infra.path_names import sanitize_segment
+
 logger = logging.getLogger(__name__)
 
 ARTIFACT_DIR_NAME = ".artifact"
@@ -69,6 +71,47 @@ def snapshot_dir(scope_cwd: Path, artifact_id: str, version_no: int) -> Path:
     return artifact_root(scope_cwd) / artifact_id / f"v{version_no}"
 
 
+#: One path component's ceiling. ext4 and overlayfs count 255 BYTES; APFS
+#: counts 255 characters. A CJK name reaches the byte cap first, which is why a
+#: name that fits on a developer's Mac can still fail in a Linux container.
+_NAME_MAX_BYTES = 255
+#: ``.<name>.<8 hex>.partial`` wraps the name while it is being written, so the
+#: staging name — not the final one — is what has to fit.
+_STAGING_DECORATION = len(".") + len(".") + 8 + len(".partial")
+
+
+def snapshot_file_name(name: str) -> str:
+    """``name``, made safe to use as the snapshot's one path component.
+
+    Callers pass whatever they hold. For a copied file that is a basename and
+    nothing here applies. For generated content it is a label a model wrote,
+    and a model writes things like ``市场规模（全球 / 中国）``. Two things then
+    go wrong, and both surface to the caller as the same bare ``OSError`` with
+    nothing naming the file:
+
+    * a separator makes ``dest_dir / name`` a *nested* path whose parent does
+      not exist — ``FileNotFoundError``, at any length;
+    * a long non-ASCII name exceeds the byte limit — ``ENAMETOOLONG``, only on
+      the filesystems that count bytes, so it passes every local test and
+      fails in the cluster.
+
+    The extension is preserved when clipping, because it is not decoration
+    here: :func:`format_for` and :func:`guess_mime` both read it, and the agent
+    opens this file by name.
+    """
+    safe = sanitize_segment(name, fallback="snapshot")
+    budget = _NAME_MAX_BYTES - _STAGING_DECORATION
+    if len(safe.encode()) <= budget:
+        return safe
+    suffix = Path(safe).suffix
+    if len(suffix.encode()) > budget // 2:
+        suffix = ""  # not an extension, just a long tail after a dot
+    stem = safe[: len(safe) - len(suffix)] if suffix else safe
+    while stem and len(f"{stem}{suffix}".encode()) > budget:
+        stem = stem[:-1]
+    return f"{stem}{suffix}" if stem else sanitize_segment(suffix, fallback="snapshot")
+
+
 @dataclass(frozen=True)
 class StagedSnapshot:
     """A complete copy that is not yet the snapshot.
@@ -104,6 +147,7 @@ def stage_snapshot(
     """
     dest_dir = snapshot_dir(scope_cwd, artifact_id, version_no)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    file_name = snapshot_file_name(file_name)
     staging = dest_dir / f".{file_name}.{secrets.token_hex(4)}.partial"
     digest = hashlib.sha256()
     size = 0
@@ -141,6 +185,7 @@ def stage_snapshot_bytes(
     """
     dest_dir = snapshot_dir(scope_cwd, artifact_id, version_no)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    file_name = snapshot_file_name(file_name)
     staging = dest_dir / f".{file_name}.{secrets.token_hex(4)}.partial"
     try:
         staging.write_bytes(data)
