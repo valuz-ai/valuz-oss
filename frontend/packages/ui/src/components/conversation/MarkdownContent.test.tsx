@@ -1,5 +1,11 @@
 /** @vitest-environment jsdom */
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MarkdownContent } from "./MarkdownContent";
 import { stripStreamingEvidenceLinkTail } from "./CitationInline";
@@ -47,7 +53,9 @@ const CITATIONS: CitationBundleV1 = {
 };
 
 function getCitationHoverCard(): HTMLElement {
-  const card = document.querySelector<HTMLElement>("[data-citation-hover-card]");
+  const card = document.querySelector<HTMLElement>(
+    "[data-citation-hover-card]",
+  );
   if (!card) throw new Error("citation hover card was not rendered");
   return card;
 }
@@ -69,7 +77,9 @@ it("projects a post-publish evidence link from sidecar metadata", () => {
     />,
   );
 
-  expect(container.querySelector('[data-citation-id="cit_first"]')).not.toBeNull();
+  expect(
+    container.querySelector('[data-citation-id="cit_first"]'),
+  ).not.toBeNull();
   expect(container.textContent).not.toContain("evidence://");
 });
 
@@ -105,7 +115,9 @@ it("renders an auto-bound citation from a sidecar anchor without changing stored
   );
 
   expect(container.textContent).toContain("Revenue increased 18%");
-  expect(container.querySelectorAll('[data-citation-id="cit_first"]')).toHaveLength(1);
+  expect(
+    container.querySelectorAll('[data-citation-id="cit_first"]'),
+  ).toHaveLength(1);
   expect(content).toBe("Revenue increased 18%.");
 });
 
@@ -180,14 +192,18 @@ it("projects a deterministic numeric correction before rendering its citation", 
 
   expect(container.textContent).toContain("~$9,911亿");
   expect(container.textContent).not.toContain("~$991亿");
-  expect(container.querySelector('[data-citation-id="cit_market_cap"]')).not.toBeNull();
+  expect(
+    container.querySelector('[data-citation-id="cit_market_cap"]'),
+  ).not.toBeNull();
   expect(content).toContain("~$991亿");
 
   fireEvent.mouseEnter(
     screen.getByRole("button", { name: /(?:citation|引用) 1/i }),
   );
   expect(
-    screen.getByText(/(?:automatically corrected|已依据结构化数据自动修正).*991.*9,911/i),
+    screen.getByText(
+      /(?:automatically corrected|已依据结构化数据自动修正).*991.*9,911/i,
+    ),
   ).not.toBeNull();
 });
 
@@ -261,15 +277,15 @@ it("projects a precise document correction before rendering its citation", () =>
 
   expect(container.textContent).toContain("2,350 亿美元");
   expect(container.textContent).not.toContain("23,500 亿美元");
-  expect(container.querySelector('[data-citation-id="cit_ai_tam"]')).not.toBeNull();
+  expect(
+    container.querySelector('[data-citation-id="cit_ai_tam"]'),
+  ).not.toBeNull();
 
   fireEvent.mouseEnter(
     screen.getByRole("button", { name: /(?:citation|引用) 1/i }),
   );
   expect(
-    screen.getByText(
-      /(?:original source|原始来源).*23,500.*2,350/i,
-    ),
+    screen.getByText(/(?:original source|原始来源).*23,500.*2,350/i),
   ).not.toBeNull();
 });
 
@@ -342,7 +358,9 @@ it("renders one terminal citation for a table provenance region", () => {
     <MarkdownContent content={content} citationBundle={bundle} />,
   );
 
-  expect(container.querySelectorAll('[data-citation-id="cit_first"]')).toHaveLength(1);
+  expect(
+    container.querySelectorAll('[data-citation-id="cit_first"]'),
+  ).toHaveLength(1);
   expect(screen.getByText("20")).not.toBeNull();
 });
 
@@ -416,11 +434,15 @@ describe("MarkdownContent local file links", () => {
     // Exercised directly: through the renderer this would also measure how
     // Streamdown treats malformed markdown, which is a separate concern.
     expect(
-      stripStreamingEvidenceLinkTail("Revenue was 100 USD [source](evidence://ev_a"),
+      stripStreamingEvidenceLinkTail(
+        "Revenue was 100 USD [source](evidence://ev_a",
+      ),
     ).toBe("Revenue was 100 USD ");
     // A completed binding is the other function's job and must survive here.
     expect(
-      stripStreamingEvidenceLinkTail("Revenue was 100 USD [source](evidence://ev_a)"),
+      stripStreamingEvidenceLinkTail(
+        "Revenue was 100 USD [source](evidence://ev_a)",
+      ),
     ).toBe("Revenue was 100 USD [source](evidence://ev_a)");
     // Ordinary prose containing brackets is untouched.
     expect(stripStreamingEvidenceLinkTail("See [note] for the method.")).toBe(
@@ -721,8 +743,7 @@ describe("MarkdownContent citations", () => {
       screen.queryByText("For the year, revenue increased 18%."),
     ).toBeNull();
     expect(
-      document
-        .querySelector('[data-citation-displayed-evidence="full"]')
+      document.querySelector('[data-citation-displayed-evidence="full"]')
         ?.textContent,
     ).toContain("Revenue increased 18%.");
   });
@@ -865,9 +886,9 @@ describe("MarkdownContent citations", () => {
     ).toHaveLength(1);
     // 11px, now expressed as the design token instead of an arbitrary value.
     expect(screen.getByRole("table").className).toContain("text-2xs");
-    expect(
-      screen.getByRole("cell", { name: "145,928" }).className,
-    ).toContain("px-2");
+    expect(screen.getByRole("cell", { name: "145,928" }).className).toContain(
+      "px-2",
+    );
     expect(getCitationHoverCard().className).toContain(
       "w-[min(680px,calc(100vw-32px))]",
     );
@@ -909,9 +930,7 @@ describe("MarkdownContent citations", () => {
       }),
     );
 
-    const sectionRow = document.querySelector(
-      "[data-citation-table-section]",
-    );
+    const sectionRow = document.querySelector("[data-citation-table-section]");
     expect(sectionRow).not.toBeNull();
     expect(sectionRow?.querySelector("th")?.colSpan).toBe(2);
     expect(sectionRow?.textContent).toBe("Product data");
@@ -959,9 +978,7 @@ describe("MarkdownContent citations", () => {
     const evidence = document.querySelector("[data-citation-evidence-section]");
     expect(evidence).not.toBeNull();
     expect(evidence?.textContent).toMatch(/cited data|引用数据/i);
-    expect(evidence?.textContent).toContain(
-      "total revenue: 174144069958 CNY",
-    );
+    expect(evidence?.textContent).toContain("total revenue: 174144069958 CNY");
     const tooltipText = getCitationHoverCard().textContent ?? "";
     expect(tooltipText).not.toContain("record ·");
     expect(tooltipText).not.toContain("dataset ·");
@@ -1126,7 +1143,9 @@ describe("MarkdownContent citations", () => {
     }
 
     fireEvent.mouseEnter(pills[0]!);
-    const note = document.querySelector('[data-citation-quality-issues="advisory"]');
+    const note = document.querySelector(
+      '[data-citation-quality-issues="advisory"]',
+    );
     expect(note?.textContent).toMatch(
       /check against the source|建议结合原文确认/i,
     );
@@ -1548,9 +1567,7 @@ describe("MarkdownContent citations", () => {
         ?.querySelector('[data-citation-source-tier-row="T4"]')
         ?.getAttribute("data-active"),
     ).toBe("true");
-    expect(tooltip?.textContent).toMatch(
-      /source type|来源类型/i,
-    );
+    expect(tooltip?.textContent).toMatch(/source type|来源类型/i);
   });
 
   it("renders calculation as a hoverable derivation instead of a numbered source", () => {
@@ -1605,17 +1622,23 @@ describe("MarkdownContent citations", () => {
     expect(onCitationClick).not.toHaveBeenCalled();
 
     fireEvent.focus(calculationPill!);
-    fireEvent.click(screen.getByRole("button", { name: /revenue.*annual report/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /revenue.*annual report/i }),
+    );
 
     expect(onCitationClick).toHaveBeenCalledWith({
       messageId: "msg-1",
       citationId: "cit_first",
     });
 
-    expect(document.querySelector("[data-citation-calculation-source]")).toBeNull();
+    expect(
+      document.querySelector("[data-citation-calculation-source]"),
+    ).toBeNull();
     expect(document.querySelector("[data-citation-source-list]")).toBeNull();
     fireEvent.mouseEnter(calculationPill!);
-    expect(screen.getAllByText(/revenue \/ 100 = 1\.18 x/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/revenue \/ 100 = 1\.18 x/i).length,
+    ).toBeGreaterThan(0);
   });
 
   it("keeps a calculation quality issue on its calculator hover card", () => {
@@ -1705,9 +1728,7 @@ describe("MarkdownContent citations", () => {
     expect(calculationPill?.getAttribute("data-citation-quality")).toBe(
       "critical",
     );
-    expect(
-      document.querySelector("[data-citation-claim-quality]"),
-    ).toBeNull();
+    expect(document.querySelector("[data-citation-claim-quality]")).toBeNull();
     fireEvent.mouseEnter(calculationPill!);
     expect(
       document.querySelector('[data-citation-quality-issues="critical"]'),
@@ -1852,9 +1873,7 @@ describe("MarkdownContent citations", () => {
       />,
     );
 
-    expect(
-      document.querySelector("[data-citation-claim-quality]"),
-    ).toBeNull();
+    expect(document.querySelector("[data-citation-claim-quality]")).toBeNull();
     expect(
       screen
         .getByRole("button", { name: /(?:citation|引用) 1/i })
@@ -1891,9 +1910,7 @@ describe("MarkdownContent citations", () => {
 
   it("keeps body-derived numbering when the citation bundle is unavailable", () => {
     render(
-      <MarkdownContent
-        content="Source [report](citation://cit_from_newer_bundle)."
-      />,
+      <MarkdownContent content="Source [report](citation://cit_from_newer_bundle)." />,
     );
 
     const unavailable = screen.getByRole("button", {
@@ -1904,7 +1921,9 @@ describe("MarkdownContent citations", () => {
   });
 
   it("leaves an unbound plain [1] as normal text", () => {
-    render(<MarkdownContent content="Plain [1] text." citationBundle={CITATIONS} />);
+    render(
+      <MarkdownContent content="Plain [1] text." citationBundle={CITATIONS} />,
+    );
 
     expect(screen.getByText(/Plain \[1\] text/)).not.toBeNull();
     expect(
@@ -2014,9 +2033,7 @@ describe("MarkdownContent citations", () => {
       "[data-citation-evidence-scroll]",
     );
     expect(evidenceSection?.textContent).toMatch(/cited content|引用内容/i);
-    expect(qualityIssues?.textContent).toMatch(
-      /needs review|需要核验/i,
-    );
+    expect(qualityIssues?.textContent).toMatch(/needs review|需要核验/i);
     expect(qualityIssues?.textContent).toMatch(
       /number or calculation|数字或计算依据/i,
     );
@@ -2026,9 +2043,9 @@ describe("MarkdownContent citations", () => {
         name: /(?:view original|查看原文)/i,
       }),
     ).not.toBeNull();
-    expect(
-      evidenceSection?.compareDocumentPosition(qualityIssues!),
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(evidenceSection?.compareDocumentPosition(qualityIssues!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   it("marks an uncited claim neutrally without a turn-level warning", () => {
@@ -2159,8 +2176,7 @@ describe("MarkdownContent citations", () => {
     // Reportify names indicator keys after their call signature, so the
     // pointer is "/datas/0/indicators/ma(close, 20)". The raw protocol used to
     // reach the reader because the link never matched.
-    const address =
-      "evc_mcp_ind_12345678#/datas/0/indicators/ma(close, 20)";
+    const address = "evc_mcp_ind_12345678#/datas/0/indicators/ma(close, 20)";
     const { container } = render(
       <MarkdownContent
         content={`MA20 为 $199.56 [source](evidence://${address})。`}
@@ -2420,7 +2436,9 @@ describe("MarkdownContent citations", () => {
       (cell) => cell.textContent ?? "",
     );
     expect(cells).toContain("PE有参考意义");
-    expect(document.querySelector("[data-citation-claim-quality]")).not.toBeNull();
+    expect(
+      document.querySelector("[data-citation-claim-quality]"),
+    ).not.toBeNull();
   });
 
   it("keeps an unsourced marker out of the middle of a number", () => {
@@ -2489,15 +2507,31 @@ describe("MarkdownContent citations", () => {
       />,
     );
 
-    expect(document.querySelector("[data-citation-claim-quality]")).not.toBeNull();
+    expect(
+      document.querySelector("[data-citation-claim-quality]"),
+    ).not.toBeNull();
     expect(document.body.textContent).toContain("13.82%");
   });
 
   it("uses claim source offsets to mark repeated critical claims independently", () => {
     const content = "Metric repeated. Metric repeated.";
     const locations = [
-      { kind: "text" as const, blockIndex: 0, start: 0, end: 16, sourceStart: 0, sourceEnd: 16 },
-      { kind: "text" as const, blockIndex: 0, start: 17, end: 33, sourceStart: 17, sourceEnd: 33 },
+      {
+        kind: "text" as const,
+        blockIndex: 0,
+        start: 0,
+        end: 16,
+        sourceStart: 0,
+        sourceEnd: 16,
+      },
+      {
+        kind: "text" as const,
+        blockIndex: 0,
+        start: 17,
+        end: 33,
+        sourceStart: 17,
+        sourceEnd: 33,
+      },
     ];
     render(
       <MarkdownContent
@@ -2549,11 +2583,17 @@ describe("MarkdownContent citations", () => {
       />,
     );
 
-    expect(document.querySelectorAll("[data-citation-claim-quality]")).toHaveLength(2);
     expect(
-      document.querySelector("[data-citation-claim-quality]")?.getAttribute("aria-label"),
+      document.querySelectorAll("[data-citation-claim-quality]"),
+    ).toHaveLength(2);
+    expect(
+      document
+        .querySelector("[data-citation-claim-quality]")
+        ?.getAttribute("aria-label"),
     ).toMatch(/cross-check|conflict|inconsistent|交叉验证|冲突|不一致/i);
-    expect(document.querySelector("[data-citation-quality-warning]")).toBeNull();
+    expect(
+      document.querySelector("[data-citation-quality-warning]"),
+    ).toBeNull();
   });
 
   it("places a critical table-cell claim marker using its stable source location", () => {
@@ -2621,7 +2661,9 @@ describe("MarkdownContent citations", () => {
       />,
     );
 
-    expect(document.querySelector("[data-citation-claim-quality]")).not.toBeNull();
+    expect(
+      document.querySelector("[data-citation-claim-quality]"),
+    ).not.toBeNull();
     expect(screen.getByText("120 USD")).not.toBeNull();
     const richText = container.querySelector<HTMLElement>("#streamdown");
     expect(richText?.className).toContain(
@@ -2640,9 +2682,13 @@ describe("MarkdownContent citations", () => {
       node.querySelector("[data-streamdown='table']") !== null;
     const dataRegion = wrapperRegions.find(containsTable);
     expect(dataRegion).not.toBeUndefined();
-    const claimMarker = dataRegion?.querySelector("[data-citation-claim-quality]");
+    const claimMarker = dataRegion?.querySelector(
+      "[data-citation-claim-quality]",
+    );
     expect(claimMarker).not.toBeNull();
-    const toolbarRegions = wrapperRegions.filter((node) => !containsTable(node));
+    const toolbarRegions = wrapperRegions.filter(
+      (node) => !containsTable(node),
+    );
     expect(toolbarRegions).toHaveLength(1);
     expect(toolbarRegions[0]?.contains(claimMarker ?? null)).toBe(false);
   });
@@ -2727,7 +2773,7 @@ describe("MarkdownContent citations", () => {
     expect(container.textContent).not.toContain("|---|");
   });
 
-  it("moves a critical claim marker outside display math without exposing its internal URL", () => {
+  it("moves a critical claim marker outside display math without exposing its internal URL", async () => {
     const content = "计算如下：\n\n$$\n增长率 = 15.71\\%\n$$";
     const mathValueEnd = content.indexOf("15.71") + "15.71".length;
     render(
@@ -2779,9 +2825,19 @@ describe("MarkdownContent citations", () => {
       />,
     );
 
-    expect(document.body.textContent).not.toContain("valuz.quality-claim.invalid");
-    expect(document.querySelector("[data-citation-claim-quality]")).not.toBeNull();
-    expect(document.querySelector(".katex")).not.toBeNull();
+    expect(document.body.textContent).not.toContain(
+      "valuz.quality-claim.invalid",
+    );
+    expect(
+      document.querySelector("[data-citation-claim-quality]"),
+    ).not.toBeNull();
+    // KaTeX arrives on a dynamic import now (see markdown-heavy-plugins), so
+    // the formula renders a tick after the marker does. Awaiting it is also the
+    // regression test for the lazy path: if detection stopped recognising
+    // display math, this would time out instead of quietly rendering "$$…$$".
+    await waitFor(() => {
+      expect(document.querySelector(".katex")).not.toBeNull();
+    });
   });
 
   it("hides quality issues that cannot be located to a concrete claim", () => {
@@ -2948,8 +3004,6 @@ describe("MarkdownContent citations", () => {
     expect(
       document.querySelector("[data-citation-quality-warning]"),
     ).toBeNull();
-    expect(
-      document.querySelector("[data-citation-claim-quality]"),
-    ).toBeNull();
+    expect(document.querySelector("[data-citation-claim-quality]")).toBeNull();
   });
 });

@@ -17,8 +17,6 @@ import type {
 } from "@valuz/shared";
 import { Streamdown, defaultUrlTransform, type UrlTransform } from "streamdown";
 import { code } from "@streamdown/code";
-import { mermaid } from "@streamdown/mermaid";
-import { math } from "@streamdown/math";
 import { cjk } from "@streamdown/cjk";
 import {
   AlertTriangle,
@@ -36,9 +34,11 @@ import {
   ZoomOut,
 } from "lucide-react";
 
+// KaTeX's stylesheet is NOT imported here — it travels with the math plugin in
+// ./markdown-math so that a transcript without formulas downloads neither.
 import "streamdown/styles.css";
-import "katex/dist/katex.min.css";
 
+import { useHeavyMarkdownPlugins } from "./markdown-heavy-plugins";
 import { cn } from "../../lib/cn";
 import {
   Dialog,
@@ -1876,6 +1876,10 @@ export const MarkdownContent = memo(function MarkdownContent({
       ),
     [displayContent, isLocalFileHref, qualityIssuePlacement.claimEntries],
   );
+  // Keyed off the rendered text rather than the raw prop: the rewrites above
+  // can only add link syntax, never a fence or a math delimiter, but reading
+  // what Streamdown will actually parse keeps the two from drifting apart.
+  const heavyPlugins = useHeavyMarkdownPlugins(renderedContent);
   const urlTransform = useCallback<UrlTransform>(
     (url, key, node) => {
       if (key === "href" && isLocalFileHref?.(decodeLocalFileHref(url))) {
@@ -2086,7 +2090,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         )}
       >
         <Streamdown
-          plugins={{ code, mermaid, math, cjk }}
+          plugins={{ code, cjk, ...heavyPlugins }}
           icons={STREAMDOWN_ICONS}
           mode={mode}
           // Only a prefix can be malformed by being a prefix, so repairing a
