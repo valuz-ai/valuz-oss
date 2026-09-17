@@ -363,7 +363,7 @@ describe("ProjectDetailContextPanel — Playbooks section", () => {
 });
 
 describe("ProjectDetailContextPanel — Generated files section", () => {
-  it("should render agent-delivered artifacts under the 生成文件 section", () => {
+  it("should render agent-delivered artifacts under the 产物 section", () => {
     render(
       <ProjectDetailContextPanel
         generatedFiles={[
@@ -378,15 +378,15 @@ describe("ProjectDetailContextPanel — Generated files section", () => {
       />,
     );
 
-    expect(screen.getByText("生成文件")).toBeTruthy();
+    expect(screen.getByText("产物")).toBeTruthy();
     expect(screen.getByText("报告.html")).toBeTruthy();
     expect(screen.getByText("报告.md")).toBeTruthy();
   });
 
   it("should render the empty state when no artifacts have been delivered", () => {
     render(<ProjectDetailContextPanel generatedFiles={[]} />);
-    expect(screen.getByText("生成文件")).toBeTruthy();
-    expect(screen.getByText("暂无生成文件")).toBeTruthy();
+    expect(screen.getByText("产物")).toBeTruthy();
+    expect(screen.getByText("暂无产物")).toBeTruthy();
   });
 
   it("should open the file's absolute path when a row is clicked", async () => {
@@ -406,7 +406,87 @@ describe("ProjectDetailContextPanel — Generated files section", () => {
 
   it("should hide the section entirely when generatedFiles is undefined", () => {
     render(<ProjectDetailContextPanel todos={[]} />);
-    expect(screen.queryByText("生成文件")).toBeNull();
+    expect(screen.queryByText("产物")).toBeNull();
+  });
+
+  it("should render 产物 below the workspace tree", () => {
+    // The tree is everything the session has; the 产物 list is the curated
+    // subset the agent handed over. A subset reads as a subset when it follows
+    // the whole — it used to sit above the tree, which inverted that.
+    render(
+      <ProjectDetailContextPanel
+        uploadedFiles={[]}
+        generatedFiles={[{ id: "a1", name: "报告.html", path: "/d/报告.html" }]}
+        fileTree={[{ name: "main.ts", type: "file", path: "main.ts" }]}
+        fileTreeTitle="工作区文件"
+      />,
+    );
+
+    const positions = ["上传文件", "工作区文件", "产物"].map((label) => {
+      const node = screen.getByText(label);
+      // ``compareDocumentPosition`` against a common root gives document order
+      // without depending on the section markup.
+      return Array.from(document.querySelectorAll("*")).indexOf(
+        node as Element,
+      );
+    });
+    expect(positions.every((i) => i >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+});
+
+describe("ProjectDetailContextPanel — Uploaded files preview", () => {
+  it("should open the uploaded file's absolute path when a row is clicked", async () => {
+    const onOpenUploadedFile = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        uploadedFiles={[
+          { id: "1", name: "shot.png", path: "/data/attachments/1/shot.png" },
+        ]}
+        onOpenUploadedFile={onOpenUploadedFile}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("shot.png"));
+
+    expect(onOpenUploadedFile).toHaveBeenCalledWith(
+      "/data/attachments/1/shot.png",
+    );
+  });
+
+  it("should leave a row without a path unopenable", async () => {
+    // An older backend sends no identity for the file; the row must not look
+    // like it can do something it cannot.
+    const onOpenUploadedFile = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        uploadedFiles={[{ id: "1", name: "shot.png" }]}
+        onOpenUploadedFile={onOpenUploadedFile}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("shot.png"));
+
+    expect(onOpenUploadedFile).not.toHaveBeenCalled();
+  });
+
+  it("should not let the row click delete the attachment", async () => {
+    // The two controls sit in the same row; the remove button must stay its
+    // own target rather than riding along with the open.
+    const onOpenUploadedFile = vi.fn();
+    const onRemoveUploadedFile = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        uploadedFiles={[{ id: "1", name: "shot.png", path: "/d/shot.png" }]}
+        onOpenUploadedFile={onOpenUploadedFile}
+        onRemoveUploadedFile={onRemoveUploadedFile}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("shot.png"));
+
+    expect(onOpenUploadedFile).toHaveBeenCalledTimes(1);
+    expect(onRemoveUploadedFile).not.toHaveBeenCalled();
   });
 });
 
@@ -610,7 +690,7 @@ describe("ProjectDetailContextPanel — Artifact version history", () => {
 
 describe("ProjectDetailContextPanel — Project deliverables section", () => {
   it("should list what the project holds, separately from one session's output", () => {
-    // A conversation that delivered nothing shows an empty 生成文件 list; the
+    // A conversation that delivered nothing shows an empty 产物 list; the
     // workspace section is the only place those deliverables appear.
     render(
       <ProjectDetailContextPanel
@@ -630,7 +710,7 @@ describe("ProjectDetailContextPanel — Project deliverables section", () => {
 
     expect(screen.getByText("交付物")).toBeTruthy();
     expect(screen.getByText("季度报告.pdf")).toBeTruthy();
-    expect(screen.getByText("暂无生成文件")).toBeTruthy();
+    expect(screen.getByText("暂无产物")).toBeTruthy();
   });
 
   it("should expand a project deliverable's history the same way a session row does", async () => {

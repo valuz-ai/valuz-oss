@@ -277,6 +277,7 @@ function ConversationViewPage(props: ConversationViewProps) {
             isToolCardFoldable={core.isToolCardFoldable}
             revealInFinder={core.revealInFinder}
             localFileLinks={core.localFileLinks}
+            openArtifactFile={core.openArtifactFile}
             selectedSessionId={core.selectedSessionId}
             openCitation={core.openCitation}
             setDraft={core.setDraft}
@@ -458,6 +459,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
         isToolCardFoldable={core.isToolCardFoldable}
         revealInFinder={core.revealInFinder}
         localFileLinks={core.localFileLinks}
+        openArtifactFile={core.openArtifactFile}
         selectedSessionId={core.selectedSessionId}
         openCitation={core.openCitation}
         setDraft={core.setDraft}

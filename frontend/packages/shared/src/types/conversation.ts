@@ -96,6 +96,14 @@ export type ConversationBlock =
 export interface ConversationTurnAttachment {
   name: string;
   size: number;
+  /**
+   * Absolute path of the original file, as the host handed it to the runtime
+   * (``source_path`` on the ``user_message`` payload). Present on every turn
+   * the current backend recorded; absent on older ones, and on a shape that
+   * only carried a name. A host that can resolve it renders the chip as a
+   * preview affordance — see ``ConversationTurnListProps.onOpenAttachment``.
+   */
+  path?: string;
 }
 
 /** Normalized per-turn token buckets emitted by ``runtime.engine.usage``. */

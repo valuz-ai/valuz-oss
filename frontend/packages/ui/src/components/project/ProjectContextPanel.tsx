@@ -198,10 +198,17 @@ export interface UploadedFileItem {
    * ``local`` for back-compat with callers that haven't been
    * updated yet (e.g. before the kb-attachment flow shipped). */
   sourceKind?: "local" | "kb_doc";
+  /**
+   * Absolute path of the original file. Present it together with
+   * {@link ProjectDetailContextPanelProps.onOpenUploadedFile} and the row
+   * opens a preview; without either, the row stays a plain listing (an older
+   * backend does not send a path, and not every host can resolve one).
+   */
+  path?: string;
 }
 
 /**
- * One agent-delivered deliverable — the "生成文件" list, recorded by the
+ * One agent-delivered deliverable — the "产物" list, recorded by the
  * built-in ``deliver_artifacts`` MCP tool. The inverse of
  * {@link UploadedFileItem} (user uploads): these are files the agent produced
  * and explicitly marked as outputs. Read-only; the row click opens the file.
@@ -377,8 +384,11 @@ export interface ProjectContextPanelProps {
   uploadedFiles?: UploadedFileItem[];
   onUploadFile?: () => void;
   onRemoveUploadedFile?: (id: string) => void;
+  /** Open one uploaded file (its absolute path) — the same destination the
+   *  delivered-artifact rows use. Omit it and the rows stay non-clickable. */
+  onOpenUploadedFile?: (path: string) => void;
   /**
-   * Files the agent delivered as finished outputs (the "生成文件" list,
+   * Files the agent delivered as finished outputs (the "产物" list,
    * recorded by the ``deliver_artifacts`` tool). Provide the array (even
    * empty) to render the section; ``undefined`` hides it. Read-only — rows
    * open via {@link onOpenGeneratedFile}.
@@ -1098,6 +1108,7 @@ export const ProjectDetailContextPanel = ({
   onSelectAllInKb,
   uploadedFiles,
   onRemoveUploadedFile,
+  onOpenUploadedFile,
   generatedFiles,
   generatedFilesAction,
   onOpenGeneratedFile,
@@ -1403,19 +1414,32 @@ export const ProjectDetailContextPanel = ({
             // visually tell "this is a live reference to a global KB
             // document" apart from a regular local upload.
             const isKb = f.sourceKind === "kb_doc";
+            // Same shape as the delivered-artifact row: the icon + name are
+            // the open affordance, the trailing badges and the remove button
+            // are not. Disabled rather than hidden when there is nothing to
+            // open, so the list does not change layout per row.
+            const canOpen = Boolean(onOpenUploadedFile && f.path);
             return (
               <div
                 key={f.id}
                 className="group -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-surface-muted/60"
               >
-                {isKb ? (
-                  <Database className="h-3.5 w-3.5 shrink-0 text-[#1d4ed8]" />
-                ) : (
-                  <FileTypeIcon filename={f.name} />
-                )}
-                <span className="flex-1 truncate text-ink-heading">
-                  {f.name}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => f.path && onOpenUploadedFile?.(f.path)}
+                  disabled={!canOpen}
+                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+                  title={f.path}
+                >
+                  {isKb ? (
+                    <Database className="h-3.5 w-3.5 shrink-0 text-[#1d4ed8]" />
+                  ) : (
+                    <FileTypeIcon filename={f.name} />
+                  )}
+                  <span className="flex-1 truncate text-ink-heading">
+                    {f.name}
+                  </span>
+                </button>
                 {f.parseStatus === "parsing" ? (
                   <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-meta">
                     <Spinner />
@@ -2288,9 +2312,6 @@ export const ProjectDetailContextPanel = ({
         </AccordionSection>
       )}
 
-      {/* Generated files (agent-delivered artifacts — the 生成文件 list) */}
-      {generatedFilesSection}
-
       {/* Scheduled — project-only; chat project omits this. */}
       {showScheduled && (
         <AccordionSection
@@ -2703,7 +2724,7 @@ export const ProjectDetailContextPanel = ({
           )}
         </AccordionSection>
       )}
-      {/* Everything the project holds, whoever produced it. The 生成文件 section
+      {/* Everything the project holds, whoever produced it. The 产物 section
           above is one conversation's output; this is the workspace, which is
           what a session that has delivered nothing has to read from. */}
       {projectArtifacts !== undefined && (
@@ -2860,6 +2881,14 @@ export const ProjectDetailContextPanel = ({
         </AccordionSection>
       )}
       {fileTreeInTab ? null : filesAccordion}
+
+      {/* Artifacts (agent-delivered outputs — the 产物 list) sit UNDER the
+          workspace tree, not above it: the tree is everything the session has,
+          the artifacts list is the curated subset the agent handed over, and a
+          subset reads as a subset when it follows the whole. When the tree is
+          a tab instead of an accordion (project sessions) this is simply the
+          last section, which is the same relationship. */}
+      {generatedFilesSection}
     </div>
   );
 

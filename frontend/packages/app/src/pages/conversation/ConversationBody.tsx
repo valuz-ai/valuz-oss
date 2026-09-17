@@ -62,6 +62,7 @@ type ConversationBodyProps = {
   isToolCardFoldable: ToolCallCards["isToolCardFoldable"];
   revealInFinder: ReturnType<typeof usePlatform>["revealInFinder"];
   localFileLinks: ReturnType<typeof useArtifactPane>["localFileLinks"];
+  openArtifactFile: ReturnType<typeof useArtifactPane>["openArtifactFile"];
   selectedSessionId: string | null;
   openCitation: ReturnType<typeof useCitationDocumentPreview>["openCitation"];
   setDraft: Dispatch<SetStateAction<string>>;
@@ -148,6 +149,7 @@ export function ConversationBody({
   isToolCardFoldable,
   revealInFinder,
   localFileLinks,
+  openArtifactFile,
   selectedSessionId,
   openCitation,
   setDraft,
@@ -429,6 +431,10 @@ export function ConversationBody({
                     citationId,
                   });
                 }}
+                // Same destination as a delivered file: the split preview
+                // pane, resolved through /v1/files/resolve, so local and
+                // cloud attachments open by the one code path.
+                onOpenAttachment={(path) => void openArtifactFile(path)}
                 emptyTitle={emptyStateOverride?.title}
                 emptySuggestions={
                   emptyStateOverride?.suggestions ?? [

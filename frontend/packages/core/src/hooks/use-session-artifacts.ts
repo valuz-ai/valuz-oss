@@ -13,7 +13,7 @@ export interface UseSessionArtifactsResult {
 }
 
 /**
- * Owns a session's agent-delivered artifacts (the "生成文件" list).
+ * Owns a session's agent-delivered artifacts (the "产物" list).
  *
  * Unlike {@link useSessionAttachments} (user uploads, polled while parsing),
  * artifacts only change when the agent calls the ``deliver_artifacts`` tool,

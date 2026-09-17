@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   artifactsApi,
+  parseFileRef,
   skillsApi,
   useTranslation,
   type BindingItem,
@@ -197,8 +198,13 @@ export function useContextPanel({
       sourceKind: a.source_kind,
       parseStatus: a.parse_status as
         "parsing" | "ready" | "failed" | "native" | undefined,
+      // The row opens the ORIGINAL, never the ``.parsed.md`` extract: an
+      // extract is a derivative, and for the image the person actually
+      // attached it is not even a rendering of it. ``stored_path`` is a
+      // storage key, not a path — the backend derives the identity.
+      path: (a.ref ? parseFileRef(a.ref) : null) ?? undefined,
     }));
-    // Agent-delivered artifacts → the curated "生成文件" panel section.
+    // Agent-delivered artifacts → the curated "产物" panel section.
     // ``skill`` rows are excluded: a saved skill is a version of a library
     // entry the product recorded on the user's behalf (an archive named
     // ``<slug>.zip``), not a file this conversation produced. The skill
@@ -284,7 +290,8 @@ export function useContextPanel({
         uploadedFiles={uploadedFiles}
         onUploadFile={handlePanelUpload}
         onRemoveUploadedFile={handleRemoveUploadedFile}
-        // Agent-delivered deliverables (生成文件) — shown in both chat and
+        onOpenUploadedFile={(path) => void openArtifactFile(path)}
+        // Agent-delivered deliverables (产物) — shown in both chat and
         // project sessions; rows open in the in-app artifact viewer.
         generatedFiles={generatedFiles}
         generatedFilesAction={
@@ -311,9 +318,9 @@ export function useContextPanel({
         fileTreeTitle={
           isProject
             ? t("project.fileTree" as Parameters<typeof t>[0])
-            : // Chat sessions: the curated "生成文件" section now owns that
-              // label (agent-delivered artifacts), so the raw cwd file tree
-              // uses the neutral "文件" title to avoid two identical headers.
+            : // Chat sessions have no project to name, so the raw cwd tree is
+              // titled by what it IS — the session's workspace — rather than
+              // by a neutral "文件" that said nothing next to the 产物 list.
               t("conversation.files" as Parameters<typeof t>[0])
         }
         fileTreeInTab={isProject}
