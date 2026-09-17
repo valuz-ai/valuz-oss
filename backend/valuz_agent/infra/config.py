@@ -57,6 +57,25 @@ class Settings(BaseSettings):
     # Accepts postgresql://... for multi-user deployments.
     database_url: str | None = None
 
+    # Connection-pool bounds for a NON-SQLite engine. Left to SQLAlchemy these
+    # are 5 + 10 with a 30-second wait, which is a library default rather than
+    # a decision anyone made about this deployment — and it is invisible until
+    # a burst hits it, at which point every caller stalls the full 30 seconds
+    # and then fails with a message about QueuePool.
+    #
+    # Sizing is deployment-specific and deliberately NOT raised here: the
+    # ceiling that matters is the server's own ``max_connections``, shared by
+    # every replica, and this process cannot see it. Raise
+    # ``VALUZ_DB_POOL_SIZE`` / ``VALUZ_DB_MAX_OVERFLOW`` against that budget.
+    #
+    # The wait IS lowered, because 30 seconds is never the useful answer: a
+    # saturated pool is a condition to report and retry, not to hide behind a
+    # half-minute stall. SQLite keeps the library defaults — it is one process
+    # against a local file, and its contention is handled by ``busy_timeout``.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout_seconds: float = 10.0
+
     # IM channel long connections (Feishu / WeCom AIBot). ``None`` = auto:
     # active only on a single-tenant local install (no shared ``database_url``)
     # — a multi-user server would otherwise open every user's bot connection

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -128,7 +129,9 @@ class DeliveryResult:
     #: Absolute path of the recorded snapshot — what a caller hands on for
     #: reading or linking. ``None`` unless the delivery was recorded.
     abs_path: str | None = None
-    #: Only for ``INVALID``, where the caller needs to know which input was.
+    #: Why, for the statuses a caller cannot act on from the status alone:
+    #: ``INVALID`` (which input was) and ``SNAPSHOT_FAILED`` (which file, and
+    #: what the filesystem said).
     detail: str | None = None
 
     @property
@@ -267,13 +270,18 @@ async def deliver_artifact(
             # through rather than in a separate pass: both need to read the whole
             # file, and on the cloud deployment that read crosses an object mount.
             if inline_bytes is not None:
+                # ``file_name``, not ``display_name``: the content forms
+                # require a file name precisely because it is what names the
+                # file, while the label is free text a caller may have taken
+                # from a model. Both are sanitized before they become a path
+                # component, but only one of them is meant to be one.
                 staged = await asyncio.to_thread(
                     snap.stage_snapshot_bytes,
                     inline_bytes,
                     scope_cwd,
                     artifact.id,
                     version_no,
-                    display_name,
+                    request.file_name or display_name,
                 )
             else:
                 assert abs_path is not None  # the form check above guarantees it
@@ -285,11 +293,17 @@ async def deliver_artifact(
                     version_no,
                     display_name,
                 )
-        except OSError:
+        except OSError as exc:
             logger.warning(
                 "deliver: snapshot failed for %s", abs_path or display_name, exc_info=True
             )
-            return DeliveryResult(status=DeliveryStatus.SNAPSHOT_FAILED)
+            # Name the file and the errno. Without them SNAPSHOT_FAILED is
+            # opaque: a caller that hit it spent 43 retries varying the payload
+            # when the cause was a separator in the name.
+            return DeliveryResult(
+                status=DeliveryStatus.SNAPSHOT_FAILED,
+                detail=f"{exc.strerror or type(exc).__name__}: {abs_path or display_name}",
+            )
 
         # A replay, a transport retry, or a caller re-delivering something it
         # never changed. Compared against the head alone: a revision further
@@ -513,12 +527,41 @@ class BoundHostRevision:
     file_path: str
 
 
+@asynccontextmanager
+async def _reader(db: AsyncSession | None, *, commit: bool = False):
+    """Run on the caller's session, or open one when called standalone.
+
+    ``async_unit_of_work`` is NOT re-entrant: it builds a fresh session, which
+    checks out another connection from the same pool. A helper that always
+    opens its own therefore costs a SECOND connection whenever it is called
+    from inside a transaction — which is the normal case for these, since a
+    caller reads a binding in order to decide what to write next.
+
+    That is not merely wasteful. With every caller needing two connections at
+    once, a burst of N concurrent callers needs 2N against a fixed ceiling, and
+    past half the ceiling they deadlock: each holds one and waits out
+    ``pool_timeout`` for a second nobody can release. A fourteen-way burst did
+    exactly that in a deployment whose pool tops out at fifteen.
+
+    When the caller supplies a session, its transaction is the caller's to
+    commit — this never commits someone else's work.
+    """
+    if db is not None:
+        yield db
+        return
+    from valuz_agent.infra.db import async_unit_of_work
+
+    async with async_unit_of_work(commit=commit) as own:
+        yield own
+
+
 async def load_bound_host_revision(
     user_id: str,
     *,
     host_type: str,
     host_id: str,
     slot: str = "main",
+    db: AsyncSession | None = None,
 ) -> BoundHostRevision | None:
     """The artifact + document a host slot is bound to, or ``None`` if unbound.
 
@@ -526,11 +569,10 @@ async def load_bound_host_revision(
     revision's content describe the same moment — a generation that started
     from a half-torn read would announce the wrong base revision.
     """
-    from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
 
-    async with async_unit_of_work(commit=False) as db:
-        ds = ArtifactDatastore(db)
+    async with _reader(db) as session:
+        ds = ArtifactDatastore(session)
         binding = await ds.get_binding(user_id, host_type, host_id, slot)
         if binding is None:
             return None
@@ -547,32 +589,39 @@ async def load_bound_host_revision(
         )
 
 
-async def list_artifact_host_bindings(user_id: str, artifact_id: str) -> list[ArtifactBindingRow]:
+async def list_artifact_host_bindings(
+    user_id: str, artifact_id: str, *, db: AsyncSession | None = None
+) -> list[ArtifactBindingRow]:
     """Every host slot currently showing a revision of this artifact."""
-    from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
 
-    async with async_unit_of_work(commit=False) as db:
-        return await ArtifactDatastore(db).list_bindings_for_artifact(user_id, artifact_id)
+    async with _reader(db) as session:
+        return await ArtifactDatastore(session).list_bindings_for_artifact(user_id, artifact_id)
 
 
-async def count_scope_artifacts(user_id: str, project_id: str, worktree: str) -> int:
+async def count_scope_artifacts(
+    user_id: str, project_id: str, worktree: str, *, db: AsyncSession | None = None
+) -> int:
     """How many live artifacts a project/worktree scope holds."""
-    from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
 
-    async with async_unit_of_work(commit=False) as db:
-        return await ArtifactDatastore(db).count_scope_artifacts(
+    async with _reader(db) as session:
+        return await ArtifactDatastore(session).count_scope_artifacts(
             Scope(user_id=user_id, project_id=project_id, worktree=worktree)
         )
 
 
-async def archive_scope_artifacts(user_id: str, project_id: str, worktree: str) -> int:
-    """Retire every artifact in a scope whose files have just been deleted."""
-    from valuz_agent.infra.db import async_unit_of_work
+async def archive_scope_artifacts(
+    user_id: str, project_id: str, worktree: str, *, db: AsyncSession | None = None
+) -> int:
+    """Retire every artifact in a scope whose files have just been deleted.
+
+    This one writes, so standalone it commits; given a session it leaves the
+    commit to whoever owns the transaction.
+    """
     from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
 
-    async with async_unit_of_work() as db:
-        return await ArtifactDatastore(db).archive_scope(
+    async with _reader(db, commit=True) as session:
+        return await ArtifactDatastore(session).archive_scope(
             Scope(user_id=user_id, project_id=project_id, worktree=worktree)
         )

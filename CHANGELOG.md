@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A delivered name can no longer break the snapshot** — `deliver_artifact`
+  staged a generated document under its `display_name`, which for generated
+  content is a label the caller often took from a model. A title containing
+  `/` made `dest_dir / name` a nested path whose parent does not exist, and a
+  long CJK title exceeded the 255-**byte** component limit that ext4 and
+  overlayfs enforce while APFS counts 255 characters — so the second shape
+  passed every local test and failed only in a container. Both surfaced as a
+  bare `SNAPSHOT_FAILED` that named nothing: one caller spent 43 retries
+  varying its payload while the cause was a slash in the title. Names now go
+  through `snapshot_file_name` (the existing `sanitize_segment` rule plus a
+  byte clip that keeps the extension, because `format_for`/`guess_mime` read
+  it), inline content stages under the `file_name` that the content forms
+  already require, and `SNAPSHOT_FAILED` carries the file and the errno in
+  `detail`.
+- **Artifact reads no longer need a second connection** —
+  `load_bound_host_revision`, `list_artifact_host_bindings`,
+  `count_scope_artifacts` and `archive_scope_artifacts` always opened their own
+  unit of work. `async_unit_of_work` is not re-entrant, so calling one from
+  inside a transaction — the normal case, since a caller reads a binding to
+  decide what to write — checked out a *second* pooled connection and held
+  both. N concurrent callers then needed 2N against a fixed ceiling and
+  deadlocked past half of it, each waiting out `pool_timeout` for a connection
+  nobody could release. All four now accept an optional `db=` and run on it;
+  called without one they behave exactly as before.
+
 ### Changed
+
+- **The server engine's pool bounds are stated, not inherited** — unset, they
+  were SQLAlchemy's 5 + 10 with a 30-second wait, which is a library default
+  rather than a decision about any deployment and is invisible until a burst
+  reaches it. `VALUZ_DB_POOL_SIZE` / `VALUZ_DB_MAX_OVERFLOW` /
+  `VALUZ_DB_POOL_TIMEOUT_SECONDS` now configure them. The sizes keep their
+  previous values deliberately — the ceiling that matters is the database
+  server's own `max_connections`, shared across replicas, which this process
+  cannot see — but the wait drops to 10s, because a saturated pool is a
+  condition to report and retry rather than to hide behind a half-minute
+  stall. SQLite is untouched.
 
 - **Built-in MCP servers are hyphenated** — `valuz_docs` / `valuz_automations`
   / `valuz_playbooks` / `valuz_connectors` are now `valuz-docs` /
