@@ -36,9 +36,23 @@ export interface Capabilities {
    * Off in OSS: a personal install owns its own setup by definition.
    */
   managedRuntimeSetup: boolean;
+  /**
+   * Whether an assistant turn shows what it cost in tokens.
+   *
+   * On in OSS: that install runs on the user's own key, so the tokens are
+   * theirs and the count is the only bill they get.
+   *
+   * A managed install can turn it off. To someone on a subscription the raw
+   * token count is an implementation detail of a plan they already bought,
+   * and a misleading one — the runtime self-reports it, while what is actually
+   * charged is computed in the billing ledger. Showing both invites the reader
+   * to reconcile two numbers that were never the same number.
+   */
+  viewTurnTokenUsage: boolean;
 }
 
 export const DEFAULT_CAPABILITIES: Capabilities = {
   configureModelChannel: true,
   managedRuntimeSetup: false,
+  viewTurnTokenUsage: true,
 };

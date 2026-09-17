@@ -791,6 +791,7 @@ export type KnownI18nKey =
   | "conversation.selectAgent"
   | "conversation.selectAgentFirst"
   | "conversation.send"
+  | "conversation.sentAt"
   | "conversation.sessionOutput"
   | "conversation.showInFinder"
   | "conversation.showMore"

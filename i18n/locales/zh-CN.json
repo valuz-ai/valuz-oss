@@ -410,6 +410,7 @@
     "dataSource": "数据源",
     "dataSourceNotConnected": "{name} 未连接 — 点击前往连接",
     "finishedAt": "完成于 {time}",
+    "sentAt": "发送于 {time}",
     "delegatedTasks": "委派了 {count} 个子任务",
     "deleteConfirmProject": "此操作不可撤销。项目目录不会被删除。",
     "deleteFailed": "删除失败",
