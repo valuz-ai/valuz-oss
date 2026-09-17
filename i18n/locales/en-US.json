@@ -409,6 +409,7 @@
     "customAnswerPlaceholder": "Enter custom answer…",
     "dataSource": "Data Source",
     "dataSourceNotConnected": "{name} not connected — click to connect",
+    "finishedAt": "Finished at {time}",
     "delegatedTasks": "Delegated {count} subtasks",
     "deleteConfirmProject": "This cannot be undone. Project directory will not be deleted.",
     "deleteFailed": "Delete failed",

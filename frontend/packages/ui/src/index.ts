@@ -66,6 +66,7 @@ export * from "./components/conversation/SkillSearchMenu";
 export * from "./components/conversation/diff-aggregator";
 export * from "./components/conversation/TurnDiffSummaryCard";
 export * from "./components/conversation/TypingIndicator";
+export * from "./components/conversation/TurnActionButton";
 export * from "./components/conversation/ConversationTurnList";
 export * from "./components/conversation/ConversationIndexRail";
 export * from "./components/conversation/UserMessageBubble";

@@ -684,6 +684,7 @@ export type KnownI18nKey =
   | "conversation.fileTruncated"
   | "conversation.files"
   | "conversation.filesChanged"
+  | "conversation.finishedAt"
   | "conversation.fork"
   | "conversation.forkConflict"
   | "conversation.forkFailed"

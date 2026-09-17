@@ -223,32 +223,33 @@ describe("ConversationTurnList virtualization", () => {
     renderList([{ ...buildTurn(1), cancelled: true }], { onRetry });
 
     expect(screen.getByText("用户取消了当前对话")).toBeTruthy();
-    expect(screen.getAllByTitle("复制")).toHaveLength(2);
-    const retry = screen.getByTitle("重试");
+    expect(screen.getAllByLabelText("复制")).toHaveLength(2);
+    const retry = screen.getByLabelText("重试");
     expect(retry).toBeTruthy();
 
     fireEvent.click(retry);
     expect(onRetry).toHaveBeenCalledWith("turn-1");
   });
 
-  it("offers the rating entry only on turns that own a kernel Message", () => {
+  it("offers the thumbs only on turns that own a kernel Message", () => {
     virtualState.start = 0;
     const onRateTurn = vi.fn();
-    // No messageId (pre-flight failure / legacy row) → no entry at all.
+    // No messageId (pre-flight failure / legacy row) → no thumbs at all.
     renderList([buildTurn(1)], { onRateTurn });
-    expect(screen.queryByTitle("评价回复")).toBeNull();
+    expect(screen.queryByLabelText("回复优秀")).toBeNull();
+    expect(screen.queryByLabelText("回复不佳")).toBeNull();
   });
 
-  it("rates through the menu, refines with the details dialog, and withdraws", () => {
+  it("rates in one click, refines with the details dialog, and withdraws", () => {
     virtualState.start = 0;
     const onRateTurn = vi.fn();
     const turn = { ...buildTurn(1), messageId: "m1" };
     const { rerender } = renderList([turn], { onRateTurn });
 
-    const entry = screen.getByTitle("评价回复");
-    expect(entry.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(entry);
-    fireEvent.click(screen.getByText("回复优秀"));
+    const up = screen.getByLabelText("回复优秀");
+    expect(up.getAttribute("aria-pressed")).toBe("false");
+    // One click on the thumb itself — no menu in between.
+    fireEvent.click(up);
     // The thumb lands immediately …
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, "up", undefined);
     // … then the optional details dialog opens with the POSITIVE chips.
@@ -280,11 +281,35 @@ describe("ConversationTurnList virtualization", () => {
         />
       </div>,
     );
-    expect(screen.queryByTitle("评价回复")).toBeNull();
-    const remove = screen.getByTitle("移除“回复优秀”反馈");
+    // The chosen thumb keeps its place and becomes the withdraw action; the
+    // other one stays available to switch sides.
+    const remove = screen.getByLabelText("移除“回复优秀”反馈");
     expect(remove.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByLabelText("回复不佳")).toBeTruthy();
     fireEvent.click(remove);
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, null, undefined);
+  });
+
+  it("switches sides when the other thumb is clicked on a rated turn", () => {
+    virtualState.start = 0;
+    const onRateTurn = vi.fn();
+    const turn = { ...buildTurn(1), messageId: "m1" };
+    render(
+      <div>
+        <ConversationTurnList
+          turns={[turn]}
+          scrollContainerRef={createRef<HTMLDivElement>()}
+          sending={false}
+          loading={false}
+          error={null}
+          turnRatings={{ m1: "up" }}
+          onRateTurn={onRateTurn}
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByLabelText("回复不佳"));
+    expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", undefined);
   });
 
   it("offers the negative chips for 回复不佳 and lets the dialog be skipped", () => {
@@ -293,8 +318,7 @@ describe("ConversationTurnList virtualization", () => {
     const turn = { ...buildTurn(1), messageId: "m1" };
     renderList([turn], { onRateTurn });
 
-    fireEvent.click(screen.getByTitle("评价回复"));
-    fireEvent.click(screen.getByText("回复不佳"));
+    fireEvent.click(screen.getByLabelText("回复不佳"));
     expect(onRateTurn).toHaveBeenLastCalledWith(turn, "down", undefined);
     expect(screen.getByText("没有遵循我的指示")).toBeTruthy();
     expect(screen.getByText("丢失上下文")).toBeTruthy();
@@ -319,7 +343,7 @@ describe("ConversationTurnList virtualization", () => {
 
     // Two copy buttons per turn: the user's prompt (not a signal) and the
     // assistant reply. Only the reply reports.
-    const [userCopy, assistantCopy] = screen.getAllByTitle("复制");
+    const [userCopy, assistantCopy] = screen.getAllByLabelText("复制");
     fireEvent.click(userCopy);
     await Promise.resolve();
     expect(onCopyTurn).not.toHaveBeenCalled();
@@ -334,8 +358,8 @@ describe("ConversationTurnList virtualization", () => {
     renderList([{ ...buildTurn(1), blocks: [], cancelled: true }], { onRetry });
 
     expect(screen.getByText("用户取消了当前对话")).toBeTruthy();
-    expect(screen.getAllByTitle("复制")).toHaveLength(2);
-    const retry = screen.getByTitle("重试");
+    expect(screen.getAllByLabelText("复制")).toHaveLength(2);
+    const retry = screen.getByLabelText("重试");
     expect(retry).toBeTruthy();
 
     fireEvent.click(retry);
@@ -431,7 +455,11 @@ describe("ConversationTurnList virtualization", () => {
             kind: "assistant",
             text: "Main answer [source](citation://cit_main).",
             messageId: "message-main",
-            citationBundle: citationBundle("cit_main", "doc-main", "Main source"),
+            citationBundle: citationBundle(
+              "cit_main",
+              "doc-main",
+              "Main source",
+            ),
           },
           {
             kind: "assistant",
@@ -453,14 +481,14 @@ describe("ConversationTurnList virtualization", () => {
       container.querySelectorAll("[data-citation-source-list]"),
     ).toHaveLength(1);
     expect(
-      screen.getByRole("button", { name: /(?:citation|引用) 1/i })
-        .textContent,
+      screen.getByRole("button", { name: /(?:citation|引用) 1/i }).textContent,
     ).toBe("1");
     expect(
-      screen.getByRole("button", { name: /(?:citation|引用) 2/i })
-        .textContent,
+      screen.getByRole("button", { name: /(?:citation|引用) 2/i }).textContent,
     ).toBe("2");
-    expect(screen.getByRole("button", { name: /^1 Main source$/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^1 Main source$/i }),
+    ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /^2 Repair source$/i }),
     ).toBeTruthy();
@@ -504,12 +532,8 @@ describe("ConversationTurnList virtualization", () => {
       "[data-citation-hover-card]",
     );
     expect(hoverCard).not.toBeNull();
-    expect(hoverCard?.textContent).toContain(
-      "Late sidecar source",
-    );
-    expect(hoverCard?.textContent).toContain(
-      "Late sidecar source evidence",
-    );
+    expect(hoverCard?.textContent).toContain("Late sidecar source");
+    expect(hoverCard?.textContent).toContain("Late sidecar source evidence");
   });
 
   it("numbers post-publish evidence links through the turn projection", () => {
@@ -541,8 +565,12 @@ describe("ConversationTurnList virtualization", () => {
     expect(
       screen.getByRole("button", { name: /(?:citation|引用) 1/i }).textContent,
     ).toBe("1");
-    expect(container.querySelectorAll("[data-citation-source-list]")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /^1 Revenue source$/i })).toBeTruthy();
+    expect(
+      container.querySelectorAll("[data-citation-source-list]"),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /^1 Revenue source$/i }),
+    ).toBeTruthy();
   });
 });
 
@@ -620,7 +648,8 @@ describe("ConversationTurnList loading placeholder", () => {
     const logo = shimmer(container);
     expect(logo).not.toBeNull();
     expect(
-      status.compareDocumentPosition(logo as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+      status.compareDocumentPosition(logo as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
   });
 
