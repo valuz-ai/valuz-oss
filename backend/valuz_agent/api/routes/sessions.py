@@ -63,6 +63,29 @@ def _data_file_path(user_id: str, ref: str) -> Path:
     return target
 
 
+def _attachment_abs_path(user_id: str, key: str | None) -> str | None:
+    """Absolute path behind a stored attachment reference.
+
+    ``stored_path`` / ``parsed_path`` hold a **data-dir-relative key** for local
+    uploads and an **absolute path** for ``kb_doc`` rows (whose bytes stay in the
+    knowledge base) and for rows written before the key migration. Both shapes
+    are answered here so callers never have to know which one they hold.
+
+    Pure path arithmetic — it does not check that the file is there. Existence is
+    the resolver's answer (``exists=false`` on the descriptor), and stat-ing every
+    row of a list would put one object-storage round trip per attachment on a
+    request that only needs to hand out identities.
+    """
+    if not key:
+        return None
+    if Path(key).is_absolute():
+        return key
+    try:
+        return str(_data_file_path(user_id, key))
+    except ValueError:
+        return None
+
+
 class SessionCreateRequest(SessionModelSelection):
     """Body for ``POST /v1/sessions``.
 
@@ -788,8 +811,19 @@ class AttachmentItem(BaseModel):
     # the turn that ships it binds it.
     session_id: str | None
     filename: str
-    stored_path: str  # absolute path the agent can Read directly
+    #: Where the bytes are, as stored: a data-dir-relative key for a local
+    #: upload, an absolute path for a ``kb_doc`` row. Kept in its stored shape
+    #: for the clients that already read it; use ``ref`` to open the file.
+    stored_path: str
     parsed_path: str | None = None  # parsed markdown for agent attachment
+    #: Stable file identity for the original the user attached — the client
+    #: passes it to ``POST /v1/files/resolve`` to get an access address (local
+    #: path or signed URL) and preview it. Derived from ``stored_path``, not
+    #: stored, exactly like ``ArtifactItem.ref``. Empty when the row carries no
+    #: usable path. See docs/design/file-address-resolution.md.
+    ref: str = ""
+    #: Same, for the markdown text extract. ``None`` until a parse succeeds.
+    parsed_ref: str | None = None
     parse_status: str = "uploaded"
     size_bytes: int
     mime_type: str | None
@@ -957,13 +991,17 @@ async def _enforce_staging_quota(db: AsyncSession, user_id: str) -> None:
         logger.warning("staging quota enforcement failed", exc_info=True)
 
 
-def _row_to_item(row: SessionAttachmentRow) -> AttachmentItem:
+def _row_to_item(row: SessionAttachmentRow, user_id: str) -> AttachmentItem:
+    source_abs = _attachment_abs_path(user_id, row.stored_path)
+    parsed_abs = _attachment_abs_path(user_id, row.parsed_path)
     return AttachmentItem(
         id=row.id,
         session_id=row.session_id,
         filename=row.filename,
         stored_path=row.stored_path,
         parsed_path=row.parsed_path,
+        ref=build_valuz_file_uri(source_abs) if source_abs else "",
+        parsed_ref=build_valuz_file_uri(parsed_abs) if parsed_abs else None,
         parse_status=row.parse_status,
         size_bytes=row.size_bytes,
         mime_type=row.mime_type,
@@ -991,7 +1029,7 @@ async def list_attachments(
     """
     await _enforce_staging_quota(db, user_id)
     rows = await SessionDatastore(db).list_attachments(user_id, session_id, include_consumed=True)
-    return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+    return AttachmentListResponse(items=[_row_to_item(r, user_id) for r in rows])
 
 
 @attachments_router.get("")
@@ -1009,7 +1047,7 @@ async def list_staged_attachments(
     exists to remove.
     """
     rows = await SessionDatastore(db).list_unbound_attachments(user_id)
-    return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+    return AttachmentListResponse(items=[_row_to_item(r, user_id) for r in rows])
 
 
 @attachments_router.post("", status_code=201)
@@ -1069,7 +1107,7 @@ async def upload_attachment(
     # sent before it settles ships the raw ``stored_path`` — degraded, never
     # blocked.
     _spawn_attachment_parse(row.id, key, safe_name, user_id)
-    return _row_to_item(row)
+    return _row_to_item(row, user_id)
 
 
 def _write_parse_result(
@@ -1347,7 +1385,7 @@ async def add_kb_attachments(
     # a staged file belongs to (deliberately: an attachment exists before any
     # composer commits to a session), so the answer to "what did I just
     # attach" has to be exactly that and nothing more.
-    return AttachmentListResponse(items=[_row_to_item(r) for r in created])
+    return AttachmentListResponse(items=[_row_to_item(r, user_id) for r in created])
 
 
 @attachments_router.delete("/{attachment_id}", status_code=204)
