@@ -26,6 +26,7 @@ import {
 import { supportsPlanMode, type ConversationTurn } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import { resolveBrainOverride } from "../conversation-brain-override";
+import { sendStillOwnsPage } from "../conversation-send-ownership";
 import { setLastTempAgent } from "../../lib/last-temp-agent";
 import {
   NEW_SESSION_ID,
@@ -92,6 +93,11 @@ type ConversationSendParams = {
   };
   handoffSessionIdRef: { current: string | null };
   promotingSessionIdRef: { current: string | null };
+  /** ``useConversationRouting``'s live view of what the page shows. Read
+   *  after every await so a send that outlived a session switch cannot write
+   *  page state — see ``conversation-send-ownership.ts``. */
+  routeIdRef: { current: string };
+  routeEpochRef: { current: number };
   isSendInFlightRef: { current: boolean };
   historyCursorRef: { current: number };
   revealPanelOnSessionChangeRef: { current: boolean };
@@ -192,6 +198,8 @@ export function useConversationSend({
   projectSendHandoffRef,
   handoffSessionIdRef,
   promotingSessionIdRef,
+  routeIdRef,
+  routeEpochRef,
   isSendInFlightRef,
   historyCursorRef,
   revealPanelOnSessionChangeRef,
@@ -220,6 +228,9 @@ export function useConversationSend({
   const ensureSession = useCallback(
     async (navigateOnCreate = false) => {
       if (selectedSession) return selectedSession;
+      // Sampled before the create round-trip: whether this page may adopt the
+      // minted session is decided against it once the await resolves.
+      const epochAtStart = routeEpochRef.current;
       const sessionProjectId = selectedProjectId ?? "chat-default";
       // For quick-chat (kind="chat"), send the ``"chat-default"`` sentinel so
       // the backend allocates a fresh, isolated chat project + cwd for this
@@ -341,6 +352,47 @@ export function useConversationSend({
       // 10-new-conversation-guidance slice 3: remember which agent this 临时对话
       // used so the next new conversation pre-selects it.
       if (isChat && selectedAgentSlug) setLastTempAgent(selectedAgentSlug);
+      const createdItem = sessionDetailToListItem(created);
+      // Push the new session into the global session store IMMEDIATELY
+      // so the sidebar's "New Chat" group renders it on this same render
+      // tick — no waiting for the post-navigate ``fetchSidebarSessions``
+      // round-trip. Same optimistic pattern the existing in-flight
+      // message handler uses (around line 1450 below). The sidebar is
+      // global: it learns about the session whether or not this page still
+      // shows the draft it was minted from.
+      setSidebarSessions(
+        sidebarSessions.some((s) => s.id === createdItem.id)
+          ? sidebarSessions.map((s) =>
+              s.id === createdItem.id ? createdItem : s,
+            )
+          : [createdItem, ...sidebarSessions],
+      );
+      if (
+        !sendStillOwnsPage({
+          routeId: routeIdRef.current,
+          routeEpoch: routeEpochRef.current,
+          epochAtSend: epochAtStart,
+          sessionId: created.id,
+        })
+      ) {
+        // The user opened another conversation while the session was being
+        // minted (a cloud create takes seconds). The session is real and the
+        // caller's send goes on, so keep it reachable — its managed project
+        // must reach the global store for the layout's chat group to list it
+        // — but this page now shows that other conversation: do not select
+        // the new session here and do not navigate to it. Adopting it anyway
+        // flipped the page onto the new session while ``events`` still held
+        // the other conversation's turns.
+        if (created.project_id !== selectedProjectId) {
+          try {
+            upsertProject(await projectsApi.get(created.project_id));
+          } catch {
+            /* non-fatal — the sidebar refresh below catches up */
+          }
+        }
+        void fetchSidebarSessions();
+        return created;
+      }
       // Update local state IMMEDIATELY (before navigate / sendMessage)
       // so the rest of ``handleSend`` and the SSE subscription closures
       // — which capture ``selectedProjectId`` and friends — see the
@@ -360,20 +412,7 @@ export function useConversationSend({
       // session was just created with ``selectedAgentSlug``, so that is the
       // authoritative bound agent.
       setSessionAgentSlug(selectedAgentSlug);
-      const createdItem = sessionDetailToListItem(created);
       setSessions([createdItem]);
-      // Push the new session into the global session store IMMEDIATELY
-      // so the sidebar's "New Chat" group renders it on this same render
-      // tick — no waiting for the post-navigate ``fetchSidebarSessions``
-      // round-trip. Same optimistic pattern the existing in-flight
-      // message handler uses (around line 1450 below).
-      setSidebarSessions(
-        sidebarSessions.some((s) => s.id === createdItem.id)
-          ? sidebarSessions.map((s) =>
-              s.id === createdItem.id ? createdItem : s,
-            )
-          : [createdItem, ...sidebarSessions],
-      );
       if (created.project_id !== selectedProjectId) {
         // Quick-chat: the backend just minted a fresh project + cwd
         // for this session. Pull the authoritative ``ProjectDetail``
@@ -541,6 +580,18 @@ export function useConversationSend({
     // Re-entrancy guard on the derived ``isBusy`` (not raw ``sending``): a
     // stuck ``sending`` on a reconciled-idle session must not swallow the send.
     if (!source || isBusy) return;
+    // Every page-scoped write past the awaits below is conditional on this:
+    // the page may show another conversation by the time ``ensureSession`` /
+    // ``sendMessage`` resolve (``conversation-send-ownership.ts``).
+    const epochAtSend = routeEpochRef.current;
+    const ownsPage = (sessionId: string) =>
+      sendStillOwnsPage({
+        routeId: routeIdRef.current,
+        routeEpoch: routeEpochRef.current,
+        epochAtSend,
+        sessionId,
+      });
+    let sessionId: string | null = null;
     revealPanelOnSessionChangeRef.current = true;
     panelSetCollapsed(false);
     // ``draft`` already contains any inline ``/slug`` tokens because
@@ -601,30 +652,38 @@ export function useConversationSend({
     }
     try {
       const session = await ensureSession();
-      // Protect the optimistic turn we just painted from the landing refresh.
-      //
-      // ``refreshEventsInner`` clears ``pendingUserMessage`` for any session it
-      // is asked to load unless that session owns the pending, and bootstrap
-      // runs it the moment we promote to /conversation/{id}. A plain 新对话
-      // escapes it through bootstrap's promote fast-path; the project-detail
-      // handoff waits for the project binding first, which shifts the timing
-      // enough to miss that path — and the pending was wiped a beat after it
-      // was set, taking the runtime-startup header down with it (the label
-      // vanished and the row fell through to "已处理").
-      //
-      // Claiming the freshly minted id is what makes the guard recognise it.
-      // The claim is released by the ``message.user`` echo, like any other.
-      handoffSessionIdRef.current = session.id;
       if (!session?.id) throw new Error("Failed to create session.");
-      // Land on the real session URL on SEND. ``ensureSession`` navigates
-      // inline when it mints a brand-new session (no prior attach), but when
-      // the session was pre-created by an attach (navigate:false — we stayed on
-      // ``/conversation/new`` so the attachment panel/chips render without the
-      // navigate→bootstrap churn) it returns cached without navigating, so do
-      // the swap here. ``replace:true`` keeps Back from returning to the draft.
-      if (id === NEW_SESSION_ID && session.id !== NEW_SESSION_ID) {
-        promotingSessionIdRef.current = session.id;
-        onSessionPromoted(session.id, { skillCreator: isSkillCreatorMode });
+      sessionId = session.id;
+      // A session switch during ``ensureSession`` means this page now shows
+      // another conversation. The turn still goes out on ``session`` below;
+      // only the page must not follow it — no pending claim, no promotion.
+      if (ownsPage(session.id)) {
+        // Protect the optimistic turn we just painted from the landing refresh.
+        //
+        // ``refreshEventsInner`` clears ``pendingUserMessage`` for any session
+        // it is asked to load unless that session owns the pending, and
+        // bootstrap runs it the moment we promote to /conversation/{id}. A
+        // plain 新对话 escapes it through bootstrap's promote fast-path; the
+        // project-detail handoff waits for the project binding first, which
+        // shifts the timing enough to miss that path — and the pending was
+        // wiped a beat after it was set, taking the runtime-startup header
+        // down with it (the label vanished and the row fell through to
+        // "已处理").
+        //
+        // Claiming the freshly minted id is what makes the guard recognise it.
+        // The claim is released by the ``message.user`` echo, like any other.
+        handoffSessionIdRef.current = session.id;
+        // Land on the real session URL on SEND. ``ensureSession`` navigates
+        // inline when it mints a brand-new session (no prior attach), but when
+        // the session was pre-created by an attach (navigate:false — we stayed
+        // on ``/conversation/new`` so the attachment panel/chips render without
+        // the navigate→bootstrap churn) it returns cached without navigating,
+        // so do the swap here. ``replace:true`` keeps Back from returning to
+        // the draft.
+        if (id === NEW_SESSION_ID && session.id !== NEW_SESSION_ID) {
+          promotingSessionIdRef.current = session.id;
+          onSessionPromoted(session.id, { skillCreator: isSkillCreatorMode });
+        }
       }
 
       // Attachments were already uploaded (on attach) and the backend's
@@ -652,17 +711,6 @@ export function useConversationSend({
         claimed.map((a) => a.id),
       );
       if (!detail?.id) throw new Error("Failed to send message.");
-      // The bind is durable now, so the conversation's own list can see it.
-      // Read here rather than off a busy transition: on the handoff path this
-      // page mounts with ``sending`` already true, so a false→true edge never
-      // happens and a refresh hung off one never runs.
-      //
-      // Let the rows go only once that read has landed. Settling first would
-      // reopen the gap this closes — for the length of the GET the panel would
-      // again hold neither the in-flight copy nor the bound one.
-      void refreshBoundAttachments(session.id).finally(() =>
-        settleAttachments(claimed),
-      );
       // The desktop sidebar's per-project session lists are derived from
       // ``/v1/runs`` (ProjectLayoutBase), NOT from the session store the
       // optimistic updates below write to — so without a poke here a brand-new
@@ -702,19 +750,43 @@ export function useConversationSend({
         // protections documented above.
         status: s.status === "created" ? "running" : s.status,
       });
-      setSessions((prev) =>
-        prev.some((s) => s.id === startedSession.id)
-          ? prev.map((s) =>
-              s.id === startedSession.id ? keepLocalStatus(s) : s,
-            )
-          : [startedSession, ...prev],
-      );
       setSidebarSessions(
         sidebarSessions.some((s) => s.id === startedSession.id)
           ? sidebarSessions.map((s) =>
               s.id === startedSession.id ? keepLocalStatus(s) : s,
             )
           : [startedSession, ...sidebarSessions],
+      );
+      // The POST round-trip is the wide window: on a cloud backend
+      // ``send_message`` finalizes the session through the sandbox kernel
+      // before it returns. If the user opened another conversation meanwhile,
+      // the turn is running where it belongs and the sidebar row above says
+      // so — but selecting it here would flip THIS page (header, status pill,
+      // live stream) onto the new session while the transcript still shows
+      // the conversation the user switched to. The attachments panel is that
+      // conversation's too; the claimed rows just settle out of their
+      // in-flight state.
+      if (!ownsPage(session.id)) {
+        settleAttachments(claimed);
+        return;
+      }
+      // The bind is durable now, so the conversation's own list can see it.
+      // Read here rather than off a busy transition: on the handoff path this
+      // page mounts with ``sending`` already true, so a false→true edge never
+      // happens and a refresh hung off one never runs.
+      //
+      // Let the rows go only once that read has landed. Settling first would
+      // reopen the gap this closes — for the length of the GET the panel would
+      // again hold neither the in-flight copy nor the bound one.
+      void refreshBoundAttachments(session.id).finally(() =>
+        settleAttachments(claimed),
+      );
+      setSessions((prev) =>
+        prev.some((s) => s.id === startedSession.id)
+          ? prev.map((s) =>
+              s.id === startedSession.id ? keepLocalStatus(s) : s,
+            )
+          : [startedSession, ...prev],
       );
       setSelectedSessionId(detail.id);
     } catch (cause) {
@@ -732,8 +804,15 @@ export function useConversationSend({
           : cause instanceof Error
             ? cause.message
             : "Failed to send message.";
-      setError(msg);
       toast.error(msg);
+      // The cleanup below belongs to the conversation the send was typed into.
+      // If the user has moved on, the switch already reset its pending / busy
+      // state (``refreshEventsInner``), and touching it now would clobber the
+      // conversation that is open instead — a send of its own, for instance.
+      // ``sessionId`` is unset when ``ensureSession`` itself threw; the draft
+      // route it was typed into stands in.
+      if (!ownsPage(sessionId ?? id)) return;
+      setError(msg);
       setSending(false);
       pinNextTurnToTopRef.current = false;
       keepCurrentTurnAtTopRef.current = false;

@@ -88,6 +88,10 @@ export interface ConversationOrchestrationParams {
    *  right before a promotion, read back by both that hook's own id-tracking
    *  effect and ``useConversationHistory``'s bootstrap fast-path. */
   promotingSessionIdRef: { current: string | null };
+  /** Also ``useConversationRouting``'s — what the page shows right now, for
+   *  the send path's post-await ownership checks (``sendStillOwnsPage``). */
+  routeIdRef: { current: string };
+  routeEpochRef: { current: number };
   onSessionPromoted: (newId: string, opts?: { skillCreator?: boolean }) => void;
   /** Panel-host recovery hook for a persisted session that now returns 404. */
   onSessionUnavailable?: (sessionId: string) => void;
@@ -143,6 +147,8 @@ export function useConversationOrchestration({
   id,
   conversationInstanceKey,
   promotingSessionIdRef,
+  routeIdRef,
+  routeEpochRef,
   onSessionPromoted,
   onSessionUnavailable,
   directoryFieldMode,
@@ -1183,6 +1189,7 @@ export function useConversationOrchestration({
       setSelectedProjectId,
       setSessions,
       setSelectedSessionId,
+      setSending,
       presetProjectId: createDefaults?.projectId ?? null,
     });
 
@@ -1409,6 +1416,8 @@ export function useConversationOrchestration({
     projectSendHandoffRef,
     handoffSessionIdRef,
     promotingSessionIdRef,
+    routeIdRef,
+    routeEpochRef,
     isSendInFlightRef,
     historyCursorRef,
     revealPanelOnSessionChangeRef,
