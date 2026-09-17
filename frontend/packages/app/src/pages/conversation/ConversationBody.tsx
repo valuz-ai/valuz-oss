@@ -14,6 +14,7 @@ import {
   EmptyState,
   ForkIcon,
   Spinner,
+  TurnActionButton,
 } from "@valuz/ui";
 import type { usePlatform } from "@valuz/app/platform";
 import type { useCitationDocumentPreview } from "../../components/CitationDocumentPreviewProvider";
@@ -336,23 +337,21 @@ export function ConversationBody({
                     // write, so forking "from here" would fork from there.
                     turn.messageId &&
                     !(turn.failedMessage && turn.blocks.length === 0) ? (
-                      <button
-                        type="button"
+                      <TurnActionButton
                         disabled={forkInFlight}
                         onClick={() => onForkFromTurn(turn.messageId!)}
-                        title={t(
+                        label={t(
                           "conversation.forkFromHere" as Parameters<
                             typeof t
                           >[0],
                         )}
-                        className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted disabled:cursor-default disabled:opacity-60"
                       >
                         {forkInFlight && forkingMessageId === turn.messageId ? (
                           <Spinner />
                         ) : (
                           <ForkIcon className="h-3.5 w-3.5" />
                         )}
-                      </button>
+                      </TurnActionButton>
                     ) : null}
                     <SlotRenderer
                       name="conversation.turn.actions"

@@ -37,7 +37,7 @@ import { ToolCallCard } from "../ToolCallCard";
 import { ErrorMessageCard } from "./ErrorMessageCard";
 import { FileUploadMessage } from "./FileUploadMessage";
 import { TurnDiffSummaryCard } from "./TurnDiffSummaryCard";
-import { formatTurnTime } from "./turn-time";
+import { formatTurnTime, formatTurnTimeExact } from "./turn-time";
 import {
   aggregateTurnFileChanges,
   type TurnDiffSummary,
@@ -63,7 +63,14 @@ import {
 import { useI18n } from "../../hooks/use-i18n";
 import { t as _t } from "@valuz/shared/i18n";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { TurnActionButton } from "./TurnActionButton";
 import { TurnFeedbackControl } from "./TurnFeedback";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../ui/tooltip";
 import { Spinner } from "../ui/spinner";
 
 function formatFileSize(bytes: number): string {
@@ -71,9 +78,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
-
-const ICON_BUTTON =
-  "flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted";
 
 const MessageActions = ({
   text,
@@ -83,10 +87,16 @@ const MessageActions = ({
   rating,
   onRate,
   onCopied,
+  timestamp,
 }: {
   text: string;
   onRetry?: () => void;
   tokenUsage?: ConversationTokenUsage;
+  /**
+   * When the turn finished, shown at the end of the row on hover — the same
+   * treatment the user's own message gets above it.
+   */
+  timestamp?: number;
   /** Current 👍/👎 on this turn (docs/design/feedback-signals.md). */
   rating?: FeedbackValue | null;
   /**
@@ -130,52 +140,57 @@ const MessageActions = ({
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(tokenUsage?.totalTokens ?? 0);
+  const tokenUsageLabel = t(
+    "conversation.tokenUsage.showDetails" as Parameters<typeof t>[0],
+    { count: formatTokens(tokenUsage?.totalTokens ?? 0) },
+  );
+  const formattedTime = formatTurnTime(timestamp);
 
   return (
     <div className="mt-1 flex items-center gap-1">
-      <button
-        type="button"
+      <TurnActionButton
+        label={t("common.copy")}
         onClick={() => void handleCopy()}
-        title={t("common.copy")}
-        className={ICON_BUTTON}
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}
-      </button>
+      </TurnActionButton>
       {onRate ? <TurnFeedbackControl rating={rating} onRate={onRate} /> : null}
       {onRetry ? (
-        <button
-          type="button"
-          onClick={onRetry}
-          title={t("common.retry")}
-          className={ICON_BUTTON}
-        >
+        <TurnActionButton label={t("common.retry")} onClick={onRetry}>
           <RotateCw className="h-3.5 w-3.5" />
-        </button>
+        </TurnActionButton>
       ) : null}
       {/* Host actions (share, …) sit with the other icon buttons; the token
           readout is a number, not an action, so it trails the row. */}
       {extraActions}
       {tokenUsage && tokenUsage.totalTokens > 0 ? (
         <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={t(
-                "conversation.tokenUsage.showDetails" as Parameters<
-                  typeof t
-                >[0],
-                { count: formatTokens(tokenUsage.totalTokens) },
-              )}
-              className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums text-ink-body transition-colors hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-            >
-              <Gauge className="h-3.5 w-3.5" aria-hidden />
-              <span>{compactTokens}</span>
-            </button>
-          </PopoverTrigger>
+          {/* Two triggers on one button: the popover opens the breakdown on
+              click, the tooltip says so on hover. Radix merges both sets of
+              props down through ``asChild``. */}
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <PopoverTrigger asChild>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={tokenUsageLabel}
+                    className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums text-ink-body transition-colors hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                  >
+                    <Gauge className="h-3.5 w-3.5" aria-hidden />
+                    <span>{compactTokens}</span>
+                  </button>
+                </TooltipTrigger>
+              </PopoverTrigger>
+              <TooltipContent side="bottom" align="center">
+                {tokenUsageLabel}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <PopoverContent align="start" side="bottom" className="w-72 p-3">
             <div className="space-y-2 text-xs">
               <div className="flex items-center justify-between gap-4 font-medium text-ink-heading">
@@ -272,6 +287,31 @@ const MessageActions = ({
             </div>
           </PopoverContent>
         </Popover>
+      ) : null}
+      {/* Last in the row, after the token readout, and only on hover — the
+          same treatment the user's own message carries above. A timestamp is
+          worth having but not worth a permanent line of grey digits under
+          every answer.
+
+          It is when the turn FINISHED, which at ``HH:MM`` resolution often
+          reads identically to the prompt that started it — a reply that lands
+          in twenty seconds shares the minute. The tooltip settles it: the
+          exact second, labelled 完成于. */}
+      {formattedTime ? (
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-default px-1 text-2xs text-ink-muted opacity-0 transition-opacity group-hover/turn:opacity-100">
+                {formattedTime}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="center">
+              {t("conversation.finishedAt" as Parameters<typeof t>[0], {
+                time: formatTurnTimeExact(timestamp),
+              })}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       ) : null}
     </div>
   );
@@ -849,18 +889,16 @@ const UserMessageActions = ({
           {formatted}
         </span>
       ) : null}
-      <button
-        type="button"
+      <TurnActionButton
+        label={t("common.copy")}
         onClick={() => void handleCopy()}
-        title={t("common.copy")}
-        className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}
-      </button>
+      </TurnActionButton>
     </div>
   );
 };
@@ -1255,7 +1293,13 @@ const TurnRow = memo(
 
         <div className="flex items-start gap-3">
           {renderTurnLeading?.(turn, "assistant")}
-          <div className="min-w-0 flex-1 space-y-3">
+          {/* A NAMED group (``group/turn``) so the action row's timestamp can
+              appear on hover anywhere over the answer. Named on purpose: a
+              bare ``group`` here is an ancestor of every ``group-hover:``
+              inside the answer, and the citation list's 等级说明 legend uses
+              exactly that — hovering the thumbs would have popped the source
+              tier card open. */}
+          <div className="group/turn min-w-0 flex-1 space-y-3">
             {/* Turn-level "Worked for Xm Ys" header — always visible when the
                 turn has any thinking/tool work. While streaming it's a
                 static label; once the turn finishes it gains a chevron and
@@ -1307,7 +1351,9 @@ const TurnRow = memo(
                     key={`plan-${turn.id}-${blockIndex}`}
                     plan={block.plan}
                     actions={
-                      isLastProposal ? (renderPlanActions?.(turn) ?? null) : null
+                      isLastProposal
+                        ? (renderPlanActions?.(turn) ?? null)
+                        : null
                     }
                   />
                 );
@@ -1472,6 +1518,7 @@ const TurnRow = memo(
                 text={actionText}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
                 tokenUsage={turn.tokenUsage}
+                timestamp={turn.endTimestamp}
                 extraActions={renderTurnActions?.(turn)}
                 rating={turnRating}
                 // Rating addresses a Message — same gate as fork-from-here:
@@ -1483,7 +1530,9 @@ const TurnRow = memo(
                     : undefined
                 }
                 onCopied={
-                  onCopyTurn && turn.messageId ? () => onCopyTurn(turn) : undefined
+                  onCopyTurn && turn.messageId
+                    ? () => onCopyTurn(turn)
+                    : undefined
                 }
               />
             ) : null}
