@@ -100,6 +100,8 @@ function useOrchestration(
     id,
     conversationInstanceKey,
     promotingSessionIdRef,
+    routeIdRef,
+    routeEpochRef,
     onSessionPromoted,
   } = useConversationRouting({
     sessionId: props.sessionId,
@@ -111,6 +113,8 @@ function useOrchestration(
     id,
     conversationInstanceKey,
     promotingSessionIdRef,
+    routeIdRef,
+    routeEpochRef,
     onSessionPromoted,
     onSessionUnavailable: props.onSessionUnavailable,
     directoryFieldMode,

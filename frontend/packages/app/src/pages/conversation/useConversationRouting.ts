@@ -50,6 +50,25 @@ export function useConversationRouting({
   const [conversationInstanceKey, setConversationInstanceKey] = useState(
     () => `conversation:${propId}`,
   );
+  // ``page`` mirrors the original component exactly — ``id`` IS the routed
+  // prop. ``panel`` has no route to reflect a promotion back through
+  // props, so it reads its own directly-updated state instead.
+  const id = variant === "panel" ? internalId : propId;
+
+  // What the page shows RIGHT NOW, readable from async continuations. The
+  // conversation page is one component instance for every ``/conversation/*``
+  // id (``layout/outlet-key.ts``), so a send's ``create`` / ``sendMessage``
+  // awaits resolve into whatever conversation is open by then: ``routeIdRef``
+  // tells them which, and ``routeEpochRef`` — bumped on every id change —
+  // whether the page moved at all since they started. Consumed through
+  // ``sendStillOwnsPage`` (``conversation-send-ownership.ts``).
+  const routeIdRef = useRef(id);
+  const routeEpochRef = useRef(0);
+  useEffect(() => {
+    if (routeIdRef.current === id) return;
+    routeIdRef.current = id;
+    routeEpochRef.current += 1;
+  }, [id]);
 
   useEffect(() => {
     const previousProp = previousPropIdRef.current;
@@ -86,12 +105,11 @@ export function useConversationRouting({
   );
 
   return {
-    // ``page`` mirrors the original component exactly — ``id`` IS the routed
-    // prop. ``panel`` has no route to reflect a promotion back through
-    // props, so it reads its own directly-updated state instead.
-    id: variant === "panel" ? internalId : propId,
+    id,
     conversationInstanceKey,
     promotingSessionIdRef,
+    routeIdRef,
+    routeEpochRef,
     onSessionPromoted,
   };
 }

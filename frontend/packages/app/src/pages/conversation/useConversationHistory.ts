@@ -103,6 +103,9 @@ type ConversationHistoryParams = {
   setSelectedProjectId: Dispatch<SetStateAction<string | null>>;
   setSessions: Dispatch<SetStateAction<SessionListItem[]>>;
   setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
+  /** The optimistic send-pending flag — released together with the pending
+   *  message when the page switches away from the session that set it. */
+  setSending: (sending: boolean) => void;
   /** Host-declared project for a fresh draft (``createDefaults.projectId``
    *  from an embedded panel). Same effect as ``?project=<id>`` on the route:
    *  the 📁 chip pre-selects that project instead of 临时对话. The URL query
@@ -177,6 +180,7 @@ export function useConversationHistory({
   setSelectedProjectId,
   setSessions,
   setSelectedSessionId,
+  setSending,
   presetProjectId,
 }: ConversationHistoryParams) {
   // A same-session bootstrap may skip REST history only after that session's
@@ -201,6 +205,15 @@ export function useConversationHistory({
     if (sessionId === null || handoffSessionIdRef.current !== sessionId) {
       setPendingUserMessage(null);
       setTurnStartAnchor(null);
+      // The optimistic busy flag is the pending's twin: it bridges the click →
+      // turn-start window of the send that painted the pending, and only that
+      // send's ``message.user`` echo (or its failure path) releases it.
+      // Neither reaches a page that switched away — the echo arrives on the
+      // other session's stream, and the send's own cleanup no longer touches
+      // this page (``sendStillOwnsPage``) — so release it with the pending, or
+      // the conversation we land on sits in the loading state until its own
+      // next turn ends.
+      setSending(false);
     }
     // CRITICAL: clear ``events`` synchronously BEFORE awaiting the
     // network fetch. The URL-change handler updates ``selectedSessionId``
@@ -459,35 +472,36 @@ export function useConversationHistory({
    * one-row ``sessions[]`` (the optimistic-merge code paths still
    * mutate this) and ``selectedSessionId``.
    */
-  const refreshActiveSession = useCallback(
-    async (sessionId: string | null) => {
-      if (!sessionId) {
-        setSessions([]);
-        setSelectedSessionId(null);
-        return;
-      }
-      try {
-        const detail = await sessionsApi.get(sessionId);
-        const item = sessionDetailToListItem(detail);
-        setSessions([item]);
-        const previousId = selectedSessionIdRef.current;
-        setSelectedSessionId(detail.id);
-        // Same session, no events refetch — SSE already accumulated
-        // them locally and ``list_events_after`` caps at 500 rows ASC,
-        // so a refetch on a long session silently drops the most
-        // recent turn (which is exactly what we just streamed).
-        if (detail.id !== previousId) {
-          await refreshEvents(detail.id);
-        }
-      } catch {
-        // Session not found / 4xx — clear selection so the UI doesn't
-        // pretend we're still on a deleted row.
-        setSessions([]);
-        setSelectedSessionId(null);
-      }
-    },
-    [refreshEvents],
-  );
+  const refreshActiveSession = useCallback(async (sessionId: string | null) => {
+    if (!sessionId) {
+      setSessions([]);
+      setSelectedSessionId(null);
+      return;
+    }
+    try {
+      const detail = await sessionsApi.get(sessionId);
+      // A session switch may have completed while the GET was in flight:
+      // the page now shows another conversation, and selecting this one
+      // would flip the header and the live stream onto it while the
+      // transcript still holds the other conversation's turns. Same guard
+      // the history load uses. (This also makes the refetch question moot:
+      // the row is the selected session, whose events SSE already
+      // accumulated locally — and ``list_events_after`` caps at 500 rows
+      // ASC, so a refetch on a long session would silently drop the most
+      // recent turn, which is exactly what we just streamed.)
+      if (selectedSessionIdRef.current !== sessionId) return;
+      const item = sessionDetailToListItem(detail);
+      setSessions([item]);
+      setSelectedSessionId(detail.id);
+    } catch {
+      // Session not found / 4xx — clear selection so the UI doesn't
+      // pretend we're still on a deleted row. Unless the page has already
+      // moved to another session: then the selection is not ours to clear.
+      if (selectedSessionIdRef.current !== sessionId) return;
+      setSessions([]);
+      setSelectedSessionId(null);
+    }
+  }, []);
 
   const bootstrap = useCallback(
     async (isCurrent: () => boolean) => {
@@ -615,11 +629,13 @@ export function useConversationHistory({
           // Start the external model client while the user is reading or
           // typing. A concurrent Send joins the same runtime prepare lock, so
           // this cannot create a duplicate Codex process.
-          if (shouldPrepareConversationRuntime({
-            name: sessionDetail.name,
-            status: sessionDetail.status,
-            promotedWithLiveStream: isPromotedNewSession,
-          })) {
+          if (
+            shouldPrepareConversationRuntime({
+              name: sessionDetail.name,
+              status: sessionDetail.status,
+              promotedWithLiveStream: isPromotedNewSession,
+            })
+          ) {
             void sessionsApi.prepare(sessionDetail.id).catch(() => {
               // Preparation is an optimization only. The normal Send path
               // remains the authoritative place to surface runtime failures.
