@@ -88,10 +88,21 @@ const MessageActions = ({
   onRate,
   onCopied,
   timestamp,
+  showTokenUsage = true,
 }: {
   text: string;
   onRetry?: () => void;
   tokenUsage?: ConversationTokenUsage;
+  /**
+   * Whether the token readout belongs in this row at all.
+   *
+   * On by default — someone running their own keys is paying for those tokens
+   * and the count is theirs to see. A host that does not bill the reader per
+   * turn can pass ``false``: to a subscriber the number is an implementation
+   * detail of a plan they already bought, and an inconsistent one (runtime
+   * self-reports it; the authoritative cost lives in the billing ledger).
+   */
+  showTokenUsage?: boolean;
   /**
    * When the turn finished, shown at the end of the row on hover — the same
    * treatment the user's own message gets above it.
@@ -167,7 +178,7 @@ const MessageActions = ({
       {/* Host actions (share, …) sit with the other icon buttons; the token
           readout is a number, not an action, so it trails the row. */}
       {extraActions}
-      {tokenUsage && tokenUsage.totalTokens > 0 ? (
+      {showTokenUsage && tokenUsage && tokenUsage.totalTokens > 0 ? (
         <Popover>
           {/* Two triggers on one button: the popover opens the breakdown on
               click, the tooltip says so on hover. Radix merges both sets of
@@ -884,10 +895,25 @@ const UserMessageActions = ({
 
   return (
     <div className="mt-0.5 flex items-center gap-1">
+      {/* Same treatment as the assistant row's finish time below: HH:MM in the
+          row, the exact second on hover. Two messages a minute apart print the
+          same label, and the one case where the timestamp is actually worth
+          reading is when you are trying to tell them apart. */}
       {formatted ? (
-        <span className="px-1 text-2xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
-          {formatted}
-        </span>
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-default px-1 text-2xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
+                {formatted}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="center">
+              {t("conversation.sentAt" as Parameters<typeof t>[0], {
+                time: formatTurnTimeExact(timestamp),
+              })}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       ) : null}
       <TurnActionButton
         label={t("common.copy")}
@@ -988,6 +1014,11 @@ interface TurnRowProps {
   ) => void;
   onCopyTurn?: (turn: ConversationTurn) => void;
   /**
+   * Whether an assistant turn's action row carries the token readout.
+   * Defaults to on; see ``MessageActions``' own prop for when to turn it off.
+   */
+  showTokenUsage?: boolean;
+  /**
    * Host control rendered at the START of a turn, before its messages.
    *
    * Separate from ``renderTurnActions`` (which appends to the copy/retry row)
@@ -1042,6 +1073,7 @@ const TurnRow = memo(
     turnRating,
     onRateTurn,
     onCopyTurn,
+    showTokenUsage,
     renderTurnLeading,
     renderPlanActions,
     isToolCardFoldable,
@@ -1529,6 +1561,7 @@ const TurnRow = memo(
                 text={actionText}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
                 tokenUsage={turn.tokenUsage}
+                showTokenUsage={showTokenUsage}
                 timestamp={turn.endTimestamp}
                 extraActions={renderTurnActions?.(turn)}
                 rating={turnRating}
@@ -1603,6 +1636,11 @@ interface ConversationTurnListProps {
   ) => void;
   /** Fired after an assistant turn's text was copied. */
   onCopyTurn?: (turn: ConversationTurn) => void;
+  /**
+   * Whether an assistant turn's action row carries the token readout.
+   * Defaults to on; see ``MessageActions``' own prop for when to turn it off.
+   */
+  showTokenUsage?: boolean;
   /**
    * External state ``renderTurnActions`` depends on, folded into the memo
    * comparator. Non-latest rows only re-render when their ``turn`` object
@@ -1683,6 +1721,7 @@ export function ConversationTurnList({
   turnRatings,
   onRateTurn,
   onCopyTurn,
+  showTokenUsage,
   renderTurnLeading,
   renderPlanActions,
   isToolCardFoldable,
@@ -1862,6 +1901,7 @@ export function ConversationTurnList({
                     }
                     onRateTurn={onRateTurn}
                     onCopyTurn={onCopyTurn}
+                    showTokenUsage={showTokenUsage}
                     renderTurnLeading={renderTurnLeading}
                     renderPlanActions={renderPlanActions}
                     isToolCardFoldable={isToolCardFoldable}

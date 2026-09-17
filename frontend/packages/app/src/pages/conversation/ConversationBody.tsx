@@ -27,7 +27,7 @@ import type { useConversationHistory } from "./useConversationHistory";
 import type { useConversationScroll } from "./useConversationScroll";
 import type { useConversationSend } from "./useConversationSend";
 import type { useToolCallCards } from "./useToolCallCards";
-import { SlotRenderer } from "@valuz/core";
+import { SlotRenderer, useCapabilities } from "@valuz/core";
 
 type ComposerConfig = ReturnType<typeof useComposerConfig>;
 type ConversationHistory = ReturnType<typeof useConversationHistory>;
@@ -170,6 +170,9 @@ export function ConversationBody({
 }: ConversationBodyProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // Whether a turn shows its token count — on for an install running its own
+  // key, off where a plan has already been paid for. See the capability.
+  const { viewTurnTokenUsage } = useCapabilities();
 
   // Plan-proposal approval (codex plan mode — docs/design/session-modes.md
   // §codex). Approval is CLIENT-driven: no runtime round-trip exists, so
@@ -324,6 +327,7 @@ export function ConversationBody({
                 turnRatings={turnRatings}
                 onRateTurn={onRateTurn}
                 onCopyTurn={onCopyTurn}
+                showTokenUsage={viewTurnTokenUsage}
                 renderTurnActions={(turn) => (
                   <>
                     {canForkFromTurn &&
