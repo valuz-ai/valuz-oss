@@ -422,8 +422,23 @@ export interface SessionAttachmentItem {
   /** ``null`` while staged — bound by the turn that ships it. */
   session_id: string | null;
   filename: string;
+  /**
+   * Where the bytes are, as stored: a data-dir-relative key for a local
+   * upload, an absolute path for a ``kb_doc`` row. Not openable on its own —
+   * use {@link ref}.
+   */
   stored_path: string;
   parsed_path?: string | null;
+  /**
+   * Stable file identity for the original the user attached
+   * (``valuz-file://<abs>``). Pass it to ``filesApi.resolve`` to get an access
+   * address (local path or signed URL) and preview it — same contract as
+   * {@link SessionArtifactItem.ref}. Empty string when the row carries no
+   * usable path; absent on a backend older than this field.
+   */
+  ref?: string;
+  /** Same, for the markdown text extract. ``null`` until a parse succeeds. */
+  parsed_ref?: string | null;
   parse_status?: string;
   size_bytes: number;
   mime_type: string | null;
@@ -452,7 +467,7 @@ export interface SessionAttachmentItem {
 /**
  * One version of a deliverable the **agent** produced via the built-in
  * ``deliver_artifacts`` MCP tool — the inverse of {@link SessionAttachmentItem}
- * (user uploads). Rendered as the read-only "生成文件" panel list.
+ * (user uploads). Rendered as the read-only "产物" panel list.
  *
  * This is a *version*, not a deliverable: ``id`` is a revision id and
  * ``file_path`` is that version's immutable snapshot, so it keeps working after
@@ -926,7 +941,7 @@ export const sessionsApi = {
   },
 
   /**
-   * List the versions the agent delivered in ``sessionId`` (the "生成文件"
+   * List the versions the agent delivered in ``sessionId`` (the "产物"
    * panel list), recorded by the built-in ``deliver_artifacts`` MCP tool.
    *
    * Session-scoped: it answers "what did this conversation produce", so a
@@ -1063,10 +1078,9 @@ export const sessionsApi = {
 
   /** The caller's feedback rows in this session — rehydrates the 👍/👎 state. */
   listFeedback(sessionId: string): Promise<FeedbackList> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/feedback`,
-      { baseUrl: sessionBase(sessionId) },
-    );
+    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/feedback`, {
+      baseUrl: sessionBase(sessionId),
+    });
   },
 
   /** Upsert a ``rating`` / ``copy`` row on one of the session's messages. */
@@ -1074,21 +1088,22 @@ export const sessionsApi = {
     sessionId: string,
     request: RecordFeedbackRequest,
   ): Promise<FeedbackRecord> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/feedback`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      baseUrl: sessionBase(sessionId),
+    });
   },
 
   /** Delete the caller's row (un-rate). Rejects with a 404 ``ApiError`` when none. */
   withdrawFeedback(
     sessionId: string,
-    params: { message_id: string; action: "rating" | "copy"; block_ref?: string },
+    params: {
+      message_id: string;
+      action: "rating" | "copy";
+      block_ref?: string;
+    },
   ): Promise<void> {
     const query = new URLSearchParams({
       message_id: params.message_id,

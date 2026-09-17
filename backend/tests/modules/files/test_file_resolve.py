@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from valuz_agent.api.routes.files import _resolve_one
+from valuz_agent.infra.fs_registry import fs_registry as _fs_registry
 from valuz_agent.modules.files.service import assert_owned, stat_meta
 from valuz_agent.modules.files.uri import build_valuz_file_uri, parse_valuz_file_uri
 from valuz_agent.ports.file_address import (
@@ -191,6 +192,25 @@ class TestResolveOne:
         assert not d.capabilities.can_download
 
 
+def _own_the_data_dir(monkeypatch: pytest.MonkeyPatch, root: Path) -> Path:
+    """Point ``fs_registry.data_dir`` at ``root/data`` for this test.
+
+    Called from the test BODY, and patching the registry method rather than
+    ``settings``, so it lands last and wins: ``tests/modules/docs/
+    test_preview_window.py`` registers ``tests.modules.docs.test_kb_e2e`` via
+    ``pytest_plugins``, which promotes that module's autouse
+    ``_isolate_data_dir`` to a session-wide fixture — from then on every later
+    test's ``fs_registry.data_dir`` answers ``tmp_path / "_assets"``, a
+    directory nothing created. (That leak is why ~45 data-dir tests already
+    fail in a full-suite run; it is not this change's to fix, but a test that
+    writes a file has to survive it.)
+    """
+    data = root / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(_fs_registry, "data_dir", lambda _user_id: data)
+    return data
+
+
 class TestOwnerAllowedRoots:
     """The prefix allowlist IS the isolation line, so what it omits is a
     permission failure the user reads as a broken button.
@@ -254,3 +274,114 @@ class TestOwnerAllowedRoots:
 
         with pytest.raises(PermissionError):
             files_service.assert_owned(secret, roots)
+
+    @pytest.mark.asyncio
+    async def test_a_session_attachment_is_owned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Uploads live under ``<data_dir>/attachments`` — no project, no library.
+
+        Same failure mode the libraries above had: the file the caller attached
+        thirty seconds ago resolved as ``forbidden``, which reads as "preview is
+        broken" rather than as a boundary doing its job.
+        """
+        from valuz_agent.infra.fs_registry import fs_registry
+        from valuz_agent.modules.files import service as files_service
+
+        _own_the_data_dir(monkeypatch, tmp_path)
+
+        async def _nothing(_user_id: str):
+            return []
+
+        monkeypatch.setattr("valuz_agent.modules.projects.service.project_root_paths", _nothing)
+        monkeypatch.setattr("valuz_agent.modules.docs.service.owner_kb_root_paths", _nothing)
+
+        upload = fs_registry.attachments_root("owner-1") / "att-1" / "shot.png"
+        upload.parent.mkdir(parents=True, exist_ok=True)
+        upload.write_bytes(b"x")
+
+        roots = await files_service.owner_allowed_roots("owner-1")
+
+        assert files_service.assert_owned(upload, roots) == upload.resolve()
+
+    @pytest.mark.asyncio
+    async def test_the_rest_of_the_data_dir_is_still_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Named subtrees, not the whole data dir.
+
+        ``data_dir`` also holds ``valuz.db``, the kernel store and the log tree.
+        Opening the directory wholesale would make every one of those a
+        one-request download.
+        """
+        from valuz_agent.infra.fs_registry import fs_registry
+        from valuz_agent.modules.files import service as files_service
+
+        _own_the_data_dir(monkeypatch, tmp_path)
+
+        async def _nothing(_user_id: str):
+            return []
+
+        monkeypatch.setattr("valuz_agent.modules.projects.service.project_root_paths", _nothing)
+        monkeypatch.setattr("valuz_agent.modules.docs.service.owner_kb_root_paths", _nothing)
+
+        db = fs_registry.data_dir("owner-1") / "valuz.db"
+        db.write_bytes(b"x")
+
+        roots = await files_service.owner_allowed_roots("owner-1")
+
+        with pytest.raises(PermissionError):
+            files_service.assert_owned(db, roots)
+
+    @pytest.mark.asyncio
+    async def test_an_uploaded_file_resolves_end_to_end(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Upload row -> ``ref`` -> resolve -> a previewable address.
+
+        The two halves of this change meet here. Each is checked on its own
+        elsewhere (``_row_to_item`` derives the identity; the allowlist admits
+        the attachments tree); this walks the actual click path, which is what
+        was missing end to end.
+        """
+        from valuz_agent.api.routes.sessions import _row_to_item
+        from valuz_agent.infra.fs_registry import fs_registry
+        from valuz_agent.modules.files import service as files_service
+        from valuz_agent.modules.sessions.models import SessionAttachmentRow
+
+        _own_the_data_dir(monkeypatch, tmp_path)
+        set_file_address_resolver(LocalFileAddressResolver())
+
+        async def _nothing(_user_id: str):
+            return []
+
+        monkeypatch.setattr("valuz_agent.modules.projects.service.project_root_paths", _nothing)
+        monkeypatch.setattr("valuz_agent.modules.docs.service.owner_kb_root_paths", _nothing)
+
+        key = "attachments/att-1/shot.png"
+        upload = fs_registry.data_dir("owner-1") / key
+        upload.parent.mkdir(parents=True, exist_ok=True)
+        upload.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        row = SessionAttachmentRow(
+            session_id="s1",
+            filename="shot.png",
+            stored_path=key,
+            size_bytes=8,
+            mime_type="image/png",
+            parse_status="ready",
+            source_kind="local",
+        )
+        row.id = "att-1"
+        row.created_at = 0
+
+        item = _row_to_item(row, "owner-1")
+        roots = await files_service.owner_allowed_roots("owner-1")
+        descriptor = await _resolve_one(item.ref, "owner-1", roots)
+
+        assert descriptor.error is None
+        assert descriptor.exists
+        assert descriptor.kind == "local"
+        assert descriptor.abs_path == str(upload.resolve())
+        assert descriptor.preview_kind == "image"
+        assert descriptor.capabilities.can_preview

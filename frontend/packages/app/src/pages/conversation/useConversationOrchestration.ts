@@ -691,7 +691,7 @@ export function useConversationOrchestration({
     ],
   );
 
-  // Agent-delivered artifacts (the "生成文件" list) — recorded by the
+  // Agent-delivered artifacts (the "产物" list) — recorded by the
   // ``deliver_artifacts`` MCP tool. Loads on session change; refreshed on
   // turn-end (below) so newly delivered files appear without a manual reload.
   const { artifacts: sessionArtifacts, refresh: refreshArtifacts } =
@@ -1336,7 +1336,7 @@ export function useConversationOrchestration({
     if (prevBusyRef.current && !isBusy) {
       refreshFileTree();
       // The agent may have called ``deliver_artifacts`` during the turn —
-      // pull the fresh 生成文件 list alongside the file tree.
+      // pull the fresh 产物 list alongside the file tree.
       void refreshArtifacts();
     }
     prevBusyRef.current = isBusy;

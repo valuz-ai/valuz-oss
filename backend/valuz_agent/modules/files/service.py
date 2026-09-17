@@ -42,6 +42,12 @@ async def owner_allowed_roots(user_id: str) -> list[Path]:
     - Plus each ``project``-kind project's explicit ``root_path`` for the
       bundled desktop, where users pick arbitrary folders outside the managed
       root. (``chat``-kind cwds live under ``project_root`` already.)
+    - Plus the owner's knowledge-base roots and session-attachment root, which
+      live under ``data_dir`` rather than under any project.
+
+    Deliberately narrow inside ``data_dir``: the two content subtrees are
+    named, not the whole directory, which also holds ``valuz.db``, the kernel
+    store, and the log tree.
     """
     roots: list[Path] = []
     try:
@@ -81,6 +87,16 @@ async def owner_allowed_roots(user_id: str) -> list[Path]:
             roots.append(_root_path(user_id, kb_root_path).resolve())
         except Exception:  # noqa: BLE001 — one unreadable library must not sink the batch
             continue
+
+    # The owner's session attachments (``<data_dir>/attachments``). Same story
+    # as the KB tree above: these are the owner's own uploads, they live
+    # outside every project root, and without this prefix "preview the file I
+    # just attached" answers ``forbidden`` — which reads as the preview being
+    # broken rather than as a boundary doing its job.
+    try:
+        roots.append(fs_registry.attachments_root(user_id).resolve())
+    except Exception:  # noqa: BLE001 — same posture as the managed root above
+        pass
     return roots
 
 

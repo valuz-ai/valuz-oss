@@ -16,7 +16,7 @@ function makeConnector(overrides: Partial<ConnectorItem> = {}): ConnectorItem {
     command: null,
     args: [],
     working_dir: null,
-    env: {},
+    env: [],
     headers: [],
     params: [],
     enabled: true,

@@ -40,6 +40,14 @@ const parseTurnAttachments = (raw: string): ConversationTurnAttachment[] => {
     return {
       name: explicitName ?? fromPath ?? "unknown",
       size,
+      // Kept, not just mined for a display name: it is the file's identity, and
+      // it is the only thing that lets a host turn the chip into a preview.
+      // A parsed extract is a derivative, so a row that has only that one is
+      // deliberately left pathless rather than opening the .parsed.md in place
+      // of the file the person attached.
+      ...(sourcePath && !sourcePath.endsWith(".parsed.md")
+        ? { path: sourcePath }
+        : {}),
     };
   });
 };

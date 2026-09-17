@@ -1022,6 +1022,8 @@ interface TurnRowProps {
   isLocalFileHref?: (href: string) => boolean;
   onLocalFileLinkClick?: (href: string) => void;
   onCitationClick?: (input: OpenCitationInput) => void;
+  /** See ``ConversationTurnListProps.onOpenAttachment``. */
+  onOpenAttachment?: (path: string) => void;
   /** See ``ConversationTurnListProps.startingRuntime``. */
   startingRuntime?: RuntimeStartLocation | null;
 }
@@ -1047,6 +1049,7 @@ const TurnRow = memo(
     isLocalFileHref,
     onLocalFileLinkClick,
     onCitationClick,
+    onOpenAttachment,
     startingRuntime,
   }: TurnRowProps) {
     const { t } = useI18n();
@@ -1279,6 +1282,14 @@ const TurnRow = memo(
                   fileName={att.name}
                   fileSize={att.size > 0 ? formatFileSize(att.size) : undefined}
                   status="ready"
+                  // Both conditions matter: a host that cannot resolve files
+                  // passes no handler, and a turn recorded before the path was
+                  // kept has nothing to open.
+                  onOpen={
+                    onOpenAttachment && att.path
+                      ? () => onOpenAttachment(att.path as string)
+                      : undefined
+                  }
                 />
               ))}
               {turn.userText ? (
@@ -1623,6 +1634,14 @@ interface ConversationTurnListProps {
   onLocalFileLinkClick?: (href: string) => void;
   /** Opens a structured citation in the host document preview. */
   onCitationClick?: (input: OpenCitationInput) => void;
+  /**
+   * Open a file the user attached to a turn, by its absolute path. Makes the
+   * attachment cards in the transcript clickable; omit it and they stay plain
+   * receipts. Hosts that can resolve files (the conversation page, the task
+   * page) pass their artifact-open verb; the share replay does not, because a
+   * viewer has no file access.
+   */
+  onOpenAttachment?: (path: string) => void;
   emptyTitle?: string;
   emptySuggestions?: string[];
   onEmptySuggestionClick?: (text: string) => void;
@@ -1671,6 +1690,7 @@ export function ConversationTurnList({
   isLocalFileHref,
   onLocalFileLinkClick,
   onCitationClick,
+  onOpenAttachment,
   emptyTitle,
   emptySuggestions,
   onEmptySuggestionClick,
@@ -1849,6 +1869,7 @@ export function ConversationTurnList({
                     isLocalFileHref={isLocalFileHref}
                     onLocalFileLinkClick={onLocalFileLinkClick}
                     onCitationClick={onCitationClick}
+                    onOpenAttachment={onOpenAttachment}
                     startingRuntime={startingRuntime}
                   />
                 </div>

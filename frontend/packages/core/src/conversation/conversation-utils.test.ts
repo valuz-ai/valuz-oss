@@ -806,7 +806,9 @@ describe("buildTurns — attachment names", () => {
       }),
     ]);
 
-    expect(turns[0]!.attachments).toEqual([{ name: "report.pdf", size: 0 }]);
+    expect(turns[0]!.attachments).toEqual([
+      { name: "report.pdf", size: 0, path: "/ws/report.pdf" },
+    ]);
   });
 
   it("falls back to the legacy filepath key on pre-split events", () => {
@@ -819,8 +821,22 @@ describe("buildTurns — attachment names", () => {
     ]);
 
     // Legacy events stored only the parsed path; the ``.parsed.md`` suffix is
-    // stripped for display.
+    // stripped for display. No ``path``: an extract is a derivative, and
+    // opening it in place of the file the person attached would be wrong —
+    // for an image it would not even be a rendering of it.
     expect(turns[0]!.attachments).toEqual([{ name: "old", size: 0 }]);
+  });
+
+  it("leaves an attachment with no path at all unopenable", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", {
+        text: "look",
+        message_id: "u1",
+        attachments: JSON.stringify([{ name: "pasted.png", size: 12 }]),
+      }),
+    ]);
+
+    expect(turns[0]!.attachments).toEqual([{ name: "pasted.png", size: 12 }]);
   });
 });
 
