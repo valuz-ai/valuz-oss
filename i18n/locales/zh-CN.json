@@ -929,6 +929,7 @@
     "statusConnecting": "连接中…",
     "statusConnected": "已连接",
     "statusError": "连接失败",
+    "statusDisabled": "已关闭",
     "statusNotConnected": "未连接",
     "groupInstalled": "已添加",
     "groupOfficial": "官方",

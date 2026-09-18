@@ -34,19 +34,11 @@ import {
   ResourceDetailActionSlot,
 } from "../components/ResourceActionSlot";
 import { isCloudOnlyResource } from "./agent-list-state";
+import { connectorStatusView } from "../lib/connector-status";
 import { reauthorizePayload, shouldReauthorize } from "./connector-reconnect";
 
 /** Add mode driven from the shared header dropdown (null = closed). */
 export type ConnectorAddModeOrNull = ConnectorAddMode | null;
-
-/** Raw connector status → localized status-pill i18n key. */
-const STATUS_LABEL_KEY: Record<string, Parameters<typeof _t>[0]> = {
-  connected: "connector.statusConnected",
-  connecting: "connector.statusConnecting",
-  error: "connector.statusError",
-  pending_auth: "connector.statusNotConnected",
-  unknown: "connector.statusNotConnected",
-};
 
 interface CatalogFlat {
   connector: CatalogConnector;
@@ -513,16 +505,13 @@ export function ConnectorsPane({
                 if (entry.kind === "installed") {
                   const c = entry.item;
                   const cloudOnly = isCloudOnlyResource(entry);
+                  const statusView = connectorStatusView(c);
                   return (
                     <ConnectorListItem
                       name={c.display_name}
                       iconUrl={entry.iconUrl}
-                      status={c.status}
-                      statusLabel={
-                        STATUS_LABEL_KEY[c.status]
-                          ? t(STATUS_LABEL_KEY[c.status])
-                          : null
-                      }
+                      status={statusView?.status ?? null}
+                      statusLabel={statusView ? t(statusView.labelKey) : null}
                       active={isSelected}
                       onClick={() => setActiveKey(`installed:${c.id}`)}
                       actions={

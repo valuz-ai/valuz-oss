@@ -43,20 +43,8 @@ import {
 import type { ConnectorAddMode } from "@valuz/app/components";
 import { reauthorizePayload, shouldReauthorize } from "./connector-reconnect";
 import { isCloudOnlyResource } from "./agent-list-state";
+import { connectorStatusView } from "../lib/connector-status";
 import { usePluginMemberships } from "../components/plugins/use-plugin-memberships";
-
-/* ── Status labels ──────────────────────────────────────────────── */
-
-// Connector status → i18n key for the colored list-row pill. The two
-// "configured but not connected" states (pending_auth / unknown) read as
-// "未连接"; "disabled" stays unlabeled (the user turned it off on purpose).
-const STATUS_LABEL_KEY: Record<string, Parameters<typeof _t>[0]> = {
-  connected: "connector.statusConnected",
-  connecting: "connector.statusConnecting",
-  error: "connector.statusError",
-  pending_auth: "connector.statusNotConnected",
-  unknown: "connector.statusNotConnected",
-};
 
 /* ── Catalog flattening ─────────────────────────────────────────── */
 
@@ -744,17 +732,14 @@ export const ConnectorsPage = () => {
                 if (entry.kind === "installed") {
                   const c = entry.item;
                   const cloudOnly = isCloudOnlyResource(entry);
+                  const statusView = connectorStatusView(c);
                   return (
                     <ConnectorListItem
                       name={c.display_name}
                       iconUrl={entry.iconUrl}
                       pluginBadge={pluginBadgeFor(c.slug)}
-                      status={c.status}
-                      statusLabel={
-                        STATUS_LABEL_KEY[c.status]
-                          ? t(STATUS_LABEL_KEY[c.status])
-                          : null
-                      }
+                      status={statusView?.status ?? null}
+                      statusLabel={statusView ? t(statusView.labelKey) : null}
                       active={!cloudOnly && isSelected}
                       onClick={() => {
                         if (!cloudOnly) setActiveKey(`installed:${c.id}`);
