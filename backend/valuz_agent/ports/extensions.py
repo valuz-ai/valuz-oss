@@ -27,13 +27,14 @@ from valuz_agent.integrations.sandbox_credential_hmac import (
     PerOwnerHmacSandboxCredentialVerifier,
 )
 from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
-from valuz_agent.ports.automation_event_source import AutomationEventSourceRegistry
 from valuz_agent.ports.agent_lifecycle import AgentLifecycleHook, NoopAgentLifecycleHook
+from valuz_agent.ports.automation_event_source import AutomationEventSourceRegistry
 from valuz_agent.ports.automation_runtime import (
     AutomationRuntimePort,
     InProcessAutomationRuntime,
 )
 from valuz_agent.ports.billing import BillingPort, NoopBillingProvider
+from valuz_agent.ports.browser_engine import BrowserEnginePort, LocalBrowserEngine
 from valuz_agent.ports.builtin_declaration import (
     BuiltinResourceDeclarationPort,
     PackagedBuiltinDeclarations,
@@ -244,6 +245,14 @@ class Extensions:
         # Optional runtime-availability override. OSS asks the kernel; managed
         # deployments may bind a provider for their controlled runtime image.
         self.runtime_availability: RuntimeAvailabilityPort | None = None
+        # Where the chrome-devtools daemon runs for a session (browser
+        # feature). OSS default: this process — Node on PATH, a visible Chrome
+        # on the isolated profile. A deployment whose agent shells run in a
+        # remote sandbox binds an engine that manages the daemon there and
+        # reports ``mode="sandbox"``. Every gate the feature has (tool
+        # registration, the always-on skill, the Settings panel) reads this.
+        # See ports/browser_engine.py.
+        self.browser_engine: BrowserEnginePort = LocalBrowserEngine()
         # One complete, owner-aware product prompt for the active
         # distribution. Managed editions replace this provider; they do not
         # append to the OSS prompt.

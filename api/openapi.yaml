@@ -1581,9 +1581,12 @@ paths:
       operationId: getBrowserStatus
       tags: [browser]
       description: |
-        Cheap, read-only snapshot for the Settings "Browser" panel: whether Node
-        is present, whether the chrome-devtools daemon is running, the active
-        mode, and any user-facing hints. Safe to poll.
+        Cheap, read-only snapshot for the Settings "Browser" panel: whether the
+        browser engine is ready (Node present, for the local engine), whether
+        the chrome-devtools daemon is running, the active mode, and any
+        user-facing hints. Safe to poll. Served by the bound browser engine:
+        `managed` / `attach` come from the local engine; `sandbox` means a
+        remote engine runs the daemon headless where the agent's shell runs.
       responses:
         "200":
           description: Current managed-browser status
@@ -1601,7 +1604,8 @@ paths:
         Login helper: launches (or reuses) the managed, visible Chrome on the
         isolated profile so the user can sign into sites. Returns the active mode
         and the CLI prefix. 422 when the environment isn't ready (e.g. Node
-        missing); the message is shown as a hint.
+        missing); the message is shown as a hint. In `sandbox` mode there is no
+        window — the daemon runs headless and the agent starts it on demand.
       responses:
         "200":
           description: Browser started or already running
@@ -5494,7 +5498,9 @@ components:
       required: [daemon_running, mode, node_ok, cli_prefix, hints]
       properties:
         daemon_running: {type: boolean}
-        mode: {type: string, enum: [managed, attach]}
+        # managed / attach: local engine. sandbox: a remote engine runs the
+        # daemon headless where the agent's shell runs (no window to open).
+        mode: {type: string, enum: [managed, attach, sandbox]}
         node_ok: {type: boolean}
         cli_prefix: {type: string}
         pid: {type: integer, nullable: true}

@@ -107,6 +107,12 @@ def test_client_surface_has_no_undeclared_kernel_ops() -> None:
     # current_kernel_id asks the ALLOCATOR which sandbox currently serves a
     # session; it never talks to a kernel, so it has no route by construction.
     public.discard("current_kernel_id")
+    # sandbox_scope_for resolves a session's SandboxScope (task vs session)
+    # through the bound scope resolver — the same lookup every op uses before
+    # picking a kernel. Public so host code that must reach the sandbox a
+    # session runs in (e.g. a remote browser engine) shares that answer; it
+    # never talks to a kernel either.
+    public.discard("sandbox_scope_for")
     assert public == set(EXPECTED_ROUTES), (
         f"client facade drifted from the contract table: {public ^ set(EXPECTED_ROUTES)}"
     )

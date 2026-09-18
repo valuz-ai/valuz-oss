@@ -426,7 +426,7 @@ def always_on_skill_paths(*, user_id: str) -> list[str]:
     is identical everywhere. A missing dir is skipped + logged so a partial
     install can't break session creation.
     """
-    from valuz_agent.modules.browser import service as browser_service
+    from valuz_agent.ports.extensions import ext
 
     candidates = [
         project_docs_skill_dir(user_id),
@@ -434,9 +434,10 @@ def always_on_skill_paths(*, user_id: str) -> list[str]:
         official_skill_dir("skill-creator", user_id),
     ]
     # The browser skill teaches the ``chrome-devtools`` CLI, which only works
-    # when the engine (Node + chrome-devtools-mcp) is available; don't inject a
-    # dead skill otherwise. See docs/design/browser-feature.md §8.
-    if browser_service.node_available():
+    # where the bound engine can run the daemon (host Node + chrome-devtools-mcp,
+    # or a sandbox image that ships them); don't inject a dead skill otherwise.
+    # See docs/design/browser-feature.md §8 / §9.
+    if ext.browser_engine.available():
         candidates.append(browser_skill_dir(user_id))
     paths: list[str] = []
     for d in candidates:

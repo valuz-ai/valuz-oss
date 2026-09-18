@@ -20,11 +20,17 @@ both work.
 If `browser_start` returns an error (e.g. Node not installed), relay the message
 to the user and stop — do not try to work around it.
 
+The browser may be **headless** (e.g. when you run inside a cloud sandbox): the
+user cannot see it. Describe what you find instead of pointing at a window, and
+save screenshots under the project directory when the user needs to see a page.
+
 ## 1. Commands (append `--output-format=json` for parseable output)
 
 Write `<prefix>` for the `cli_prefix` returned by `browser_start`.
 
-- `<prefix> navigate_page --url="<URL>"` — open a page (also back/forward/reload via `--type`)
+- `<prefix> navigate_page --url="<URL>"` — open a page (also back/forward/reload via `--type`).
+  Heavy pages (live quotes, dashboards, long feeds) exceed the default 3 s
+  navigation timeout — pass `--timeout=30000` (milliseconds) for those.
 - `<prefix> take_snapshot` — accessibility tree with `uid`s. **Do this before acting.**
 - `<prefix> click "<uid>" [--includeSnapshot]` — click an element by uid
 - `<prefix> fill "<uid>" "<value>" [--includeSnapshot]` — type into / select an element
@@ -43,6 +49,9 @@ Write `<prefix>` for the `cli_prefix` returned by `browser_start`.
   screenshot only when you genuinely need to *see* layout. Screenshots are costly.
 - Take the cheapest next step that confirms progress; don't blindly re-snapshot
   every turn. Use `--includeSnapshot` on click/fill to act-and-observe in one call.
+- **Recover a wedged daemon**: if a command hangs or returns
+  `Timeout waiting for daemon response`, every later command will too. Call
+  `browser_stop`, then `browser_start`, and continue from a fresh page.
 
 ## 3. Safety
 

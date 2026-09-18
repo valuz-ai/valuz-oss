@@ -972,6 +972,17 @@ async def _scope_for(user_id: str, session_id: str) -> SandboxScope:
     return scope
 
 
+async def sandbox_scope_for(user_id: str, session_id: str) -> SandboxScope:
+    """The sandbox scope serving ``session_id`` for ``user_id`` — ``task:{id}``
+    when the session belongs to a task, else ``session:{id}``.
+
+    Public for host code that must reach the SAME sandbox a session executes
+    in without going through a kernel op — e.g. a remote browser engine
+    locating the daemon that session's shell can see.
+    """
+    return await _scope_for(user_id, session_id)
+
+
 def _accepts(fn: Any, name: str) -> bool:
     """Whether an allocator method takes the (additive) ``name`` kwarg.
 

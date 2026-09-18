@@ -16,7 +16,12 @@ export const setBrowserApiBase = (url: string): void => {
   _apiBase = url;
 };
 
-export type BrowserMode = "managed" | "attach";
+/**
+ * `managed` / `attach` — the local engine (a visible Chrome on this machine).
+ * `sandbox` — a remote engine: the daemon runs headless where the agent's
+ * shell runs; there is no window for the user to open.
+ */
+export type BrowserMode = "managed" | "attach" | "sandbox";
 
 export interface BrowserStatus {
   daemon_running: boolean;
