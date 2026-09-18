@@ -404,7 +404,6 @@ async def init_kernel(app: FastAPI) -> None:
     from valuz_agent.integrations.tools_plugin import build_plugin_tool_defs
     from valuz_agent.integrations.tools_skill_creator import build_submit_skill_tool_defs
     from valuz_agent.integrations.tools_skill_library import build_skill_library_tool_defs
-    from valuz_agent.modules.browser import service as browser_service
     from valuz_agent.modules.browser.tools import build_browser_tool_defs
     from valuz_agent.modules.citations.calculation_tool import (
         build_citation_calculation_tool_defs,
@@ -440,20 +439,24 @@ async def init_kernel(app: FastAPI) -> None:
         + build_citation_calculation_tool_defs()
         + build_generative_ui_tool_defs()
     )
-    # browser_start/browser_stop only work when the engine (Node +
-    # chrome-devtools-mcp) is available; don't expose dead tools otherwise
-    # (e.g. headless/TUI without Node). See docs/design/browser-feature.md §8.
-    if browser_service.node_available():
+    # browser_start/browser_stop only work when the bound engine can run the
+    # daemon (local: Node + chrome-devtools-mcp on this host; a remote-sandbox
+    # engine declares it for its image); don't expose dead tools otherwise
+    # (e.g. headless/TUI without Node). See docs/design/browser-feature.md §8/§9.
+    from valuz_agent.ports.extensions import ext
+
+    if ext.browser_engine.available():
         shared = shared + build_browser_tool_defs()
-        # Install the friendly ``chrome-devtools`` wrapper on PATH now, at boot —
-        # before any session spawns its agent subprocess (which inherits env at
-        # spawn time). Lets the agent run a clean ``chrome-devtools <tool>``.
+        # Engine boot setup now, before any session spawns its agent subprocess
+        # (which inherits env at spawn time): the local engine installs the
+        # friendly ``chrome-devtools`` wrapper on PATH so the agent runs a
+        # clean ``chrome-devtools <tool>``.
         if not _startup_user_content_enabled():
             logger.info(
-                "startup user-content initialization disabled; browser CLI bootstrap skipped"
+                "startup user-content initialization disabled; browser engine bootstrap skipped"
             )
-        elif browser_service.ensure_cli_on_path():
-            logger.info("browser CLI installed on PATH (chrome-devtools)")
+        else:
+            ext.browser_engine.bootstrap()
     else:
         logger.info("browser engine unavailable — browser_start/browser_stop not registered")
     install_toolkit_toolsets(
@@ -1126,13 +1129,14 @@ async def start_post_boot_agent_channels(app: FastAPI) -> None:
 
 
 async def stop_managed_browser() -> None:
-    """Best-effort: stop the chrome-devtools daemon so app exit doesn't leave an
-    orphan visible Chrome. The isolated profile persists (login state survives);
-    only the window/daemon closes. Bounded + never blocks teardown."""
+    """Best-effort: let the browser engine release what it holds so app exit
+    doesn't leave an orphan visible Chrome (local engine). The isolated profile
+    persists (login state survives); only the window/daemon closes. Bounded +
+    never blocks teardown."""
     try:
-        from valuz_agent.modules.browser import service as browser_service
+        from valuz_agent.ports.extensions import ext
 
-        await asyncio.wait_for(browser_service.stop(), timeout=10.0)
+        await asyncio.wait_for(ext.browser_engine.shutdown(), timeout=10.0)
     except Exception:  # noqa: BLE001 — shutdown best-effort
         logger.warning("managed browser stop on shutdown failed", exc_info=True)
 

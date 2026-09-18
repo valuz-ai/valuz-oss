@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The browser engine is a port** — `ext.browser_engine`
+  (`ports/browser_engine.py`, `BrowserEnginePort`) now decides where the
+  chrome-devtools daemon runs. Every gate the feature had read
+  `service.node_available()` on the host — tool registration, the always-on
+  `browser` skill, the Settings panel — which is right for the desktop, where
+  the agent's shell is the host, and wrong for a deployment whose shells run
+  in a remote sandbox: the daemon is reached over a local unix socket, so it
+  has to be started where the shell is. The OSS default
+  (`LocalBrowserEngine`) keeps the desktop behaviour byte-for-byte; a
+  remote-sandbox overlay binds an engine that starts / stops / inspects the
+  daemon there and reports `mode="sandbox"`, which the panel renders as a
+  headless daemon (no "Open my browser"). The tool handlers now pass the
+  calling session (`kernel_client.sandbox_scope_for` resolves its sandbox),
+  the routes pass the request owner, and the `browser` skill documents the
+  navigation `--timeout` heavy pages need and the stop/start recovery for a
+  wedged daemon.
+
 ### Fixed
 
 - **A delivered name can no longer break the snapshot** — `deliver_artifact`

@@ -420,12 +420,18 @@ def test_project_does_not_auto_include_official_skills(
 
 
 def test_browser_skill_gated_on_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The always-on browser skill is injected only when the browser engine
-    (Node + chrome-devtools-mcp) is available, so headless/TUI hosts without
-    Node don't advertise a dead skill. See docs/design/browser-feature.md §8."""
+    """The always-on browser skill is injected only when the bound browser
+    engine is available (local: Node + chrome-devtools-mcp), so headless/TUI
+    hosts without Node don't advertise a dead skill. The gate reads
+    ``ext.browser_engine`` — the local default delegates to Node detection.
+    See docs/design/browser-feature.md §8 / §9."""
     from valuz_agent.infra.config import settings
     from valuz_agent.infra.fs_registry import fs_registry
     from valuz_agent.modules.browser import service as browser_service
+    from valuz_agent.ports.browser_engine import LocalBrowserEngine
+    from valuz_agent.ports.extensions import ext
+
+    monkeypatch.setattr(ext, "browser_engine", LocalBrowserEngine())
 
     # always_on now returns the MATERIALIZED path under official_skill_root
     # (produced by ``sync_bundled_official_skills``); create it under a tmp data

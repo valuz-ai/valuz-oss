@@ -1398,6 +1398,8 @@
       "disconnected": "未连接",
       "modeManaged": "受管 Profile",
       "modeAttach": "连接到我的 Chrome",
+      "modeSandbox": "云端沙箱（无头）",
+      "sandboxNote": "在你的云端沙箱内无头运行，由 agent 按需启动；此处没有可打开的窗口。",
       "open": "打开我的浏览器",
       "stop": "停止",
       "opened": "浏览器已就绪",

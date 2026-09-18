@@ -32,6 +32,7 @@ from valuz_agent.ports.billing import (
     get_billing_port,
     set_billing_port,
 )
+from valuz_agent.ports.browser_engine import BrowserEnginePort, LocalBrowserEngine
 from valuz_agent.ports.connector_lifecycle import (
     ConnectorLifecycleHook,
     ConnectorOAuthSnapshot,
@@ -157,6 +158,7 @@ __all__ = [
     "AgentSaveOrigin",
     "Balance",
     "BillingPort",
+    "BrowserEnginePort",
     "BudgetStatus",
     "CapabilityStatus",
     "ConfigField",
@@ -167,6 +169,7 @@ __all__ = [
     "ConnectorSecretSnapshot",
     "DocsRuntimePort",
     "FileAddressResolverPort",
+    "LocalBrowserEngine",
     "LocalFileAddressResolver",
     "LocalConnectorOAuthRefreshProvider",
     "McpCatalogPort",

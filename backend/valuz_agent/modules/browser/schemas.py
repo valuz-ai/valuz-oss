@@ -19,7 +19,9 @@ class EnvReport(BaseModel):
 
 class BrowserStatus(BaseModel):
     daemon_running: bool
-    mode: str  # "managed" | "attach"
+    # "managed" | "attach" (local engine) | "sandbox" (a remote engine: the
+    # daemon runs headless where the agent's shell runs; no window to open).
+    mode: str
     node_ok: bool
     cli_prefix: str
     pid: int | None = None

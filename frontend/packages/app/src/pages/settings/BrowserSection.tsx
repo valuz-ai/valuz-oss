@@ -55,8 +55,13 @@ export const BrowserSection = () => {
   };
 
   const running = status?.daemon_running ?? false;
-  const modeLabel =
-    status?.mode === "attach"
+  // A remote engine runs the daemon headless where the agent's shell runs:
+  // there is no window to open, so the login helper is hidden and the panel
+  // explains instead.
+  const sandbox = status?.mode === "sandbox";
+  const modeLabel = sandbox
+    ? t("settings.browser.modeSandbox")
+    : status?.mode === "attach"
       ? t("settings.browser.modeAttach")
       : t("settings.browser.modeManaged");
   const statusText = running
@@ -79,7 +84,7 @@ export const BrowserSection = () => {
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void stop()}>
                 {t("settings.browser.stop")}
               </Button>
-            ) : (
+            ) : sandbox ? null : (
               <Button size="sm" loading={busy} disabled={loading} onClick={() => void open()}>
                 {t("settings.browser.open")}
               </Button>
@@ -98,6 +103,9 @@ export const BrowserSection = () => {
         </Card>
       )}
 
+      {sandbox && (
+        <p className="mb-2 text-xs text-ink-meta">{t("settings.browser.sandboxNote")}</p>
+      )}
       <p className="text-xs text-ink-meta">{t("settings.browser.riskNote")}</p>
     </SettingsSection>
   );

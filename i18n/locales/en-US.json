@@ -1398,6 +1398,8 @@
       "disconnected": "Not connected",
       "modeManaged": "Managed profile",
       "modeAttach": "Attach to my Chrome",
+      "modeSandbox": "Cloud sandbox (headless)",
+      "sandboxNote": "Runs headless inside your cloud sandbox and is started by the agent on demand. There is no window to open here.",
       "open": "Open my browser",
       "stop": "Stop",
       "opened": "Browser ready",

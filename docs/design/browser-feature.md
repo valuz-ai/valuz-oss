@@ -31,7 +31,7 @@ agent ──shell(skill)──> chrome-devtools navigate/snapshot/click/… ─�
 
 | 层 | 形式 | 说明 |
 |---|---|---|
-| **管理** | `browser_start` / `browser_stop` MCP 工具(模型可调,**实现是 host 代码**)+ Settings 面板(HTTP) | 起/停 daemon,选 profile / 模式 / 旗标。策略 host 拥有,模型只触发 |
+| **管理** | `browser_start` / `browser_stop` MCP 工具(模型可调,**实现是 host 代码**)+ Settings 面板(HTTP) | 起/停 daemon,选 profile / 模式 / 旗标。策略 host 拥有,模型只触发。两个前门都打到 `ext.browser_engine`(**§9 引擎端口**):OSS 默认是本进程的 `LocalBrowserEngine`,远程沙箱部署绑自己的引擎 |
 | **操作** | bundled **skill**,模型经 shell 跑 `chrome-devtools <tool>` | navigate / take_snapshot / click / fill / type / press_key / take_screenshot / handle_dialog |
 | **引擎** | `chrome-devtools-mcp` 的 `chrome-devtools` CLI(daemon 模式) | 连真实 Chrome,跨命令复用状态 |
 
@@ -58,7 +58,8 @@ agent ──shell(skill)──> chrome-devtools navigate/snapshot/click/… ─�
 
 | 件 | 路径 |
 |---|---|
-| host 服务(daemon 管理:detect/status/start/stop,封装 CLI)| `backend/valuz_agent/modules/browser/service.py` |
+| 引擎端口(daemon **在哪跑**;所有 gate 与前门的唯一入口)| `backend/valuz_agent/ports/browser_engine.py`(`BrowserEnginePort`;OSS 默认 `LocalBrowserEngine`,经 `ext.browser_engine` 绑定)|
+| host 服务(本地引擎:detect/status/start/stop,封装 CLI)| `backend/valuz_agent/modules/browser/service.py` |
 | DTO / 错误 | `backend/valuz_agent/modules/browser/{schemas,errors}.py` |
 | `browser_start`/`browser_stop` 工具(注册进 toolkit `base`/`lead`)| `backend/valuz_agent/modules/browser/tools.py`(`boot/steps.py` 注册)|
 | Settings HTTP(`/v1/browser/{status,open,stop}`)| `backend/valuz_agent/api/routes/browser.py`(`api/app.py` 挂载,契约在 `api/openapi.yaml`)|
@@ -139,8 +140,35 @@ agent ──shell(skill)──> chrome-devtools navigate/snapshot/click/… ─�
 4. **`sidecar.ts`**:staged CDT 树存在时,设 `VALUZ_NODE_PATH=process.execPath`(即 Electron 本体)+ `VALUZ_NODE_IS_ELECTRON=1` + `VALUZ_CDT_ENTRY`(`libexec/chrome-devtools-mcp/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools.js`)为绝对路径,绕开 GUI app 的精简 PATH。
 5. **`modules/browser/service.py`**:`_engine_argv()` 是*真实*调用 —— 两个 env 都设 → `[node, entry]`;否则 `npx`(仅 dev/带系统 node 的 headless)。host 自己的 status/start/stop 直接用它。`node_available()`:两个 env 都设即可用,否则探测系统 node。**`VALUZ_NODE_IS_ELECTRON=1` 时,引擎 spawn env 注入 `ELECTRON_RUN_AS_NODE=1`(`_engine_env()`)—— 只注入引擎相关 spawn,绝不进全局 `os.environ`**(否则会漏进 claude/codex CLI 等其他子进程;env var 本身只对 Electron 二进制生效,但作用域仍收紧到位)。缺了它 Electron 会以 GUI 模式启动(弹第二个 Valuz 实例)而不是当 node 用。
 6. **友好命令 `chrome-devtools`(显示友好)**:绝对路径前缀会原样显示在客户端工具卡里、很丑。故 `ensure_cli_on_path()` 在 **boot** 时(早于任何 session spawn —— env 在 spawn 时被继承,不是实时)往 `FsRegistry.browser_bin_dir()`(`~/.valuz-oss/bin`)写一个 wrapper(posix `sh` / win `.cmd`,内容 `exec <engine argv> "$@"`;Electron-as-node 模式下 wrapper 内嵌 `export ELECTRON_RUN_AS_NODE=1` / win `set`,daemon 再 spawn 靠 env 继承自动带上),并把该目录 **prepend 进 `os.environ["PATH"]`**;三 runtime 的 agent shell 都继承此 PATH —— Claude SDK 继承父 env、Codex `dict(os.environ)`、DeepAgents `LocalShellBackend(inherit_env=True)`(**其默认是空 env、无 PATH,必须显式开启**,否则连 wrapper/npx/node 都解析不到 → exit 127)。于是 `cli_prefix()` 返回 `chrome-devtools`,agent 跑/显示的就是 `chrome-devtools take_snapshot …`;wrapper 装不上时回退到真实前缀。dev 与打包一致(dev 底层仍 npx)。
-7. **gate**:引擎不可用(env 未全设且系统无 node)时,`capability_resolver.always_on_skill_paths` 不注入 browser skill、`boot/steps` 不注册 `browser_start`/`browser_stop`(也不装 wrapper),避免 headless/TUI 广告一个跑不起来的功能。
+7. **gate**:引擎不可用时(本地引擎 = env 未全设且系统无 node),`capability_resolver.always_on_skill_paths` 不注入 browser skill、`boot/steps` 不注册 `browser_start`/`browser_stop`(也不装 wrapper),避免 headless/TUI 广告一个跑不起来的功能。三处 gate 都读 `ext.browser_engine.available()`(§9),不再直接读 `node_available()`。
 
 **平台矩阵**:node 运行时 = 各平台自己的 Electron 本体(mac arm64/x64、linux arm64、win x64 天然全覆盖,无需 dist tag → node target 映射);JS 树一份共享。
 
-**范围与边界**:desktop-only。headless/TUI 暂不支持(将来支持时:无 Electron 可复用 → 届时重新引入独立 node —— 恢复 `scripts/download-node.sh`(git 历史)或把 node+包打进 valuz-server 的 PyInstaller bundle + `sys._MEIPASS` 自定位,见 `_detect_rg` 的 frozen 分支)。**Chrome 仍由用户自带**(puppeteer-core 按安装位置查找,不受 PATH 影响)。
+**范围与边界**:本节 = **本地引擎**(desktop)。headless/TUI 的本地引擎暂不支持(将来支持时:无 Electron 可复用 → 届时重新引入独立 node —— 恢复 `scripts/download-node.sh`(git 历史)或把 node+包打进 valuz-server 的 PyInstaller bundle + `sys._MEIPASS` 自定位,见 `_detect_rg` 的 frozen 分支)。**Chrome 仍由用户自带**(puppeteer-core 按安装位置查找,不受 PATH 影响)。agent shell 不在 host 上跑的部署(云沙箱)走 **§9 的远程引擎**,与本节无关。
+
+---
+
+## 9. 引擎端口:daemon 在哪跑(`BrowserEnginePort`)
+
+> 状态:Implemented。动机来自云沙箱部署:agent 的 shell 在一台**别的机器**(每 owner / 每 session 一个沙箱 microVM)上跑,而 §1–§8 的管理层全部假设 daemon 与 shell 同机(CLI 经本地 unix socket 找 daemon)。host 上就算装齐 node + Chrome 也没用——daemon 起在 host,沙箱里的 `chrome-devtools navigate_page` 连不到。
+
+**契约**(`backend/valuz_agent/ports/browser_engine.py`,经 `ext.browser_engine` 绑定):
+
+| 方法 | 谁调 | 语义 |
+|---|---|---|
+| `available()` | boot(注册工具)+ `always_on_skill_paths`(注入 skill)| 本部署能否跑 daemon。本地引擎 = 探测 node;远程引擎 = **对镜像的声明**(同 `RuntimeAvailabilityPort` 的思路) |
+| `bootstrap()` | boot,仅当 available | 一次性准备;本地引擎装 `chrome-devtools` wrapper 进 PATH。永不抛 |
+| `status / start / stop(user_id, session_id=None)` | `browser_start`/`browser_stop` 工具(带 session)、Settings 路由(只带 owner)| 在**该 session 的 shell 所在处**起/停/看 daemon。scoped allocator 下每 session / task 一个沙箱,所以远程引擎需要 session 定位;`kernel_client.sandbox_scope_for(user_id, session_id)` 给出同一个 scope |
+| `shutdown()` | host 进程退出 | 本地引擎关 Chrome;远程引擎通常 no-op(沙箱自己有生命周期)|
+
+**OSS 默认 `LocalBrowserEngine`** = §3–§8 的全部行为原样(桌面零变化)。DTO(`BrowserStatus` / `BrowserStartResult`)与错误(`BrowserError` 族)从端口模块再导出,overlay 只依赖端口。
+
+**`mode="sandbox"`**:远程引擎在 `BrowserStatus.mode` 报 `sandbox`,Settings 面板据此隐藏「打开我的浏览器」(无窗口可开)、改显示说明文案;`cli_prefix` 仍是 `chrome-devtools`(镜像把 wrapper 放进 PATH)。
+
+**远程引擎要自己解决的事**(OSS 不替它决定,但实测过、写下来省一次踩坑;2026-09 云沙箱 spike):
+
+- **策略旗标烘进镜像**,不靠 CLI 转发:chrome-devtools-mcp 1.2.0 把 `--chromeArg=--no-sandbox` 拆成两个 token 重新 spawn daemon,yargs 把 `--no-sandbox` 当布尔开关吃掉,root 下 Chrome 秒退(症状 `Protocol error (Target.setDiscoverTargets): Target closed`)。正解是 `--executablePath` 指向一个注入 `--no-sandbox --disable-dev-shm-usage --disable-gpu …` 的包装脚本——这也正是 host-owned 策略(§1)在镜像里的落点。
+- **无头 + 无显示**:「打开浏览器登录」这一半没有对应物;L1 只做 agent 自主浏览,登录态、可视面板另立方案。
+- **导航超时**:默认 3 s,重页面必超;skill 已教模型 `--timeout=30000`。导航到不响应的地址后 daemon 会整个卡死(后续命令一律 60 s `Timeout waiting for daemon response`),skill 已教 `browser_stop` → `browser_start` 恢复。
+- **多用户即触发 §6 的 P3 条件**:至少带 `--blockedUrlPattern`(私网段 / link-local)与 `--redactNetworkHeaders`。
+- 云端出口 IP + `HeadlessChrome` UA 会招反爬验证码;按 skill 纪律不绕过。
