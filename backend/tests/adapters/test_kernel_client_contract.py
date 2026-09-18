@@ -8,6 +8,8 @@ path + verb) or is explicitly declared in-process-only.
 
 from __future__ import annotations
 
+import httpx
+import pytest
 from app.main import app as kernel_app  # type: ignore[import-not-found]
 
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
@@ -134,3 +136,101 @@ def test_error_types_cover_the_kernel_status_codes() -> None:
         err = cls(status, "x")
         assert isinstance(err, KernelClientError)
         assert err.status == status
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "text", "expected"),
+    [
+        # FastAPI — every kernel route — always answers with ``detail``.
+        (404, {"detail": "Session not found"}, "", "Session not found"),
+        (400, {"detail": "bad anchor"}, "", "bad anchor"),
+        # NOT the kernel: the sandbox platform's traffic edge answering for an
+        # instance it no longer has. Keeping only the status turned this into
+        # "KernelSessionNotFoundError: 404" — a true number, a misleading name,
+        # and no trace of the actual reason (fin prod 2026-09-17).
+        (
+            404,
+            {
+                "error": "Not Found",
+                "message": "The sandbox instance does not exist or has been deleted",
+            },
+            "",
+            "does not exist or has been deleted",
+        ),
+        # Not JSON at all (an HTML 502 page from a proxy, say).
+        (502, None, "<html>Bad Gateway</html>", "Bad Gateway"),
+        # Nothing to say → the status is still better than an empty string.
+        (500, None, "", "500"),
+    ],
+)
+def test_error_detail_keeps_whatever_the_responder_actually_said(
+    status: int, body: object, text: str, expected: str
+) -> None:
+    """``detail`` when the kernel answered, the body itself when something in
+    front of it did. The second case is the one that used to vanish."""
+    from valuz_agent.adapters.kernel_client_http import _detail_of
+
+    resp = (
+        httpx.Response(
+            status,
+            json=body,
+            request=httpx.Request("GET", "https://kernel.test/x"),
+        )
+        if body is not None
+        else httpx.Response(
+            status,
+            text=text,
+            request=httpx.Request("GET", "https://kernel.test/x"),
+        )
+    )
+    assert expected in _detail_of(resp)
+
+
+async def test_a_gateway_404_reaches_the_caller_with_its_own_words() -> None:
+    """End to end through ``_request`` — the call that failed in production.
+
+    A sandbox reclaimed after its idle grace leaves the platform's traffic edge
+    answering for it, and every call into that host 404s. The host client is
+    free to keep calling that ``KernelSessionNotFoundError`` (it cannot tell
+    a gateway from a kernel by status alone, and the allocator is the layer
+    that must not hand out a dead instance), but it must not reduce the
+    platform's sentence to the number 404: that is the difference between an
+    error a user can act on and one only a pod log can explain.
+    """
+    from app.schemas import UpdateSessionRequest  # type: ignore[import-not-found]
+
+    from valuz_agent.adapters.kernel_client import KernelSessionNotFoundError
+    from valuz_agent.adapters.kernel_client_http import HttpKernelClient
+
+    edge = httpx.Response(
+        404,
+        json={
+            "error": "Not Found",
+            "message": "The sandbox instance does not exist or has been deleted",
+        },
+    )
+    client = HttpKernelClient("https://8000-inst.sandbox.test", token="t")
+    await client.aclose()
+    client._http = httpx.AsyncClient(
+        base_url="https://8000-inst.sandbox.test",
+        transport=httpx.MockTransport(lambda _req: edge),
+    )
+    try:
+        with pytest.raises(KernelSessionNotFoundError) as caught:
+            await client.update_session("owner", "session", UpdateSessionRequest())
+    finally:
+        await client.aclose()
+    assert "does not exist or has been deleted" in str(caught.value)
+
+
+def test_error_detail_is_bounded() -> None:
+    """A gateway can answer with a whole HTML page; it must not become the
+    exception message (and from there, a turn's user-visible error)."""
+    from valuz_agent.adapters.kernel_client_http import _DETAIL_MAX_CHARS, _detail_of
+
+    resp = httpx.Response(
+        502,
+        text="x" * 10_000,
+        request=httpx.Request("GET", "https://kernel.test/x"),
+    )
+    assert len(_detail_of(resp)) < _DETAIL_MAX_CHARS + 50

@@ -313,8 +313,15 @@ async def test_failed_convergence_cannot_run_with_stale_disabled_flags(
     else:
         monkeypatch.setattr(capabilities.kernel_client, "update_session", broken)
     hook = pre_turn.chat_capability_hook("session", "owner")
-    with pytest.raises(RequiredPreTurnError, match="current task check policy"):
+    with pytest.raises(RequiredPreTurnError, match="current task check policy") as caught:
         await hook()
+    # The client renders this string under "show details" on a failed turn.
+    # Without the cause every distinct upstream failure — kernel unreachable,
+    # sandbox reclaimed under us, preference store down — reads identically,
+    # and triage has to start in the pod logs for a traceback the user is
+    # already holding the tail of.
+    assert "store unavailable" in str(caught.value)
+    assert "RuntimeError" in str(caught.value)
     # Old storage is not fabricated away; the allocation hook must refuse
     # model dispatch until a later successful convergence replaces it.
     assert session.metadata["valuz"]["task_coverage_enabled"] is False

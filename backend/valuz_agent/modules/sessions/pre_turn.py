@@ -161,8 +161,14 @@ async def _refresh_citation_policy(
         logger.error("check policy refresh failed for session %s", session_id, exc_info=True)
         from valuz_agent.adapters import kernel_client
 
+        # Name the cause. This string is what the client renders under "show
+        # details" for a failed turn, and on its own it says only that
+        # something upstream of the model did not work — every one of these
+        # (kernel unreachable, sandbox reclaimed under us, preference store
+        # down) reads identically, so triage always started by going to the
+        # pod logs for a traceback the user already had the tail of.
         raise kernel_client.RequiredPreTurnError(
-            "Unable to resolve the current task check policy"
+            f"Unable to resolve the current task check policy: {type(exc).__name__}: {exc}"
         ) from exc
 
 
