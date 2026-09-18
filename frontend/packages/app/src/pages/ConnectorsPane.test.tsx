@@ -246,3 +246,57 @@ describe("ConnectorsPane extension slots", () => {
     expect(installedSection!.textContent).not.toContain("Team Search");
   });
 });
+
+describe("ConnectorsPane status pill", () => {
+  beforeEach(() => {
+    initI18n({ locale: "en-US", fallbackLocale: "en-US" });
+    vi.spyOn(connectorsApi, "listDirectory").mockResolvedValue({ items: [] });
+  });
+
+  afterEach(() => {
+    act(() => {
+      useCategoryRegistry.getState().remove("connector");
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("shows a switched-off connector as off, not as its last failure", async () => {
+    // The row this reproduces: a builtin whose probe once got a 404, after
+    // which the owner switched it off. Nothing re-probes a disabled connector,
+    // so the pane kept rendering "Connection failed" indefinitely — the pane
+    // read ``status`` and never looked at ``enabled``.
+    vi.spyOn(connectorsApi, "list").mockResolvedValue({
+      connectors: [
+        {
+          ...personalBuiltinConnector,
+          enabled: false,
+          status: "error",
+          error_message: "Session terminated",
+        } as unknown as ConnectorItem,
+      ],
+    });
+
+    render(<ConnectorsPane query="" addMode={null} onAddModeChange={vi.fn()} />);
+
+    expect(await screen.findByText("Off")).toBeTruthy();
+    expect(screen.queryByText("Connection failed")).toBeNull();
+  });
+
+  it("still shows a failure on a connector that is actually on", async () => {
+    vi.spyOn(connectorsApi, "list").mockResolvedValue({
+      connectors: [
+        {
+          ...personalBuiltinConnector,
+          enabled: true,
+          status: "error",
+          error_message: "Session terminated",
+        } as unknown as ConnectorItem,
+      ],
+    });
+
+    render(<ConnectorsPane query="" addMode={null} onAddModeChange={vi.fn()} />);
+
+    expect(await screen.findByText("Connection failed")).toBeTruthy();
+    expect(screen.queryByText("Off")).toBeNull();
+  });
+});

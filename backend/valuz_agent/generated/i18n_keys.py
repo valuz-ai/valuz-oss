@@ -564,6 +564,7 @@ I18nKey = Literal[
     "connector.selectPrompt",
     "connector.statusConnected",
     "connector.statusConnecting",
+    "connector.statusDisabled",
     "connector.statusError",
     "connector.statusNotConnected",
     "connector.systemManaged",

@@ -929,6 +929,7 @@
     "statusConnecting": "Connecting…",
     "statusConnected": "Connected",
     "statusError": "Connection failed",
+    "statusDisabled": "Off",
     "statusNotConnected": "Not connected",
     "groupInstalled": "Added",
     "groupOfficial": "Official",

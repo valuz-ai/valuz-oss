@@ -74,18 +74,7 @@ import {
   getAvatarIcon,
   pickAgentIcon,
 } from "./agent-icons";
-
-// Connector status → i18n key for the colored status pill — mirrors the
-// Connectors page so the agent's connector list reads the same. The two
-// "configured but not connected" states (pending_auth / unknown) read as
-// "未连接"; a bound-but-not-installed connector is treated as pending_auth too.
-const STATUS_LABEL_KEY: Record<string, string> = {
-  connected: "connector.statusConnected",
-  connecting: "connector.statusConnecting",
-  error: "connector.statusError",
-  pending_auth: "connector.statusNotConnected",
-  unknown: "connector.statusNotConnected",
-};
+import { connectorStatusView } from "../lib/connector-status";
 
 interface ConnectorMeta {
   display_name: string;
@@ -867,6 +856,7 @@ export const AgentDetailView = ({
           name: resource.name,
           description: meta?.description,
           status: resource.status,
+          enabled: installed?.enabled,
           navigable: Boolean(meta),
           removable: false,
         };
@@ -891,6 +881,7 @@ export const AgentDetailView = ({
           name: meta?.display_name ?? connectorSlug,
           description: meta?.description,
           status: installed?.status ?? "pending_auth",
+          enabled: installed?.enabled,
           navigable: Boolean(meta),
           removable: true,
         };
@@ -1439,7 +1430,7 @@ export const AgentDetailView = ({
                 </div>
               ) : (
                 displayedConnectors.map((connector) => {
-                  const statusKey = STATUS_LABEL_KEY[connector.status];
+                  const statusView = connectorStatusView(connector);
                   const body = (
                     <>
                       <div className="flex items-center gap-1.5">
@@ -1481,10 +1472,10 @@ export const AgentDetailView = ({
                       {/* Pill + delete grouped tightly (gap-2.5) so they read
                           together, matching the Connectors page list rows. */}
                       <div className="flex shrink-0 items-center gap-2.5">
-                        {statusKey ? (
+                        {statusView ? (
                           <StatusPill
-                            status={connector.status}
-                            label={t(statusKey as Parameters<typeof t>[0])}
+                            status={statusView.status}
+                            label={t(statusView.labelKey)}
                             className="shrink-0 px-1.5 py-0 text-micro leading-4"
                           />
                         ) : null}

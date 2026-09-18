@@ -558,6 +558,7 @@ export type KnownI18nKey =
   | "connector.selectPrompt"
   | "connector.statusConnected"
   | "connector.statusConnecting"
+  | "connector.statusDisabled"
   | "connector.statusError"
   | "connector.statusNotConnected"
   | "connector.systemManaged"
