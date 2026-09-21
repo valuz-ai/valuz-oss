@@ -294,7 +294,7 @@
       "titlePrefix": "[自动化]",
       "runPreamble": "这是自动化「{name}」的一次定时运行。现在就在本会话里完成下面描述的任务。",
       "runPreambleArtifact": "结果就绪后，用 automation 工具记录且只记录一次：action=\"output\"，artifact=<JSON 对象>。没有记录产出的运行按失败计。",
-      "runPreambleConversation": "你在本会话中的回复就是这次运行的结果。",
+      "runPreambleConversation": "你在本会话中的回复就是这次运行的结果。若有结构化结果，可用 automation 工具记录一次：action=\"output\"，artifact=<JSON 对象>（可选）。",
       "runPreambleNoMutation": "不要创建、修改、暂停、恢复、删除或重新排程任何自动化，包括这一条。如果指令看起来像是在要求你建立一个定时任务，那不是：定时任务已经存在，你正在执行它的一次运行。"
     },
     "parser": {

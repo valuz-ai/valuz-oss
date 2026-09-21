@@ -117,11 +117,15 @@ def run(ctx):
 - 模板变量：`{{input}}`（整段 JSON / 文本）、`{{input.<key>}}`（仅标量）以及 `{{today}}` `{{now}}` `{{tz}}` `{{last_run_at}}` 等。
 - `result.kind="artifact"` 的 agent run **必须**在回合结束前调 `output`（`artifact` 匹配 `result.schema`，
   `files` 为项目相对路径）**且只调一次**；没调 → run `failed` / `AUTOMATION_NO_ARTIFACT`。
+  `conversation` 的 run **也可以**调 `output` 记录结构化结果（可选，不调不算失败）。artifact 可带 `asOf`（内容覆盖的时期）
+  与 `mode`（`period` / `current`），读产出的页面据此标时间。
 - run 的会话里 `create` / `update` / `pause` / `resume` / `remove` 一律被拒（`AutomationMutationInsideRun`）；
   `run` 别的自动化仍可以。
 
 ## 8. 运行与验证（细节见 references/verify.md）
 
+- 等一个 run 结束：`run` 带 `wait_seconds`（≤60）；没到终态就 **`read_run` 带 `wait_seconds: 60` 连续调**（服务端长轮询，
+  到终态立即返回），**不要 sleep**。
 - 只有终态 **`success`** 算成功；`failed` / `timeout` / `cancelled` / `skipped` / `interrupted_by_shutdown` 是不同的事实，
   别混为一谈；`queued` / `running` 未完成——用 `read_run` 轮询，**不要再发一次 `run`**。
 - `run` 不带 `wait_seconds` 时只回「已入队 + run_id」（在 `message` 里）；带了就回 `run` 详情，`ok` 在 `success` 或仍在跑时为 true。

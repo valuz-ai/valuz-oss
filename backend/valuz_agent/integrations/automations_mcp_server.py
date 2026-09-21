@@ -788,14 +788,32 @@ async def _handle_read_run(
     denied = _scoped_row_or_err("read_run", row, project_id=project_id, scope=scope)
     if denied is not None:
         return denied
+    wait_s = payload.wait_seconds or 0
     try:
-        detail = await svc.get_run_detail(payload.automation_id, payload.run_id, user_id=user_id)
+        if wait_s > 0:
+            # Long-poll on the server: the DB is re-read every half second and
+            # the call returns the moment the run is terminal — so a caller
+            # that needs to wait chains read_run calls instead of sleeping.
+            detail = await svc.wait_for_run(
+                payload.automation_id, payload.run_id, timeout_s=wait_s, user_id=user_id
+            )
+        else:
+            detail = await svc.get_run_detail(
+                payload.automation_id, payload.run_id, user_id=user_id
+            )
     except AutomationRunNotFound as exc:
         return _err("read_run", str(exc.message), code=exc.__class__.__name__)
+    msg = f"Run {detail.run_id}: {detail.status}."
+    if detail.status in ("queued", "running"):
+        msg += (
+            f" Still {detail.status}"
+            + (f" after {wait_s}s" if wait_s else "")
+            + "; call read_run again with wait_seconds (up to 60) — do not sleep between calls."
+        )
     return AutomationToolResult(
         action="read_run",
         ok=True,
-        message=f"Run {detail.run_id}: {detail.status}.",
+        message=msg,
         run=detail,
     )
 
@@ -1045,7 +1063,10 @@ CONTRACTS (create/update; all optional, see the `automation` skill):
     An artifact result is ONE JSON object per run: a program returns it; an
     agent run records it with action="output" (artifact=…, files=[…]) exactly
     once. A code automation always has an artifact result. Task-mode agents
-    cannot declare one.
+    cannot declare one. A conversation-result automation MAY still record an
+    artifact with action="output" (optional there, required for the artifact
+    kind); an artifact may carry `asOf` (the period it is about) and `mode`
+    ("period" | "current") so a page shows the right time.
 
 Other actions: list returns existing automations (chat: all projects by
 default, scope="this" to narrow; project: always the current project). get
@@ -1054,7 +1075,8 @@ returns ONE automation's full detail by automation_id. update / pause / resume
 run's input per the input contract: a string for text, an object for json;
 never modifies the saved automation) and wait_seconds (0-60: block until the
 run finishes and return it — the way to verify a code automation end to end).
-runs lists recent runs; read_run (run_id) returns one run with its input,
+runs lists recent runs; read_run (run_id, optional wait_seconds 1-60 to
+long-poll until the run is terminal — chain calls, never sleep) returns one run with its input,
 artifact, files and log tail; cancel (run_id) stops a queued run or a running
 program. output records the artifact of the run THIS session is executing.
 Inside an automation run, create/update/pause/resume/remove are refused.
