@@ -658,6 +658,18 @@ class AutomationToolPayload(BaseModel):
     result: ResultContract | None = None
     # run: block up to N seconds for a terminal state (0 = return at once).
     wait_seconds: int | None = Field(default=None, ge=0, le=60)
+    # create only: ``"skip"`` persists at once and returns ``automation_id``
+    # instead of a proposal card — honoured only where the deployment's
+    # ``automation_create_policy`` allows it (an edition's site flow); anywhere
+    # else the tool falls back to the card and says why. Default ``"card"``.
+    confirmation: Literal["card", "skip"] | None = Field(
+        default=None,
+        description=(
+            "create only: 'skip' persists the automation immediately (no confirmation "
+            "card) and returns automation_id — ONLY for a site's automations, and only "
+            "where the deployment allows it; otherwise the card is shown. Default 'card'."
+        ),
+    )
     # read_run / cancel.
     run_id: str | None = None
     # runs: page size.
@@ -783,6 +795,9 @@ class AutomationToolResult(BaseModel):
     # confirmation card renders. ``automation`` stays ``None`` on create
     # (nothing is persisted until the user confirms).
     proposal: AutomationProposalSpec | None = None
+    # ``create`` with ``confirmation="skip"`` (persisted at once): the new
+    # automation's id, also inside ``automation``. ``None`` when a card was shown.
+    automation_id: str | None = None
     # ``run``: the run that was queued, whether or not the caller waited.
     run_id: str | None = None
     # ``run`` (when waited) / ``read_run`` / ``cancel`` / ``output``.

@@ -15,7 +15,7 @@ tags: [official, automation]
 
 | `action` | 必填 | 说明 |
 |---|---|---|
-| `create` | `name`、`trigger`；agent 执行还要 `prompt_template`；项目会话还要 `agent_slug` | **只提议，不落库**：返回 `proposal`，用户在卡片上点「创建」才真正生成 |
+| `create` | `name`、`trigger`；agent 执行还要 `prompt_template`；项目会话还要 `agent_slug` | **只提议，不落库**：返回 `proposal`，用户在卡片上点「创建」才真正生成。`confirmation: "skip"` 直接落库并返回 `automation_id`——只给站点流程用（站点技能会告诉你何时用），部署不允许时退回卡片并说明原因 |
 | `get` / `list` | `automation_id` / — | 单条完整详情 / 列表（临时对话默认全库，`scope:"this"` 收窄；项目会话只看本项目） |
 | `update` | `automation_id` + 要改的字段 | 可改 `name` `prompt_template` `trigger` `agent_slug` `action_kind` `worktree` `execution` `input_contract` `result` |
 | `pause` / `resume` / `remove` | `automation_id` | 暂停只停排程，显式 `run` 仍可跑 |
