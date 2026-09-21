@@ -30,7 +30,8 @@
 - **带 `wait_seconds`（1–60）**：阻塞到终态或超时，返回 `run` 详情。`ok` 在 `success` **或仍在 `queued` / `running`** 时都是 true，
   所以要看 `run.status`，不要只看 `ok`；未完成时 `message` 是 `Run … is still running after 60s; poll it with action='read_run'`。
   `error_code` = run 的 `error_code`（非 success 时）。
-- 程序可能跑几分钟：`wait_seconds` 到顶就改用 `read_run` 轮询；**不要再发 `run`**。
+- 程序可能跑几分钟：`wait_seconds` 到顶就改用 **`read_run` 带 `wait_seconds: 60`** 连续调——服务端每半秒查一次、
+  到终态立即返回，所以调用之间**不要 sleep**；**不要再发 `run`**。
 
 ## 3. `runs` 与 `read_run`
 
