@@ -32,6 +32,10 @@ from valuz_agent.ports.automation_code_executor import (
     AutomationCodeExecutor,
     LocalSubprocessCodeExecutor,
 )
+from valuz_agent.ports.automation_create_policy import (
+    AutomationCreatePolicyPort,
+    CardOnlyAutomationCreatePolicy,
+)
 from valuz_agent.ports.automation_event_source import AutomationEventSourceRegistry
 from valuz_agent.ports.automation_result import AutomationResultHook
 from valuz_agent.ports.automation_runtime import (
@@ -129,6 +133,9 @@ class Extensions:
         # semantics — a deployment projects artifacts into its own surfaces
         # (a site data channel, a workbench). OSS registers none.
         self.automation_result_hooks: list[AutomationResultHook] = []
+        # Whether the ``automation`` tool may persist a ``create`` without the
+        # confirmation card (ports/automation_create_policy.py). OSS: never.
+        self.automation_create_policy: AutomationCreatePolicyPort = CardOnlyAutomationCreatePolicy()
         self.billing: BillingPort = NoopBillingProvider()
         # User outcome signals (rating / copy / regenerate / fork / share) —
         # host table ``valuz_feedback``; an overlay decorates the local

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`automation` tool: `confirmation: "skip"` on `create`** — persists the
+  automation at once and returns `automation_id` instead of a confirmation
+  card, for an automation a site being built will read. Whether it is
+  honoured is a new port, `ext.automation_create_policy`
+  (`ports/automation_create_policy.py`): OSS binds the card-only policy, so
+  the card stays the only path here; an edition binds a policy for the flow
+  that needs it. A refusal never fails the call — the card is shown and the
+  message says why. The tool result gained `automation_id`; a persisted create
+  renders as the read-only tool card, not a confirm card.
+
 - **Automations have execution contracts** — an automation row now carries
   three orthogonal contracts next to its trigger: `input` (`none` / `text` /
   `json` with a JSON Schema and a default), `execution` (`agent` as before,

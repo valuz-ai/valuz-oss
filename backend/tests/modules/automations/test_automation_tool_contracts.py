@@ -110,6 +110,18 @@ class Stub:
             trigger_human_readable="Manual",
         )
 
+    async def create(
+        self,
+        payload: Any,
+        *,
+        calling_session_project_id: Any = None,
+        origin_tool_call_id: Any = None,
+        user_id: Any = None,
+    ) -> Any:
+        self._rec("create", payload=payload, user_id=user_id)
+        self.rows["auto-new"] = _item("auto-new")
+        return type("D", (), {"automation_id": "auto-new"})()
+
     async def run_now(self, automation_id: str, **kw: Any) -> Any:
         self._rec("run_now", automation_id=automation_id, **kw)
         return type("R", (), {"run_id": "run-1"})()
@@ -299,3 +311,64 @@ async def test_output_requires_an_automation_run_session(stub: Stub) -> None:
     }
     decoded = await _call(action="output")
     assert decoded["error_code"] == "MISSING_ARTIFACT"
+
+
+def _code_create_kw(**extra: Any) -> dict[str, Any]:
+    return {
+        "action": "create",
+        "name": "site feed",
+        "trigger": {"kind": "manual"},
+        "execution": {"kind": "code", "runtime": "python", "entry": "automations/x.py"},
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_skip_falls_back_to_the_card_under_the_oss_policy(stub: Stub) -> None:
+    decoded = await _call(**_code_create_kw(confirmation="skip"))
+    assert decoded["ok"] is True
+    assert decoded["proposal"] is not None
+    assert decoded["automation_id"] is None
+    assert "not honoured" in decoded["message"] and "not enabled" in decoded["message"]
+    assert not [c for c in stub.calls if c[0] == "create"]
+
+
+@pytest.mark.asyncio
+async def test_create_skip_persists_when_the_policy_allows(
+    stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from valuz_agent.ports.extensions import ext
+
+    seen: dict[str, Any] = {}
+
+    class _Allow:
+        async def unconfirmed_create_refusal(self, ctx: Any) -> str | None:
+            seen["ctx"] = ctx
+            return None
+
+    monkeypatch.setattr(ext, "automation_create_policy", _Allow())
+    decoded = await _call(**_code_create_kw(confirmation="skip"))
+    assert decoded["ok"] is True, decoded
+    assert decoded["proposal"] is None
+    assert decoded["automation_id"] == "auto-new"
+    assert decoded["automation"]["automation_id"] == "auto-new"
+    assert "Created automation" in decoded["message"] and "auto-new" in decoded["message"]
+    created = [c for c in stub.calls if c[0] == "create"]
+    assert len(created) == 1 and created[0][1]["user_id"] == "user-1"
+    assert seen["ctx"].execution_kind == "code" and seen["ctx"].session_id == "sess-1"
+
+
+@pytest.mark.asyncio
+async def test_create_without_the_flag_still_proposes_even_when_allowed(
+    stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from valuz_agent.ports.extensions import ext
+
+    class _Allow:
+        async def unconfirmed_create_refusal(self, ctx: Any) -> str | None:
+            return None
+
+    monkeypatch.setattr(ext, "automation_create_policy", _Allow())
+    decoded = await _call(**_code_create_kw())
+    assert decoded["proposal"] is not None and decoded["automation_id"] is None
+    assert not [c for c in stub.calls if c[0] == "create"]

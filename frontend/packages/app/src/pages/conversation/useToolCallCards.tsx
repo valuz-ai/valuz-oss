@@ -426,7 +426,18 @@ export function useToolCallCards({
         // render and be confirmable.
         const inputSpec = parseAutomationCreateInput(tool.input);
         const proposal = result?.proposal ?? null;
-        const isCreate = result?.action === "create" || inputSpec != null;
+        // A ``create`` the server already PERSISTED (``confirmation: "skip"``,
+        // honoured by the deployment's policy) carries ``automation`` and no
+        // proposal: there is nothing left to confirm, so it renders as the
+        // read-only tool card like ``get`` would, never as a confirm card.
+        const persistedCreate =
+          result?.action === "create" &&
+          result.ok &&
+          !proposal &&
+          (result.automation != null || result.automation_id != null);
+        const isCreate =
+          !persistedCreate &&
+          (result?.action === "create" || inputSpec != null);
         if (isCreate) {
           // Only a SERVER-validated proposal is confirmable. ``result`` is
           // null while the tool is still running (output not delivered yet)
