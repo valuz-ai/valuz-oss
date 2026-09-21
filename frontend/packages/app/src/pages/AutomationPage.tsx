@@ -36,6 +36,9 @@ import {
   type AutomationProjectTarget,
   type MemberWithAgent,
   type ActionKind,
+  type ExecutionContract,
+  type InputContract,
+  type ResultContract,
   type Trigger,
 } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
@@ -190,9 +193,7 @@ export const AutomationPage = () => {
   // ── Header ──────────────────────────────────────────────────────
 
   const pageHeader = useMemo(
-    () => (
-      <PageHeader title={<AutomationHubTitle active="automations" />} />
-    ),
+    () => <PageHeader title={<AutomationHubTitle active="automations" />} />,
     [],
   );
 
@@ -308,7 +309,7 @@ export const AutomationPage = () => {
   const handleDialogSubmit = async (data: {
     name: string;
     prompt_template: string;
-    agent_slug: string;
+    agent_slug: string | null;
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
@@ -316,6 +317,9 @@ export const AutomationPage = () => {
     playbook_version: number | null;
     event_source: string | null;
     event_refs: string[] | null;
+    execution: ExecutionContract;
+    input: InputContract;
+    result: ResultContract;
     /** Chat-standalone target only: chosen execution-location target id. */
     exec_location?: string;
   }) => {
@@ -336,14 +340,21 @@ export const AutomationPage = () => {
       : resolveApiBase({ projectId: selectedTarget.project_id ?? "" }, "") ||
         undefined;
     try {
+      const isCode = data.execution.kind === "code";
       const created = await automationsApi.create(
         {
           name: data.name,
           project_kind: selectedTarget.kind,
           project_id: selectedTarget.project_id,
-          agent_kind:
-            selectedTarget.kind === "chat" ? "library_agent" : "project_member",
-          agent_slug: data.agent_slug,
+          // Code executions have no agent — omit both fields.
+          ...(isCode
+            ? {}
+            : {
+                agent_kind: (selectedTarget.kind === "chat"
+                  ? "library_agent"
+                  : "project_member") as "library_agent" | "project_member",
+                agent_slug: data.agent_slug ?? undefined,
+              }),
           prompt_template: data.prompt_template,
           trigger: data.trigger,
           action_kind: data.action_kind,
@@ -352,6 +363,9 @@ export const AutomationPage = () => {
           playbook_version: data.playbook_version,
           event_source: data.event_source,
           event_refs: data.event_refs,
+          execution: data.execution,
+          input: data.input,
+          result: data.result,
         },
         baseUrl ? { baseUrl } : undefined,
       );
@@ -493,20 +507,23 @@ export const AutomationPage = () => {
                   automations: group.automations,
                 }))}
               agentName={(item) => {
+                // A code execution has no agent at all.
+                if (!item.agent_slug) return item.agent_name ?? undefined;
                 // Same source of truth as the 执行手册 page: the agent
                 // library's (locale-aware) names. A project member is a
                 // copy whose slug carries an 8-hex suffix, so resolve it
                 // back to its source agent when the copy itself is unknown.
+                const agentSlug = item.agent_slug;
                 const member = (projectMembers[item.project_id] ?? []).find(
-                  (entry) => entry.member.agent_slug === item.agent_slug,
+                  (entry) => entry.member.agent_slug === agentSlug,
                 );
                 const sourceSlug =
                   member?.member.source_agent_slug ??
-                  item.agent_slug.replace(/-[0-9a-f]{8}$/, "");
+                  agentSlug.replace(/-[0-9a-f]{8}$/, "");
                 const bySlug = (slug: string) =>
                   libraryAgents.find((agent) => agent.slug === slug)?.name;
                 return (
-                  bySlug(item.agent_slug) ??
+                  bySlug(agentSlug) ??
                   bySlug(sourceSlug) ??
                   member?.agent?.name ??
                   item.agent_name ??

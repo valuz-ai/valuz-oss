@@ -50,6 +50,9 @@ import {
   type ActivityTab,
   type ActionKind,
   type AutomationItem,
+  type ExecutionContract,
+  type InputContract,
+  type ResultContract,
   type Trigger,
   type ProjectDetail,
   type ProjectFileNode,
@@ -867,7 +870,7 @@ export const ProjectDetailPage = () => {
   const handleSubmitTask = async (data: {
     name: string;
     prompt_template: string;
-    agent_slug: string;
+    agent_slug: string | null;
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
@@ -875,7 +878,11 @@ export const ProjectDetailPage = () => {
     playbook_version: number | null;
     event_source: string | null;
     event_refs: string[] | null;
+    execution: ExecutionContract;
+    input: InputContract;
+    result: ResultContract;
   }) => {
+    const isCode = data.execution.kind === "code";
     // Edit mode: PATCH the existing row. The dialog is stateless and calls the
     // same submit handler for create + edit; ``editTask`` decides which.
     if (editTask) {
@@ -890,6 +897,9 @@ export const ProjectDetailPage = () => {
         playbook_version: data.playbook_version,
         event_source: data.event_source,
         event_refs: data.event_refs,
+        execution: data.execution,
+        input: data.input,
+        result: data.result,
       });
       toast.success(t("common.saved" as Parameters<typeof t>[0]));
       await reloadScheduledTasks();
@@ -898,13 +908,17 @@ export const ProjectDetailPage = () => {
     // Project detail page is bound to a specific project project by URL —
     // ``project_kind="project"`` + the project's id is the only valid pair
     // here. agent_kind is "project_member" (chat-only library_agent has no
-    // meaning inside a project).
+    // meaning inside a project; a code execution has no agent at all).
     await automationsApi.create({
       name: data.name,
       project_kind: "project",
       project_id: id,
-      agent_kind: "project_member",
-      agent_slug: data.agent_slug,
+      ...(isCode
+        ? {}
+        : {
+            agent_kind: "project_member" as const,
+            agent_slug: data.agent_slug ?? undefined,
+          }),
       prompt_template: data.prompt_template,
       trigger: data.trigger,
       action_kind: data.action_kind,
@@ -913,6 +927,9 @@ export const ProjectDetailPage = () => {
       playbook_version: data.playbook_version,
       event_source: data.event_source,
       event_refs: data.event_refs,
+      execution: data.execution,
+      input: data.input,
+      result: data.result,
     });
     toast.success(t("project.taskCreated" as Parameters<typeof t>[0]));
     const schedRes = await automationsApi.listGroups(id);
@@ -1702,9 +1719,7 @@ export const ProjectDetailPage = () => {
   /* ── PLACEHOLDER_RENDER ─────────────────────────────────────── */
 
   if (loading) {
-    return (
-      <LoadingState variant="page" />
-    );
+    return <LoadingState variant="page" />;
   }
 
   return (
@@ -1987,6 +2002,9 @@ export const ProjectDetailPage = () => {
                   playbook_version: editTask.playbook_version,
                   event_source: editTask.event_source ?? null,
                   event_refs: editTask.event_refs ?? null,
+                  execution: editTask.execution,
+                  input: editTask.input,
+                  result: editTask.result,
                 }
               : undefined
           }

@@ -33,7 +33,15 @@ from zoneinfo import ZoneInfo
 
 from valuz_agent.i18n import t
 from valuz_agent.infra.time_utils import now_ms
-from valuz_agent.modules.automations.models import AutomationRow, AutomationRunRow
+from valuz_agent.modules.automations.contracts import (
+    artifact_summary,
+    template_input_variables,
+)
+from valuz_agent.modules.automations.models import (
+    ACTIVE_RUN_STATUSES,
+    AutomationRow,
+    AutomationRunRow,
+)
 from valuz_agent.modules.automations.triggers import TriggerEvaluator
 from valuz_agent.ports.automation_runtime import (
     AutomationExecutionLease,
@@ -48,7 +56,9 @@ TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
 
 
 def _automation_check_config(
-    row: AutomationRow, run: AutomationRunRow, playbook_run: Any | None = None,
+    row: AutomationRow,
+    run: AutomationRunRow,
+    playbook_run: Any | None = None,
 ) -> TaskCheckConfig:
     """Pass owned run identity, not prompt text or host-based exemptions."""
     return TaskCheckConfig(
@@ -92,6 +102,56 @@ def _render_template(template: str, variables: dict[str, str]) -> str:
         return variables.get(m.group(1), "")
 
     return TEMPLATE_VAR_RE.sub(_replace, template)
+
+
+def _run_input_of(row: AutomationRow, run: AutomationRunRow) -> str | dict[str, Any] | None:
+    """The run's effective input as stored at enqueue time (already validated)."""
+    if getattr(row, "input_kind", "none") == "json":
+        value = getattr(run, "input_json", None)
+        return dict(value) if isinstance(value, dict) else None
+    if getattr(row, "input_kind", "none") == "text":
+        return getattr(run, "extra_input", None)
+    return None
+
+
+def _frame_agent_prompt(
+    row: AutomationRow,
+    run: AutomationRunRow,
+    rendered_prompt: str,
+    run_input: str | dict[str, Any] | None,
+) -> str:
+    """Tell the agent what it is: one run of an automation, not a request to
+    build one.
+
+    Without this a prompt like "generate the daily brief every weekday at
+    15:30" reads, to a fresh session, as an instruction to CREATE that
+    automation — observed in production: runs re-proposed themselves, and
+    one rewrote the user's automation. The preamble names the run, hands over
+    the structured input verbatim, and states the two rules (do the task now;
+    never create / modify / reschedule automations).
+    """
+    import json
+
+    wants_artifact = getattr(row, "result_kind", "conversation") == "artifact"
+    lines = [
+        f'<automation-run automation_id="{row.id}" run_id="{run.id}" '
+        f'trigger="{run.trigger_type}" name="{row.name}">',
+        t("backend.automation.runPreamble", params={"name": row.name}),
+        (
+            t("backend.automation.runPreambleArtifact")
+            if wants_artifact
+            else t("backend.automation.runPreambleConversation")
+        ),
+        t("backend.automation.runPreambleNoMutation"),
+        "</automation-run>",
+    ]
+    if isinstance(run_input, dict):
+        lines.append(
+            "<automation-input>\n"
+            + json.dumps(run_input, ensure_ascii=False, indent=2)
+            + "\n</automation-input>"
+        )
+    return "\n".join(lines) + "\n\n" + rendered_prompt
 
 
 def _build_template_variables(
@@ -147,7 +207,7 @@ def _build_template_variables(
         "task.name": row.name,
         "automation.id": row.id,
         "automation.name": row.name,
-        "agent.slug": row.agent_slug,
+        "agent.slug": row.agent_slug or "",
         "now": now_local.isoformat(),
         "now_utc": now_utc.isoformat(),
         "today": now_local.strftime("%Y-%m-%d"),
@@ -419,6 +479,24 @@ class InProcessAutomationRunner:
         # Bound before the ``try`` below so the catch-all handler can reach it
         # however early the failure happened.
         playbook_run: PlaybookRunRow | None = None
+
+        # ── Code execution: no agent, no prompt ──────────────────────────
+        # Marked running in its own unit of work, then handed to
+        # ``_finish_code_run`` exactly like a chat turn is handed to
+        # ``_finish_chat_run`` — the FIFO worker must not block on a program.
+        if await self._start_code_run(user_id, automation_id, run_id, lease=execution_lease):
+            finish_code = self._finish_code_run(
+                user_id=user_id,
+                automation_id=automation_id,
+                run_id=run_id,
+                lease=execution_lease,
+            )
+            if detach_chat:
+                asyncio.create_task(finish_code)
+            else:
+                await finish_code
+            return
+
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
             playbooks = PlaybookDatastore(db)
@@ -426,6 +504,11 @@ class InProcessAutomationRunner:
             run = await ds.last_run(user_id, automation_id)
             if not row or not run or run.id != run_id:
                 logger.warning("Run %s for automation %s not found", run_id, automation_id)
+                return
+            if run.status not in ACTIVE_RUN_STATUSES:
+                # Cancelled (or otherwise terminalised) between enqueue and
+                # pickup — nothing to execute.
+                logger.info("Run %s is already %s; not executing", run_id, run.status)
                 return
 
             # Owner boundary: an automation fires from the background scheduler
@@ -444,6 +527,8 @@ class InProcessAutomationRunner:
                     project_name=project_name,
                     effective_tz=effective_tz,
                 )
+                run_input = _run_input_of(row, run)
+                variables.update(template_input_variables(run_input))
                 rendered_prompt = _render_template(row.prompt_template, variables)
                 # Per-run extra input (e.g. an agent firing ``run`` with an
                 # ``input`` argument carrying a discovered task id) is appended
@@ -650,7 +735,9 @@ class InProcessAutomationRunner:
                 # turn AFTER this unit of work commits the ``running`` status
                 # (the background task re-reads a consistent, committed row).
                 handoff_args = (
-                    session.id, rendered_prompt, _automation_check_config(row, run, playbook_run)
+                    session.id,
+                    _frame_agent_prompt(row, run, rendered_prompt, run_input),
+                    _automation_check_config(row, run, playbook_run),
                 )
             except Exception as exc:
                 # Everything before ``create_session`` used to run with NO handler:
@@ -754,20 +841,27 @@ class InProcessAutomationRunner:
                 try:
                     pinned_playbook = (
                         await playbooks.get_run(user_id, run.playbook_run_id)
-                        if getattr(run, "playbook_run_id", None) else None
+                        if getattr(run, "playbook_run_id", None)
+                        else None
                     )
                     result = await session_svc.send_message_sync(
                         session_id,
                         rendered_prompt,
                         user_id=user_id,
-                        task_check_config=task_check_config or _automation_check_config(
-                            row, run, pinned_playbook
-                        ).model_copy(update={"configuration": {
-                            "action_kind": "chat", "trigger_type": run.trigger_type,
-                            "playbook_version": (
-                                pinned_playbook.definition_version if pinned_playbook else None
-                            ),
-                        }}),
+                        task_check_config=task_check_config
+                        or _automation_check_config(row, run, pinned_playbook).model_copy(
+                            update={
+                                "configuration": {
+                                    "action_kind": "chat",
+                                    "trigger_type": run.trigger_type,
+                                    "playbook_version": (
+                                        pinned_playbook.definition_version
+                                        if pinned_playbook
+                                        else None
+                                    ),
+                                }
+                            }
+                        ),
                     )
                     # ``send_message_sync`` returns normally even when the
                     # turn errored mid-stream — provider 401s, kernel SDK
@@ -793,6 +887,14 @@ class InProcessAutomationRunner:
                             text = payload.get("text", "")
                             if text:
                                 summary_parts.append(str(text)[:200])
+                    wants_artifact = getattr(row, "result_kind", "conversation") == "artifact"
+                    if wants_artifact:
+                        # The ``output`` action wrote the artifact from the
+                        # tool's own unit of work; reload those columns before
+                        # judging the run.
+                        await db.refresh(
+                            run, attribute_names=["artifact_json", "files_json", "result_summary"]
+                        )
                     if session_error_msg is not None:
                         run.status = "failed"
                         run.error_code = "SessionError"
@@ -803,9 +905,20 @@ class InProcessAutomationRunner:
                             session_id,
                             session_error_msg[:200],
                         )
+                    elif wants_artifact and getattr(run, "artifact_json", None) is None:
+                        # Declared an artifact, delivered none: that is a
+                        # failure, not a quiet success (a page bound to this
+                        # automation would otherwise wait forever).
+                        run.status = "failed"
+                        run.error_code = "AUTOMATION_NO_ARTIFACT"
+                        run.error_message = (
+                            "the run ended without calling the automation tool's output action"
+                        )
                     else:
                         run.status = "success"
-                        if summary_parts:
+                        if wants_artifact and isinstance(run.artifact_json, dict):
+                            run.result_summary = artifact_summary(run.artifact_json)
+                        elif summary_parts:
                             run.result_summary = summary_parts[-1]
                 except Exception as exc:  # noqa: BLE001
                     run.status = "failed"
@@ -865,6 +978,160 @@ class InProcessAutomationRunner:
         finally:
             self._active_ids.pop(automation_id, None)
 
+    # ── Code execution ─────────────────────────────────────────────
+
+    async def _start_code_run(
+        self,
+        user_id: str,
+        automation_id: str,
+        run_id: str,
+        *,
+        lease: AutomationExecutionLease,
+    ) -> bool:
+        """Mark a code run ``running`` and take the single-flight slot.
+
+        Returns ``False`` for anything that is not a runnable code run (an
+        agent row; a run that is no longer queued) so ``_execute_run`` carries
+        on with — or skips — the agent path. On ``True`` the caller must hand
+        the run to ``_finish_code_run``, which owns the release.
+        """
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+
+        async with async_unit_of_work() as db:
+            ds = AutomationDatastore(db)
+            row = await ds.get_automation(user_id, automation_id)
+            run = await ds.last_run(user_id, automation_id)
+            if not row or not run or run.id != run_id:
+                return False
+            if getattr(row, "execution_kind", "agent") != "code":
+                return False
+            if run.status not in ACTIVE_RUN_STATUSES:
+                return False
+            run.status = "running"
+            run.started_at = now_ms()
+            if not await lease.is_current():
+                logger.warning("Run %s lost execution lease before running write", run_id)
+                return False
+            self._active_ids[automation_id] = user_id
+            await ds.replace_run(run)
+            return True
+
+    async def _finish_code_run(
+        self,
+        *,
+        user_id: str,
+        automation_id: str,
+        run_id: str,
+        lease: AutomationExecutionLease | None = None,
+    ) -> None:
+        """Run the program and finalize the run OFF the serial worker.
+
+        Mirrors ``_finish_chat_run``: owns the program (through
+        ``code_runner``), the terminal run-row write, the reschedule and the
+        single-flight release. The program runs OUTSIDE any unit of work — it
+        may take minutes — and the terminal write happens in a fresh one,
+        fenced by the execution lease.
+        """
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.code_runner import (
+            artifact_event,
+            files_to_json,
+            fire_artifact_hooks,
+            run_code_automation,
+        )
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+
+        assert self._triggers is not None
+        execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
+        try:
+            async with async_unit_of_work(commit=False) as db:
+                ds = AutomationDatastore(db)
+                row = await ds.get_automation(user_id, automation_id)
+                run = await ds.get_run(user_id, automation_id, run_id)
+                if not row or not run:
+                    logger.warning("Code run %s for automation %s vanished", run_id, automation_id)
+                    return
+                previous = await ds.last_artifact_run(user_id, automation_id)
+                effective_tz = self._effective_tz_for(row)
+                db.expunge_all()
+
+            result = await run_code_automation(
+                user_id=user_id,
+                row=row,
+                run=run,
+                effective_input=_run_input_of(row, run),
+                previous=previous,
+                timezone=effective_tz,
+                locale=await self._user_locale(user_id),
+            )
+
+            async with async_unit_of_work() as db:
+                ds = AutomationDatastore(db)
+                row = await ds.get_automation(user_id, automation_id)
+                run = await ds.get_run(user_id, automation_id, run_id)
+                if not row or not run:
+                    logger.warning("Code run %s for automation %s vanished", run_id, automation_id)
+                    return
+                if run.status != "running":
+                    # Cancelled / interrupted by someone else meanwhile; that
+                    # write wins — ours would resurrect a terminal row.
+                    logger.info("Code run %s is %s; not overwriting", run_id, run.status)
+                    return
+                run.status = result.status
+                run.error_code = result.error_code
+                run.error_message = (result.error_message or "")[:500] or None
+                run.artifact_json = result.artifact
+                run.files_json = files_to_json(result.files) if result.files else None
+                run.executor_ref = result.executor_ref
+                run.log_tail = result.log_tail
+                run.result_summary = result.result_summary
+                run.completed_at = now_ms()
+                if run.started_at:
+                    run.duration_ms = run.completed_at - run.started_at
+                if not await execution_lease.is_current():
+                    logger.warning("Run %s lost execution lease before terminal write", run_id)
+                    return
+                await ds.replace_run(run)
+
+                row.last_run_at = run.triggered_at
+                if row.status == "enabled":
+                    row.next_run_at = self._triggers.next_fire_at(row, run.triggered_at)
+                else:
+                    row.next_run_at = None
+                row.updated_at = now_ms()
+                if not await execution_lease.is_current():
+                    logger.warning("Run %s lost execution lease before schedule advance", run_id)
+                    return
+                await ds.update_automation(row)
+                await ds.trim_runs(row.user_id, automation_id, keep=100)
+                logger.info("Code run %s completed: %s", run_id, run.status)
+
+            if result.status == "success" and result.artifact is not None:
+                await fire_artifact_hooks(
+                    artifact_event(
+                        row=row,
+                        run=run,
+                        artifact=result.artifact,
+                        files=result.files,
+                        producer="code",
+                    )
+                )
+        except Exception:
+            logger.exception("Background code run %s crashed", run_id)
+        finally:
+            self._active_ids.pop(automation_id, None)
+
+    async def _user_locale(self, user_id: str) -> str:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.settings.preferences import get_default_locale
+
+        try:
+            async with async_unit_of_work(commit=False) as db:
+                return str(await get_default_locale(db, user_id=user_id))
+        except Exception:  # noqa: BLE001 — locale is decoration for ctx
+            return "en-US"
+
     # ── Task-mode execution ────────────────────────────────────────
 
     async def _execute_task_kickoff(
@@ -909,7 +1176,7 @@ class InProcessAutomationRunner:
             task = await task_orchestrator.lifecycle.kickoff(
                 project_id=row.project_id,
                 goal=rendered_prompt,
-                lead_agent_slug=row.agent_slug,
+                lead_agent_slug=row.agent_slug or "",
                 title=title or row.name,
                 created_by="automation",
                 # Worktree isolation (design §5): the automation's flag rides

@@ -3,6 +3,8 @@ name = "valuz-oss-backend"
 version = "0.2.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    # Automation input/result contracts (modules/automations/contracts.py)
+    "jsonschema>=4.23",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "sqlalchemy[asyncio]>=2.0",

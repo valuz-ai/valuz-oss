@@ -467,6 +467,41 @@ export function useToolCallCards({
             null;
           const cardPlaybookVersion =
             proposal?.playbook_version ?? inputSpec?.playbook_version ?? null;
+          // The three contracts are only ever reliable off the SERVER-validated
+          // proposal (the raw tool input a model emits doesn't carry them
+          // consistently) — replay exactly what the server resolved.
+          const cardExecution = proposal?.execution ?? null;
+          const cardInput = proposal?.input ?? null;
+          const cardResult = proposal?.result ?? null;
+          const cardExecutionLabel =
+            cardExecution?.kind === "code"
+              ? t("automation.executionBadgeCode" as Parameters<typeof t>[0], {
+                  entry: cardExecution.entry,
+                  runtime: cardExecution.runtime,
+                })
+              : cardExecution?.kind === "agent" && cardExecution.mode === "task"
+                ? t(
+                    "automation.executionBadgeAgentTask" as Parameters<
+                      typeof t
+                    >[0],
+                  )
+                : cardExecution?.kind === "agent"
+                  ? t(
+                      "automation.executionBadgeAgentChat" as Parameters<
+                        typeof t
+                      >[0],
+                    )
+                  : undefined;
+          const cardInputLabel =
+            cardInput?.kind === "json"
+              ? t("automation.inputKindJson" as Parameters<typeof t>[0])
+              : cardInput?.kind === "text"
+                ? t("automation.inputKindText" as Parameters<typeof t>[0])
+                : undefined;
+          const cardResultLabel =
+            cardResult?.kind === "artifact"
+              ? t("automation.resultKindArtifact" as Parameters<typeof t>[0])
+              : undefined;
           const entry = automationProposalStates[tool.id] || {
             state: "pending" as const,
           };
@@ -479,6 +514,9 @@ export function useToolCallCards({
               actionKind={cardActionKind}
               worktree={cardWorktree}
               playbookVersion={cardPlaybookVersion}
+              executionLabel={cardExecutionLabel}
+              inputLabel={cardInputLabel}
+              resultLabel={cardResultLabel}
               state={entry.state}
               errorMessage={entry.errorMessage}
               validationError={validationError}
@@ -494,6 +532,9 @@ export function useToolCallCards({
                   worktree: cardWorktree,
                   playbook_definition_id: cardPlaybookDefinitionId,
                   playbook_version: cardPlaybookVersion,
+                  execution: cardExecution,
+                  input: cardInput,
+                  result: cardResult,
                 });
               }}
               onDismiss={() => handleDismissAutomation(tool.id)}

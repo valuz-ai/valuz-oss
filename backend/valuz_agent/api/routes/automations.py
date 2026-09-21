@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Body, Depends, Header
 
 from valuz_agent.api.deps import get_automation_service, get_current_user_id
 from valuz_agent.modules.automations.errors import (
@@ -42,7 +42,9 @@ from valuz_agent.modules.automations.schemas import (
     AutomationProposalStatusRequest,
     AutomationProposalStatusResponse,
     AutomationRunAcceptedResponse,
+    AutomationRunDetailResponse,
     AutomationRunItemResponse,
+    AutomationRunNowPayload,
     AutomationUpdatePayload,
     CronValidateRequest,
     CronValidationResultResponse,
@@ -211,6 +213,9 @@ async def confirm_automation_proposal(
         worktree=payload.worktree,
         playbook_definition_id=payload.playbook_definition_id,
         playbook_version=payload.playbook_version,
+        execution=payload.execution,
+        input_contract=payload.input,
+        result=payload.result,
     )
     # MCP-from-chat: forward the calling session's project so library agents land
     # in the user's current chat project rather than a freshly created one.
@@ -348,15 +353,58 @@ async def resume_automation(
 @router.post("/{automation_id}/run-now", status_code=202)
 async def run_automation_now(
     automation_id: str,
+    payload: AutomationRunNowPayload | None = Body(default=None),
     user_id: str = Depends(get_current_user_id),
     svc: AutomationService = Depends(get_automation_service),
 ) -> AutomationRunAcceptedResponse:
     """Enqueue an immediate run.
 
+    The body is optional. ``input`` is this run's input per the automation's
+    input contract (422 ``AutomationInputInvalid`` before any run exists);
+    ``wait_seconds`` blocks until the run is terminal — or the wait elapses —
+    and returns it in ``run``.
+
     Single-flight: returns 409 if the latest run is still ``queued`` or
     ``running`` so two rapid clicks don't burn double tokens.
     """
-    return await svc.run_now(automation_id, user_id=user_id)
+    accepted = await svc.run_now(
+        automation_id,
+        run_input=payload.input if payload is not None else None,
+        user_id=user_id,
+    )
+    if payload is not None and payload.wait_seconds > 0:
+        accepted.run = await svc.wait_for_run(
+            automation_id,
+            accepted.run_id,
+            timeout_s=float(payload.wait_seconds),
+            user_id=user_id,
+        )
+        accepted.status = accepted.run.status
+    return accepted
+
+
+@router.get("/{automation_id}/runs/{run_id}")
+async def get_automation_run(
+    automation_id: str,
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    svc: AutomationService = Depends(get_automation_service),
+) -> AutomationRunDetailResponse:
+    """One run with its content — effective input, artifact, delivered files,
+    log tail."""
+    return await svc.get_run_detail(automation_id, run_id, user_id=user_id)
+
+
+@router.post("/{automation_id}/runs/{run_id}/cancel")
+async def cancel_automation_run(
+    automation_id: str,
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    svc: AutomationService = Depends(get_automation_service),
+) -> AutomationRunDetailResponse:
+    """Stop a run: a queued run is terminalised at once; a running program
+    is asked to stop (409 for a running agent turn — stop it via its session)."""
+    return await svc.cancel_run(automation_id, run_id, user_id=user_id)
 
 
 @router.get("/{automation_id}/runs")

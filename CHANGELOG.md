@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Automations have execution contracts** — an automation row now carries
+  three orthogonal contracts next to its trigger: `input` (`none` / `text` /
+  `json` with a JSON Schema and a default), `execution` (`agent` as before,
+  or `code` — a Python or shell entry inside the project, run by an
+  `AutomationCodeExecutor` port with a hard timeout) and `result`
+  (`conversation` or `artifact` with a schema). Code runs never touch a
+  model: the OSS default `LocalSubprocessCodeExecutor` runs the entry as a
+  detached subprocess under `<project>/.valuz/automations/<id>/`, hands it
+  a `ctx.json` (input, trigger, previous artifact) and reads back an
+  `output.json` wrapper; it refuses to run on a cloud deployment, where an
+  overlay binds a sandbox executor. Runs gained `timeout` / `cancelled`
+  terminal states and `input_json` / `artifact_json` / `files_json` /
+  `log_tail`, `POST /run-now` accepts `{input, wait_seconds}`, and there are
+  run-detail and cancel routes. Agent runs are framed by an
+  `<automation-run>` preamble, receive the structured input, may not
+  create / modify / remove automations from inside a run, and an
+  `artifact` automation that never calls `output` fails with
+  `AUTOMATION_NO_ARTIFACT`. The `automation` tool grew `execution` /
+  `input` / `result` parameters and `runs` / `read_run` / `cancel` /
+  `output` actions; a bundled `automation` skill documents the runtime
+  protocol. `jsonschema` is now a direct dependency. Migration `0050`.
+
 - **The browser engine is a port** — `ext.browser_engine`
   (`ports/browser_engine.py`, `BrowserEnginePort`) now decides where the
   chrome-devtools daemon runs. Every gate the feature had read
