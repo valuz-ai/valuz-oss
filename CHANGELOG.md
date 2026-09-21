@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`automation` tool: `read_run` long-polls with `wait_seconds`** (1-60) —
+  the server re-reads the run every half second and returns the moment it is
+  terminal, so a caller chains `read_run` calls instead of sleeping; the
+  message says so while the run is still going.
+
 - **`automation` tool: `confirmation: "skip"` on `create`** — persists the
   automation at once and returns `automation_id` instead of a confirmation
   card, for an automation a site being built will read. Whether it is
@@ -59,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wedged daemon.
 
 ### Fixed
+
+- **A conversation-result automation may record an artifact** — `output`
+  on such a run was refused (`AutomationOutputNotExpected`) and a card reading
+  the automation stayed empty although the run had finished. The artifact
+  kind is what makes recording *required*; any agent automation may record
+  one. Artifacts may carry `asOf` / `mode` for time semantics (documented in
+  the `automation` skill).
 
 - **A code automation's declared files are recorded again, and a file the
   host cannot record no longer fails the run** — `deliver_files` handed the

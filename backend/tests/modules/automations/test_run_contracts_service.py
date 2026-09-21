@@ -19,7 +19,6 @@ from valuz_agent.modules.automations.errors import (
     AutomationArtifactInvalid,
     AutomationCancelUnsupported,
     AutomationInputInvalid,
-    AutomationOutputNotExpected,
     AutomationRunNotActive,
     AutomationTaskArtifactUnsupported,
 )
@@ -215,13 +214,28 @@ class TestRecordArtifact:
         assert hooks.await_args.args[0].producer == "agent"
 
     @pytest.mark.asyncio
-    async def test_refuses_conversation_rows_and_bad_artifacts(
+    async def test_a_conversation_automation_may_still_record_an_artifact(
         self, svc: AutomationService
     ) -> None:
+        """Production, 2026-09-21: a run on a conversation automation reached for
+        output, was refused, and its card stayed empty. 'conversation' means the
+        artifact is optional — not forbidden."""
         svc._ds.get_automation.return_value = _row(result_kind="conversation")  # noqa: SLF001
+        run = _run()
+        svc._ds.get_run.return_value = run  # noqa: SLF001
+        with (
+            patch("valuz_agent.modules.automations.code_runner.fire_artifact_hooks", AsyncMock()),
+            patch.object(svc, "_resolve_task_links", AsyncMock(return_value={})),
+        ):
+            detail = await svc.record_artifact(
+                "auto-1", "run-1", artifact={"summary": "x", "asOf": "2026-09-21"}, user_id="u1"
+            )
+        assert run.artifact_json == {"summary": "x", "asOf": "2026-09-21"}
+        assert detail.artifact == {"summary": "x", "asOf": "2026-09-21"}
+
+    @pytest.mark.asyncio
+    async def test_refuses_bad_artifacts_and_inactive_runs(self, svc: AutomationService) -> None:
         svc._ds.get_run.return_value = _run()  # noqa: SLF001
-        with pytest.raises(AutomationOutputNotExpected):
-            await svc.record_artifact("auto-1", "run-1", artifact={"summary": "x"}, user_id="u1")
         svc._ds.get_automation.return_value = _row()  # noqa: SLF001
         with pytest.raises(AutomationArtifactInvalid):
             await svc.record_artifact("auto-1", "run-1", artifact={"no": "summary"}, user_id="u1")

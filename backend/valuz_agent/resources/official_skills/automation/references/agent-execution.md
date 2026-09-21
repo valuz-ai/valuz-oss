@@ -41,7 +41,7 @@ run 的第一条用户消息由平台拼成，顺序固定：
 
 未知变量渲染成空字符串。写模板时把输入当成**已知会存在**的键来引用（由 `input_contract.schema` 的 `required` 保证）。
 
-## 3. `output` 动作（只对 `result.kind="artifact"` 的 chat run）
+## 3. `output` 动作（`result.kind="artifact"` 必须调；`conversation` 可选）
 
 ```json
 { "action": "output",
@@ -60,7 +60,11 @@ run 的第一条用户消息由平台拼成，顺序固定：
   run 已到非成功终态 → `AutomationRunNotActive`。
 - `artifact.summary` 若是字符串会成为 run 列表里的 `result_summary`；给一句人能读的摘要。
 
-conversation 结果的 run：你的回复就是结果（`result_summary` 取最后一条助手消息前 200 字），不需要也不能调 `output`。
+conversation 结果的 run：你的回复就是结果（`result_summary` 取最后一条助手消息前 200 字）；如果有结构化结果，
+也可以调一次 `output` 记录下来（可选——不调不算失败，调了就和 artifact run 一样落库、可被页面读到）。
+
+artifact 的两个约定键（可选）：`asOf` = 这份内容覆盖的时期（周报是上一周的最后一天，不是运行日）；`mode` =
+`"period"`（一段时间的内容，历史即产品）或 `"current"`（当前状态的刷新）。没写就按「未知」呈现，不会被猜成运行时间。
 
 ## 4. run 内的禁令
 

@@ -80,7 +80,6 @@ from valuz_agent.modules.automations.errors import (
     AutomationInputInvalid,
     AutomationNameEmpty,
     AutomationNotFound,
-    AutomationOutputNotExpected,
     AutomationPlaybookNotFound,
     AutomationPlaybookTaskUnsupported,
     AutomationPlaybookVersionNotFound,
@@ -1800,7 +1799,13 @@ class AutomationService:
             raise AutomationRunNotActive()
         contract = result_contract_of(row)
         if not isinstance(contract, ArtifactResult):
-            raise AutomationOutputNotExpected()
+            # A conversation automation did not PROMISE an artifact, but one it
+            # records is still the run's structured result: stored, published
+            # to whatever reads artifacts, summarised. "Required" is what the
+            # artifact kind adds — not the only kind allowed to record one.
+            # (Measured on production: a run that reached for output on a
+            # conversation automation was refused, and its card stayed empty.)
+            contract = ArtifactResult()
         try:
             clean = validate_artifact(contract, artifact)
         except ContractViolationError as exc:

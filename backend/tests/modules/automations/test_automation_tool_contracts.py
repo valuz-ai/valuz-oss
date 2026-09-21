@@ -372,3 +372,17 @@ async def test_create_without_the_flag_still_proposes_even_when_allowed(
     decoded = await _call(**_code_create_kw())
     assert decoded["proposal"] is not None and decoded["automation_id"] is None
     assert not [c for c in stub.calls if c[0] == "create"]
+
+
+@pytest.mark.asyncio
+async def test_read_run_with_wait_seconds_long_polls_on_the_server(stub: Stub) -> None:
+    decoded = await _call(
+        action="read_run", automation_id="auto-1", run_id="run-1", wait_seconds=30
+    )
+    waited = [c for c in stub.calls if c[0] == "wait_for_run"]
+    assert waited and waited[0][1]["timeout_s"] == 30
+    assert decoded["run"]["run_id"] == "run-1"
+    # without wait_seconds it is a plain read
+    stub.calls.clear()
+    await _call(action="read_run", automation_id="auto-1", run_id="run-1")
+    assert not [c for c in stub.calls if c[0] == "wait_for_run"]

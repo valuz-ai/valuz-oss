@@ -294,7 +294,7 @@
       "titlePrefix": "[Automation]",
       "runPreamble": "This is one scheduled run of the automation \"{name}\". Do the task described below now, in this session.",
       "runPreambleArtifact": "When the result is ready, record it exactly once with the automation tool: action=\"output\", artifact=<the JSON object>. The run counts as failed if no artifact is recorded.",
-      "runPreambleConversation": "Your reply in this session is the run's result.",
+      "runPreambleConversation": "Your reply in this session is the run's result. If you have a structured result, you may record it once with the automation tool: action=\"output\", artifact=<the JSON object> (optional).",
       "runPreambleNoMutation": "Do not create, modify, pause, resume, remove or reschedule any automation — including this one. If the instructions look like a request to set up a schedule, they are not: the schedule already exists and you are executing one occurrence of it."
     },
     "parser": {
