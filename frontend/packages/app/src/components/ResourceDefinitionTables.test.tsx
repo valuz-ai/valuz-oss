@@ -17,6 +17,9 @@ const automation: AutomationItem = {
   agent_slug: "valurion",
   agent_name: "Valurion",
   action_kind: "chat",
+  execution: { kind: "agent", mode: "chat" },
+  input: { kind: "none" },
+  result: { kind: "conversation" },
   worktree: false,
   playbook_definition_id: null,
   playbook_version: null,
@@ -84,7 +87,9 @@ describe("canonical resource definition tables", () => {
     expect(screen.getByText("状态")).toBeTruthy();
     expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "季度复盘" })[0]!);
+    await userEvent.click(
+      screen.getAllByRole("button", { name: "季度复盘" })[0]!,
+    );
     expect(onOpen).toHaveBeenCalledWith(playbook);
 
     await userEvent.click(screen.getAllByRole("button", { name: "操作" })[0]!);

@@ -238,6 +238,16 @@ class Settings(BaseSettings):
     # login with the authenticated user_id.
     initialize_user_content_on_startup: bool = True
 
+    # ── Code automations (modules/automations/code_runner.py) ─────────
+    # Interpreter for ``execution.kind='code'`` programs on the desktop. The
+    # packaged backend's own ``sys.executable`` is a frozen app, not a general
+    # interpreter, so this must name a real python3; unset = ``python3`` on
+    # PATH. Override with VALUZ_AUTOMATION_PYTHON.
+    automation_python: str | None = None
+    # How many run directories (``.valuz/automations/<id>/runs/<run>``) a code
+    # automation keeps; older ones are removed after each run.
+    automation_run_dirs_keep: int = 20
+
     # Custom URL scheme the desktop shell registers (Electron
     # ``setAsDefaultProtocolClient`` — see
     # frontend/apps/desktop/src/main/deep-link-utils.ts ``DEEP_LINK_PROTOCOL``).

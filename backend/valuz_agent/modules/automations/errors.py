@@ -220,3 +220,75 @@ class AutomationCrossProjectDenied(ForbiddenError):
 
     error_code = 403_711
     message = "Automation belongs to a different project"
+
+
+# ── Contracts (input / execution / result) ─────────────────────────────
+
+
+class AutomationInputInvalid(UnprocessableEntityError):
+    """The run input breaks the row's ``input`` contract — a missing required
+    key, a wrong type, an input handed to a ``none`` automation. Raised before
+    a run row exists, from every entrance (HTTP / MCP / deployment callers)."""
+
+    error_code = 422_722
+    message = "Automation input does not match its input contract"
+
+
+class AutomationCodeEntryInvalid(UnprocessableEntityError):
+    """``execution.entry`` is not a clean path inside the project."""
+
+    error_code = 422_723
+    message = "Code entry must be a relative path inside the project"
+
+
+class AutomationTaskArtifactUnsupported(UnprocessableEntityError):
+    """A task automation's run finishes before the task starts, so there is
+    nowhere to attach an artifact; only chat and code executions may declare
+    ``result.kind = "artifact"``."""
+
+    error_code = 422_724
+    message = "Task automations cannot declare an artifact result"
+
+
+class AutomationContractInvalid(UnprocessableEntityError):
+    """A contract that does not parse — an invalid JSON Schema, a default of
+    the wrong shape."""
+
+    error_code = 422_725
+    message = "Invalid automation contract"
+
+
+class AutomationArtifactInvalid(UnprocessableEntityError):
+    """The artifact an agent tried to record breaks the ``result`` contract."""
+
+    error_code = 422_726
+    message = "Artifact does not match the result contract"
+
+
+class AutomationOutputNotExpected(UnprocessableEntityError):
+    """``output`` was called for an automation whose result is a conversation."""
+
+    error_code = 422_727
+    message = "This automation does not declare an artifact result"
+
+
+class AutomationCancelUnsupported(ConflictError):
+    """Only a queued run, or a running program, can be cancelled today; a
+    running agent turn is a session and is stopped through the session."""
+
+    error_code = 409_714
+    message = "Only queued runs and running code runs can be cancelled"
+
+
+class AutomationRunNotActive(ConflictError):
+    error_code = 409_715
+    message = "Run is already finished"
+
+
+class AutomationMutationInsideRun(ForbiddenError):
+    """The ``automation`` tool was asked to create / change / remove an
+    automation from inside an automation run's own session. A run does its
+    task; it does not rewrite the schedule that started it."""
+
+    error_code = 403_712
+    message = "Automations cannot be created or modified from inside an automation run"

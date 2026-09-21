@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ChevronRight,
   Clock3,
+  Eye,
   FilePenLine,
   ListChecks,
   MessageSquare,
@@ -11,6 +12,7 @@ import {
   Play,
   Power,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -28,7 +30,10 @@ import {
   type ActionKind,
   type AutomationDetail,
   type AutomationRunItem,
+  type ExecutionContract,
+  type InputContract,
   type MemberWithAgent,
+  type ResultContract,
   type Trigger,
 } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
@@ -37,9 +42,57 @@ import {
   formatCreatedAt,
   type AutomationAgentChoice,
 } from "@valuz/app/components";
+import {
+  describeRunStatus,
+  describeTriggerType,
+} from "../components/describe-trigger";
+import { AutomationRunDetailPanel } from "./AutomationRunDetailPanel";
+import { AutomationRunInputDialog } from "./AutomationRunInputDialog";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
+
+/** Runs the empty-run filter keeps even without a session — terminal
+ *  non-success outcomes a code run can reach without ever spawning a
+ *  session (agent conversation). */
+const TERMINAL_NON_SUCCESS_STATUSES = new Set([
+  "failed",
+  "timeout",
+  "cancelled",
+]);
+
+function executionSummary(
+  execution: ExecutionContract,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (execution.kind === "code") {
+    return t(k("automation.executionBadgeCode"), {
+      entry: execution.entry,
+      runtime: execution.runtime,
+    });
+  }
+  return execution.mode === "task"
+    ? t(k("automation.executionBadgeAgentTask"))
+    : t(k("automation.executionBadgeAgentChat"));
+}
+
+function inputKindLabel(
+  input: InputContract,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (input.kind === "text") return t(k("automation.inputKindText"));
+  if (input.kind === "json") return t(k("automation.inputKindJson"));
+  return t(k("automation.inputKindNone"));
+}
+
+function resultKindLabel(
+  result: ResultContract,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  return result.kind === "artifact"
+    ? t(k("automation.resultKindArtifact"))
+    : t(k("automation.resultKindConversation"));
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -104,6 +157,9 @@ export const AutomationDetailPage = () => {
   const [editMembers, setEditMembers] = useState<MemberWithAgent[] | null>(
     null,
   );
+  const [runInputOpen, setRunInputOpen] = useState(false);
+  const [runDetailId, setRunDetailId] = useState<string | null>(null);
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -174,17 +230,47 @@ export const AutomationDetailPage = () => {
     }
   };
 
-  const handleRunNow = async () => {
-    if (!detail || detail.status !== "enabled" || runBusy) return;
+  const runNowWithInput = async (input?: string | Record<string, unknown>) => {
+    if (!detail) return;
     setRunBusy(true);
     try {
-      await automationsApi.runNow(automationId);
+      if (input !== undefined) {
+        await automationsApi.runNow(automationId, { input });
+      } else {
+        await automationsApi.runNow(automationId);
+      }
       toast.success(t(k("automation.runQueued")));
+      setRunInputOpen(false);
       void refreshRuns();
     } catch (error) {
       toast.error(t(k("automation.runFailed"), { error: String(error) }));
     } finally {
       setRunBusy(false);
+    }
+  };
+
+  const handleRunNow = async () => {
+    if (!detail || detail.status !== "enabled" || runBusy) return;
+    // ``none`` input runs immediately; ``text``/``json`` open the input
+    // prompt so the run's input is collected before firing.
+    if (detail.input.kind !== "none") {
+      setRunInputOpen(true);
+      return;
+    }
+    await runNowWithInput();
+  };
+
+  const handleCancelRun = async (runId: string) => {
+    if (cancellingRunId) return;
+    setCancellingRunId(runId);
+    try {
+      await automationsApi.cancelRun(automationId, runId);
+      toast.success(t(k("automation.runCancelSuccess")));
+      void refreshRuns();
+    } catch (error) {
+      toast.error(t(k("automation.runCancelFailed"), { error: String(error) }));
+    } finally {
+      setCancellingRunId(null);
     }
   };
 
@@ -202,7 +288,7 @@ export const AutomationDetailPage = () => {
   const handleEditSubmit = async (data: {
     name: string;
     prompt_template: string;
-    agent_slug: string;
+    agent_slug: string | null;
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
@@ -210,6 +296,9 @@ export const AutomationDetailPage = () => {
     playbook_version: number | null;
     event_source: string | null;
     event_refs: string[] | null;
+    execution: ExecutionContract;
+    input: InputContract;
+    result: ResultContract;
   }) => {
     try {
       await automationsApi.update(automationId, data);
@@ -246,10 +335,17 @@ export const AutomationDetailPage = () => {
       : (from ?? "/automations");
   const backLabel = t(k("common.back"));
 
-  // Drop runs that never produced a session — interrupted-on-shutdown
-  // or recovered-skip ticks that fired but never kicked off a task/chat.
-  // They carry no title or destination, so they'd read as empty rows.
-  const visibleRuns = runs.filter((r) => r.session_id);
+  // Drop only the truly empty rows — interrupted-on-shutdown / recovered-skip
+  // ticks that fired but produced nothing at all. A code run never has a
+  // session, so it stays visible when it has an artifact, ran somewhere
+  // (executor_ref), or reached a terminal non-success outcome worth seeing.
+  const visibleRuns = runs.filter(
+    (r) =>
+      Boolean(r.session_id) ||
+      r.has_artifact ||
+      Boolean(r.executor_ref) ||
+      TERMINAL_NON_SUCCESS_STATUSES.has(r.status),
+  );
 
   const groupedRuns = (() => {
     const now = new Date();
@@ -267,45 +363,60 @@ export const AutomationDetailPage = () => {
     const isTask = run.task_status !== null;
     const Icon = isTask ? ListChecks : MessageSquare;
     const eff = run.task_status ?? run.status;
-    const pillStatus =
-      eff === "completed" || eff === "success"
-        ? "completed"
-        : eff === "failed"
-          ? "failed"
-          : eff === "active" || eff === "running" || eff === "queued"
-            ? "running"
-            : eff === "paused"
-              ? "paused"
-              : "skipped";
-    const pillLabel =
-      pillStatus === "completed"
-        ? t(k("automation.execStatusOk"))
-        : pillStatus === "failed"
-          ? t(k("automation.execStatusErr"))
-          : pillStatus === "running"
-            ? t(k(eff === "queued" ? "automation.execStatusPending" : "cron.running"))
-            : pillStatus === "paused"
-              ? t(k("cron.paused"))
-              : t(k("automation.execStatusSkip"));
+    const { pillStatus, label: pillLabel } = describeRunStatus(eff, t);
+    const canOpen = Boolean(run.task_id || run.session_id);
+    const isCodeRun = detail.execution.kind === "code";
+    const canCancel =
+      isCodeRun && (run.status === "queued" || run.status === "running");
     return (
-      <button
+      <div
         key={run.run_id}
-        onClick={() => {
-          if (run.task_id) navigate(`/tasks/${run.task_id}`);
-          else if (run.session_id) navigate(`/conversation/${run.session_id}`);
-        }}
         className="group flex w-full items-center gap-2 rounded-xl px-3 py-3 text-left transition-colors hover:bg-surface-soft"
       >
-        <Icon className="h-3 w-3 shrink-0 text-ink-meta" strokeWidth={2} />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
-          {run.result_summary?.trim() || detail.name}
-        </span>
+        <button
+          type="button"
+          disabled={!canOpen}
+          onClick={() => {
+            if (run.task_id) navigate(`/tasks/${run.task_id}`);
+            else if (run.session_id)
+              navigate(`/conversation/${run.session_id}`);
+          }}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
+        >
+          <Icon className="h-3 w-3 shrink-0 text-ink-meta" strokeWidth={2} />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
+            {run.result_summary?.trim() || detail.name}
+          </span>
+        </button>
         <span className="shrink-0 text-2xs text-ink-meta">
+          {describeTriggerType(run.trigger_type, t)}
+          {" · "}
           {formatCreatedAt(run.triggered_at, t)}
           {run.duration_ms ? ` · ${formatDuration(run.duration_ms)}` : ""}
         </span>
         <StatusPill status={pillStatus} label={pillLabel} />
-      </button>
+        {canCancel ? (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={t(k("automation.runCancel"))}
+            title={t(k("automation.runCancel"))}
+            disabled={cancellingRunId === run.run_id}
+            onClick={() => void handleCancelRun(run.run_id)}
+          >
+            <XCircle className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t(k("automation.runDetailTitle"))}
+          title={t(k("automation.runDetailTitle"))}
+          onClick={() => setRunDetailId(run.run_id)}
+        >
+          <Eye className="h-3.5 w-3.5" />
+        </Button>
+      </div>
     );
   };
 
@@ -334,20 +445,26 @@ export const AutomationDetailPage = () => {
             <h1 className="text-2xl font-semibold text-ink-heading">
               {detail.name}
             </h1>
-            <p className="mt-1 flex items-center gap-2 text-sm text-ink-meta">
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-ink-meta">
               <span>{detail.trigger_human_readable}</span>
-              {detail.agent_name && (
+              <span>·</span>
+              <span>{executionSummary(detail.execution, t)}</span>
+              {detail.execution.kind === "agent" ? (
                 <>
                   <span>·</span>
-                  <span>{detail.agent_name}</span>
+                  <span>{detail.agent_name ?? "—"}</span>
                 </>
-              )}
+              ) : null}
               {detail.playbook_definition_id && detail.playbook_version ? (
                 <>
                   <span>·</span>
                   <span>Playbook v{detail.playbook_version}</span>
                 </>
               ) : null}
+              <span>·</span>
+              <span>{inputKindLabel(detail.input, t)}</span>
+              <span>·</span>
+              <span>{resultKindLabel(detail.result, t)}</span>
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 pt-1">
@@ -385,7 +502,11 @@ export const AutomationDetailPage = () => {
             >
               <Trash2 className="h-4 w-4" />
             </Button>
-            <Button size="sm" disabled={detail.status !== "enabled" || runBusy} onClick={() => void handleRunNow()}>
+            <Button
+              size="sm"
+              disabled={detail.status !== "enabled" || runBusy}
+              onClick={() => void handleRunNow()}
+            >
               <Play className="h-3.5 w-3.5" />
               {t(k("cron.runNow"))}
             </Button>
@@ -454,6 +575,9 @@ export const AutomationDetailPage = () => {
           playbook_version: detail.playbook_version,
           event_source: detail.event_source ?? null,
           event_refs: detail.event_refs ?? null,
+          execution: detail.execution,
+          input: detail.input,
+          result: detail.result,
         }}
         title={t(k("automation.dialogTitleEditNamed"), { name: detail.name })}
       />
@@ -465,6 +589,23 @@ export const AutomationDetailPage = () => {
         description={t(k("automation.deleteConfirmDesc"))}
         confirmLabel={t(k("common.delete"))}
         onConfirm={handleDelete}
+      />
+
+      <AutomationRunInputDialog
+        open={runInputOpen}
+        onOpenChange={setRunInputOpen}
+        inputContract={detail.input}
+        busy={runBusy}
+        onSubmit={(input) => runNowWithInput(input)}
+      />
+
+      <AutomationRunDetailPanel
+        automationId={automationId}
+        runId={runDetailId}
+        open={runDetailId !== null}
+        onOpenChange={(open) => {
+          if (!open) setRunDetailId(null);
+        }}
       />
     </div>
   );

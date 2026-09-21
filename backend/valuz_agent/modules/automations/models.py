@@ -4,7 +4,13 @@ Two tables:
 
 - ``valuz_automation``      — one row per user-defined automation (Trigger × Action).
 - ``valuz_automation_run``  — one row per fire (cron tick / interval tick / manual /
-                              recovered-skip / future webhook).
+                              agent / api / event / recovered-skip).
+
+Run ``status`` values: ``queued`` → ``running`` → one of ``success`` /
+``failed`` / ``timeout`` / ``cancelled`` / ``skipped`` /
+``interrupted_by_shutdown``. ``timeout`` and ``cancelled`` are distinct facts
+from ``failed`` — a program that hit its limit and a run somebody stopped must
+stay tellable apart from a program that crashed.
 
 See [ADR-021](../../../../docs/decisions/ADR-021-automation-trigger-agent.md):
 Trigger × Agent. Execution identity (model / provider / runtime / instructions /
@@ -17,6 +23,8 @@ CheckConstraints enforce the discriminated-trigger invariant at the DB layer
 ``>= 30`` ``interval_seconds``). Pydantic validates again at the API edge,
 but the DB guard is the last-line defence against direct-insert bugs.
 """
+
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -35,6 +43,13 @@ from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, Us
 
 _JSON_VARIANT = JSON().with_variant(JSONB(), "postgresql")
 
+#: Run statuses that will never change again.
+TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(
+    {"success", "failed", "timeout", "cancelled", "skipped", "interrupted_by_shutdown"}
+)
+#: Run statuses the single-flight guard treats as "in progress".
+ACTIVE_RUN_STATUSES: frozenset[str] = frozenset({"queued", "running"})
+
 
 class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_automation"
@@ -48,9 +63,33 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
             "AND interval_seconds >= 30) OR trigger_kind != 'interval'",
             name="ck_automation_interval_seconds_floor",
         ),
+        # ``NULL`` is the code-execution case (no agent at all); the pairing
+        # rule below insists an agent row names one.
         CheckConstraint(
-            "agent_kind IN ('project_member', 'library_agent')",
+            "agent_kind IS NULL OR agent_kind IN ('project_member', 'library_agent')",
             name="ck_automation_agent_kind",
+        ),
+        # ── Contracts (input / execution / result) ─────────────────────
+        CheckConstraint(
+            "execution_kind IN ('agent', 'code')",
+            name="ck_automation_execution_kind",
+        ),
+        CheckConstraint(
+            "(execution_kind = 'code' AND code_entry IS NOT NULL "
+            "AND code_runtime IN ('python', 'shell')) OR execution_kind != 'code'",
+            name="ck_automation_code_entry_when_code",
+        ),
+        CheckConstraint(
+            "execution_kind = 'code' OR (agent_kind IS NOT NULL AND agent_slug IS NOT NULL)",
+            name="ck_automation_agent_when_agent",
+        ),
+        CheckConstraint(
+            "input_kind IN ('none', 'text', 'json')",
+            name="ck_automation_input_kind",
+        ),
+        CheckConstraint(
+            "result_kind IN ('conversation', 'artifact')",
+            name="ck_automation_result_kind",
         ),
         CheckConstraint(
             "trigger_kind IN ('cron', 'interval', 'manual', 'event')",
@@ -60,8 +99,7 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
         # itself is validated against the registry at the API edge — the DB can
         # only insist that the column is populated.
         CheckConstraint(
-            "(trigger_kind = 'event' AND event_source IS NOT NULL) "
-            "OR trigger_kind != 'event'",
+            "(trigger_kind = 'event' AND event_source IS NOT NULL) OR trigger_kind != 'event'",
             name="ck_automation_event_source_when_event",
         ),
         CheckConstraint(
@@ -79,8 +117,9 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     # display / ownership semantics — runner resolves either kind through
     # the same project_member lookup (library agents are instantiated
     # into the bound chat project at create time; see ADR-021 §4).
-    agent_kind: Mapped[str] = mapped_column(String(32))
-    agent_slug: Mapped[str] = mapped_column(String(128))
+    # Both NULL for ``execution_kind='code'`` — a program has no agent.
+    agent_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    agent_slug: Mapped[str | None] = mapped_column(String(128), nullable=True)
     project_id: Mapped[str] = mapped_column(String(36), index=True)
     prompt_template: Mapped[str] = mapped_column(Text)
     # Execution mode at fire time:
@@ -99,6 +138,29 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     # every member) in ONE worktree. Clean worktrees auto-remove when the run
     # / task finishes. Ignored for non-git (chat-sentinel) projects.
     worktree: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ── Contracts (modules/automations/contracts.py) ──────────────────
+    # ``execution_kind='agent'`` is everything that existed before contracts
+    # (``action_kind`` is then the agent mode). ``'code'`` runs a program in
+    # the project — ``code_entry`` is the author's project-relative path,
+    # ``code_runtime`` how to launch it, ``code_timeout_s`` its hard limit.
+    execution_kind: Mapped[str] = mapped_column(String(16), default="agent", server_default="agent")
+    code_runtime: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    code_entry: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    code_timeout_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # What a run may be given: ``none`` / ``text`` (the old free-text
+    # ``extra_input``) / ``json`` (an object validated against
+    # ``input_schema``; ``default_input`` is merged under the run's input).
+    input_kind: Mapped[str] = mapped_column(String(16), default="none", server_default="none")
+    input_schema: Mapped[dict[str, Any] | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    default_input: Mapped[Any | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    # What a run must produce: ``conversation`` (the session / task it made)
+    # or ``artifact`` (one JSON object on the run row, validated against
+    # ``result_schema`` when set).
+    result_kind: Mapped[str] = mapped_column(
+        String(16), default="conversation", server_default="conversation"
+    )
+    result_schema: Mapped[dict[str, Any] | None] = mapped_column(_JSON_VARIANT, nullable=True)
 
     # ── Trigger (何时触发) ────────────────────────────────────────────
     trigger_kind: Mapped[str] = mapped_column(String(32))
@@ -149,9 +211,7 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
 class AutomationRunRow(Base, PrimaryKeyMixin, UserMixin):
     __tablename__ = "valuz_automation_run"
     __table_args__ = (
-        UniqueConstraint(
-            "automation_id", "event_id", name="uq_automation_run_event"
-        ),
+        UniqueConstraint("automation_id", "event_id", name="uq_automation_run_event"),
     )
 
     automation_id: Mapped[str] = mapped_column(String(36), index=True)
@@ -199,3 +259,22 @@ class AutomationRunRow(Base, PrimaryKeyMixin, UserMixin):
     # occurrence all carry the same id and collide on the unique index below,
     # so at most one run exists per (automation, event).
     event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # ── Contract-era columns ──────────────────────────────────────────
+    # The effective input of a ``json`` automation (default merged under the
+    # caller's input, validated). ``text`` inputs keep using ``extra_input``.
+    input_json: Mapped[dict[str, Any] | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    # The one artifact an ``artifact`` result run produced (≤ 1 MiB).
+    artifact_json: Mapped[dict[str, Any] | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    # Files the run delivered, as artifact rows:
+    # ``[{artifact_id, name, mime_type, size_bytes}]``.
+    files_json: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    # Where a code run executed — ``local:<pid>`` / ``sandbox:<instance>``.
+    executor_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Last 64 KiB of a code run's stdout + stderr; the full logs stay in the
+    # run directory.
+    log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Opaque label of the caller for ``trigger_type='api'`` (``site:<key>``).
+    invoked_by_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Set by ``cancel``; the code runner polls it and stops the program.
+    cancel_requested_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

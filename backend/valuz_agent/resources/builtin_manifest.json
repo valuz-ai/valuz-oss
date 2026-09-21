@@ -42,6 +42,14 @@
       "display_order": 4
     },
     {
+      "type": "skill",
+      "slug": "automation",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "official_skills/automation",
+      "display_order": 5
+    },
+    {
       "type": "plugin",
       "slug": "office",
       "version": "1.0.0",

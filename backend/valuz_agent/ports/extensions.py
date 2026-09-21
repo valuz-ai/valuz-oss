@@ -28,7 +28,12 @@ from valuz_agent.integrations.sandbox_credential_hmac import (
 )
 from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 from valuz_agent.ports.agent_lifecycle import AgentLifecycleHook, NoopAgentLifecycleHook
+from valuz_agent.ports.automation_code_executor import (
+    AutomationCodeExecutor,
+    LocalSubprocessCodeExecutor,
+)
 from valuz_agent.ports.automation_event_source import AutomationEventSourceRegistry
+from valuz_agent.ports.automation_result import AutomationResultHook
 from valuz_agent.ports.automation_runtime import (
     AutomationRuntimePort,
     InProcessAutomationRuntime,
@@ -114,6 +119,16 @@ class Extensions:
         # may replace only the lifecycle/enqueue transport. OSS defaults to the
         # existing single-process tick + FIFO runner and failure monitor.
         self.automation_runtime: AutomationRuntimePort = InProcessAutomationRuntime()
+        # Where a code automation's program runs. OSS: a child process of this
+        # one (desktop). A ``cloud`` deployment MUST bind a sandbox-backed
+        # executor — the local one refuses to start there, so a forgotten
+        # binding fails the run instead of executing a user's program in the
+        # host process (ports/automation_code_executor.py).
+        self.automation_code_executor: AutomationCodeExecutor = LocalSubprocessCodeExecutor()
+        # Observers of structured results (``result.kind='artifact'``), list
+        # semantics — a deployment projects artifacts into its own surfaces
+        # (a site data channel, a workbench). OSS registers none.
+        self.automation_result_hooks: list[AutomationResultHook] = []
         self.billing: BillingPort = NoopBillingProvider()
         # User outcome signals (rating / copy / regenerate / fork / share) —
         # host table ``valuz_feedback``; an overlay decorates the local

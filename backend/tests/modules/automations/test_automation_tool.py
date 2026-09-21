@@ -48,9 +48,7 @@ class StubService:
     def _record(self, method: str, **kwargs: Any) -> None:
         self.calls.append((method, kwargs))
 
-    async def create(
-        self, payload, *, calling_session_project_id=None, user_id=None
-    ):  # type: ignore[no-untyped-def]
+    async def create(self, payload, *, calling_session_project_id=None, user_id=None):  # type: ignore[no-untyped-def]
         self._record(
             "create",
             payload=payload,
@@ -92,9 +90,7 @@ class StubService:
         )()
         return detail
 
-    async def preview(
-        self, payload, *, calling_session_project_id=None, user_id=None
-    ):  # type: ignore[no-untyped-def]
+    async def preview(self, payload, *, calling_session_project_id=None, user_id=None):  # type: ignore[no-untyped-def]
         """``create`` action now PROPOSES (validate + preview, no persist) —
         the dispatcher calls ``preview`` instead of ``create``. Record the call
         so routing/defaulting asserts still inspect the resolved payload."""
@@ -143,6 +139,8 @@ class StubService:
         trigger_type="manual",
         invoked_by_session_id=None,
         extra_input=None,
+        run_input=None,
+        invoked_by_ref=None,
         user_id=None,
     ):  # type: ignore[no-untyped-def]
         self._record(
@@ -150,6 +148,8 @@ class StubService:
             automation_id=automation_id,
             trigger_type=trigger_type,
             extra_input=extra_input,
+            run_input=run_input,
+            invoked_by_ref=invoked_by_ref,
             user_id=user_id,
         )
         return type("Run", (), {"run_id": f"run-{automation_id}"})()
@@ -224,9 +224,7 @@ def patched_dispatch(monkeypatch: pytest.MonkeyPatch, stub_service: StubService)
     project_kind = {"value": "project"}
     session_agent_slug = {"value": None}
 
-    async def _fake_session_context(
-        session_id: str, user_id: str | None = None
-    ):  # noqa: ARG001
+    async def _fake_session_context(session_id: str, user_id: str | None = None):  # noqa: ARG001
         return project_id["value"], project_kind["value"], session_agent_slug["value"]
 
     async def _fake_build_service(db, user_id: str | None = None):  # noqa: ARG001
@@ -686,6 +684,8 @@ class TestScopeAndCrossProject:
                     "automation_id": "auto-run",
                     "trigger_type": "agent",
                     "extra_input": None,
+                    "run_input": None,
+                    "invoked_by_ref": None,
                     "user_id": "user-1",
                 },
             )
@@ -697,20 +697,18 @@ class TestScopeAndCrossProject:
         stub_service: StubService,
     ) -> None:
         # ``run`` with an ``input`` arg (e.g. a triage agent passing a discovered
-        # task id) forwards it as ``extra_input`` so the runner appends it to the
-        # automation's instruction for that single run.
+        # task id) forwards it as the run's input; the service validates it
+        # against the automation's input contract (text → ``extra_input``).
         stub_service._rows["auto-run"] = _row(  # noqa: SLF001
             automation_id="auto-run", project_id="ws-proj"
         )
         result = await mod.automation_invoke(
-            AutomationToolPayload(
-                action="run", automation_id="auto-run", input="task_id=abc123"
-            )
+            AutomationToolPayload(action="run", automation_id="auto-run", input="task_id=abc123")
         )
         decoded = json.loads(result)
         assert decoded["ok"] is True
         run_call = next(c for c in stub_service.calls if c[0] == "run_now")
-        assert run_call[1]["extra_input"] == "task_id=abc123"
+        assert run_call[1]["run_input"] == "task_id=abc123"
 
 
 # ── Decorated ``automation`` thin wrapper trigger coercion ─────────
@@ -788,16 +786,23 @@ class TestToolSchemaExposure:
         schema = await self._automation_schema()
         props = schema.get("properties", {})
         assert props["action"]["enum"] == [
-            "create", "get", "list", "update", "pause", "resume", "run", "remove",
+            "create",
+            "get",
+            "list",
+            "update",
+            "pause",
+            "resume",
+            "run",
+            "remove",
+            "runs",
+            "read_run",
+            "cancel",
+            "output",
         ]
         # Optional enums arrive as anyOf → the first non-null branch.
-        scope_enum = next(
-            v["enum"] for v in props["scope"]["anyOf"] if "enum" in v
-        )
+        scope_enum = next(v["enum"] for v in props["scope"]["anyOf"] if "enum" in v)
         assert scope_enum == ["all", "this"]
-        kind_enum = next(
-            v["enum"] for v in props["action_kind"]["anyOf"] if "enum" in v
-        )
+        kind_enum = next(v["enum"] for v in props["action_kind"]["anyOf"] if "enum" in v)
         assert kind_enum == ["chat", "task"]
 
     async def test_trigger_exposes_discriminated_union_with_kind_enum(self) -> None:
@@ -836,9 +841,7 @@ class TestToolSchemaExposure:
             "playbook_version",
             "scope",
         ):
-            assert props[field].get("description"), (
-                f"{field} has no description in the schema"
-            )
+            assert props[field].get("description"), f"{field} has no description in the schema"
 
 
 # ── Session-context resolution ─────────────────────────────────────

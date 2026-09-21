@@ -18,6 +18,15 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from valuz_agent.modules.automations.contracts import (
+    AgentExecution,
+    CodeExecution,
+    ConversationResult,
+    ExecutionContract,
+    InputContract,
+    NoneInput,
+    ResultContract,
+)
 from valuz_agent.modules.automations.triggers import MIN_INTERVAL_SECONDS
 
 # Fan-out guard: a delivery that matches this automation's refs is checked in
@@ -167,13 +176,23 @@ class AutomationCreatePayload(BaseModel):
     project_kind: Literal["chat", "project"]
     project_id: str | None = None
 
-    agent_kind: AgentKind
-    agent_slug: str = Field(min_length=1)
+    # Both required for an agent execution; both ignored (and stored NULL)
+    # for a code execution, which has no agent.
+    agent_kind: AgentKind | None = None
+    agent_slug: str | None = None
 
     # Optional when a Playbook is pinned. At least one of prompt_template or
     # playbook_definition_id is enforced by AutomationService so API, Agent
-    # proposal, and update paths share the same composition rule.
+    # proposal, and update paths share the same composition rule. Unused
+    # (may be empty) for a code execution.
     prompt_template: str = ""
+
+    # ── Contracts (modules/automations/contracts.py) ──────────────────
+    # ``execution`` omitted = an agent execution whose mode is ``action_kind``
+    # (the pre-contract wire shape keeps working unchanged).
+    execution: ExecutionContract | None = None
+    input: InputContract = Field(default_factory=NoneInput)
+    result: ResultContract = Field(default_factory=ConversationResult)
 
     # Optional immutable Playbook pin. ``playbook_version`` may be omitted on
     # create; the service resolves and stores the Definition's current version
@@ -225,6 +244,24 @@ class AutomationCreatePayload(BaseModel):
             raise ValueError("trigger kind 'event' requires event_source")
         return self
 
+    @model_validator(mode="after")
+    def _check_execution(self) -> AutomationCreatePayload:
+        execution = self.effective_execution
+        if isinstance(execution, AgentExecution):
+            if not self.agent_kind or not (self.agent_slug or "").strip():
+                raise ValueError("agent_kind and agent_slug are required for an agent execution")
+            # Keep the legacy column in step so readers that still branch on
+            # ``action_kind`` see the same mode the contract declares.
+            self.action_kind = execution.mode
+        return self
+
+    @property
+    def effective_execution(self) -> AgentExecution | CodeExecution:
+        """The execution contract, with the legacy ``action_kind`` folded in."""
+        if self.execution is not None:
+            return self.execution
+        return AgentExecution(mode=self.action_kind)
+
 
 class AutomationUpdatePayload(BaseModel):
     """Partial update. ``None`` everywhere = "leave field untouched".
@@ -267,6 +304,14 @@ class AutomationUpdatePayload(BaseModel):
     event_source: str | None = Field(default=None, max_length=64)
     event_refs: list[str] | None = None
 
+    # Contracts are replaced whole, like ``trigger``: passing one swaps the
+    # entire contract, omitting it keeps the stored one. Switching an agent
+    # row to ``code`` drops its agent; switching a code row to ``agent``
+    # needs an ``agent_slug`` (in this payload or already on the row).
+    execution: ExecutionContract | None = None
+    input: InputContract | None = None
+    result: ResultContract | None = None
+
     @field_validator("event_refs")
     @classmethod
     def _check_event_refs(cls, value: list[str] | None) -> list[str] | None:
@@ -294,15 +339,25 @@ class AutomationItemResponse(BaseModel):
     project_kind: str
 
     name: str
-    agent_kind: str
-    agent_slug: str
+    # ``None`` for a code execution (no agent). Clients branch on
+    # ``execution.kind`` first.
+    agent_kind: str | None
+    agent_slug: str | None
     # Resolved name of the bound agent so the list can render it without an
     # extra round-trip. ``None`` when the agent has been deleted upstream —
     # the row stays so the user can see the broken reference and fix it.
     agent_name: str | None
     # Execution mode (see ``ActionKind``). UI uses this to render the
-    # appropriate badge and pre-select the right Tab when editing.
+    # appropriate badge and pre-select the right Tab when editing. For a
+    # code execution this is the column default and carries no meaning.
     action_kind: str
+    # The three contracts, always present. The defaults are what a
+    # pre-contract row means (agent / none / conversation) — the service
+    # always fills them from the row; the defaults exist for constructors
+    # that predate contracts.
+    execution: ExecutionContract = Field(default_factory=AgentExecution)
+    input: InputContract = Field(default_factory=NoneInput)
+    result: ResultContract = Field(default_factory=ConversationResult)
     # Worktree isolation flag (both action kinds; git-repo projects only).
     worktree: bool = False
     playbook_definition_id: str | None = None
@@ -347,7 +402,11 @@ class AutomationRunItemResponse(BaseModel):
     run_id: str
     automation_id: str
     project_id: str
+    # ``cron`` / ``interval`` / ``manual`` / ``agent`` / ``api`` / ``event`` /
+    # ``recovered_skip`` / ``system``.
     trigger_type: str
+    # ``queued`` / ``running`` / ``success`` / ``failed`` / ``timeout`` /
+    # ``cancelled`` / ``skipped`` / ``interrupted_by_shutdown``.
     status: str
     triggered_at: int
     started_at: int | None
@@ -356,9 +415,18 @@ class AutomationRunItemResponse(BaseModel):
     result_summary: str | None
     error_code: str | None
     error_message_key: str | None
+    error_message: str | None = None
     session_id: str | None
     created_files: list[str]
     playbook_run_id: str | None = None
+    # Where a code run executed (``local:<pid>`` / ``sandbox:<instance>``).
+    executor_ref: str | None = None
+    # Opaque caller label for ``trigger_type='api'`` runs.
+    invoked_by_ref: str | None = None
+    # Whether the run stored an artifact / took an input — the detail route
+    # carries the content itself.
+    has_artifact: bool = False
+    has_input: bool = False
     # The task this run kicked off (task automations only) — id + title let the
     # execution log deep-link to it ("→ 任务《title》"). ``None`` for non-task runs.
     task_id: str | None = None
@@ -368,10 +436,37 @@ class AutomationRunItemResponse(BaseModel):
     # session's task at read time (``active`` / ``completed`` / ``failed`` /
     # ``paused``). ``None`` for non-task runs or when the task is gone.
     task_status: str | None = None
-    # When the run kicked off a task, the owning ``task_id`` so the client can
-    # deep-link to the task detail page instead of the raw lead conversation.
-    # ``None`` for non-task (chat) runs.
-    task_id: str | None = None
+
+
+class AutomationRunFile(BaseModel):
+    """One file a run delivered, as the artifact row it became."""
+
+    artifact_id: str
+    name: str
+    mime_type: str | None = None
+    size_bytes: int | None = None
+
+
+class AutomationRunDetailResponse(AutomationRunItemResponse):
+    """One run with its content: the effective input, the artifact, the
+    delivered files and the log tail (``GET /{id}/runs/{run_id}``)."""
+
+    input: Any = None
+    artifact: dict[str, Any] | None = None
+    files: list[AutomationRunFile] = Field(default_factory=list)
+    log_tail: str | None = None
+    cancel_requested_at: int | None = None
+
+
+class AutomationRunNowPayload(BaseModel):
+    """Body of ``POST /{id}/run-now`` — optional, the pre-contract call had
+    none. ``input`` follows the row's input contract (a string for ``text``,
+    an object for ``json``, absent for ``none``). ``wait_seconds`` blocks the
+    call until the run reaches a terminal state (or the wait elapses) and
+    returns the run detail alongside the acceptance."""
+
+    input: str | dict[str, Any] | None = None
+    wait_seconds: int = Field(default=0, ge=0, le=60)
 
 
 class CronValidateRequest(BaseModel):
@@ -400,6 +495,9 @@ class AutomationRunAcceptedResponse(BaseModel):
     run_id: str
     automation_id: str
     status: str
+    # Present when the caller asked to wait: the run as it stood when the
+    # wait ended (terminal, or still running if the wait elapsed first).
+    run: AutomationRunDetailResponse | None = None
 
 
 class AutomationProjectTarget(BaseModel):
@@ -518,7 +616,10 @@ class AutomationToolPayload(BaseModel):
     """
 
     action: str = Field(
-        description="One of: create, get, list, update, pause, resume, run, remove.",
+        description=(
+            "One of: create, get, list, update, pause, resume, run, remove, "
+            "runs, read_run, cancel, output."
+        ),
     )
     automation_id: str | None = Field(
         default=None,
@@ -539,16 +640,29 @@ class AutomationToolPayload(BaseModel):
             "create unless playbook_definition_id is set)."
         ),
     )
-    # ``run`` only: extra text appended to the automation's instruction for THIS
-    # run (e.g. a discovered task id). Ignored by the other actions.
-    input: str | None = Field(
+    # ``run`` only: this run's input, per the automation's input contract — a
+    # string for ``text``, an object for ``json``. Ignored by the other actions.
+    input: str | dict[str, Any] | None = Field(
         default=None,
         description=(
-            "run only: extra text appended to the automation's instruction for "
-            "this single run (e.g. a task id you discovered). Does NOT modify the "
-            "saved automation."
+            "run only: this run's input per the automation's input contract — a "
+            "string for a text input, an object for a json input. Does NOT modify "
+            "the saved automation."
         ),
     )
+    # create / update: the three contracts.
+    execution: ExecutionContract | None = None
+    input_contract: InputContract | None = None
+    result: ResultContract | None = None
+    # run: block up to N seconds for a terminal state (0 = return at once).
+    wait_seconds: int | None = Field(default=None, ge=0, le=60)
+    # read_run / cancel.
+    run_id: str | None = None
+    # runs: page size.
+    limit: int | None = Field(default=None, ge=1, le=50)
+    # output: the artifact (+ project-relative file paths) of the CURRENT run.
+    artifact: dict[str, Any] | None = None
+    files: list[str] | None = None
     trigger: Trigger | None = Field(
         default=None,
         description=(
@@ -633,11 +747,14 @@ class AutomationProposalSpec(BaseModel):
     trigger: Trigger
     # Resolved executing agent. In a chat the slug defaults to the session's
     # bound agent; in a project session it's the chosen project member (the
-    # Lead in ``task`` mode).
-    agent_slug: str
-    agent_kind: str
+    # Lead in ``task`` mode). ``None`` for a code execution.
+    agent_slug: str | None
+    agent_kind: str | None
     agent_name: str | None = None
     action_kind: str
+    execution: ExecutionContract = Field(default_factory=AgentExecution)
+    input: InputContract = Field(default_factory=NoneInput)
+    result: ResultContract = Field(default_factory=ConversationResult)
     # Worktree isolation (both action kinds; git-repo projects only) — echoed
     # so the confirm card can display and replay it.
     worktree: bool = False
@@ -664,6 +781,12 @@ class AutomationToolResult(BaseModel):
     # confirmation card renders. ``automation`` stays ``None`` on create
     # (nothing is persisted until the user confirms).
     proposal: AutomationProposalSpec | None = None
+    # ``run``: the run that was queued, whether or not the caller waited.
+    run_id: str | None = None
+    # ``run`` (when waited) / ``read_run`` / ``cancel`` / ``output``.
+    run: AutomationRunDetailResponse | None = None
+    # ``runs``.
+    runs: list[AutomationRunItemResponse] = []
     error_code: str | None = None
 
 
@@ -687,6 +810,9 @@ class AutomationProposalConfirmRequest(BaseModel):
     worktree: bool = False
     playbook_definition_id: str | None = Field(default=None, max_length=36)
     playbook_version: int | None = Field(default=None, ge=1)
+    execution: ExecutionContract | None = None
+    input: InputContract | None = None
+    result: ResultContract | None = None
 
 
 class AutomationProposalStatusRequest(BaseModel):

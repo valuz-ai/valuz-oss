@@ -70,6 +70,11 @@ from valuz_agent.integrations._mcp_asgi import (
     get_current_mcp_user_id,
     internal_mcp_transport_security,
 )
+from valuz_agent.modules.automations.contracts import (
+    ExecutionContract,
+    InputContract,
+    ResultContract,
+)
 from valuz_agent.modules.automations.schemas import (
     AutomationToolPayload,
     AutomationToolResult,
@@ -148,6 +153,27 @@ async def _resolve_session_context(
     return ws.id, ws.kind, bound_agent_slug
 
 
+async def _session_origin(session_id: str, user_id: str) -> str:
+    """``metadata.valuz.origin`` of the calling session — ``"automation"``
+    when this very session IS an automation run's turn."""
+    from valuz_agent.adapters.data_reader import data_reader
+
+    try:
+        kernel_session = await data_reader().get_session(user_id, session_id)
+    except Exception:  # noqa: BLE001 — the guard must never break the tool
+        logger.debug("automation tool: could not resolve session origin", exc_info=True)
+        return "user"
+    if kernel_session is None:
+        return "user"
+    meta = getattr(kernel_session, "metadata", None) or {}
+    valuz_meta = meta.get("valuz") if isinstance(meta, dict) else None
+    if isinstance(valuz_meta, dict):
+        origin = valuz_meta.get("origin")
+        if isinstance(origin, str) and origin:
+            return origin
+    return "user"
+
+
 # ---------------------------------------------------------------------------
 # Service helper
 # ---------------------------------------------------------------------------
@@ -198,7 +224,23 @@ async def _build_automation_service(db: Any, user_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-_VALID_ACTIONS = {"create", "get", "list", "update", "pause", "resume", "run", "remove"}
+_VALID_ACTIONS = {
+    "create",
+    "get",
+    "list",
+    "update",
+    "pause",
+    "resume",
+    "run",
+    "remove",
+    "runs",
+    "read_run",
+    "cancel",
+    "output",
+}
+# A run does its task; it never rewrites the schedule that started it. These
+# are refused when the calling session is itself an automation run.
+_MUTATING_ACTIONS = {"create", "update", "remove", "pause", "resume"}
 
 
 def _err(action: str, message: str, code: str | None = None) -> AutomationToolResult:
@@ -251,6 +293,7 @@ async def _handle_create(
         AutomationPlaybookVersionNotFound,
         AutomationProjectNotFound,
         AutomationPromptEmpty,
+        AutomationTaskArtifactUnsupported,
         AutomationTaskOnlyOnProject,
         IntervalTooShort,
         InvalidCronExpression,
@@ -307,11 +350,18 @@ async def _handle_create(
             worktree=bool(payload.worktree),
             playbook_definition_id=payload.playbook_definition_id,
             playbook_version=payload.playbook_version,
+            execution=payload.execution,
+            input_contract=payload.input_contract,
+            result=payload.result,
         )
     except AutomationNameEmpty:
         return _err("create", "name is required for create.", code="MISSING_NAME")
     except AutomationPromptEmpty:
         return _err("create", "prompt_template is required for create.", code="MISSING_PROMPT")
+    except AutomationTaskArtifactUnsupported as exc:
+        return _err("create", str(exc.message), code=exc.__class__.__name__)
+    except ValueError as exc:
+        return _err("create", f"invalid contract: {exc}", code="INVALID_CONTRACT")
     except AutomationAgentRequired:
         # Only reachable in PROJECT sessions (chat omits agent_slug and the
         # server resolves the bound agent or defaults to the system agent).
@@ -348,14 +398,22 @@ async def _handle_create(
         AutomationPlaybookNotFound,
         AutomationPlaybookVersionNotFound,
         AutomationPlaybookTaskUnsupported,
+        AutomationTaskArtifactUnsupported,
     ) as exc:
         return _err("create", str(exc.message), code=exc.__class__.__name__)
 
+    hint = ""
+    if spec.execution.kind == "code":
+        hint = (
+            f" It will run `{spec.execution.entry}` (project-relative) with the "
+            f"{spec.execution.runtime} runtime — make sure that file exists and "
+            "defines run(ctx) before the first run."
+        )
     return AutomationToolResult(
         action="create",
         ok=True,
         message=(
-            f"Proposed automation '{spec.name}' — {spec.trigger_human_readable}. "
+            f"Proposed automation '{spec.name}' — {spec.trigger_human_readable}.{hint} "
             "Awaiting the user's confirmation in the card; do not call create again."
         ),
         proposal=spec,
@@ -436,6 +494,8 @@ async def _handle_update(
         AutomationPlaybookTaskUnsupported,
         AutomationPlaybookVersionNotFound,
         AutomationPromptEmpty,
+        AutomationTaskArtifactUnsupported,
+        AutomationTaskOnlyOnProject,
         IntervalTooShort,
         InvalidCronExpression,
         InvalidTimeZone,
@@ -455,16 +515,27 @@ async def _handle_update(
             code="CROSS_PROJECT_DENIED",
         )
 
-    update_payload = AutomationUpdatePayload(
-        name=payload.name,
-        prompt_template=payload.prompt_template,
-        trigger=_trigger_from_payload(payload.trigger),
-        agent_slug=payload.agent_slug,
-        action_kind=payload.action_kind,
-        worktree=payload.worktree,
-        playbook_definition_id=payload.playbook_definition_id,
-        playbook_version=payload.playbook_version,
-    )
+    fields: dict[str, Any] = {
+        "name": payload.name,
+        "prompt_template": payload.prompt_template,
+        "trigger": _trigger_from_payload(payload.trigger),
+        "agent_slug": payload.agent_slug,
+        "action_kind": payload.action_kind,
+        "worktree": payload.worktree,
+    }
+    # Only forward the playbook pin when the caller said something — an
+    # explicit ``None`` here would UNPIN (see AutomationUpdatePayload).
+    if payload.playbook_definition_id is not None:
+        fields["playbook_definition_id"] = payload.playbook_definition_id
+    if payload.playbook_version is not None:
+        fields["playbook_version"] = payload.playbook_version
+    if payload.execution is not None:
+        fields["execution"] = payload.execution
+    if payload.input_contract is not None:
+        fields["input"] = payload.input_contract
+    if payload.result is not None:
+        fields["result"] = payload.result
+    update_payload = AutomationUpdatePayload(**fields)
     try:
         detail = await svc.update(payload.automation_id, update_payload, user_id=user_id)
     except (
@@ -479,6 +550,8 @@ async def _handle_update(
         AutomationPlaybookNotFound,
         AutomationPlaybookVersionNotFound,
         AutomationPlaybookTaskUnsupported,
+        AutomationTaskArtifactUnsupported,
+        AutomationTaskOnlyOnProject,
     ) as exc:
         return _err("update", str(exc.message), code=exc.__class__.__name__)
     fresh = await svc._row_to_item(  # noqa: SLF001
@@ -508,6 +581,7 @@ async def _handle_status_change(
     from valuz_agent.modules.automations.errors import (
         AutomationAlreadyQueued,
         AutomationAlreadyRunning,
+        AutomationInputInvalid,
         AutomationNotFound,
         AutomationPaused,
     )
@@ -551,17 +625,41 @@ async def _handle_status_change(
                 payload.automation_id,
                 trigger_type="agent",
                 invoked_by_session_id=_current_session_id(),
-                extra_input=payload.input,
+                run_input=payload.input,
                 user_id=user_id,
             )
+            wait_s = payload.wait_seconds or 0
+            if wait_s > 0:
+                detail = await svc.wait_for_run(
+                    payload.automation_id, run.run_id, timeout_s=float(wait_s), user_id=user_id
+                )
+                if detail.status in ("queued", "running"):
+                    msg = (
+                        f"Run {run.run_id} is still {detail.status} after {wait_s}s; "
+                        "poll it with action='read_run'."
+                    )
+                else:
+                    msg = f"Run {run.run_id} finished: {detail.status}."
+                    if detail.error_message:
+                        msg += f" {detail.error_message}"
+                return AutomationToolResult(
+                    action="run",
+                    ok=detail.status == "success" or detail.status in ("queued", "running"),
+                    message=msg,
+                    automation=await svc._row_to_item(row, user_id),  # noqa: SLF001
+                    run=detail,
+                    run_id=run.run_id,
+                    error_code=None if detail.status == "success" else detail.error_code,
+                )
             return AutomationToolResult(
                 action="run",
                 ok=True,
                 message=(
                     f"Queued automation for immediate execution (run_id={run.run_id}). "
-                    "The session it spawns will appear in the project shortly."
+                    "Poll it with action='read_run' (or pass wait_seconds next time)."
                 ),
                 automation=await svc._row_to_item(row, user_id),  # noqa: SLF001
+                run_id=run.run_id,
             )
         else:  # pragma: no cover — guarded above
             return _err(action, f"Unknown action {action!r}.")
@@ -570,6 +668,7 @@ async def _handle_status_change(
         AutomationPaused,
         AutomationAlreadyQueued,
         AutomationAlreadyRunning,
+        AutomationInputInvalid,
     ) as exc:
         return _err(action, str(exc.message), code=exc.__class__.__name__)
     fresh = await svc._row_to_item(  # noqa: SLF001
@@ -581,6 +680,134 @@ async def _handle_status_change(
         ok=True,
         message=msg,
         automation=fresh,
+    )
+
+
+def _scoped_row_or_err(
+    action: str, row: Any, *, project_id: str | None, scope: str
+) -> AutomationToolResult | None:
+    if row is None:
+        return _err(action, "No such automation.", code="AutomationNotFound")
+    if scope == "this" and project_id is not None and row.project_id != project_id:
+        return _err(
+            action, "Automation belongs to a different project.", code="CROSS_PROJECT_DENIED"
+        )
+    return None
+
+
+async def _handle_runs(
+    *, svc: Any, payload: AutomationToolPayload, project_id: str | None, scope: str, user_id: str
+) -> AutomationToolResult:
+    if not payload.automation_id:
+        return _err("runs", "automation_id is required for runs.", code="MISSING_AUTOMATION_ID")
+    row = await svc._ds.get_automation(user_id, payload.automation_id)  # noqa: SLF001
+    denied = _scoped_row_or_err("runs", row, project_id=project_id, scope=scope)
+    if denied is not None:
+        return denied
+    runs = await svc.list_runs(payload.automation_id, limit=payload.limit or 10, user_id=user_id)
+    return AutomationToolResult(
+        action="runs",
+        ok=True,
+        message=f"{len(runs)} run(s), newest first.",
+        runs=runs,
+    )
+
+
+async def _handle_read_run(
+    *, svc: Any, payload: AutomationToolPayload, project_id: str | None, scope: str, user_id: str
+) -> AutomationToolResult:
+    from valuz_agent.modules.automations.errors import AutomationRunNotFound
+
+    if not payload.automation_id or not payload.run_id:
+        return _err(
+            "read_run", "automation_id and run_id are required for read_run.", code="MISSING_RUN_ID"
+        )
+    row = await svc._ds.get_automation(user_id, payload.automation_id)  # noqa: SLF001
+    denied = _scoped_row_or_err("read_run", row, project_id=project_id, scope=scope)
+    if denied is not None:
+        return denied
+    try:
+        detail = await svc.get_run_detail(payload.automation_id, payload.run_id, user_id=user_id)
+    except AutomationRunNotFound as exc:
+        return _err("read_run", str(exc.message), code=exc.__class__.__name__)
+    return AutomationToolResult(
+        action="read_run",
+        ok=True,
+        message=f"Run {detail.run_id}: {detail.status}.",
+        run=detail,
+    )
+
+
+async def _handle_cancel(
+    *, svc: Any, payload: AutomationToolPayload, project_id: str | None, scope: str, user_id: str
+) -> AutomationToolResult:
+    from valuz_agent.modules.automations.errors import (
+        AutomationCancelUnsupported,
+        AutomationRunNotActive,
+        AutomationRunNotFound,
+    )
+
+    if not payload.automation_id or not payload.run_id:
+        return _err(
+            "cancel", "automation_id and run_id are required for cancel.", code="MISSING_RUN_ID"
+        )
+    row = await svc._ds.get_automation(user_id, payload.automation_id)  # noqa: SLF001
+    denied = _scoped_row_or_err("cancel", row, project_id=project_id, scope=scope)
+    if denied is not None:
+        return denied
+    try:
+        detail = await svc.cancel_run(payload.automation_id, payload.run_id, user_id=user_id)
+    except (AutomationRunNotFound, AutomationRunNotActive, AutomationCancelUnsupported) as exc:
+        return _err("cancel", str(exc.message), code=exc.__class__.__name__)
+    return AutomationToolResult(
+        action="cancel",
+        ok=True,
+        message=(
+            f"Run {detail.run_id} cancelled."
+            if detail.status == "cancelled"
+            else f"Run {detail.run_id} asked to stop (status {detail.status})."
+        ),
+        run=detail,
+    )
+
+
+async def _handle_output(
+    *, svc: Any, payload: AutomationToolPayload, session_id: str, user_id: str
+) -> AutomationToolResult:
+    """Record the artifact of the run THIS session is executing."""
+    from valuz_agent.modules.automations.errors import (
+        AutomationArtifactInvalid,
+        AutomationOutputNotExpected,
+        AutomationRunNotActive,
+    )
+
+    if payload.artifact is None:
+        return _err(
+            "output", "artifact (a JSON object) is required for output.", code="MISSING_ARTIFACT"
+        )
+    run = await svc.get_run_for_session(session_id, user_id=user_id)
+    if run is None:
+        return _err(
+            "output",
+            "This session is not an automation run; output only works inside one.",
+            code="NOT_AN_AUTOMATION_RUN",
+        )
+    try:
+        detail = await svc.record_artifact(
+            run.automation_id,
+            run.id,
+            artifact=payload.artifact,
+            files=payload.files,
+            producer="agent",
+            user_id=user_id,
+        )
+    except (AutomationArtifactInvalid, AutomationOutputNotExpected, AutomationRunNotActive) as exc:
+        return _err("output", str(exc.message), code=exc.__class__.__name__)
+    return AutomationToolResult(
+        action="output",
+        ok=True,
+        message=f"Artifact recorded for run {detail.run_id}. Do not call output again.",
+        run=detail,
     )
 
 
@@ -603,9 +830,37 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
         session_id, user_id
     )
     scope = _coerce_scope(payload, project_kind)
+    if payload.action in _MUTATING_ACTIONS and await _session_origin(session_id, user_id) == (
+        "automation"
+    ):
+        return _err(
+            payload.action,
+            (
+                "This session is an automation run: do the run's task, and use "
+                "action='output' to record its artifact. Creating, changing, pausing "
+                "or removing automations from inside a run is not allowed."
+            ),
+            code="AutomationMutationInsideRun",
+        )
 
     async with async_unit_of_work() as db:
         svc = await _build_automation_service(db, user_id)
+        if payload.action == "runs":
+            return await _handle_runs(
+                svc=svc, payload=payload, project_id=project_id, scope=scope, user_id=user_id
+            )
+        if payload.action == "read_run":
+            return await _handle_read_run(
+                svc=svc, payload=payload, project_id=project_id, scope=scope, user_id=user_id
+            )
+        if payload.action == "cancel":
+            return await _handle_cancel(
+                svc=svc, payload=payload, project_id=project_id, scope=scope, user_id=user_id
+            )
+        if payload.action == "output":
+            return await _handle_output(
+                svc=svc, payload=payload, session_id=session_id, user_id=user_id
+            )
         if payload.action == "list":
             return await _handle_list(svc=svc, project_id=project_id, scope=scope, user_id=user_id)
         if payload.action == "create":
@@ -706,13 +961,37 @@ playbook_definition_id / playbook_version — OPTIONAL immutable Playbook pin
 (action_kind must be "chat"). A Definition without a version pins its current
 version at create.
 
+CONTRACTS (create/update; all optional, see the `automation` skill):
+  execution — {"kind":"agent","mode":"chat"|"task"} (default) or
+    {"kind":"code","runtime":"python"|"shell","entry":"<project-relative path>",
+     "timeout_seconds":600}. A code automation runs a PROGRAM in the project
+    directory with no agent, no model and no credits: write the entry file
+    first (python: define run(ctx) returning {"artifact": {...}, "files": [...]});
+    it runs where the project lives (desktop → a local process, cloud → a
+    sandbox with the project directory mounted).
+  input_contract — {"kind":"none"} (default) | {"kind":"text","default":"…"} |
+    {"kind":"json","schema":{JSON Schema object},"default":{…}}. A json input
+    is validated on every run and handed to a program as ctx["input"] and to
+    an agent inside an <automation-input> block (also {{input.<key>}}).
+  result — {"kind":"conversation"} (default) | {"kind":"artifact","schema":{…}}.
+    An artifact result is ONE JSON object per run: a program returns it; an
+    agent run records it with action="output" (artifact=…, files=[…]) exactly
+    once. A code automation always has an artifact result. Task-mode agents
+    cannot declare one.
+
 Other actions: list returns existing automations (chat: all projects by
 default, scope="this" to narrow; project: always the current project). get
 returns ONE automation's full detail by automation_id. update / pause / resume
-/ run / remove require automation_id from a prior list. For run you may pass
-input — extra text for THAT single run; it does NOT modify the saved
-automation. Execution identity follows the bound agent — there is NO model_id
-or provider_id input."""
+/ run / remove require automation_id from a prior list. run takes input (this
+run's input per the input contract: a string for text, an object for json;
+never modifies the saved automation) and wait_seconds (0-60: block until the
+run finishes and return it — the way to verify a code automation end to end).
+runs lists recent runs; read_run (run_id) returns one run with its input,
+artifact, files and log tail; cancel (run_id) stops a queued run or a running
+program. output records the artifact of the run THIS session is executing.
+Inside an automation run, create/update/pause/resume/remove are refused.
+Execution identity follows the bound agent — there is NO model_id or
+provider_id input."""
 
 
 async def automation_invoke(payload: AutomationToolPayload) -> str:
@@ -725,17 +1004,31 @@ async def automation_invoke(payload: AutomationToolPayload) -> str:
     except Exception as exc:  # defensive — never let the tool 500 the runtime
         logger.exception("automation dispatch failed")
         result = _err(payload.action, f"internal error: {exc!r}", code="INTERNAL")
-    return json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
+    return json.dumps(result.model_dump(mode="json", by_alias=True), ensure_ascii=False)
 
 
 @_mcp.tool(description=_AUTOMATION_DESCRIPTION)
 async def automation(
-    action: Literal["create", "get", "list", "update", "pause", "resume", "run", "remove"],
+    action: Literal[
+        "create",
+        "get",
+        "list",
+        "update",
+        "pause",
+        "resume",
+        "run",
+        "remove",
+        "runs",
+        "read_run",
+        "cancel",
+        "output",
+    ],
     automation_id: Annotated[
         str | None,
         Field(
             description=(
-                "Required for get/update/pause/resume/run/remove; get one from a prior list."
+                "Required for get/update/pause/resume/run/remove/runs/read_run/cancel; "
+                "get one from a prior list."
             )
         ),
     ] = None,
@@ -828,15 +1121,82 @@ async def automation(
         ),
     ] = None,
     input: Annotated[
-        str | None,
+        str | dict[str, Any] | None,
         Field(
             description=(
-                "run only: extra text appended to the automation's "
-                "instruction for THIS single run (e.g. a task id you just "
-                "discovered). Does NOT modify the saved automation."
+                "run only: THIS run's input per the automation's input contract "
+                "— a string for a text input, a JSON object for a json input. "
+                "Does NOT modify the saved automation."
             )
         ),
     ] = None,  # noqa: A002 — MCP wire arg name; intentional
+    execution: Annotated[
+        ExecutionContract | None,
+        Field(
+            description=(
+                "create/update: {kind:'agent', mode:'chat'|'task'} (default) or "
+                "{kind:'code', runtime:'python'|'shell', entry:'<project-relative "
+                "path>', timeout_seconds:600}."
+            )
+        ),
+    ] = None,
+    input_contract: Annotated[
+        InputContract | None,
+        Field(
+            description=(
+                "create/update: {kind:'none'} | {kind:'text', default?} | "
+                "{kind:'json', schema:{JSON Schema object}, default?:{…}}."
+            )
+        ),
+    ] = None,
+    result: Annotated[
+        ResultContract | None,
+        Field(
+            description=(
+                "create/update: {kind:'conversation'} | {kind:'artifact', "
+                "schema?:{JSON Schema object}}. Code automations always produce an "
+                "artifact."
+            )
+        ),
+    ] = None,
+    wait_seconds: Annotated[
+        int | None,
+        Field(
+            ge=0,
+            le=60,
+            description=(
+                "run only: block up to N seconds for the run to finish and "
+                "return it (status + artifact + log tail). Omit / 0 to return "
+                "immediately."
+            ),
+        ),
+    ] = None,
+    run_id: Annotated[
+        str | None,
+        Field(description="read_run / cancel: the run to read or stop (from runs)."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        Field(ge=1, le=50, description="runs: how many recent runs to return (default 10)."),
+    ] = None,
+    artifact: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description=(
+                "output only: the run's artifact — a JSON object matching the "
+                "automation's result schema."
+            )
+        ),
+    ] = None,
+    files: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "output only: project-relative paths of files this run produced; "
+                "each is recorded as an artifact of the project."
+            )
+        ),
+    ] = None,
 ) -> str:
     """Unified entrypoint — see ``_AUTOMATION_DESCRIPTION`` for usage.
 
@@ -859,6 +1219,14 @@ async def automation(
             playbook_version=playbook_version,
             scope=scope,
             input=input,
+            execution=execution,
+            input_contract=input_contract,
+            result=result,
+            wait_seconds=wait_seconds,
+            run_id=run_id,
+            limit=limit,
+            artifact=artifact,
+            files=files,
         )
     )
 

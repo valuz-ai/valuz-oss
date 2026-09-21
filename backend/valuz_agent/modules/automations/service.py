@@ -21,9 +21,11 @@ from the legacy schedule:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -40,6 +42,25 @@ from valuz_agent.modules.agents.datastore import (
 )
 from valuz_agent.modules.agents.service import AgentService
 from valuz_agent.modules.agents.slug import derive_slug, is_valid_slug
+from valuz_agent.modules.automations.contracts import (
+    AgentExecution,
+    ArtifactResult,
+    CodeExecution,
+    ContractViolationError,
+    ConversationResult,
+    JsonInput,
+    NoneInput,
+    TextInput,
+    apply_execution_contract,
+    apply_input_contract,
+    apply_result_contract,
+    artifact_summary,
+    effective_input,
+    execution_contract_of,
+    input_contract_of,
+    result_contract_of,
+    validate_artifact,
+)
 from valuz_agent.modules.automations.cron_utils import (
     DEFAULT_LOCALE,
     CronInterpreter,
@@ -52,15 +73,22 @@ from valuz_agent.modules.automations.errors import (
     AutomationAgentRequired,
     AutomationAlreadyQueued,
     AutomationAlreadyRunning,
+    AutomationArtifactInvalid,
+    AutomationCancelUnsupported,
     AutomationEventSourceRequired,
     AutomationEventSubscribeFailed,
+    AutomationInputInvalid,
     AutomationNameEmpty,
     AutomationNotFound,
+    AutomationOutputNotExpected,
     AutomationPlaybookNotFound,
     AutomationPlaybookTaskUnsupported,
     AutomationPlaybookVersionNotFound,
     AutomationProjectNotFound,
     AutomationPromptEmpty,
+    AutomationRunNotActive,
+    AutomationRunNotFound,
+    AutomationTaskArtifactUnsupported,
     AutomationTaskOnlyOnProject,
     IntervalTooShort,
     InvalidCronExpression,
@@ -68,6 +96,7 @@ from valuz_agent.modules.automations.errors import (
     InvalidTimeZone,
 )
 from valuz_agent.modules.automations.models import (
+    TERMINAL_RUN_STATUSES,
     AutomationRow,
     AutomationRunRow,
 )
@@ -79,6 +108,8 @@ from valuz_agent.modules.automations.schemas import (
     AutomationProjectTarget,
     AutomationProposalSpec,
     AutomationRunAcceptedResponse,
+    AutomationRunDetailResponse,
+    AutomationRunFile,
     AutomationRunItemResponse,
     AutomationUpdatePayload,
     CronTrigger,
@@ -371,6 +402,8 @@ class AutomationService:
         this same lookup failure into a failed run + ADR-012 auto-pause.
         """
         user_id = self._require_user_id(user_id)
+        if not row.agent_slug:
+            return None
         member = await self._members.get(user_id, row.project_id, row.agent_slug)
         if member is None:
             return None
@@ -401,6 +434,9 @@ class AutomationService:
             worktree=bool(getattr(row, "worktree", False)),
             playbook_definition_id=getattr(row, "playbook_definition_id", None),
             playbook_version=getattr(row, "playbook_version", None),
+            execution=execution_contract_of(row),
+            input=input_contract_of(row),
+            result=result_contract_of(row),
             trigger=self._row_to_trigger(row),
             trigger_human_readable=self._trigger_human(row),
             event_source=row.event_source,
@@ -450,15 +486,53 @@ class AutomationService:
             result_summary=row.result_summary,
             error_code=row.error_code,
             error_message_key=row.error_message_key,
+            error_message=getattr(row, "error_message", None),
             session_id=row.session_id,
             created_files=created_files,
             playbook_run_id=getattr(row, "playbook_run_id", None),
+            executor_ref=getattr(row, "executor_ref", None),
+            invoked_by_ref=getattr(row, "invoked_by_ref", None),
+            has_artifact=getattr(row, "artifact_json", None) is not None,
+            has_input=(
+                getattr(row, "input_json", None) is not None
+                or bool(getattr(row, "extra_input", None))
+            ),
             # The spawned task (task-action automations): id + title deep-link to
             # it; status is its *live* outcome (the run row froze to success at
             # kickoff, but the lead may run for hours after).
             task_id=task_id,
             task_title=task_title,
             task_status=task_status,
+        )
+
+    @classmethod
+    def _run_to_detail(
+        cls,
+        row: AutomationRunRow,
+        task_link: tuple[str, str, str] | None = None,
+    ) -> AutomationRunDetailResponse:
+        item = cls._run_to_item(row, task_link)
+        raw_files = getattr(row, "files_json", None) or []
+        files = [
+            AutomationRunFile(
+                artifact_id=str(f.get("artifact_id", "")),
+                name=str(f.get("name", "")),
+                mime_type=f.get("mime_type"),
+                size_bytes=f.get("size_bytes"),
+            )
+            for f in raw_files
+            if isinstance(f, dict) and f.get("artifact_id")
+        ]
+        input_value: Any = getattr(row, "input_json", None)
+        if input_value is None and getattr(row, "extra_input", None):
+            input_value = row.extra_input
+        return AutomationRunDetailResponse(
+            **item.model_dump(),
+            input=input_value,
+            artifact=getattr(row, "artifact_json", None),
+            files=files,
+            log_tail=getattr(row, "log_tail", None),
+            cancel_requested_at=getattr(row, "cancel_requested_at", None),
         )
 
     # ── Project target picker ───────────────────────────────────────
@@ -636,6 +710,7 @@ class AutomationService:
           add-agent flow first.
         """
         user_id = self._require_user_id(user_id)
+        code_execution = isinstance(payload.effective_execution, CodeExecution)
         # ── Chat path ───────────────────────────────────────────────────
         if payload.project_kind == "chat":
             if self._ws is None:
@@ -669,12 +744,17 @@ class AutomationService:
                 )
                 project_id = fresh.id
 
+            # A program has no agent — the project is all it needs.
+            if code_execution:
+                return project_id, ""
+
             # 2. Resolve the agent for that project
+            agent_slug = payload.agent_slug or ""
             if payload.agent_kind == "project_member":
-                member = await self._members.get(user_id, project_id, payload.agent_slug)
+                member = await self._members.get(user_id, project_id, agent_slug)
                 if member is None:
                     raise AgentNotInProject()
-                return project_id, payload.agent_slug
+                return project_id, agent_slug
 
             # ``library_agent`` — instantiate the library agent into this
             # chat project. The runner / display then treat it like any
@@ -684,7 +764,7 @@ class AutomationService:
                     "AutomationService is missing AgentService — required to "
                     "instantiate library agents into chat projects"
                 )
-            source = await self._agents.get_agent(user_id, payload.agent_slug)
+            source = await self._agents.get_agent(user_id, agent_slug)
             if source is None:
                 raise AgentNotFound()
             # Derive a project-local slug. We hash a short prefix on so the
@@ -699,8 +779,8 @@ class AutomationService:
             # CJK in ``f"{raw_slug}-{hex}"`` would be rejected by
             # ``deploy_agent``'s ``is_valid_slug`` — an uncaught 500 on
             # every automation create for those agents.
-            if is_valid_slug(payload.agent_slug):
-                slug_prefix = payload.agent_slug
+            if is_valid_slug(agent_slug):
+                slug_prefix = agent_slug
             else:
                 slug_prefix = derive_slug(source.name)
             instance_slug = f"{slug_prefix}-{uuid4().hex[:8]}"
@@ -709,7 +789,7 @@ class AutomationService:
             await self._agent_svc.deploy_agent(
                 user_id,
                 project_id=project_id,
-                source_agent_slug=payload.agent_slug,
+                source_agent_slug=agent_slug,
                 agent_slug=instance_slug,
                 dedupe=False,
             )
@@ -722,6 +802,9 @@ class AutomationService:
         if ws_kind != "project":
             raise AutomationProjectNotFound()
 
+        if code_execution:
+            return payload.project_id, ""
+
         if payload.agent_kind != "project_member":
             # Library agents must be added to the project as a member first
             # through the existing add-agent flow — that flow lets the user
@@ -729,10 +812,33 @@ class AutomationService:
             # it here would duplicate that surface.
             raise AgentNotInProject()
 
-        member = await self._members.get(user_id, payload.project_id, payload.agent_slug)
+        member = await self._members.get(user_id, payload.project_id, payload.agent_slug or "")
         if member is None:
             raise AgentNotInProject()
-        return payload.project_id, payload.agent_slug
+        return payload.project_id, payload.agent_slug or ""
+
+    # ── Contracts ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _check_contracts(
+        execution: AgentExecution | CodeExecution,
+        result: ConversationResult | ArtifactResult,
+    ) -> ConversationResult | ArtifactResult:
+        """The one cross-contract rule, and the one default.
+
+        A task run is terminal before the task starts, so there is nowhere
+        to attach an artifact → refused. A program's only product IS an
+        artifact, so a code execution that declared nothing gets an
+        unconstrained artifact result rather than a meaningless
+        "conversation".
+        """
+        if isinstance(execution, AgentExecution) and execution.mode == "task":
+            if isinstance(result, ArtifactResult):
+                raise AutomationTaskArtifactUnsupported()
+            return result
+        if isinstance(execution, CodeExecution) and not isinstance(result, ArtifactResult):
+            return ArtifactResult()
+        return result
 
     # ── Proposal (propose → confirm) ────────────────────────────────────
 
@@ -750,6 +856,9 @@ class AutomationService:
         worktree: bool = False,
         playbook_definition_id: str | None = None,
         playbook_version: int | None = None,
+        execution: AgentExecution | CodeExecution | None = None,
+        input_contract: NoneInput | TextInput | JsonInput | None = None,
+        result: ConversationResult | ArtifactResult | None = None,
     ) -> AutomationCreatePayload:
         """Assemble an :class:`AutomationCreatePayload` from raw create inputs.
 
@@ -772,6 +881,31 @@ class AutomationService:
         name = (name or "").strip()
         if not name:
             raise AutomationNameEmpty()
+        effective_execution = execution or AgentExecution(
+            mode="task" if (action_kind or "chat") == "task" else "chat"
+        )
+        effective_result = AutomationService._check_contracts(
+            effective_execution, result or ConversationResult()
+        )
+        if isinstance(effective_execution, CodeExecution):
+            # A program: no agent, no prompt. The project routing below still
+            # applies (chat sentinel → lazy chat project, etc.).
+            return AutomationCreatePayload(
+                name=name,
+                project_kind=project_kind,  # type: ignore[arg-type]
+                project_id=project_id,
+                agent_kind=None,
+                agent_slug=None,
+                prompt_template=(prompt_template or "").strip(),
+                trigger=trigger,
+                action_kind="chat",
+                worktree=False,
+                playbook_definition_id=None,
+                playbook_version=None,
+                execution=effective_execution,
+                input=input_contract or NoneInput(),
+                result=effective_result,
+            )
         if not (prompt_template or "").strip() and not playbook_definition_id:
             raise AutomationPromptEmpty()
         effective_agent_slug = agent_slug
@@ -788,7 +922,7 @@ class AutomationService:
             effective_agent_slug = session_agent_slug or VALURION_SLUG
         if not effective_agent_slug:
             raise AutomationAgentRequired()
-        action = action_kind or "chat"
+        action = effective_execution.mode
         if action == "task" and project_kind != "project":
             raise AutomationTaskOnlyOnProject()
         agent_kind = "project_member" if project_kind == "project" else "library_agent"
@@ -800,7 +934,7 @@ class AutomationService:
             agent_slug=effective_agent_slug,
             prompt_template=(prompt_template or "").strip(),
             trigger=trigger,
-            action_kind=action,  # type: ignore[arg-type]
+            action_kind=action,
             # Worktree isolation needs a git-repo project. Only real projects
             # qualify — a chat-sentinel (lazy chat project) is never a repo — so
             # silently drop the flag for chat-kind targets rather than persisting
@@ -808,6 +942,9 @@ class AutomationService:
             worktree=bool(worktree) and project_kind == "project",
             playbook_definition_id=playbook_definition_id,
             playbook_version=playbook_version,
+            execution=effective_execution,
+            input=input_contract or NoneInput(),
+            result=effective_result,
         )
 
     async def _preview_agent_name(
@@ -824,22 +961,25 @@ class AutomationService:
         from the (chat or project) project they belong to.
         """
         uid = self._require_user_id(user_id)
+        if isinstance(payload.effective_execution, CodeExecution):
+            return None
+        agent_slug = payload.agent_slug or ""
         if payload.agent_kind == "library_agent":
-            agent = await self._agents.get_agent(uid, payload.agent_slug)
+            agent = await self._agents.get_agent(uid, agent_slug)
             if agent is None:
                 raise AgentNotFound()
             return agent.name
         project_id = payload.project_id or calling_session_project_id
         if not project_id:
             raise AgentNotInProject()
-        member = await self._members.get(uid, project_id, payload.agent_slug)
+        member = await self._members.get(uid, project_id, agent_slug)
         if member is None:
             raise AgentNotInProject()
         probe = AutomationRow(
             id="preview",
             name="",
             agent_kind="project_member",
-            agent_slug=payload.agent_slug,
+            agent_slug=agent_slug,
             project_id=project_id,
             prompt_template="",
             action_kind="chat",
@@ -865,9 +1005,16 @@ class AutomationService:
         name = payload.name.strip()
         if not name:
             raise AutomationNameEmpty()
-        if not payload.prompt_template.strip() and not payload.playbook_definition_id:
+        execution = payload.effective_execution
+        result = self._check_contracts(execution, payload.result)
+        is_code = isinstance(execution, CodeExecution)
+        if (
+            not is_code
+            and not payload.prompt_template.strip()
+            and not payload.playbook_definition_id
+        ):
             raise AutomationPromptEmpty()
-        if not payload.agent_slug:
+        if not is_code and not payload.agent_slug:
             raise AutomationAgentRequired()
         if payload.action_kind == "task" and payload.project_kind != "project":
             raise AutomationTaskOnlyOnProject()
@@ -876,11 +1023,11 @@ class AutomationService:
         user_id = self._require_user_id(user_id)
         playbook_definition_id, playbook_version = await self._resolve_playbook_pin(
             user_id,
-            definition_id=payload.playbook_definition_id,
-            version=payload.playbook_version,
+            definition_id=None if is_code else payload.playbook_definition_id,
+            version=None if is_code else payload.playbook_version,
             action_kind=payload.action_kind,
         )
-        if not payload.prompt_template.strip() and not playbook_definition_id:
+        if not is_code and not payload.prompt_template.strip() and not playbook_definition_id:
             raise AutomationPromptEmpty()
         agent_name = await self._preview_agent_name(payload, calling_session_project_id, user_id)
 
@@ -888,8 +1035,8 @@ class AutomationService:
         row = AutomationRow(
             id="preview",
             name=name,
-            agent_kind=payload.agent_kind,
-            agent_slug=payload.agent_slug,
+            agent_kind=None if is_code else payload.agent_kind,
+            agent_slug=None if is_code else payload.agent_slug,
             project_id=payload.project_id or "preview",
             prompt_template=payload.prompt_template.strip(),
             action_kind=payload.action_kind,
@@ -903,19 +1050,25 @@ class AutomationService:
             created_at=now,
             updated_at=now,
         )
+        apply_execution_contract(row, execution)
+        apply_input_contract(row, payload.input)
+        apply_result_contract(row, result)
         self._apply_trigger(row, payload.trigger)
         next_run = self._triggers.initial_next_fire(row, now=now)
         return AutomationProposalSpec(
             name=name,
             prompt_template=payload.prompt_template.strip(),
             trigger=self._row_to_trigger(row),
-            agent_slug=payload.agent_slug,
-            agent_kind=payload.agent_kind,
+            agent_slug=row.agent_slug,
+            agent_kind=row.agent_kind,
             agent_name=agent_name,
-            action_kind=payload.action_kind,
+            action_kind=row.action_kind,
             worktree=bool(payload.worktree),
             playbook_definition_id=playbook_definition_id,
             playbook_version=playbook_version,
+            execution=execution_contract_of(row),
+            input=input_contract_of(row),
+            result=result_contract_of(row),
             trigger_human_readable=self._trigger_human(row),
             next_run_at=next_run,
         )
@@ -952,9 +1105,16 @@ class AutomationService:
         name = payload.name.strip()
         if not name:
             raise AutomationNameEmpty()
-        if not payload.prompt_template.strip() and not payload.playbook_definition_id:
+        execution = payload.effective_execution
+        result = self._check_contracts(execution, payload.result)
+        is_code = isinstance(execution, CodeExecution)
+        if (
+            not is_code
+            and not payload.prompt_template.strip()
+            and not payload.playbook_definition_id
+        ):
             raise AutomationPromptEmpty()
-        if not payload.agent_slug:
+        if not is_code and not payload.agent_slug:
             raise AutomationAgentRequired()
 
         # Task mode only valid for projects — chat projects
@@ -967,11 +1127,11 @@ class AutomationService:
 
         playbook_definition_id, playbook_version = await self._resolve_playbook_pin(
             user_id,
-            definition_id=payload.playbook_definition_id,
-            version=payload.playbook_version,
+            definition_id=None if is_code else payload.playbook_definition_id,
+            version=None if is_code else payload.playbook_version,
             action_kind=payload.action_kind,
         )
-        if not payload.prompt_template.strip() and not playbook_definition_id:
+        if not is_code and not payload.prompt_template.strip() and not playbook_definition_id:
             raise AutomationPromptEmpty()
 
         project_id, agent_slug = await self._resolve_project_and_agent(
@@ -988,12 +1148,12 @@ class AutomationService:
         row = AutomationRow(
             id=uuid4().hex,
             name=name,
-            agent_kind=payload.agent_kind,
-            agent_slug=agent_slug,
+            agent_kind=None if is_code else payload.agent_kind,
+            agent_slug=None if is_code else agent_slug,
             project_id=project_id,
             prompt_template=payload.prompt_template.strip(),
             action_kind=payload.action_kind,
-            worktree=bool(payload.worktree),
+            worktree=bool(payload.worktree) and not is_code,
             playbook_definition_id=playbook_definition_id,
             playbook_version=playbook_version,
             trigger_kind="cron",  # overwritten by _apply_trigger
@@ -1006,6 +1166,9 @@ class AutomationService:
             created_at=now,
             updated_at=now,
         )
+        apply_execution_contract(row, execution)
+        apply_input_contract(row, payload.input)
+        apply_result_contract(row, result)
         self._apply_trigger(row, payload.trigger)
         row.next_run_at = self._triggers.initial_next_fire(row, now=now)
 
@@ -1047,7 +1210,7 @@ class AutomationService:
         # Enforce the same invariants the DB CHECK constraints do, so a bad
         # import surfaces a typed error instead of an IntegrityError.
         if row.trigger_kind == "cron" and not (row.cron_expr or "").strip():
-            raise AutomationAgentRequired()  # type: ignore[misc]
+            raise AutomationAgentRequired()
         if row.trigger_kind == "interval" and (
             row.interval_seconds is None or row.interval_seconds < MIN_INTERVAL_SECONDS
         ):
@@ -1062,10 +1225,11 @@ class AutomationService:
                 raise InvalidCronExpression(err_msg)
         if not row.name.strip():
             raise AutomationNameEmpty()
-        if not row.prompt_template.strip() and not row.playbook_definition_id:
-            raise AutomationPromptEmpty()
-        if not row.agent_slug:
-            raise AutomationAgentRequired()
+        if getattr(row, "execution_kind", "agent") != "code":
+            if not row.prompt_template.strip() and not row.playbook_definition_id:
+                raise AutomationPromptEmpty()
+            if not row.agent_slug:
+                raise AutomationAgentRequired()
 
         now = now_ms()
         row.id = row.id or uuid4().hex
@@ -1109,6 +1273,9 @@ class AutomationService:
             agent_name=None,
             action_kind=row.action_kind,
             worktree=bool(getattr(row, "worktree", False)),
+            execution=execution_contract_of(row),
+            input=input_contract_of(row),
+            result=result_contract_of(row),
             trigger=self._row_to_trigger(row),
             trigger_human_readable=self._trigger_human(row),
             event_source=row.event_source,
@@ -1159,7 +1326,41 @@ class AutomationService:
             prompt = payload.prompt_template.strip()
             row.prompt_template = prompt
 
-        if payload.agent_slug is not None:
+        # ── Contracts ───────────────────────────────────────────────────
+        # Replaced whole, like ``trigger``. An agent row becoming a program
+        # drops its agent and prompt requirements; a program becoming an agent
+        # needs a member slug (from this payload or already on the row).
+        if payload.execution is not None:
+            if isinstance(payload.execution, AgentExecution):
+                if payload.execution.mode == "task":
+                    _, ws_kind = await self._get_project_info(row.project_id, user_id)
+                    if ws_kind != "project":
+                        raise AutomationTaskOnlyOnProject()
+                candidate = (payload.agent_slug or row.agent_slug or "").strip()
+                if not candidate:
+                    raise AutomationAgentRequired()
+                member = await self._members.get(user_id, row.project_id, candidate)
+                if member is None:
+                    raise AgentNotInProject()
+                apply_execution_contract(row, payload.execution)
+                row.agent_slug = candidate
+                row.agent_kind = row.agent_kind or "project_member"
+            else:
+                apply_execution_contract(row, payload.execution)
+                row.playbook_definition_id = None
+                row.playbook_version = None
+                row.worktree = False
+        if payload.input is not None:
+            apply_input_contract(row, payload.input)
+        if payload.result is not None:
+            apply_result_contract(row, payload.result)
+        if payload.execution is not None or payload.result is not None:
+            apply_result_contract(
+                row, self._check_contracts(execution_contract_of(row), result_contract_of(row))
+            )
+        is_code = row.execution_kind == "code"
+
+        if payload.agent_slug is not None and not is_code and payload.execution is None:
             # Cross-kind swap is unsupported (see ADR-021 §6 update rules);
             # the slug must continue to refer to a member of the bound
             # project, regardless of how the row was originally created.
@@ -1171,7 +1372,7 @@ class AutomationService:
                 raise AgentNotInProject()
             row.agent_slug = new_slug
 
-        if payload.action_kind is not None:
+        if payload.action_kind is not None and not is_code and payload.execution is None:
             # Same task-on-project guard as on create. We re-derive the
             # project kind from the live project row rather than
             # trusting any cached value — projects don't change kind
@@ -1181,12 +1382,15 @@ class AutomationService:
                 if ws_kind != "project":
                     raise AutomationTaskOnlyOnProject()
             row.action_kind = payload.action_kind
+            apply_result_contract(
+                row, self._check_contracts(execution_contract_of(row), result_contract_of(row))
+            )
 
         playbook_fields = payload.model_fields_set & {
             "playbook_definition_id",
             "playbook_version",
         }
-        if playbook_fields or payload.action_kind is not None:
+        if not is_code and (playbook_fields or payload.action_kind is not None):
             definition_changed = "playbook_definition_id" in playbook_fields
             definition_id = (
                 payload.playbook_definition_id if definition_changed else row.playbook_definition_id
@@ -1209,10 +1413,10 @@ class AutomationService:
                 action_kind=row.action_kind,
             )
 
-        if not row.prompt_template.strip() and not row.playbook_definition_id:
+        if not is_code and not row.prompt_template.strip() and not row.playbook_definition_id:
             raise AutomationPromptEmpty()
 
-        if payload.worktree is not None:
+        if payload.worktree is not None and not is_code:
             row.worktree = bool(payload.worktree)
 
         # ── Event subscription ──────────────────────────────────────────
@@ -1347,10 +1551,12 @@ class AutomationService:
         row: AutomationRow,
         *,
         user_id: str,
-        trigger_type: Literal["manual", "agent", "event"],
+        trigger_type: Literal["manual", "agent", "api", "event"],
         event_id: str | None = None,
         invoked_by_session_id: str | None = None,
         extra_input: str | None = None,
+        input_json: dict[str, Any] | None = None,
+        invoked_by_ref: str | None = None,
     ) -> AutomationRunRow:
         """Shared enqueue path: write the run row, publish, hand to the
         runtime port. Every entrance that starts a run — ``run_now`` and
@@ -1367,6 +1573,8 @@ class AutomationService:
             triggered_at=now,
             invoked_by_session_id=invoked_by_session_id,
             extra_input=(extra_input.strip() or None) if extra_input else None,
+            input_json=input_json,
+            invoked_by_ref=invoked_by_ref,
             event_id=event_id,
         )
         await self._ds.create_run(user_id, run)
@@ -1380,13 +1588,32 @@ class AutomationService:
         )
         return run
 
+    def _effective_run_input(
+        self, row: AutomationRow, run_input: Any
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """``(extra_input, input_json)`` for a new run, or ``AutomationInputInvalid``.
+
+        One place for every entrance — HTTP, the MCP tool, deployment
+        callers — so they all refuse the same input with the same error.
+        """
+        contract = input_contract_of(row)
+        try:
+            value = effective_input(contract, run_input)
+        except ContractViolationError as exc:
+            raise AutomationInputInvalid(f"{exc.path}: {exc}" if exc.path else str(exc)) from exc
+        if isinstance(value, dict):
+            return None, value
+        return value, None
+
     async def run_now(
         self,
         automation_id: str,
         *,
-        trigger_type: Literal["manual", "agent"] = "manual",
+        trigger_type: Literal["manual", "agent", "api"] = "manual",
         invoked_by_session_id: str | None = None,
         extra_input: str | None = None,
+        run_input: Any = None,
+        invoked_by_ref: str | None = None,
         user_id: str | None = None,
     ) -> AutomationRunAcceptedResponse:
         """Enqueue an immediate, off-schedule run for this automation.
@@ -1399,8 +1626,16 @@ class AutomationService:
           (``POST /v1/automations/{id}/run-now``).
         - ``"agent"`` — an agent invoked the ``automation`` MCP tool with
           ``action="run"``.
+        - ``"api"`` — a deployment surface (a published site, an integration)
+          asked, labelled by ``invoked_by_ref``.
 
-        Both share the same enqueue path; only the recorded provenance differs.
+        All share the same enqueue path; only the recorded provenance differs.
+
+        ``run_input`` is this run's input per the row's input contract — a
+        string for ``text``, an object for ``json`` — merged over the
+        contract's default and validated BEFORE a run row exists. The legacy
+        ``extra_input`` keyword is the text form; when both are given
+        ``run_input`` wins.
 
         Allowed while the automation is paused: pausing stops the schedule,
         not explicit runs (workbench cards re-run their paused companion
@@ -1420,6 +1655,10 @@ class AutomationService:
         # the opposite of the tick loop, so it runs regardless; the row stays
         # paused and ``next_run_at`` stays empty afterwards.
 
+        if run_input is None and extra_input is not None:
+            run_input = extra_input
+        text_input, json_input = self._effective_run_input(row, run_input)
+
         existing = await self._ds.active_run(user_id, automation_id)
         if existing is not None:
             if existing.status == "queued":
@@ -1432,11 +1671,173 @@ class AutomationService:
             user_id=user_id,
             trigger_type=trigger_type,
             invoked_by_session_id=invoked_by_session_id,
-            extra_input=extra_input,
+            extra_input=text_input,
+            input_json=json_input,
+            invoked_by_ref=invoked_by_ref,
         )
         return AutomationRunAcceptedResponse(
             run_id=run.id, automation_id=automation_id, status="queued"
         )
+
+    # ── Runs: read / wait / cancel / artifact ─────────────────────────
+
+    async def _require_run(self, user_id: str, automation_id: str, run_id: str) -> AutomationRunRow:
+        row = await self._ds.get_automation(user_id, automation_id)
+        if row is None:
+            raise AutomationNotFound()
+        run = await self._ds.get_run(user_id, automation_id, run_id)
+        if run is None:
+            raise AutomationRunNotFound()
+        return run
+
+    async def get_run_detail(
+        self, automation_id: str, run_id: str, user_id: str | None = None
+    ) -> AutomationRunDetailResponse:
+        user_id = self._require_user_id(user_id)
+        run = await self._require_run(user_id, automation_id, run_id)
+        links = await self._resolve_task_links([run], user_id)
+        return self._run_to_detail(run, links.get(run.session_id) if run.session_id else None)
+
+    async def wait_for_run(
+        self,
+        automation_id: str,
+        run_id: str,
+        *,
+        timeout_s: float,
+        poll_s: float = 0.5,
+        user_id: str | None = None,
+    ) -> AutomationRunDetailResponse:
+        """Block until the run is terminal or ``timeout_s`` elapses, then
+        return it as it stands. The row is re-read each poll — the runner
+        writes it from another unit of work (or another process)."""
+        user_id = self._require_user_id(user_id)
+        deadline = asyncio.get_running_loop().time() + max(0.0, timeout_s)
+        while True:
+            self._db.expire_all()
+            run = await self._require_run(user_id, automation_id, run_id)
+            if run.status in TERMINAL_RUN_STATUSES:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(poll_s)
+        return await self.get_run_detail(automation_id, run_id, user_id=user_id)
+
+    async def get_run_for_session(
+        self, session_id: str, user_id: str | None = None
+    ) -> AutomationRunRow | None:
+        """The run whose agent turn is ``session_id`` (the ``output`` action)."""
+        user_id = self._require_user_id(user_id)
+        return await self._ds.get_run_by_session(user_id, session_id)
+
+    async def cancel_run(
+        self, automation_id: str, run_id: str, user_id: str | None = None
+    ) -> AutomationRunDetailResponse:
+        """Stop a run.
+
+        A queued run is terminalised here and now (the runner skips anything
+        that is no longer ``queued``). A running program gets
+        ``cancel_requested_at`` set; the code runner polls it and kills the
+        process group. A running agent turn is a session — stop it through
+        the session, not here.
+        """
+        user_id = self._require_user_id(user_id)
+        row = await self._ds.get_automation(user_id, automation_id)
+        if row is None:
+            raise AutomationNotFound()
+        run = await self._ds.get_run(user_id, automation_id, run_id)
+        if run is None:
+            raise AutomationRunNotFound()
+        now = now_ms()
+        if run.status == "queued":
+            run.status = "cancelled"
+            run.error_code = "AUTOMATION_CANCELLED"
+            run.cancel_requested_at = now
+            run.completed_at = now
+            await self._ds.replace_run(run)
+        elif run.status == "running":
+            if row.execution_kind != "code":
+                raise AutomationCancelUnsupported()
+            if run.cancel_requested_at is None:
+                run.cancel_requested_at = now
+                await self._ds.replace_run(run)
+        else:
+            raise AutomationRunNotActive()
+        self._bus.publish("automation.run.cancelled", automation_id=automation_id, run_id=run.id)
+        return await self.get_run_detail(automation_id, run_id, user_id=user_id)
+
+    async def record_artifact(
+        self,
+        automation_id: str,
+        run_id: str,
+        *,
+        artifact: Mapping[str, Any],
+        files: list[str] | None = None,
+        producer: str = "agent",
+        user_id: str | None = None,
+    ) -> AutomationRunDetailResponse:
+        """Store the artifact of an ``artifact``-result run (the ``output``
+        action; a deployment's own producers). Validated against the result
+        contract; ``files`` are project-relative paths delivered as artifact
+        rows. Result hooks fire after the row commits."""
+        from valuz_agent.modules.automations.code_runner import (
+            DeclaredFile,
+            artifact_event,
+            deliver_files,
+            files_to_json,
+            fire_artifact_hooks,
+            resolve_project_cwd,
+        )
+
+        user_id = self._require_user_id(user_id)
+        row = await self._ds.get_automation(user_id, automation_id)
+        if row is None:
+            raise AutomationNotFound()
+        run = await self._ds.get_run(user_id, automation_id, run_id)
+        if run is None:
+            raise AutomationRunNotFound()
+        if run.status in TERMINAL_RUN_STATUSES and run.status != "success":
+            raise AutomationRunNotActive()
+        contract = result_contract_of(row)
+        if not isinstance(contract, ArtifactResult):
+            raise AutomationOutputNotExpected()
+        try:
+            clean = validate_artifact(contract, artifact)
+        except ContractViolationError as exc:
+            raise AutomationArtifactInvalid(f"{exc.path}: {exc}" if exc.path else str(exc)) from exc
+
+        delivered = []
+        if files:
+            try:
+                project_cwd = await resolve_project_cwd(self._db, user_id, row.project_id)
+            except Exception as exc:  # noqa: BLE001 — a missing project is a 422 here
+                raise AutomationArtifactInvalid(str(exc)) from exc
+            root = project_cwd.resolve()
+            declared: list[DeclaredFile] = []
+            for rel in files:
+                path = (project_cwd / rel).resolve()
+                if root not in path.parents or not path.is_file():
+                    raise AutomationArtifactInvalid(f"files: {rel!r} is not a file in the project")
+                declared.append(DeclaredFile(path=path, name=Path(rel).name, mime_type=None))
+            try:
+                delivered = await deliver_files(
+                    self._db,
+                    user_id=user_id,
+                    project_id=row.project_id,
+                    project_cwd=project_cwd,
+                    run_id=run.id,
+                    files=declared,
+                )
+            except ContractViolationError as exc:
+                raise AutomationArtifactInvalid(str(exc)) from exc
+
+        run.artifact_json = clean
+        run.files_json = files_to_json(delivered)
+        run.result_summary = artifact_summary(clean)
+        await self._ds.replace_run(run)
+        await fire_artifact_hooks(
+            artifact_event(row=row, run=run, artifact=clean, files=delivered, producer=producer)
+        )
+        return await self.get_run_detail(automation_id, run_id, user_id=user_id)
 
     async def fire_from_event(self, source_name: str, payload: Mapping[str, Any]) -> list[str]:
         """Dispatch one inbound delivery to every automation waiting on it.

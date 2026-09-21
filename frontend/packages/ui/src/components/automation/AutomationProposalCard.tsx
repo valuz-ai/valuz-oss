@@ -35,12 +35,7 @@ import {
 } from "../ui/dialog";
 
 export type AutomationProposalState =
-  | "pending"
-  | "confirming"
-  | "confirmed"
-  | "dismissing"
-  | "dismissed"
-  | "error";
+  "pending" | "confirming" | "confirmed" | "dismissing" | "dismissed" | "error";
 
 interface AutomationProposalCardProps {
   name: string;
@@ -54,6 +49,14 @@ interface AutomationProposalCardProps {
   worktree?: boolean;
   /** Immutable Playbook version the server resolved for this proposal. */
   playbookVersion?: number | null;
+  /** Pre-localized execution summary ("Agent · Chat" / "Code: entry (python)")
+   *  — computed by the caller (@valuz/app can read ``execution.kind``; this
+   *  package stays free of the ``@valuz/core`` wire types). */
+  executionLabel?: string | null;
+  /** Pre-localized input-contract kind ("No input" / "Text input" / …). */
+  inputLabel?: string | null;
+  /** Pre-localized result-contract kind ("Conversation" / "Artifact"). */
+  resultLabel?: string | null;
   state: AutomationProposalState;
   /** When ``state === "error"``, the confirm failure to display. */
   errorMessage?: string;
@@ -75,6 +78,9 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
   actionKind,
   worktree = false,
   playbookVersion,
+  executionLabel,
+  inputLabel,
+  resultLabel,
   state,
   errorMessage,
   validationError,
@@ -94,7 +100,9 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
           <AlarmClock className="h-3.5 w-3.5" aria-hidden="true" />
           {t("automation.proposalFailed")}
         </div>
-        <p className="mt-1 text-xs leading-snug text-ink-body">{validationError}</p>
+        <p className="mt-1 text-xs leading-snug text-ink-body">
+          {validationError}
+        </p>
       </div>
     );
   }
@@ -125,134 +133,148 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
             : "",
         )}
       >
-      <div className="flex items-start gap-3 px-4 py-3">
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand">
-          {state === "confirmed" ? (
-            <Check className="h-4 w-4" />
-          ) : state === "dismissed" ? (
-            <X className="h-4 w-4 text-ink-muted" />
-          ) : (
-            <AlarmClock className="h-4 w-4" />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="truncate text-sm font-medium text-ink-heading">
-              {name || t("automation.proposalUnnamed")}
-            </span>
-            <span className="shrink-0 text-2xs uppercase tracking-wider text-ink-label">
-              {t("automation.proposalNew")}
-            </span>
-            <span className="shrink-0 rounded-full bg-surface-muted px-1.5 text-2xs font-medium text-ink-label">
-              {modeLabel}
-            </span>
-            {worktree ? (
-              <span className="shrink-0 rounded-full bg-brand/10 px-1.5 text-2xs font-medium text-brand">
-                {t("automation.worktreeLabel")}
+        <div className="flex items-start gap-3 px-4 py-3">
+          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand">
+            {state === "confirmed" ? (
+              <Check className="h-4 w-4" />
+            ) : state === "dismissed" ? (
+              <X className="h-4 w-4 text-ink-muted" />
+            ) : (
+              <AlarmClock className="h-4 w-4" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2">
+              <span className="truncate text-sm font-medium text-ink-heading">
+                {name || t("automation.proposalUnnamed")}
               </span>
+              <span className="shrink-0 text-2xs uppercase tracking-wider text-ink-label">
+                {t("automation.proposalNew")}
+              </span>
+              <span className="shrink-0 rounded-full bg-surface-muted px-1.5 text-2xs font-medium text-ink-label">
+                {modeLabel}
+              </span>
+              {worktree ? (
+                <span className="shrink-0 rounded-full bg-brand/10 px-1.5 text-2xs font-medium text-brand">
+                  {t("automation.worktreeLabel")}
+                </span>
+              ) : null}
+            </div>
+
+            {triggerHuman || agentName || playbookVersion ? (
+              <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+                {triggerHuman ? (
+                  <span className="flex shrink-0 items-center gap-1 text-ink-body">
+                    <Sparkles className="h-3 w-3 shrink-0 text-ink-label" />
+                    {triggerHuman}
+                  </span>
+                ) : null}
+                {agentName ? (
+                  <span className="flex min-w-0 items-center gap-1 text-ink-meta">
+                    <User className="h-3 w-3 shrink-0 text-ink-label" />
+                    <span className="truncate">
+                      {actionKind === "task"
+                        ? `${t("automation.proposalLead")}: ${agentName}`
+                        : `${t("automation.agentLabel")}: ${agentName}`}
+                    </span>
+                  </span>
+                ) : null}
+                {playbookVersion ? (
+                  <span className="flex shrink-0 items-center gap-1 text-ink-meta">
+                    <BookOpen className="h-3 w-3 shrink-0 text-ink-label" />
+                    Playbook v{playbookVersion}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+
+            {executionLabel || inputLabel || resultLabel ? (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-ink-meta">
+                {executionLabel ? <span>{executionLabel}</span> : null}
+                {inputLabel ? <span>{inputLabel}</span> : null}
+                {resultLabel ? <span>{resultLabel}</span> : null}
+              </div>
+            ) : null}
+
+            {promptTemplate ? (
+              <div
+                data-slot="automation-prompt-preview"
+                className="relative mt-2 pr-9"
+              >
+                <div className="line-clamp-3 whitespace-pre-wrap break-words text-xs leading-snug text-ink-body">
+                  {promptTemplate}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setDetailsOpen(true)}
+                  className="absolute right-0 top-0"
+                  title={t("automation.viewPrompt")}
+                  aria-label={t("automation.viewPrompt")}
+                >
+                  <Maximize2 />
+                </Button>
+              </div>
+            ) : null}
+
+            {state === "confirmed" ? (
+              <p className="mt-2 text-xs text-ink-body">
+                {t("automation.proposalCreated")}
+              </p>
+            ) : null}
+            {state === "dismissed" ? (
+              <p className="mt-2 text-xs text-ink-meta">
+                {t("automation.proposalDismissed")}
+              </p>
+            ) : null}
+            {state === "error" && errorMessage ? (
+              <p className="mt-2 text-xs text-error">
+                {t("skill.operationFailed", { error: errorMessage })}
+              </p>
             ) : null}
           </div>
-
-          {triggerHuman || agentName || playbookVersion ? (
-            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
-              {triggerHuman ? (
-                <span className="flex shrink-0 items-center gap-1 text-ink-body">
-                  <Sparkles className="h-3 w-3 shrink-0 text-ink-label" />
-                  {triggerHuman}
-                </span>
-              ) : null}
-              {agentName ? (
-                <span className="flex min-w-0 items-center gap-1 text-ink-meta">
-                  <User className="h-3 w-3 shrink-0 text-ink-label" />
-                  <span className="truncate">
-                    {actionKind === "task"
-                      ? `${t("automation.proposalLead")}: ${agentName}`
-                      : `${t("automation.agentLabel")}: ${agentName}`}
-                  </span>
-                </span>
-              ) : null}
-              {playbookVersion ? (
-                <span className="flex shrink-0 items-center gap-1 text-ink-meta">
-                  <BookOpen className="h-3 w-3 shrink-0 text-ink-label" />
-                  Playbook v{playbookVersion}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-
-          {promptTemplate ? (
-            <div
-              data-slot="automation-prompt-preview"
-              className="relative mt-2 pr-9"
-            >
-              <div className="line-clamp-3 whitespace-pre-wrap break-words text-xs leading-snug text-ink-body">
-                {promptTemplate}
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => setDetailsOpen(true)}
-                className="absolute right-0 top-0"
-                title={t("automation.viewPrompt")}
-                aria-label={t("automation.viewPrompt")}
-              >
-                <Maximize2 />
-              </Button>
-            </div>
-          ) : null}
-
-          {state === "confirmed" ? (
-            <p className="mt-2 text-xs text-ink-body">
-              {t("automation.proposalCreated")}
-            </p>
-          ) : null}
-          {state === "dismissed" ? (
-            <p className="mt-2 text-xs text-ink-meta">
-              {t("automation.proposalDismissed")}
-            </p>
-          ) : null}
-          {state === "error" && errorMessage ? (
-            <p className="mt-2 text-xs text-error">
-              {t("skill.operationFailed", { error: errorMessage })}
-            </p>
-          ) : null}
         </div>
-      </div>
 
-      {!isTerminal ? (
-        <div className="flex items-center justify-end gap-2 px-4 py-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={isBusy}
-            loading={state === "dismissing"}
-            onClick={onDismiss}
-          >
-            {t("common.cancel")}
-          </Button>
-          {submittable ? (
+        {!isTerminal ? (
+          <div className="flex items-center justify-end gap-2 px-4 py-2">
             <Button
               type="button"
+              variant="outline"
               size="sm"
-              disabled={!canConfirm || isBusy}
-              loading={state === "confirming"}
-              onClick={onConfirm}
+              disabled={isBusy}
+              loading={state === "dismissing"}
+              onClick={onDismiss}
             >
-              {state === "error" ? t("common.retry") : t("automation.actionCreate")}
+              {t("common.cancel")}
             </Button>
-          ) : null}
-        </div>
-      ) : null}
+            {submittable ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={!canConfirm || isBusy}
+                loading={state === "confirming"}
+                onClick={onConfirm}
+              >
+                {state === "error"
+                  ? t("common.retry")
+                  : t("automation.actionCreate")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {promptTemplate ? (
         <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
           <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
             <DialogHeader className="border-b border-surface-border px-5 pb-4 pt-5 pr-12">
-              <DialogTitle>{name || t("automation.proposalUnnamed")}</DialogTitle>
-              <DialogDescription>{t("automation.promptLabel")}</DialogDescription>
+              <DialogTitle>
+                {name || t("automation.proposalUnnamed")}
+              </DialogTitle>
+              <DialogDescription>
+                {t("automation.promptLabel")}
+              </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
               <MarkdownContent

@@ -53,10 +53,7 @@ export interface EventTrigger {
 }
 
 export type Trigger =
-  | CronTrigger
-  | IntervalTrigger
-  | ManualTrigger
-  | EventTrigger;
+  CronTrigger | IntervalTrigger | ManualTrigger | EventTrigger;
 
 /** One registered event source and the closed set of types it can deliver
  * (``GET /automations/event-sources``). Empty on plain OSS. */
@@ -122,6 +119,57 @@ export type AgentKind = "project_member" | "library_agent";
  */
 export type ActionKind = "chat" | "task";
 
+// ── Contracts (input / execution / result) ─────────────────────────
+//
+// An automation row carries three orthogonal contracts (see backend
+// ``modules/automations/contracts.py``). All three are always present on
+// list/detail responses — pre-contract rows resolve to the defaults
+// (agent / none / conversation).
+
+export interface NoneInput {
+  kind: "none";
+}
+
+export interface TextInput {
+  kind: "text";
+  default?: string | null;
+}
+
+export interface JsonInput {
+  kind: "json";
+  /** JSON Schema (draft 2020-12) describing an object. */
+  schema: Record<string, unknown>;
+  default?: Record<string, unknown> | null;
+}
+
+export type InputContract = NoneInput | TextInput | JsonInput;
+
+export interface AgentExecution {
+  kind: "agent";
+  mode: "chat" | "task";
+}
+
+export interface CodeExecution {
+  kind: "code";
+  runtime: "python" | "shell";
+  /** Project-relative path to the entry file. */
+  entry: string;
+  timeout_seconds: number;
+}
+
+export type ExecutionContract = AgentExecution | CodeExecution;
+
+export interface ConversationResult {
+  kind: "conversation";
+}
+
+export interface ArtifactResult {
+  kind: "artifact";
+  schema?: Record<string, unknown> | null;
+}
+
+export type ResultContract = ConversationResult | ArtifactResult;
+
 // ── List + detail ──────────────────────────────────────────────────
 
 export interface AutomationItem {
@@ -131,12 +179,20 @@ export interface AutomationItem {
   project_kind: "chat" | "project";
 
   name: string;
-  agent_kind: AgentKind;
-  agent_slug: string;
-  /** Resolved name of the bound agent; null when upstream agent deleted. */
+  /** ``null`` for a code execution — no agent. */
+  agent_kind: AgentKind | null;
+  agent_slug: string | null;
+  /** Resolved name of the bound agent; null when upstream agent deleted
+   *  (or when there is none — a code execution). */
   agent_name: string | null;
-  /** Execution mode — drives the UI badge + edit-dialog default Tab. */
+  /** Execution mode — drives the UI badge + edit-dialog default Tab.
+   *  Meaningless for a code execution (column default). */
   action_kind: ActionKind;
+  /** The three contracts, always present (defaults for pre-contract rows:
+   *  agent / none / conversation). */
+  execution: ExecutionContract;
+  input: InputContract;
+  result: ResultContract;
   /** Worktree isolation flag (both action kinds; git-repo projects only). */
   worktree: boolean;
   /** Optional immutable Playbook contract executed by each fire. */
@@ -180,12 +236,22 @@ export interface AutomationRunItem {
   run_id: string;
   automation_id: string;
   project_id: string;
-  trigger_type: "cron" | "interval" | "manual" | "agent" | "recovered_skip";
+  trigger_type:
+    | "cron"
+    | "interval"
+    | "manual"
+    | "agent"
+    | "api"
+    | "event"
+    | "recovered_skip"
+    | "system";
   status:
     | "queued"
     | "running"
     | "success"
     | "failed"
+    | "timeout"
+    | "cancelled"
     | "skipped"
     | "interrupted_by_shutdown";
   triggered_at: number;
@@ -200,6 +266,14 @@ export interface AutomationRunItem {
   created_files: string[];
   /** Canonical PlaybookRun created for this fire, when a Playbook is pinned. */
   playbook_run_id: string | null;
+  /** Where a code run executed (``local:<pid>`` / ``sandbox:<instance>``). */
+  executor_ref: string | null;
+  /** Opaque caller label for ``trigger_type === "api"`` runs. */
+  invoked_by_ref: string | null;
+  /** Whether the run stored an artifact / took an input — the run-detail
+   *  endpoint carries the content itself. */
+  has_artifact: boolean;
+  has_input: boolean;
   // The task this run kicked off (task automations only) — id + title deep-link
   // to it ("→ 任务《title》"). `null` for non-task runs.
   task_id: string | null;
@@ -208,6 +282,24 @@ export interface AutomationRunItem {
   // this for the badge when present. Resolved from the lead session's task at
   // read time. `null` for non-task runs.
   task_status: "active" | "completed" | "failed" | "paused" | null;
+}
+
+/** One file a run delivered, as the artifact row it became. */
+export interface AutomationRunFile {
+  artifact_id: string;
+  name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+}
+
+/** One run with its content — effective input, artifact, delivered files,
+ *  and the log tail (``GET /{id}/runs/{run_id}``). */
+export interface AutomationRunDetail extends AutomationRunItem {
+  input: unknown;
+  artifact: Record<string, unknown> | null;
+  files: AutomationRunFile[];
+  log_tail: string | null;
+  cancel_requested_at: number | null;
 }
 
 // ── Trigger validation helpers ─────────────────────────────────────
@@ -248,8 +340,10 @@ export interface AutomationCreatePayload {
   project_kind: "chat" | "project";
   project_id: string | null;
 
-  agent_kind: AgentKind;
-  agent_slug: string;
+  /** Both required for an agent execution; both omitted (server stores
+   *  NULL) for a code execution, which has no agent. */
+  agent_kind?: AgentKind;
+  agent_slug?: string;
 
   prompt_template: string;
 
@@ -259,6 +353,7 @@ export interface AutomationCreatePayload {
    * Execution mode. Optional — backend defaults to `"chat"` if omitted.
    * `"task"` is only valid for project projects; the backend rejects
    * (422 ``AutomationTaskOnlyOnProject``) the combination on chat.
+   * Meaningless (and ignored) for a code execution.
    */
   action_kind?: ActionKind;
   /**
@@ -275,6 +370,12 @@ export interface AutomationCreatePayload {
    * ``trigger.kind === "event"`` and must be a registered source. */
   event_source?: string | null;
   event_refs?: string[] | null;
+  /** The three contracts (see backend ``modules/automations/contracts.py``).
+   *  Omitting ``execution`` defaults to an agent execution whose mode is
+   *  ``action_kind`` — the pre-contract wire shape keeps working unchanged. */
+  execution?: ExecutionContract;
+  input?: InputContract;
+  result?: ResultContract;
 }
 
 export interface AutomationUpdatePayload {
@@ -288,6 +389,11 @@ export interface AutomationUpdatePayload {
   playbook_version?: number | null;
   event_source?: string | null;
   event_refs?: string[] | null;
+  /** Contracts are replaced whole, like ``trigger``: passing one swaps the
+   *  entire contract, omitting it keeps the stored one. */
+  execution?: ExecutionContract | null;
+  input?: InputContract | null;
+  result?: ResultContract | null;
 }
 
 /** Minimal Definition projection needed by the Automation contract picker. */
@@ -304,6 +410,19 @@ export interface AutomationRunAccepted {
   run_id: string;
   automation_id: string;
   status: "queued" | "running";
+  /** Present when the caller asked to wait (``wait_seconds > 0``): the run
+   *  as it stood when the wait ended (terminal, or still running if the
+   *  wait elapsed first). */
+  run?: AutomationRunDetail | null;
+}
+
+/** Body of ``POST /{id}/run-now``. ``input`` follows the row's input
+ *  contract (a string for ``text``, an object for ``json``, absent for
+ *  ``none``). ``wait_seconds`` blocks the call until the run reaches a
+ *  terminal state (or the wait elapses) and returns it in ``run``. */
+export interface AutomationRunNowPayload {
+  input?: string | Record<string, unknown> | null;
+  wait_seconds?: number;
 }
 
 /**
@@ -335,14 +454,20 @@ export interface AutomationProposalSpec {
   name: string;
   prompt_template: string;
   trigger: Trigger;
-  agent_slug: string;
-  agent_kind: AgentKind;
+  /** ``null`` for a code execution — the proposal has no agent. */
+  agent_slug: string | null;
+  agent_kind: AgentKind | null;
   agent_name: string | null;
   action_kind: ActionKind;
   /** Worktree isolation (both action kinds; git-repo projects only). */
   worktree: boolean;
   playbook_definition_id: string | null;
   playbook_version: number | null;
+  /** The three contracts — always present (defaults: agent / none /
+   *  conversation). The confirm card replays these verbatim. */
+  execution: ExecutionContract;
+  input: InputContract;
+  result: ResultContract;
   trigger_human_readable: string;
   next_run_at: number | null;
 }
@@ -359,6 +484,9 @@ export interface AutomationProposalConfirmPayload {
   worktree?: boolean;
   playbook_definition_id?: string | null;
   playbook_version?: number | null;
+  execution?: ExecutionContract | null;
+  input?: InputContract | null;
+  result?: ResultContract | null;
 }
 
 export interface AutomationProposalStatusResult {
@@ -557,10 +685,25 @@ export const automationsApi = {
     );
   },
 
-  runNow(automationId: string): Promise<AutomationRunAccepted> {
+  /** ``body`` is optional (pre-contract callers pass nothing). ``input``
+   *  follows the automation's input contract; ``wait_seconds`` blocks for a
+   *  terminal run and returns it in the response's ``run``. */
+  runNow(
+    automationId: string,
+    body?: AutomationRunNowPayload,
+  ): Promise<AutomationRunAccepted> {
     return fetchJson(
       `/v1/automations/${encodeURIComponent(automationId)}/run-now`,
-      { method: "POST", baseUrl: automationBase(automationId) },
+      {
+        method: "POST",
+        ...(body
+          ? {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          : {}),
+        baseUrl: automationBase(automationId),
+      },
     );
   },
 
@@ -576,6 +719,24 @@ export const automationsApi = {
     return fetchJson(
       `/v1/automations/${encodeURIComponent(automationId)}/runs${suffix}`,
       { baseUrl: automationBase(automationId) },
+    );
+  },
+
+  /** One run with its content — effective input, artifact, delivered files,
+   *  log tail. */
+  getRun(automationId: string, runId: string): Promise<AutomationRunDetail> {
+    return fetchJson(
+      `/v1/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}`,
+      { baseUrl: automationBase(automationId) },
+    );
+  },
+
+  /** Stop a run: a queued run is terminalised at once; a running program is
+   *  asked to stop (409 for a running agent turn — stop it via its session). */
+  cancelRun(automationId: string, runId: string): Promise<AutomationRunDetail> {
+    return fetchJson(
+      `/v1/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}/cancel`,
+      { method: "POST", baseUrl: automationBase(automationId) },
     );
   },
 

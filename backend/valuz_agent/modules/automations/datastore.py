@@ -209,9 +209,7 @@ class AutomationDatastore:
             .all()
         )
 
-    async def find_due_automations_for_update(
-        self, now: int, *, limit: int
-    ) -> list[AutomationRow]:
+    async def find_due_automations_for_update(self, now: int, *, limit: int) -> list[AutomationRow]:
         """Lock a bounded due batch, skipping rows another dispatcher owns."""
         stmt = (
             select(AutomationRow)
@@ -275,9 +273,46 @@ class AutomationDatastore:
             .first()
         )
 
-    async def active_run(
-        self, user_id: str, automation_id: str
-    ) -> AutomationRunRow | None:
+    async def get_run_by_session(self, user_id: str, session_id: str) -> AutomationRunRow | None:
+        """The run whose agent turn is ``session_id`` — how the ``automation``
+        tool's ``output`` action finds the run it is speaking for."""
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow)
+                    .where(
+                        AutomationRunRow.session_id == session_id,
+                        AutomationRunRow.user_id == user_id,
+                    )
+                    .order_by(AutomationRunRow.triggered_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    async def last_artifact_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
+        """Newest successful run that stored an artifact — ``ctx.previous``
+        for the next code run, so a periodic program can pick up where the
+        last one left off."""
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow)
+                    .where(
+                        AutomationRunRow.automation_id == automation_id,
+                        AutomationRunRow.user_id == user_id,
+                        AutomationRunRow.status == "success",
+                        AutomationRunRow.artifact_json.is_not(None),
+                    )
+                    .order_by(AutomationRunRow.triggered_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    async def active_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
         return (
             (
                 await self._db.execute(
@@ -400,7 +435,7 @@ class AutomationDatastore:
             await self._db.execute(
                 select(func.count())
                 .select_from(recent_runs)
-                .filter(recent_runs.c.status == "failed")
+                .filter(recent_runs.c.status.in_(("failed", "timeout")))
             )
         ).scalar() or 0
 
@@ -436,7 +471,7 @@ class AutomationDatastore:
                         AutomationRunRow.automation_id == automation_id,
                         AutomationRunRow.user_id == user_id,
                         AutomationRunRow.triggered_at >= since,
-                        AutomationRunRow.status.in_(("success", "failed")),
+                        AutomationRunRow.status.in_(("success", "failed", "timeout")),
                     )
                 )
             )
@@ -444,5 +479,5 @@ class AutomationDatastore:
             .all()
         )
         total = len(rows)
-        failed = sum(1 for status in rows if status == "failed")
+        failed = sum(1 for status in rows if status in ("failed", "timeout"))
         return total, failed

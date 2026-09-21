@@ -21,6 +21,7 @@ import {
   Play,
   Sparkles,
   Trash2,
+  XCircle,
 } from "lucide-react";
 
 import { cn } from "@valuz/ui/lib/utils";
@@ -34,7 +35,11 @@ export type AutomationAction =
   | "pause"
   | "resume"
   | "run"
-  | "remove";
+  | "remove"
+  | "runs"
+  | "read_run"
+  | "cancel"
+  | "output";
 
 /** Discriminated trigger union matching the backend ``Trigger`` schema. */
 export type AutomationTrigger =
@@ -68,16 +73,60 @@ export interface AutomationProposalSpecPayload {
   name: string;
   prompt_template: string;
   trigger: AutomationTrigger;
-  agent_slug: string;
-  agent_kind: string;
+  /** ``null`` for a code execution — the proposal has no agent. */
+  agent_slug: string | null;
+  agent_kind: string | null;
   agent_name: string | null;
   action_kind: "chat" | "task";
   /** Worktree isolation (both action kinds; git-repo projects only). */
   worktree?: boolean;
   playbook_definition_id?: string | null;
   playbook_version?: number | null;
+  /** The three contracts (see backend ``modules/automations/contracts.py``),
+   *  echoed verbatim so the confirm click can replay them unchanged. */
+  execution?: AutomationExecutionPayload;
+  input?: AutomationInputPayload;
+  result?: AutomationResultPayload;
   trigger_human_readable: string;
   next_run_at: number | null;
+}
+
+/** Mirrors the backend ``ExecutionContract`` — kept local (not imported from
+ *  ``@valuz/core``) since ``packages/ui`` may not depend on ``core``. */
+export type AutomationExecutionPayload =
+  | { kind: "agent"; mode: "chat" | "task" }
+  | {
+      kind: "code";
+      runtime: "python" | "shell";
+      entry: string;
+      timeout_seconds: number;
+    };
+
+export type AutomationInputPayload =
+  | { kind: "none" }
+  | { kind: "text"; default?: string | null }
+  | {
+      kind: "json";
+      schema: Record<string, unknown>;
+      default?: Record<string, unknown> | null;
+    };
+
+export type AutomationResultPayload =
+  | { kind: "conversation" }
+  | { kind: "artifact"; schema?: Record<string, unknown> | null };
+
+/** One run, as echoed by the ``run`` / ``read_run`` / ``cancel`` / ``output``
+ *  actions (``run``) or the ``runs`` action (``runs``). A trimmed local
+ *  mirror of ``AutomationRunItem`` — only the fields this card renders. */
+export interface AutomationRunPayload {
+  run_id: string;
+  status: string;
+  trigger_type?: string;
+  result_summary?: string | null;
+  error_message?: string | null;
+  executor_ref?: string | null;
+  triggered_at?: number;
+  duration_ms?: number | null;
 }
 
 export interface AutomationToolResultPayload {
@@ -89,6 +138,10 @@ export interface AutomationToolResultPayload {
   next_runs?: number[];
   // Set only by the ``create`` action — the proposed (not yet saved) automation.
   proposal?: AutomationProposalSpecPayload | null;
+  // ``run`` (when waited) / ``read_run`` / ``cancel`` / ``output``.
+  run?: AutomationRunPayload | null;
+  // ``runs``.
+  runs?: AutomationRunPayload[];
   error_code?: string | null;
 }
 
@@ -108,6 +161,10 @@ const ACTION_LABEL_KEYS: Record<AutomationAction, string> = {
   resume: "skill.resumed",
   run: "skill.triggered",
   remove: "skill.deleted",
+  runs: "automation.actionRunsListed",
+  read_run: "automation.actionRunRead",
+  cancel: "automation.actionRunCancelled",
+  output: "automation.actionOutputRecorded",
 };
 
 const ACTION_ICON: Record<AutomationAction, typeof AlarmClock> = {
@@ -119,6 +176,10 @@ const ACTION_ICON: Record<AutomationAction, typeof AlarmClock> = {
   resume: Play,
   run: Play,
   remove: Trash2,
+  runs: AlarmClock,
+  read_run: Eye,
+  cancel: XCircle,
+  output: CheckCircle2,
 };
 
 function formatNextRun(value: number | null | undefined): string | null {
@@ -203,6 +264,8 @@ export const AutomationToolCard = memo(function AutomationToolCard({
   const items = result.automations ?? [];
   const showList = result.action === "list" && items.length > 0;
   const singleItem = result.automation ?? null;
+  const singleRun = result.run ?? null;
+  const runsList = result.runs ?? [];
 
   return (
     <div className="rounded-lg border border-surface-border bg-surface px-3 py-2.5 text-xs shadow-sm">
@@ -226,6 +289,42 @@ export const AutomationToolCard = memo(function AutomationToolCard({
               item={it}
               onOpen={onOpenInAutomation}
             />
+          ))}
+        </div>
+      ) : null}
+
+      {singleRun ? (
+        <div className="mt-1.5 border-t border-[#f1f3f5] pt-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[#1f2937]">
+              {singleRun.result_summary?.trim() || singleRun.run_id}
+            </span>
+            <span className="shrink-0 text-2xs text-[#6e7481]">
+              {singleRun.status}
+            </span>
+          </div>
+          {singleRun.error_message ? (
+            <p className="mt-1 text-2xs text-error-text">
+              {singleRun.error_message}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {result.action === "runs" && runsList.length > 0 ? (
+        <div className="mt-1.5 max-h-64 space-y-1 overflow-auto border-t border-[#f1f3f5] pt-1.5">
+          {runsList.map((r) => (
+            <div
+              key={r.run_id}
+              className="flex items-center justify-between gap-2 rounded-md px-2 py-1"
+            >
+              <span className="min-w-0 flex-1 truncate text-[#1f2937]">
+                {r.result_summary?.trim() || r.run_id}
+              </span>
+              <span className="shrink-0 text-2xs text-[#6e7481]">
+                {r.status}
+              </span>
+            </div>
           ))}
         </div>
       ) : null}

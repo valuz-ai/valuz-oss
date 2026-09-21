@@ -8,6 +8,9 @@ import {
   parseOperationToolOutput,
   skillsApi,
   useTranslation,
+  type ExecutionContract,
+  type InputContract,
+  type ResultContract,
   type Trigger,
   type OperationView,
   type useIncrementalTurns,
@@ -34,6 +37,9 @@ type AutomationConfirmSpec = {
   worktree?: boolean;
   playbook_definition_id?: string | null;
   playbook_version?: number | null;
+  execution?: ExecutionContract | null;
+  input?: InputContract | null;
+  result?: ResultContract | null;
 };
 
 export async function confirmAutomationProposalAndNotify(
@@ -51,6 +57,9 @@ export async function confirmAutomationProposalAndNotify(
     worktree: spec.worktree ?? false,
     playbook_definition_id: spec.playbook_definition_id ?? null,
     playbook_version: spec.playbook_version ?? null,
+    execution: spec.execution ?? null,
+    input: spec.input ?? null,
+    result: spec.result ?? null,
   });
   notifyResourceRefresh({
     resourceType: "automation",
@@ -80,9 +89,7 @@ export async function confirmOperationAndNotify(
     resourceType: result.operation_type.split(".", 1)[0] || "operation",
     projectId: result.project_id,
     resourceId:
-      typeof canonicalResourceId === "string"
-        ? canonicalResourceId
-        : result.id,
+      typeof canonicalResourceId === "string" ? canonicalResourceId : result.id,
   });
   return result;
 }
@@ -322,10 +329,7 @@ export function useToolCallCardActions({
   // re-resolves project / bound-agent context from the session and stamps the
   // proposing ``tool_call_id`` so a reload can detect the row already exists.
   const handleConfirmAutomation = useCallback(
-    async (
-      toolId: string,
-      spec: AutomationConfirmSpec,
-    ) => {
+    async (toolId: string, spec: AutomationConfirmSpec) => {
       const sid = selectedSessionIdRef.current;
       if (!sid) return;
       setAutomationProposalStates((prev) => ({
@@ -336,11 +340,7 @@ export function useToolCallCardActions({
         },
       }));
       try {
-        const res = await confirmAutomationProposalAndNotify(
-          sid,
-          toolId,
-          spec,
-        );
+        const res = await confirmAutomationProposalAndNotify(sid, toolId, spec);
         setAutomationProposalStates((prev) => ({
           ...prev,
           [toolId]: { state: "confirmed", automationId: res.automation_id },
@@ -636,7 +636,10 @@ export function useToolCallCardActions({
         // has to come from the server (both confirm and dismiss delete the
         // staging dir the old card inferred its state from).
         const name = block.tool.title || "";
-        if (!isToolNamed(name, "playbook") && !isToolNamed(name, "submit_skill")) {
+        if (
+          !isToolNamed(name, "playbook") &&
+          !isToolNamed(name, "submit_skill")
+        ) {
           continue;
         }
         const result = parseOperationToolOutput(block.tool.output);
@@ -781,7 +784,6 @@ export function useToolCallCardActions({
       window.clearInterval(interval);
     };
   }, [selectedSessionId, turns, isBusy]);
-
 
   return {
     submissionStates,
