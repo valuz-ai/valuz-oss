@@ -15,10 +15,16 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(frozen=True, slots=True)
 class AutomationArtifactFile:
-    artifact_id: str
+    """One file the run declared. ``artifact_id`` is the artifact row it became;
+    ``None`` with ``error`` set when the host could not record it — the run is
+    still a success, the artifact is what the contract promised, and the
+    failed registration is reported rather than hidden behind a failed run."""
+
+    artifact_id: str | None
     name: str
     mime_type: str | None = None
     size_bytes: int | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

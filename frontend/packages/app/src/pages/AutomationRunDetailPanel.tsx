@@ -167,15 +167,24 @@ export const AutomationRunDetailPanel = ({
                   <ul className="flex flex-col gap-1">
                     {detail.files.map((file) => (
                       <li
-                        key={file.artifact_id}
+                        key={file.artifact_id ?? `unrecorded:${file.name}`}
                         className="flex items-center justify-between gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 py-1.5 text-xs"
                       >
                         <span className="min-w-0 flex-1 truncate text-ink-body">
                           {file.name}
                         </span>
-                        <span className="shrink-0 text-ink-meta">
-                          {formatBytes(file.size_bytes) ?? ""}
-                        </span>
+                        {file.error ? (
+                          <span
+                            className="min-w-0 shrink truncate text-status-danger"
+                            title={file.error}
+                          >
+                            {file.error}
+                          </span>
+                        ) : (
+                          <span className="shrink-0 text-ink-meta">
+                            {formatBytes(file.size_bytes) ?? ""}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>

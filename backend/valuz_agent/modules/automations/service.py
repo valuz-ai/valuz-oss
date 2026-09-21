@@ -515,10 +515,11 @@ class AutomationService:
         raw_files = getattr(row, "files_json", None) or []
         files = [
             AutomationRunFile(
-                artifact_id=str(f.get("artifact_id", "")),
+                artifact_id=(str(f["artifact_id"]) if f.get("artifact_id") else None),
                 name=str(f.get("name", "")),
                 mime_type=f.get("mime_type"),
                 size_bytes=f.get("size_bytes"),
+                error=f.get("error"),
             )
             for f in raw_files
             if isinstance(f, dict) and f.get("artifact_id")

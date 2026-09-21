@@ -185,7 +185,13 @@ async def test_finish_code_run_writes_terminal_state_and_fires_hooks(
     assert run.status == "success"
     assert run.artifact_json == {"summary": "done"}
     assert run.files_json == [
-        {"artifact_id": "art-1", "name": "r.csv", "mime_type": "text/csv", "size_bytes": 3}
+        {
+            "artifact_id": "art-1",
+            "name": "r.csv",
+            "mime_type": "text/csv",
+            "size_bytes": 3,
+            "error": None,
+        }
     ]
     assert run.executor_ref == "local:7"
     assert run.log_tail == "log"
