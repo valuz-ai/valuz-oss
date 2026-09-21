@@ -63,6 +63,12 @@ class ArtifactKind(StrEnum):
     # module owns everything that makes a skill a skill; this module never
     # branches on it (docs/design/skill-versioning in the commercial repo).
     SKILL = "skill"
+    # A published site (static / service / workbench) owned by an overlay's
+    # sites module: each revision is a small JSON manifest that points at the
+    # site's source and built bundles by hash. Still just a label here — the
+    # overlay owns deployment, access and hosting; this module never branches
+    # on it, exactly like ``SKILL``.
+    SITE = "site"
 
 
 #: Model-facing descriptions, kept beside the enum so the tool schema and the
@@ -76,6 +82,10 @@ ARTIFACT_KIND_HINTS: dict[ArtifactKind, str] = {
     ArtifactKind.SKILL: (
         "an installable agent skill package; the skill library records these "
         "when a skill is saved — do not use it for files you deliver yourself"
+    ),
+    ArtifactKind.SITE: (
+        "a published site; the sites module records these when a site is built "
+        "— do not use it for files you deliver yourself"
     ),
     ArtifactKind.FILE: "anything else, or when unsure",
 }
