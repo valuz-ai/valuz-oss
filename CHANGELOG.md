@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A code automation's declared files are recorded again, and a file the
+  host cannot record no longer fails the run** — `deliver_files` handed the
+  owner boundary an empty root list, so every declared file came back
+  `not_owned` and a run whose program had succeeded (artifact valid, file
+  written where the contract says) was marked `failed` /
+  `AUTOMATION_ARTIFACT_INVALID`. The project is now the owner root, and a
+  registration failure is reported on the file entry (`artifact_id: null`,
+  `error`), in the log tail and in the `automation` tool's message, while the
+  run stays `success` with its artifact.
+
 - **A delivered name can no longer break the snapshot** — `deliver_artifact`
   staged a generated document under its `display_name`, which for generated
   content is a label the caller often took from a model. A title containing

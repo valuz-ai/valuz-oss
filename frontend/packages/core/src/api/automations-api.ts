@@ -286,10 +286,13 @@ export interface AutomationRunItem {
 
 /** One file a run delivered, as the artifact row it became. */
 export interface AutomationRunFile {
-  artifact_id: string;
+  /** The artifact row the file became; null when the host could not record it (see `error`). */
+  artifact_id: string | null;
   name: string;
   mime_type: string | null;
   size_bytes: number | null;
+  /** Why the host could not record the file. The run itself is still a success. */
+  error?: string | null;
 }
 
 /** One run with its content — effective input, artifact, delivered files,

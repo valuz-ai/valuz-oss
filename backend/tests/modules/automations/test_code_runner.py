@@ -180,13 +180,24 @@ class TestWrapperAndFiles:
 
 
 class _FakeExecutor:
-    def __init__(self, outcome: CodeRunOutcome | Exception, *, write_output: str | None = None):
+    def __init__(
+        self,
+        outcome: CodeRunOutcome | Exception,
+        *,
+        write_output: str | None = None,
+        write_files: dict[str, bytes] | None = None,
+    ):
         self._outcome = outcome
         self._write = write_output
+        self._write_files = write_files or {}
         self.spec: CodeRunSpec | None = None
 
     async def execute(self, spec: CodeRunSpec, *, cancel: asyncio.Event) -> CodeRunOutcome:
         self.spec = spec
+        for rel, data in self._write_files.items():  # what the program "wrote" into the run dir
+            target = Path(spec.run_dir) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
         if self._write is not None:
             Path(spec.output_path).write_text(self._write, encoding="utf-8")
         if isinstance(self._outcome, Exception):
@@ -362,3 +373,102 @@ async def test_fire_artifact_hooks_swallows_failures(monkeypatch: pytest.MonkeyP
     )
     await cr.fire_artifact_hooks(event)
     assert seen == ["run-1"]
+
+
+class _Delivered:
+    def __init__(
+        self, *, ok: bool, artifact_id: str | None = None, status: str = "recorded", detail=None
+    ):
+        self.ok = ok
+        self.artifact_id = artifact_id
+        self.status = status
+        self.detail = detail
+
+
+@pytest.mark.asyncio
+async def test_declared_files_are_delivered_with_the_project_as_owner_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quiet_cancel_watch: None
+) -> None:
+    """Desktop, 2026-09-21: every declared file came back ``not_owned`` because
+    the owner boundary was handed no roots — the project IS the root."""
+    project = _project(tmp_path)
+    seen: dict[str, Any] = {}
+
+    async def fake_deliver(db, *, scope, scope_cwd, owner_roots, request, **kw):
+        seen["owner_roots"] = owner_roots
+        seen["scope_cwd"] = scope_cwd
+        seen["abs_path"] = request.abs_path
+        return _Delivered(ok=True, artifact_id="art-1")
+
+    monkeypatch.setattr("valuz_agent.modules.artifacts.service.deliver_artifact", fake_deliver)
+    run_dir = project / ".valuz/automations/auto-1/runs/run-1"
+    executor = _FakeExecutor(
+        CodeRunOutcome(status="success", exit_code=0, executor_ref="local:1"),
+        write_output=json.dumps(
+            {
+                "artifact": {"summary": "ok"},
+                "files": [{"sourcePath": "files/report.json", "name": "report.json"}],
+            }
+        ),
+        write_files={"files/report.json": b"{}"},
+    )
+    monkeypatch.setattr(ext, "automation_code_executor", executor)
+    monkeypatch.setattr(cr, "resolve_project_cwd", AsyncMock(return_value=project))
+    with patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow):
+        result = await cr.run_code_automation(
+            user_id="u1",
+            row=_row(),
+            run=_run(),
+            effective_input=None,
+            previous=None,
+            timezone="UTC",
+            locale="en-US",
+        )
+    assert result.status == "success", result
+    assert seen["owner_roots"] == [project]
+    assert seen["scope_cwd"] == project
+    assert Path(seen["abs_path"]).resolve() == (run_dir / "files/report.json").resolve()
+    assert [f.artifact_id for f in result.files] == ["art-1"]
+    assert result.files[0].error is None
+
+
+@pytest.mark.asyncio
+async def test_a_file_the_host_cannot_record_does_not_fail_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quiet_cancel_watch: None
+) -> None:
+    project = _project(tmp_path)
+
+    async def fake_deliver(db, **kw):
+        return _Delivered(ok=False, status="not_owned")
+
+    monkeypatch.setattr("valuz_agent.modules.artifacts.service.deliver_artifact", fake_deliver)
+    executor = _FakeExecutor(
+        CodeRunOutcome(status="success", exit_code=0, executor_ref="local:1", stdout_tail="hi"),
+        write_output=json.dumps(
+            {
+                "artifact": {"summary": "ok"},
+                "files": [{"sourcePath": "files/report.json", "name": "report.json"}],
+            }
+        ),
+        write_files={"files/report.json": b"{}"},
+    )
+    monkeypatch.setattr(ext, "automation_code_executor", executor)
+    monkeypatch.setattr(cr, "resolve_project_cwd", AsyncMock(return_value=project))
+    with patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow):
+        result = await cr.run_code_automation(
+            user_id="u1",
+            row=_row(),
+            run=_run(),
+            effective_input=None,
+            previous=None,
+            timezone="UTC",
+            locale="en-US",
+        )
+    assert result.status == "success", result
+    assert result.error_code is None
+    assert result.artifact == {"summary": "ok"}
+    assert result.files[0].artifact_id is None
+    assert result.files[0].error == "not_owned"
+    assert "could not record file 'report.json'" in (result.log_tail or "")
+    assert result.log_tail.startswith("hi\n[host]")
+    assert cr.files_to_json(result.files)[0]["error"] == "not_owned"

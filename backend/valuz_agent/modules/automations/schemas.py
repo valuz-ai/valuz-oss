@@ -439,12 +439,14 @@ class AutomationRunItemResponse(BaseModel):
 
 
 class AutomationRunFile(BaseModel):
-    """One file a run delivered, as the artifact row it became."""
+    """One file a run declared: the artifact row it became, or — when the host
+    could not record it — ``artifact_id=None`` and the reason in ``error``."""
 
-    artifact_id: str
+    artifact_id: str | None = None
     name: str
     mime_type: str | None = None
     size_bytes: int | None = None
+    error: str | None = None
 
 
 class AutomationRunDetailResponse(AutomationRunItemResponse):

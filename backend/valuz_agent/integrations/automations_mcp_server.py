@@ -642,6 +642,13 @@ async def _handle_status_change(
                     msg = f"Run {run.run_id} finished: {detail.status}."
                     if detail.error_message:
                         msg += f" {detail.error_message}"
+                    unrecorded = [f for f in (detail.files or []) if f.error]
+                    if unrecorded:
+                        msg += (
+                            f" {len(unrecorded)} declared file(s) could not be recorded "
+                            "(the artifact is intact): "
+                            + "; ".join(f"{f.name}: {f.error}" for f in unrecorded)
+                        )
                 return AutomationToolResult(
                     action="run",
                     ok=detail.status == "success" or detail.status in ("queued", "running"),

@@ -73,7 +73,8 @@
   `artifact.summary` 是字符串时会成为 run 的 `result_summary`（否则取 JSON 前 200 字）。
 - `files` 可选。每项 `sourcePath` 必填（绝对路径，或相对 `runDir`），**必须落在 `runDir` 内**（放 `files/` 子目录最省事）；
   `name` 默认取文件名；`mimeType` 缺省按扩展名猜。限制：≤ 32 个、单个 ≤ 8 MiB、合计 ≤ 32 MiB。
-  主机读回每个文件、登记为项目的产物行，`read_run` 的 `files` 里是 `{artifact_id, name, mime_type, size_bytes}`。
+  主机读回每个文件、登记为项目的产物行，`read_run` 的 `files` 里是 `{artifact_id, name, mime_type, size_bytes, error}`；
+  某个文件登记失败**不会让 run 失败**——该项 `artifact_id` 为空、`error` 说明原因，`log_tail` 里也有一行 `[host] could not record file …`。
   **不要把路径 / 字节 / base64 塞进 artifact**——文件走 `files`。
 - python：`run(ctx)` 的返回值就是包装对象；程序自己写到 `$VALUZ_AUTOMATION_OUTPUT_FILE` 的**非空、合法 JSON** 优先于返回值
   （大结果或文件型结果用这条路，免得在内存里放两份）。`run` 可以是 `async def`，会被 `asyncio.run` 执行。

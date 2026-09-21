@@ -332,7 +332,16 @@ async def deliver_files(
     run_id: str,
     files: list[DeclaredFile],
 ) -> list[AutomationArtifactFile]:
-    """Record each declared file as an artifact row (the run's ``files_json``)."""
+    """Record each declared file as an artifact row (the run's ``files_json``).
+
+    A file the host cannot record is reported on its entry (``error``) and
+    never fails the run: the program did what the contract asked — the
+    artifact is valid and on the row — and ``files`` are the optional half.
+    (Measured on a desktop: every declared file came back ``not_owned`` because
+    the owner boundary was handed no roots, and a correct run was marked
+    ``failed`` for it.) The owner root is the project: every declared path was
+    already checked to sit inside the run dir, which sits inside the project.
+    """
     if not files:
         return []
     from valuz_agent.modules.artifacts.models import SHARED_CWD, ArtifactKind
@@ -341,11 +350,12 @@ async def deliver_files(
 
     out: list[AutomationArtifactFile] = []
     for declared in files:
+        size = declared.path.stat().st_size
         delivered = await deliver_artifact(
             db,
             scope=Scope(user_id=user_id, project_id=project_id, worktree=SHARED_CWD),
             scope_cwd=project_cwd,
-            owner_roots=[],
+            owner_roots=[project_cwd],
             request=DeliveryRequest(
                 abs_path=declared.path,
                 display_name=declared.name,
@@ -354,19 +364,36 @@ async def deliver_files(
             ),
         )
         if not delivered.ok or not delivered.artifact_id:
-            raise ContractViolationError(
-                f"could not record file {declared.name!r} ({delivered.status}: {delivered.detail})",
-                path="files",
+            status = getattr(delivered.status, "value", delivered.status)
+            detail = f"{status}: {delivered.detail}" if delivered.detail else str(status)
+            logger.warning(
+                "automation run %s: could not record file %r (%s)", run_id, declared.name, detail
             )
+            out.append(
+                AutomationArtifactFile(
+                    artifact_id=None,
+                    name=declared.name,
+                    mime_type=declared.mime_type,
+                    size_bytes=size,
+                    error=detail,
+                )
+            )
+            continue
         out.append(
             AutomationArtifactFile(
                 artifact_id=delivered.artifact_id,
                 name=declared.name,
                 mime_type=declared.mime_type,
-                size_bytes=declared.path.stat().st_size,
+                size_bytes=size,
             )
         )
     return out
+
+
+def file_delivery_notes(files: list[AutomationArtifactFile]) -> list[str]:
+    """One human line per file the host could not record, for the log tail and
+    the tool's message."""
+    return [f"could not record file {f.name!r} ({f.error})" for f in files if f.error]
 
 
 def compose_log_tail(outcome: CodeRunOutcome) -> str | None:
@@ -385,6 +412,7 @@ def files_to_json(files: list[AutomationArtifactFile]) -> list[dict[str, Any]]:
             "name": f.name,
             "mime_type": f.mime_type,
             "size_bytes": f.size_bytes,
+            "error": f.error,
         }
         for f in files
     ]
@@ -538,6 +566,12 @@ async def run_code_automation(
         return result
     result.artifact = artifact
     result.files = delivered
+    notes = file_delivery_notes(delivered)
+    if notes:
+        # Visible where the user looks first (``read_run`` / the run detail),
+        # without pretending the program failed.
+        tail = "\n".join(f"[host] {n}" for n in notes)
+        result.log_tail = f"{result.log_tail}\n{tail}" if result.log_tail else tail
     _trim(paths, settings.automation_run_dirs_keep)
     return result
 
