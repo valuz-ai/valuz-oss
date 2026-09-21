@@ -138,6 +138,9 @@ export interface AutomationToolResultPayload {
   next_runs?: number[];
   // Set only by the ``create`` action — the proposed (not yet saved) automation.
   proposal?: AutomationProposalSpecPayload | null;
+  // ``create`` with ``confirmation: "skip"`` — the automation was persisted at
+  // once (no card); ``automation`` carries it and this is its id.
+  automation_id?: string | null;
   // ``run`` (when waited) / ``read_run`` / ``cancel`` / ``output``.
   run?: AutomationRunPayload | null;
   // ``runs``.

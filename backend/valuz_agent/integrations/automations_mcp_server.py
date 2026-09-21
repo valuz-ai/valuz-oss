@@ -274,8 +274,11 @@ async def _handle_create(
     project_id: str | None,
     user_id: str,
     session_agent_slug: str | None = None,
+    session_id: str | None = None,
 ) -> AutomationToolResult:
-    """Validate + PREVIEW the proposed automation — never persist.
+    """Validate + PREVIEW the proposed automation — never persist (unless
+    ``confirmation="skip"`` is asked for AND the deployment's create policy
+    allows it — see ``ports/automation_create_policy.py``).
 
     Mirrors ``propose_agent``: the tool returns a resolved-but-unsaved spec the
     frontend renders as a confirmation card; the user's confirm click hits
@@ -409,12 +412,64 @@ async def _handle_create(
             f"{spec.execution.runtime} runtime — make sure that file exists and "
             "defines run(ctx) before the first run."
         )
+    refusal = ""
+    if payload.confirmation == "skip":
+        from valuz_agent.ports.automation_create_policy import UnconfirmedCreateContext
+        from valuz_agent.ports.extensions import ext
+
+        ctx = UnconfirmedCreateContext(
+            user_id=user_id,
+            session_id=session_id or "",
+            project_kind=project_kind,
+            project_id=project_id,
+            execution_kind=spec.execution.kind,
+            action_kind=action_kind,
+        )
+        refusal = await ext.automation_create_policy.unconfirmed_create_refusal(ctx) or ""
+        if not refusal:
+            # Persist now — same payload the confirm route would build, same
+            # ``create`` — and hand the id back instead of a card.
+            try:
+                detail = await svc.create(
+                    create_payload,
+                    calling_session_project_id=calling_ws,
+                    user_id=user_id,
+                )
+            except (
+                InvalidCronExpression,
+                InvalidTimeZone,
+                IntervalTooShort,
+                AutomationProjectNotFound,
+                AgentNotInProject,
+                AgentNotFound,
+                AutomationTaskOnlyOnProject,
+                AutomationPlaybookNotFound,
+                AutomationPlaybookVersionNotFound,
+                AutomationPlaybookTaskUnsupported,
+                AutomationTaskArtifactUnsupported,
+            ) as exc:
+                return _err("create", str(exc.message), code=exc.__class__.__name__)
+            row = await svc._ds.get_automation(user_id, detail.automation_id)  # noqa: SLF001
+            item = await svc._row_to_item(row, user_id) if row is not None else None  # noqa: SLF001
+            return AutomationToolResult(
+                action="create",
+                ok=True,
+                message=(
+                    f"Created automation '{spec.name}' (id {detail.automation_id}) — "
+                    f"{spec.trigger_human_readable}.{hint} No confirmation card was shown; "
+                    "it exists now — use the id for run / declare, do not call create again."
+                ),
+                automation=item,
+                automation_id=detail.automation_id,
+                next_runs=[spec.next_run_at] if spec.next_run_at else [],
+            )
+        refusal = f" (confirmation='skip' was not honoured: {refusal})"
     return AutomationToolResult(
         action="create",
         ok=True,
         message=(
             f"Proposed automation '{spec.name}' — {spec.trigger_human_readable}.{hint} "
-            "Awaiting the user's confirmation in the card; do not call create again."
+            "Awaiting the user's confirmation in the card; do not call create again." + refusal
         ),
         proposal=spec,
         next_runs=[spec.next_run_at] if spec.next_run_at else [],
@@ -878,6 +933,7 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
                 project_id=project_id,
                 session_agent_slug=session_agent_slug,
                 user_id=user_id,
+                session_id=session_id,
             )
         if payload.action == "get":
             return await _handle_get(
@@ -942,6 +998,11 @@ confirmation card and nothing is written until they approve (same "tool
 proposes, user disposes" model as propose_agent). So call create ONCE, state
 the resolved schedule in plain prose, then STOP — do not call create again
 for the same automation, and do not assume it exists yet.
+  The ONE exception: confirmation='skip' (create only) persists the
+  automation at once and returns automation_id — meant for an automation a
+  SITE you are building will read, and honoured only where the deployment
+  allows it (elsewhere the card is shown and the message says so). Use it
+  only when the site skill tells you to; never in an ordinary conversation.
 
 agent_slug is CONTEXT-DEPENDENT, not universally required:
   • Chat / quick conversation (no project): OPTIONAL — omit it and the
