@@ -1725,9 +1725,17 @@ class AutomationService:
     async def get_run_for_session(
         self, session_id: str, user_id: str | None = None
     ) -> AutomationRunRow | None:
-        """The run whose agent turn is ``session_id`` (the ``output`` action)."""
+        """The run whose agent turn is ``session_id`` (the ``output`` action).
+
+        A chat run's session is stamped on the run row. A task run's is not —
+        the lead session only exists after the run row is written — so the
+        second lookup walks the task the run kicked off (valuz/valuz#26).
+        """
         user_id = self._require_user_id(user_id)
-        return await self._ds.get_run_by_session(user_id, session_id)
+        run = await self._ds.get_run_by_session(user_id, session_id)
+        if run is not None:
+            return run
+        return await self._ds.get_run_for_task_lead_session(user_id, session_id)
 
     async def cancel_run(
         self, automation_id: str, run_id: str, user_id: str | None = None
