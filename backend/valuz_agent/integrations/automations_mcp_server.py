@@ -153,25 +153,46 @@ async def _resolve_session_context(
     return ws.id, ws.kind, bound_agent_slug
 
 
-async def _session_origin(session_id: str, user_id: str) -> str:
-    """``metadata.valuz.origin`` of the calling session — ``"automation"``
-    when this very session IS an automation run's turn."""
+async def _session_valuz_meta(session_id: str, user_id: str) -> dict[str, Any]:
+    """``metadata.valuz`` of the calling session, or ``{}``."""
     from valuz_agent.adapters.data_reader import data_reader
 
     try:
         kernel_session = await data_reader().get_session(user_id, session_id)
     except Exception:  # noqa: BLE001 — the guard must never break the tool
-        logger.debug("automation tool: could not resolve session origin", exc_info=True)
-        return "user"
+        logger.debug("automation tool: could not resolve session metadata", exc_info=True)
+        return {}
     if kernel_session is None:
-        return "user"
+        return {}
     meta = getattr(kernel_session, "metadata", None) or {}
     valuz_meta = meta.get("valuz") if isinstance(meta, dict) else None
-    if isinstance(valuz_meta, dict):
-        origin = valuz_meta.get("origin")
-        if isinstance(origin, str) and origin:
-            return origin
-    return "user"
+    return valuz_meta if isinstance(valuz_meta, dict) else {}
+
+
+async def _session_origin(session_id: str, user_id: str) -> str:
+    """``metadata.valuz.origin`` of the calling session — ``"automation"``
+    when this very session IS an automation run's turn."""
+    origin = (await _session_valuz_meta(session_id, user_id)).get("origin")
+    return origin if isinstance(origin, str) and origin else "user"
+
+
+async def _session_is_automation_run(session_id: str, user_id: str, svc: Any) -> bool:
+    """Is this session executing an automation run?
+
+    A chat run's session is stamped ``origin="automation"``. A TASK run's lead
+    session is stamped like any task lead (``run_kind="lead"``, no origin), so
+    the origin alone let a task lead create / rewrite automations from inside
+    its run; for those the run is resolved through the task it belongs to.
+    """
+    if await _session_origin(session_id, user_id) == "automation":
+        return True
+    if (await _session_valuz_meta(session_id, user_id)).get("run_kind") != "lead":
+        return False
+    try:
+        return await svc.get_run_for_session(session_id, user_id=user_id) is not None
+    except Exception:  # noqa: BLE001 — the guard must never break the tool
+        logger.debug("automation tool: could not resolve the lead's run", exc_info=True)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -910,21 +931,21 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
         session_id, user_id
     )
     scope = _coerce_scope(payload, project_kind)
-    if payload.action in _MUTATING_ACTIONS and await _session_origin(session_id, user_id) == (
-        "automation"
-    ):
-        return _err(
-            payload.action,
-            (
-                "This session is an automation run: do the run's task, and use "
-                "action='output' to record its artifact. Creating, changing, pausing "
-                "or removing automations from inside a run is not allowed."
-            ),
-            code="AutomationMutationInsideRun",
-        )
 
     async with async_unit_of_work() as db:
         svc = await _build_automation_service(db, user_id)
+        if payload.action in _MUTATING_ACTIONS and await _session_is_automation_run(
+            session_id, user_id, svc
+        ):
+            return _err(
+                payload.action,
+                (
+                    "This session is an automation run: do the run's task, and use "
+                    "action='output' to record its artifact. Creating, changing, pausing "
+                    "or removing automations from inside a run is not allowed."
+                ),
+                code="AutomationMutationInsideRun",
+            )
         if payload.action == "runs":
             return await _handle_runs(
                 svc=svc, payload=payload, project_id=project_id, scope=scope, user_id=user_id

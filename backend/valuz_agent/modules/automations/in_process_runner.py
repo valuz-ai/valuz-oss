@@ -51,6 +51,17 @@ from valuz_agent.ports.capability_policy import TaskCheckConfig
 
 logger = logging.getLogger(__name__)
 
+#: Strong references to background linkers (``_link_lead_session_later``) so the
+#: event loop cannot garbage-collect them mid-wait.
+_detached: set[asyncio.Task[None]] = set()
+
+#: How long a task kickoff's lead session is waited for before the run row is
+#: left without a session link. Cold sandbox provisioning is ~20 s
+#: (valuz-task-kickoff-cold-sandbox); the budget covers a slow node, not a
+#: task that never comes up — that one is visible in the task list anyway.
+_LEAD_LINK_BUDGET_S = 180.0
+_LEAD_LINK_POLL_S = 2.0
+
 TICK_INTERVAL = 30
 TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
 
@@ -1191,6 +1202,10 @@ class InProcessAutomationRunner:
                 # and the reverse "what did this automation spawn?" is queryable.
                 trigger_type="automation",
                 trigger_automation_id=automation_id,
+                # The run too, not only the automation: the lead session is
+                # traced back to THIS run through the task row
+                # (``AutomationDatastore.get_run_for_task_lead_session``).
+                trigger_automation_run_id=run_id,
                 task_check_config=task_check_config or _automation_check_config(row, run),
                 # When an AGENT invoked this run, carry its session so the spawned
                 # task also chains back to the originating task (transitive
@@ -1221,6 +1236,19 @@ class InProcessAutomationRunner:
             run.status = "success"
             run.completed_at = now_ms()
             run.session_id = lead_session_id
+            if lead_session_id is None:
+                # ``kickoff`` returns BEFORE the lead exists (its cold sandbox
+                # takes ~20 s), so this lookup is empty on every real kickoff
+                # and the run row used to stay unlinked forever: the detail
+                # page showed "no runs", and every ``automation_output`` from
+                # the lead was refused as "not an automation run"
+                # (valuz/valuz#26). Link it when it appears.
+                self._spawn_lead_link(
+                    user_id=user_id,
+                    automation_id=automation_id,
+                    run_id=run_id,
+                    task_id=task.id,
+                )
             # Just the task title — no "kicked off" prefix. The run is a
             # fire-and-forget kickoff: the lead session runs in the background
             # (deep-linked via ``session_id``), so ``duration_ms`` is left unset
@@ -1272,6 +1300,73 @@ class InProcessAutomationRunner:
         await ds.trim_runs(row.user_id, automation_id, keep=100)
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    def _spawn_lead_link(
+        self, *, user_id: str, automation_id: str, run_id: str, task_id: str
+    ) -> None:
+        """Run ``_link_lead_session_later`` behind the kickoff, kept alive."""
+        linker = asyncio.create_task(
+            self._link_lead_session_later(
+                user_id=user_id, automation_id=automation_id, run_id=run_id, task_id=task_id
+            ),
+            name=f"automation-lead-link:{run_id}",
+        )
+        _detached.add(linker)
+        linker.add_done_callback(_detached.discard)
+
+    async def _link_lead_session_later(
+        self, *, user_id: str, automation_id: str, run_id: str, task_id: str
+    ) -> None:
+        """Write ``run.session_id`` once the task's lead session exists.
+
+        Bounded polling rather than an event: the lead is created by the task
+        lifecycle in another module, behind its own detached coroutine, and the
+        only thing this run needs from it is one id. Gives up silently after
+        ``_LEAD_LINK_BUDGET_S``; the run is still resolvable through the task
+        row's ``automation_run_id`` even then.
+        """
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.tasks.datastore import TaskSessionDatastore, pick_lead_run
+
+        deadline = asyncio.get_running_loop().time() + _LEAD_LINK_BUDGET_S
+        while True:
+            try:
+                async with async_unit_of_work(commit=False) as db:
+                    lead_run = pick_lead_run(
+                        await TaskSessionDatastore(db).list_runs(user_id, task_id)
+                    )
+                lead_session_id = lead_run.session_id if lead_run else None
+            except Exception:  # noqa: BLE001 — a transient read failure is a retry
+                logger.debug("Run %s: lead session lookup failed", run_id, exc_info=True)
+                lead_session_id = None
+            if lead_session_id:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning(
+                    "Run %s: task %s produced no lead session within %ss; run stays unlinked",
+                    run_id,
+                    task_id,
+                    int(_LEAD_LINK_BUDGET_S),
+                )
+                return
+            await asyncio.sleep(_LEAD_LINK_POLL_S)
+        try:
+            async with async_unit_of_work() as db:
+                ds = AutomationDatastore(db)
+                run = await ds.get_run(user_id, automation_id, run_id)
+                if run is None or run.session_id:
+                    return
+                run.session_id = lead_session_id
+                await ds.replace_run(run)
+            logger.info(
+                "Automation %s run %s linked to lead session %s",
+                automation_id,
+                run_id,
+                lead_session_id,
+            )
+        except Exception:
+            logger.exception("Run %s: could not record lead session %s", run_id, lead_session_id)
 
     @staticmethod
     async def _stop_linked_playbook_run(

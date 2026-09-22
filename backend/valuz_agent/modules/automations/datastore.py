@@ -291,6 +291,67 @@ class AutomationDatastore:
             .first()
         )
 
+    async def get_run_for_task_lead_session(
+        self, user_id: str, session_id: str
+    ) -> AutomationRunRow | None:
+        """The run whose task-mode kickoff spawned ``session_id`` as the task's lead.
+
+        Task mode acknowledges dispatch before its lead exists: the run row is
+        written seconds after ``kickoff`` returns, the lead session comes up
+        twenty seconds later behind a cold sandbox, and nothing joined the two —
+        so ``get_run_by_session`` never found a task automation's run, and every
+        ``output`` / ``automation_output`` call from such a lead was refused as
+        "not an automation run" (valuz/valuz#26: every one of those refusals in
+        production was a task lead). The task row remembers the run that kicked
+        it off (``metadata.automation_run_id``); rows written before that key
+        existed only know the automation, and then the newest run that does not
+        postdate the task is the one — a run is claimed (``triggered_at``)
+        before its kickoff registers the task row, and the next run of the same
+        automation registers a task of its own.
+        """
+        from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
+
+        task = (
+            (
+                await self._db.execute(
+                    select(TaskRow)
+                    .join(TaskSessionRow, TaskSessionRow.task_id == TaskRow.id)
+                    .where(
+                        TaskSessionRow.session_id == session_id,
+                        TaskSessionRow.user_id == user_id,
+                        TaskSessionRow.kind == "lead",
+                        TaskRow.user_id == user_id,
+                        TaskRow.trigger_automation_id.is_not(None),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if task is None or not task.trigger_automation_id:
+            return None
+        metadata = task.metadata_ if isinstance(task.metadata_, dict) else {}
+        run_id = metadata.get("automation_run_id")
+        if isinstance(run_id, str) and run_id:
+            run = await self.get_run(user_id, task.trigger_automation_id, run_id)
+            if run is not None:
+                return run
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow)
+                    .where(
+                        AutomationRunRow.automation_id == task.trigger_automation_id,
+                        AutomationRunRow.user_id == user_id,
+                        AutomationRunRow.triggered_at <= (task.created_at or 0),
+                    )
+                    .order_by(AutomationRunRow.triggered_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+
     async def last_artifact_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
         """Newest successful run that stored an artifact — ``ctx.previous``
         for the next code run, so a periodic program can pick up where the

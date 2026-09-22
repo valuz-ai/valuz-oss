@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -386,3 +387,26 @@ async def test_read_run_with_wait_seconds_long_polls_on_the_server(stub: Stub) -
     stub.calls.clear()
     await _call(action="read_run", automation_id="auto-1", run_id="run-1")
     assert not [c for c in stub.calls if c[0] == "wait_for_run"]
+
+
+@pytest.mark.asyncio
+async def test_a_task_lead_running_an_automation_cannot_mutate_automations(
+    stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task run's lead session carries no ``origin`` (it is stamped like any
+    task lead), so the origin check alone let it create / rewrite automations
+    from inside its run. Its run is resolved through the task instead."""
+
+    async def _meta(session_id: str, user_id: str) -> dict[str, Any]:
+        return {"run_kind": "lead", "task_id": "task-1"}
+
+    monkeypatch.setattr(mod, "_session_valuz_meta", _meta)
+    stub.get_run_for_session = AsyncMock(return_value=SimpleNamespace(id="run-1"))  # type: ignore[attr-defined]
+    decoded = await _call(action="create", name="x", trigger=ManualTrigger())
+    assert decoded["ok"] is False
+    assert decoded["error_code"] == "AutomationMutationInsideRun"
+
+    # A task lead that is NOT an automation run keeps its powers.
+    stub.get_run_for_session = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+    decoded = await _call(action="create", name="x", trigger=ManualTrigger())
+    assert decoded["error_code"] != "AutomationMutationInsideRun"

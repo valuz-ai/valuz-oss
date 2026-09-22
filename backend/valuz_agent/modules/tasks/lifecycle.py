@@ -94,6 +94,7 @@ class LifecycleService:
         originating_session_id: str | None = None,
         trigger_type: str | None = None,
         trigger_automation_id: str | None = None,
+        trigger_automation_run_id: str | None = None,
         worktree: bool = False,
         user_id: str,
         task_check_config: TaskCheckConfig | None = None,
@@ -202,6 +203,17 @@ class LifecycleService:
                     # every member into ``worktree.cwd``; finish_task removes
                     # the worktree iff clean.
                     **({"worktree": wt_snapshot} if wt_snapshot else {}),
+                    # The automation RUN that kicked this task off, not only the
+                    # automation. The run row cannot point at the lead session
+                    # (it is written before the lead exists), so this is how a
+                    # lead session is traced back to its run — the automation
+                    # tools resolve "which run am I" through it
+                    # (``AutomationDatastore.get_run_for_task_lead_session``).
+                    **(
+                        {"automation_run_id": trigger_automation_run_id}
+                        if trigger_automation_run_id
+                        else {}
+                    ),
                 },
             )
             await task_ds.create_task(user_id, task_row)
