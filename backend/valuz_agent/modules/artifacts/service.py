@@ -457,6 +457,24 @@ async def get_artifact_revision(
     return await ArtifactDatastore(db).get_revision(user_id, revision_id)
 
 
+async def get_revision_inline_content(
+    db: AsyncSession, user_id: str, revision_id: str
+) -> tuple[ArtifactRevisionRow, str | None] | None:
+    """One revision and its inline document, or ``None`` for an unknown id.
+
+    For lineage owners whose revisions ARE small inline documents (a site's
+    revision manifest): resolving one by id should not mean listing the whole
+    lineage through :func:`list_artifact_revisions`. The second element is
+    ``None`` when the content is file-backed.
+    """
+    ds = ArtifactDatastore(db)
+    revision = await ds.get_revision(user_id, revision_id)
+    if revision is None:
+        return None
+    content = await ds.get_content(user_id, revision.content_id)
+    return revision, (content.content_inline if content is not None else None)
+
+
 async def bind_host_revision(
     db: AsyncSession,
     user_id: str,

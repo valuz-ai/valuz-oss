@@ -200,3 +200,50 @@ async def test_bytes_without_a_file_name_is_rejected(session_factory, cwd) -> No
     result = await _deliver(session_factory, cwd, content_bytes=ARCHIVE)
 
     assert result.status is DeliveryStatus.INVALID
+
+
+# ── lineage owners outside this module (an overlay's sites module) ──────────
+
+
+async def test_should_record_a_site_manifest_as_a_site_kind_artifact(session_factory, cwd) -> None:
+    """``SITE`` is a label like ``SKILL``: an overlay's sites module delivers a
+    small JSON manifest per revision and owns everything else about a site."""
+    from valuz_agent.modules.artifacts.models import ArtifactKind, coerce_kind
+
+    manifest = '{"schema":"valuz.site-revision/v1","siteKey":"s1","bundleSha256":"abc"}'
+    result = await _deliver(
+        session_factory, cwd, content=manifest, file_name="s1.site.json", kind=ArtifactKind.SITE
+    )
+    assert result.status is DeliveryStatus.RECORDED
+
+    async with session_factory() as db:
+        artifact = await ArtifactDatastore(db).get_artifact("owner-1", result.artifact_id)
+    assert artifact is not None and artifact.kind == "site"
+    assert coerce_kind("site") is ArtifactKind.SITE
+
+
+async def test_should_read_one_revisions_inline_document_by_id(session_factory, cwd) -> None:
+    from valuz_agent.modules.artifacts.service import get_revision_inline_content
+
+    first = await _deliver(session_factory, cwd, content='{"v":1}', file_name="s1.site.json")
+    second = await _deliver(session_factory, cwd, content='{"v":2}', file_name="s1.site.json")
+
+    async with session_factory() as db:
+        found = await get_revision_inline_content(db, "owner-1", first.revision_id)
+        assert found is not None
+        revision, inline = found
+        assert revision.artifact_id == second.artifact_id and inline == '{"v":1}'
+        # Scoped to the owner, like every other read: not-yours is not-found.
+        assert await get_revision_inline_content(db, "somebody-else", first.revision_id) is None
+        assert await get_revision_inline_content(db, "owner-1", "no-such-revision") is None
+
+
+async def test_should_answer_none_inline_for_a_file_backed_revision(session_factory, cwd) -> None:
+    from valuz_agent.modules.artifacts.service import get_revision_inline_content
+
+    result = await _deliver(
+        session_factory, cwd, content_bytes=b"\x00\x01binary", file_name="pack.zip"
+    )
+    async with session_factory() as db:
+        found = await get_revision_inline_content(db, "owner-1", result.revision_id)
+    assert found is not None and found[1] is None
