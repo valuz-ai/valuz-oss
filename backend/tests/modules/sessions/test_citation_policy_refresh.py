@@ -379,6 +379,8 @@ async def test_three_preferences_are_independent_for_every_truth_table_row(
     evidence_binding_enabled = citation_enabled or verification_enabled
     assert (str(citation_dir.resolve()) in body.skills) is evidence_binding_enabled
     assert ("<citation-system-policy" in body.instructions) is evidence_binding_enabled
+    # with binding off the session says so, so prompts that still ask for the skill do not win
+    assert ("<citation-off-notice>" in body.instructions) is (not evidence_binding_enabled)
     assert valuz["citation_enabled"] is citation_enabled
     assert valuz["citation_verification_enabled"] is verification_enabled
     assert valuz["task_coverage_enabled"] is task_coverage_enabled

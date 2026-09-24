@@ -101,15 +101,33 @@ _CITATION_POLICY_BLOCK_RE = re.compile(
 )
 
 
+#: Installed in place of the citation policy when a session's evidence binding is off
+#: (citations and verification both disabled). The ``citation`` skill is not mounted then, but
+#: distribution prompts and skills may still ask for it; this block is the session-level word
+#: that wins, so the model stops calling a skill that is not there ("Unknown skill: citation").
+CITATION_OFF_NOTICE = """\
+Citations are turned off for this session. The `citation` skill is not \
+available: do not try to load it, do not bind claims to Evidence handles or \
+`evidence://` links, and do not run a citation audit. Answer from tool results \
+in plain prose. This overrides any other instruction that asks for the \
+citation skill, evidence binding, or a citation audit."""
+_CITATION_OFF_BLOCK_RE = re.compile(
+    r"(?:\n{0,2})<citation-off-notice>.*?</citation-off-notice>(?:\n{0,2})",
+    re.DOTALL,
+)
+
+
 def ensure_citation_system_policy(instructions: str) -> str:
     """Install or upgrade the immutable citation policy section.
 
     The block is machine-managed and idempotent.  Existing sessions pass
     through the same function before every turn, so a policy revision takes
-    effect without rewriting user/agent/project instruction sections.
+    effect without rewriting user/agent/project instruction sections. A
+    citation-off notice left by an earlier turn is removed.
     """
 
     without_old = _CITATION_POLICY_BLOCK_RE.sub("\n\n", instructions or "").strip()
+    without_old = _CITATION_OFF_BLOCK_RE.sub("\n\n", without_old).strip()
     block = (
         f'<citation-system-policy revision="{CITATION_POLICY_REVISION}">\n'
         f"{CITATION_SYSTEM_POLICY}\n"
@@ -122,6 +140,15 @@ def remove_citation_system_policy(instructions: str) -> str:
     """Remove the machine-managed citation block without touching user text."""
 
     return _CITATION_POLICY_BLOCK_RE.sub("\n\n", instructions or "").strip()
+
+
+def ensure_citation_off_notice(instructions: str) -> str:
+    """Citations off: remove the citation policy and install the off notice (idempotent)."""
+
+    base = remove_citation_system_policy(instructions)
+    base = _CITATION_OFF_BLOCK_RE.sub("\n\n", base).strip()
+    block = f"<citation-off-notice>\n{CITATION_OFF_NOTICE}\n</citation-off-notice>"
+    return f"{base}\n\n{block}" if base else block
 
 
 # ── PTC (Programmatic Tool Calling) policy block ─────────────────────────
@@ -286,4 +313,6 @@ __all__ = [
     "ensure_citation_system_policy",
     "ensure_ptc_system_policy",
     "remove_citation_system_policy",
+    "ensure_citation_off_notice",
+    "CITATION_OFF_NOTICE",
 ]

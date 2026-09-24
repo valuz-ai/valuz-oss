@@ -199,3 +199,44 @@ async def test_a_package_that_lands_mid_session_invalidates_the_listing(
 
     assert await capabilities.refresh_bundled_skills_for_session("sess-1", "owner-1") is True
     assert str(landed.resolve()) in patched_kernel["updates"][0].skills
+
+
+@pytest.mark.asyncio
+async def test_citation_is_not_reattached_when_the_session_has_evidence_binding_off(
+    official_root: Path, patched_kernel: dict[str, Any]
+) -> None:
+    """valuz/valuz#29: the citation refresher removed ``citation`` on purpose (citations and
+    verification both off); the bundled sweep that runs after it must not put it back."""
+    citation = _bundled(official_root, "citation")
+    other = _bundled(official_root, "skill-creator")
+    session = _make_session(skills=[])
+    session.metadata = {
+        "valuz": {"citation_enabled": False, "citation_verification_enabled": False}
+    }
+    patched_kernel["session"] = session
+
+    assert await capabilities.refresh_bundled_skills_for_session("sess-1", "owner-1") is True
+    skills = patched_kernel["updates"][0].skills
+    assert str(other.resolve()) in skills
+    assert str(citation.resolve()) not in skills
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "valuz",
+    [
+        {},  # the citation refresher never ran: old rule
+        {"citation_enabled": True, "citation_verification_enabled": False},
+        {"citation_enabled": False, "citation_verification_enabled": True},
+    ],
+)
+async def test_citation_is_reattached_when_evidence_binding_is_on_or_unknown(
+    official_root: Path, patched_kernel: dict[str, Any], valuz: dict[str, Any]
+) -> None:
+    citation = _bundled(official_root, "citation")
+    session = _make_session(skills=[])
+    session.metadata = {"valuz": valuz}
+    patched_kernel["session"] = session
+
+    assert await capabilities.refresh_bundled_skills_for_session("sess-1", "owner-1") is True
+    assert str(citation.resolve()) in patched_kernel["updates"][0].skills

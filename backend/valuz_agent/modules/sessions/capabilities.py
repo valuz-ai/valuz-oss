@@ -50,8 +50,8 @@ async def refresh_citation_policy_for_session(
     from valuz_agent.adapters.capability_resolver import citation_skill_dir
     from valuz_agent.adapters.system_prompt_builder import (
         CITATION_POLICY_REVISION,
+        ensure_citation_off_notice,
         ensure_citation_system_policy,
-        remove_citation_system_policy,
     )
     from valuz_agent.modules.settings.preferences import (
         get_conversation_citations_enabled,
@@ -72,16 +72,22 @@ async def refresh_citation_policy_for_session(
     session_valuz = dict((session.metadata or {}).get("valuz") or {})
     if task_check_config is not None:
         overrides = task_check_config.overrides.model_dump()
-        overrides.update({
-            key: value for key, value in {
-                "citation_enabled": citation_enabled_override,
-                "verification_enabled": verification_enabled_override,
-                "task_coverage_enabled": task_coverage_enabled_override,
-            }.items() if value is not None
-        })
-        task_check_config = task_check_config.model_copy(update={
-            "overrides": OptionalCheckOverrides(**overrides),
-        })
+        overrides.update(
+            {
+                key: value
+                for key, value in {
+                    "citation_enabled": citation_enabled_override,
+                    "verification_enabled": verification_enabled_override,
+                    "task_coverage_enabled": task_coverage_enabled_override,
+                }.items()
+                if value is not None
+            }
+        )
+        task_check_config = task_check_config.model_copy(
+            update={
+                "overrides": OptionalCheckOverrides(**overrides),
+            }
+        )
     checks, check_context = await resolve_task_checks(
         user_id=user_id,
         session_id=session_id,
@@ -133,7 +139,7 @@ async def refresh_citation_policy_for_session(
         new_instructions = ensure_citation_system_policy(session.instructions or "")
     else:
         new_skills = [path for path in current_skills if Path(path).name != "citation"]
-        new_instructions = remove_citation_system_policy(session.instructions or "")
+        new_instructions = ensure_citation_off_notice(session.instructions or "")
     metadata = dict(session.metadata or {})
     valuz = dict(metadata.get("valuz") or {})
     old_revision = valuz.get("citation_policy_revision")
@@ -433,7 +439,19 @@ async def refresh_bundled_skills_for_session(session_id: str, user_id: str) -> b
 
     current_skills = list(session.skills or ())
     known = set(current_skills)
-    missing = [path for path in _bundled_package_paths(user_id) if path not in known]
+    valuz = (session.metadata or {}).get("valuz") or {}
+    # The citation refresher runs first and records the session's switches; with evidence
+    # binding off it removed ``citation`` on purpose — re-attaching it here would undo that
+    # (valuz/valuz#29). Sessions the refresher never saw carry no flags and keep the old rule.
+    binding_off = (
+        valuz.get("citation_enabled") is False
+        and valuz.get("citation_verification_enabled") is False
+    )
+    missing = [
+        path
+        for path in _bundled_package_paths(user_id)
+        if path not in known and not (binding_off and Path(path).name == "citation")
+    ]
     if not missing:
         return False
 
