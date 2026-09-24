@@ -6,6 +6,7 @@ provider; prompts are never appended through an inheritance chain.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -42,7 +43,14 @@ class PromptSnapshot:
 
 class GlobalInstructionsPort(Protocol):
     async def resolve(self, user_id: str) -> PromptSnapshot:
-        """Resolve this distribution's complete prompt for ``user_id``."""
+        """Resolve this distribution's complete prompt for ``user_id``.
+
+        A provider may also accept a keyword ``assignment_seed`` (the id of the
+        session being created). It lets a distribution run two prompt revisions
+        side by side and assign each SESSION to one of them deterministically;
+        the chosen revision is recorded through ``PromptSnapshot.revision`` as
+        usual. Providers without the parameter keep working unchanged.
+        """
         ...
 
 
@@ -63,14 +71,34 @@ class GlobalInstructionsConfigurationError(RuntimeError):
     pass
 
 
-async def resolve_global_instructions(user_id: str) -> PromptSnapshot:
-    """Resolve and validate the exact prompt snapshot for one owner."""
+def _accepts_assignment_seed(resolve: object) -> bool:
+    try:
+        parameters = inspect.signature(resolve).parameters  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return "assignment_seed" in parameters or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+    )
+
+
+async def resolve_global_instructions(
+    user_id: str, *, assignment_seed: str | None = None
+) -> PromptSnapshot:
+    """Resolve and validate the exact prompt snapshot for one owner.
+
+    ``assignment_seed`` (the new session's id) is forwarded to providers that
+    accept it, so a distribution can split sessions between two revisions.
+    """
     if not user_id:
         raise ValueError("user_id is required")
 
     from valuz_agent.ports.extensions import ext
 
-    snapshot = await ext.global_instructions.resolve(user_id)
+    resolve = ext.global_instructions.resolve
+    if assignment_seed is not None and _accepts_assignment_seed(resolve):
+        snapshot = await resolve(user_id, assignment_seed=assignment_seed)  # type: ignore[call-arg]
+    else:
+        snapshot = await resolve(user_id)
     missing = [
         field
         for field in ("content", "revision", "distribution")
