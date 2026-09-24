@@ -59,6 +59,7 @@ from valuz_agent.ports.instructions import (
     agent_inherits_global_instructions,
     resolve_global_instructions,
 )
+from valuz_agent.ports.workspace_sync import notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -299,9 +300,28 @@ def spill_goal_brief_if_too_long(
 
     Only the file write touches disk; the path comes from ``FsRegistry`` (which
     never writes content), keeping the single-write-registry rule intact.
+
+    Async callers use ``spill_goal_brief_and_notify`` instead, which also
+    reports the doc to the workspace-sync port.
     """
+    text, _doc_path = _spill_goal_brief(
+        brief, run_dir=run_dir, task_id=task_id, label=label, is_lead=is_lead
+    )
+    return text
+
+
+def _spill_goal_brief(
+    brief: str,
+    *,
+    run_dir: str | Path,
+    task_id: str,
+    label: str,
+    is_lead: bool,
+) -> tuple[str, Path | None]:
+    """``spill_goal_brief_if_too_long`` plus the doc it wrote (``None`` when
+    the brief fit and nothing was written)."""
     if not goal_brief_exceeds_budget(brief):
-        return brief
+        return brief, None
     from valuz_agent.infra.fs_registry import fs_registry
 
     doc_path = fs_registry.task_brief_path(run_dir, task_id, label)
@@ -314,7 +334,32 @@ def spill_goal_brief_if_too_long(
         label,
         doc_path,
     )
-    return _goal_brief_pointer(str(doc_path), is_lead=is_lead)
+    return _goal_brief_pointer(str(doc_path), is_lead=is_lead), doc_path
+
+
+async def spill_goal_brief_and_notify(
+    brief: str,
+    *,
+    run_dir: str | Path,
+    task_id: str,
+    label: str,
+    is_lead: bool,
+    user_id: str,
+    project_id: str | None = None,
+) -> str:
+    """``spill_goal_brief_if_too_long`` for async callers: a doc it wrote is
+    reported to the workspace-sync port before the pointer is returned.
+
+    The pointer tells the session to read that doc first, so it must be
+    visible to a remote sandbox BEFORE the session is dispatched — which is
+    why every async spill site goes through here rather than the sync fence.
+    """
+    text, doc_path = _spill_goal_brief(
+        brief, run_dir=run_dir, task_id=task_id, label=label, is_lead=is_lead
+    )
+    if doc_path is not None:
+        await notify_written(user_id, [doc_path], project_id=project_id)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1051,12 +1096,14 @@ async def build_member_session(
     # already short and this is a no-op — but if a path forgets, this fences the
     # brief embedded into the session instructions.
     if goal_mode and agent.runtime_provider in ("claude_agent", "codex"):
-        brief = spill_goal_brief_if_too_long(
+        brief = await spill_goal_brief_and_notify(
             brief,
             run_dir=run_dir,
             task_id=task_id,
             label=agent_slug,
             is_lead=is_lead,
+            user_id=user_id,
+            project_id=project_id,
         )
 
     # Build the instructions string (§S3 point ③)

@@ -66,6 +66,7 @@ from valuz_agent.modules.skills.models import (
     SkillView,
 )
 from valuz_agent.modules.skills.versioning import RecordedVersion
+from valuz_agent.ports.workspace_sync import notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -912,6 +913,13 @@ class SkillLibraryService:
             description=payload.description,
             instructions_markdown=payload.instructions_markdown,
         )
+        # A project-scoped skill lands in ``<project>/.claude/skills/``; a user
+        # one is outside every project and the port ignores it.
+        await notify_written(
+            user_id,
+            [skill_dir],
+            project_id=payload.project_id if payload.target_scope == "project" else None,
+        )
         if payload.target_scope == "project" and project is not None:
             self._ds.set_skill_enabled(project, str(skill_dir), True)
         elif payload.add_to_project and project is not None and project.kind == "project":
@@ -949,6 +957,7 @@ class SkillLibraryService:
             ),
             encoding="utf-8",
         )
+        await notify_written(user_id, [manifest_path])
         result = await self._resolve_skill(user_id, skill_id=skill_id, project_id=project_id)
         return result
 
@@ -1017,6 +1026,7 @@ class SkillLibraryService:
         skill_dir = Path(skill.path)
         if skill_dir.exists():
             shutil.rmtree(skill_dir)
+            await notify_written(user_id, [skill_dir])
         # Key on the deleted folder's path, not slug: if a same-slug official
         # copy coexists, deleting the user copy must not mark the official absent.
         await self._ds.mark_unavailable_by_path(user_id, skill.path)
@@ -1179,6 +1189,11 @@ class SkillLibraryService:
                 ),
                 encoding="utf-8",
             )
+        await notify_written(
+            user_id,
+            [target_dir],
+            project_id=payload.project_id if payload.target_scope == "project" else None,
+        )
         project = await self._resolve_project(user_id, payload.project_id)
         if payload.target_scope == "project" and project is not None:
             self._ds.set_skill_enabled(project, str(target_dir), True)
@@ -1260,6 +1275,7 @@ class SkillLibraryService:
         if action.action == "create":
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(action.content or "", encoding="utf-8")
+            await notify_written(user_id, [target])
             return SkillFileContent(path=action.path, content=action.content or "")
         elif action.action == "rename":
             if action.new_path is None:
@@ -1269,6 +1285,7 @@ class SkillLibraryService:
                 raise ValueError("Path traversal not allowed")
             new_target.parent.mkdir(parents=True, exist_ok=True)
             target.rename(new_target)
+            await notify_written(user_id, [target, new_target])
             content = _read_text(new_target) if new_target.is_file() else ""
             return SkillFileContent(path=action.new_path, content=content)
         elif action.action == "delete":
@@ -1276,6 +1293,7 @@ class SkillLibraryService:
                 target.unlink()
             elif target.is_dir():
                 shutil.rmtree(target)
+            await notify_written(user_id, [target])
             return SkillFileContent(path=action.path, content="")
         raise ValueError(f"Unknown action: {action.action}")
 
@@ -1668,6 +1686,11 @@ class SkillLibraryService:
                 ),
                 encoding="utf-8",
             )
+        await notify_written(
+            user_id,
+            [target_dir],
+            project_id=payload.project_id if payload.target_scope == "project" else None,
+        )
 
         project = await self._resolve_project(user_id, payload.project_id)
         if payload.target_scope == "project" and project is not None:

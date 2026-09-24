@@ -17,11 +17,13 @@ from valuz_agent.modules.tasks.plan import TaskPlan
 logger = logging.getLogger(__name__)
 
 
-def render_plan_md(task_row: TaskRow, plan: TaskPlan) -> None:
+def render_plan_md(task_row: TaskRow, plan: TaskPlan) -> Path | None:
     """Best-effort mirror of the plan into the task markdown file (file-as-truth).
 
     Never raises — the DB plan column is the source of truth; the md is a
-    human/agent-readable mirror.
+    human/agent-readable mirror. Returns the path it wrote, or ``None`` when
+    the render was skipped — the async caller reports a written path to the
+    workspace-sync port once its unit of work is closed.
     """
     try:
         path = Path(task_row.file_path)
@@ -34,3 +36,5 @@ def render_plan_md(task_row: TaskRow, plan: TaskPlan) -> None:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except Exception:  # noqa: BLE001
         logger.debug("plan md render skipped for task %s", task_row.id, exc_info=True)
+        return None
+    return path

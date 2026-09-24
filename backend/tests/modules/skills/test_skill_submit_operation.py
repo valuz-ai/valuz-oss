@@ -570,3 +570,112 @@ async def test_prepare_skill_edit_reseeds_freely_when_the_draft_matches(env, mon
     ctx = HostExecContext(session_id=SESSION, user_id=USER)
     assert not (await _prepare_skill_edit_handler({"slug": "demo"}, ctx)).is_error
     assert not (await _prepare_skill_edit_handler({"slug": "demo"}, ctx)).is_error
+
+
+# ── workspace sync: the draft was written in a sandbox ─────────────────────
+
+
+@pytest.fixture
+def sync_port(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    return port
+
+
+async def test_submit_tool_waits_for_the_draft_before_checking_it(
+    env, monkeypatch, sync_port
+) -> None:  # type: ignore[no-untyped-def]
+    """The barrier runs before the manifest check: a draft that only reaches
+    the host through it (here, the side effect) is still found and proposed."""
+    import json
+
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _submit_skill_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    sync_port.before_read.side_effect = lambda **_kw: _stage(env.staging, "demo", "late")
+
+    result = await _submit_skill_handler(
+        {"slug": "demo", "summary": "s", "change_kind": "create", "files_touched": ["SKILL.md"]},
+        HostExecContext(session_id=SESSION, user_id=USER),
+    )
+
+    assert not result.is_error, result.content
+    assert json.loads(result.content)["operation"]["state"] == "awaiting_confirmation"
+    sync_port.before_read.assert_awaited_once_with(
+        owner_user_id=USER, paths=(env.staging / "demo",), project_id=None
+    )
+
+
+async def test_confirm_waits_for_the_draft_with_a_short_bound(env, monkeypatch, sync_port) -> None:  # type: ignore[no-untyped-def]
+    """The confirm handler cannot leave the operation's transaction, so its
+    barrier is bounded tightly; the save then reports the library copy and the
+    removed draft."""
+    seen: list[float] = []
+    real = skill_ops.ensure_readable
+
+    async def _spy(owner, paths, **kw):  # type: ignore[no-untyped-def]
+        seen.append(kw["timeout_s"])
+        await real(owner, paths, **kw)
+
+    monkeypatch.setattr(skill_ops, "ensure_readable", _spy)
+    _stage(env.staging, "demo", "first")
+    op_id, digest, _, _ = await _propose(env, "demo")
+
+    state, _, message, _ = await _confirm(env, op_id, digest)
+
+    assert state == "succeeded", message
+    assert seen == [2.0]
+    sync_port.before_read.assert_awaited_once_with(
+        owner_user_id=USER, paths=(env.staging / "demo",), project_id=None
+    )
+    reported = [call.kwargs["paths"] for call in sync_port.after_write.await_args_list]
+    assert (env.staging / "demo", env.library / "demo") in reported  # sync_slug
+    assert (env.staging / "demo",) in reported  # the draft removed after the save
+
+
+async def test_a_rename_decision_reports_the_move(env, sync_port) -> None:  # type: ignore[no-untyped-def]
+    _stage(env.staging, "demo", "first")
+    op_id, digest, _, _ = await _propose(env, "demo")
+    await _confirm(env, op_id, digest)
+    _stage(env.staging, "demo", "another")
+    op2, digest2, _, _ = await _propose(env, "demo")
+    sync_port.after_write.reset_mock()
+
+    state, _, message, _ = await _confirm(
+        env, op2, digest2, {"mode": "rename", "new_slug": "demo-2"}
+    )
+
+    assert state == "succeeded", message
+    first = sync_port.after_write.await_args_list[0].kwargs
+    assert first == {
+        "owner_user_id": USER,
+        "paths": (env.staging / "demo", env.staging / "demo-2"),
+        "project_id": None,
+    }
+
+
+async def test_prepare_skill_edit_waits_for_an_existing_draft(env, monkeypatch, sync_port) -> None:  # type: ignore[no-untyped-def]
+    from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+    from valuz_agent.integrations.tools_skill_creator import _prepare_skill_edit_handler
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", env.uow)
+    _stage(env.staging, "demo", "first")
+    op_id, digest, _, _ = await _propose(env, "demo")
+    await _confirm(env, op_id, digest)
+    sync_port.before_read.reset_mock()
+
+    result = await _prepare_skill_edit_handler(
+        {"slug": "demo"}, HostExecContext(session_id=SESSION, user_id=USER)
+    )
+
+    assert not result.is_error, result.content
+    sync_port.before_read.assert_awaited_once_with(
+        owner_user_id=USER, paths=(env.staging / "demo",), project_id=None
+    )
+    # and the seeded copy is reported for the sandbox to edit
+    assert sync_port.after_write.await_args_list[-1].kwargs["paths"] == (env.staging / "demo",)

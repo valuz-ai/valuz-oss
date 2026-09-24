@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from collections.abc import AsyncIterable, AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.skills.datastore import SkillDatastore
+from valuz_agent.ports.workspace_sync import notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -754,25 +756,39 @@ class ProjectService:
         cloud-managed project can receive files without a caller-supplied
         local directory.
         """
+        (written,) = await self.write_files(user_id, project_id, [(file_path, data)])
+        return written
+
+    async def write_files(
+        self,
+        user_id: str,
+        project_id: str,
+        files: Iterable[tuple[str, bytes]] | AsyncIterable[tuple[str, bytes]],
+    ) -> list[str]:
+        """Write ``(relative path, bytes)`` pairs into the project cwd, in order.
+
+        Same rules per file as ``write_file``; the first rejected path raises
+        and the files before it stay written. ``files`` may be an async
+        iterable so an upload route can read one part at a time.
+
+        Every file that landed is reported to the workspace-sync port ONCE,
+        after the batch — also when a later file failed, since those earlier
+        writes are on disk either way.
+        """
         row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
-        if row.kind == "project":
-            if not row.root_path:
-                raise ValueError("Project has no root path")
-            return _write_relative_file(_root_path(user_id, row.root_path), file_path, data)
         root = _project_root(user_id, row, project_id)
-        rel = Path(file_path)
-        if rel.is_absolute() or any(part in {"", "."} for part in rel.parts):
-            raise ValueError("Invalid file path")
-        if any(part == ".." for part in rel.parts):
-            raise ValueError("Invalid file path")
-        target = (root / rel).resolve()
-        if root != target and root not in target.parents:
-            raise ValueError("File path escapes project root")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        return target.relative_to(root).as_posix()
+        written: list[Path] = []
+        try:
+            async for file_path, data in _aiter(files):
+                target = _resolve_project_write_target(root, file_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                written.append(target)
+        finally:
+            await notify_written(user_id, written, project_id=project_id)
+        return [target.relative_to(root).as_posix() for target in written]
 
 
 def _managed_project_root(user_id: str, kind: ProjectKind = "project") -> str:
@@ -800,11 +816,14 @@ def _root_path(user_id: str, root_path: str) -> Path:
     return (fs_registry.project_root(user_id) / root_path).resolve()
 
 
-def _write_relative_file(root: Path, file_path: str, data: bytes) -> str:
-    target = _resolve_project_write_target(root, file_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    return target.relative_to(root).as_posix()
+async def _aiter[T](items: Iterable[T] | AsyncIterable[T]) -> AsyncIterator[T]:
+    """Iterate a sync or an async iterable the same way."""
+    if isinstance(items, AsyncIterable):
+        async for item in items:
+            yield item
+    else:
+        for item in items:
+            yield item
 
 
 def _resolve_listing_dir(root: Path, path: str | None) -> Path:

@@ -113,6 +113,7 @@ from valuz_agent.ports.skill_runtime import (
     ExternalSkillDiscoveryPolicy,
 )
 from valuz_agent.ports.ui_artifact import UiArtifactSinkPort
+from valuz_agent.ports.workspace_sync import NoopWorkspaceSync, WorkspaceSyncPort
 
 
 class Extensions:
@@ -230,6 +231,14 @@ class Extensions:
         # overlay binds a storage-specific resolver (e.g. COS presigned URLs) for
         # the cloud deployment. The backend never proxies file bytes.
         self.file_address_resolver: FileAddressResolverPort = LocalFileAddressResolver()
+        # Keep a deployment's replicated workspace log in step with host file
+        # I/O: ``after_write`` once the host has written / moved / deleted
+        # under a project directory, ``before_read`` before it reads what an
+        # agent may just have written in a remote sandbox. OSS default is a
+        # no-op (one filesystem, nothing to replicate); call sites go through
+        # the fail-open ``notify_written`` / ``ensure_readable`` helpers
+        # (ports/workspace_sync.py).
+        self.workspace_sync: WorkspaceSyncPort = NoopWorkspaceSync()
         # Builds the document-retrieval runtime for one owner. OSS default is
         # ripgrep over that owner's preview markdown; a deployment whose
         # documents are indexed in an external service binds its own factory.

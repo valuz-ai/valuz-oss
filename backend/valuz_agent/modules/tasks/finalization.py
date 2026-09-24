@@ -44,6 +44,7 @@ from valuz_agent.modules.tasks.manifest import collect_manifest_safe, last_assis
 from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.models import TaskRow
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
+from valuz_agent.ports.workspace_sync import ensure_readable
 
 logger = logging.getLogger(__name__)
 
@@ -421,6 +422,13 @@ class FinalizationService:
                 )
             return
 
+        # Let the member's last sandbox writes land before its run dir is
+        # scanned for the manifest — here, between the two units of work, so
+        # the barrier never holds the terminal write's transaction open (the
+        # collect below then skips its own).
+        if member_run is not None and member_run.run_dir:
+            await ensure_readable(user_id, [member_run.run_dir], project_id=project_id)
+
         try:
             async with async_unit_of_work() as db:
                 run_ds = TaskSessionDatastore(db)
@@ -447,6 +455,7 @@ class FinalizationService:
                     agent_slug=agent_slug,
                     since_epoch=since,
                     user_id=user_id,
+                    read_barrier_s=None,  # waited above, outside this transaction
                 )
 
                 ok = final_status not in ("terminated", "error")

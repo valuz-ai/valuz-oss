@@ -618,3 +618,47 @@ async def test_unchanged_bound_delivery_stays_quiet(session_factory, cwd):  # ty
         HostExecContext(session_id="s1", user_id="u1"),
     )
     assert UI_ARTIFACT_RECEIPT_OPEN not in second.content
+
+
+# ── Workspace sync ────────────────────────────────────────────────────────────
+
+
+async def test_the_batch_waits_for_its_owned_files_once_before_recording(  # type: ignore[no-untyped-def]
+    session_factory, cwd, tmp_path, monkeypatch
+):
+    """The agent wrote these files in its sandbox a moment ago: the handler
+    waits for them ONCE for the whole batch, before its unit of work, and only
+    for paths inside the caller's roots — an out-of-bounds path is refused per
+    entry, never handed to the barrier."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import valuz_agent.infra.db as db_mod
+    from valuz_agent.ports.extensions import ext
+
+    order: list[str] = []
+    port = SimpleNamespace(
+        after_write=AsyncMock(),
+        before_read=AsyncMock(side_effect=lambda **_kw: order.append("barrier")),
+    )
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    real_uow = db_mod.async_unit_of_work
+
+    def _uow(*args, **kwargs):  # type: ignore[no-untyped-def]
+        order.append("unit_of_work")
+        return real_uow(*args, **kwargs)
+
+    monkeypatch.setattr(tool_mod, "async_unit_of_work", _uow)
+    a = _write(cwd / "a.md", "A")
+    b = _write(cwd / "sub" / "b.md", "B")
+    outside = _write(tmp_path / "elsewhere.md", "x")
+
+    _, payload = await _deliver(
+        {"filePath": str(a)}, {"filePath": str(b)}, {"filePath": str(outside)}
+    )
+
+    assert [r["status"] for r in payload["results"]] == ["recorded", "recorded", "not_owned"]
+    port.before_read.assert_awaited_once_with(owner_user_id="u1", paths=(a, b), project_id="p1")
+    assert order[:2] == ["barrier", "unit_of_work"]
+    # each recorded snapshot is reported as a host write
+    assert port.after_write.await_count == 2

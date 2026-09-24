@@ -128,8 +128,13 @@ from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.ports.automation_event_source import EventSubscription, UnknownEventSourceError
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
 from valuz_agent.ports.extensions import ext
+from valuz_agent.ports.workspace_sync import ensure_readable
 
 logger = logging.getLogger(__name__)
+
+#: ``before_read`` bound for ``record_artifact``, which cannot wait outside
+#: this service's session (see there).
+_RECORD_ARTIFACT_READ_TIMEOUT_S = 2.0
 
 
 def _normalise_tz(value: str | None) -> str | None:
@@ -1826,9 +1831,20 @@ class AutomationService:
             except Exception as exc:  # noqa: BLE001 — a missing project is a 422 here
                 raise AutomationArtifactInvalid(str(exc)) from exc
             root = project_cwd.resolve()
+            resolved = [(rel, (project_cwd / rel).resolve()) for rel in files]
+            # The run's agent wrote these in its sandbox just before calling
+            # ``output``. Bounded, because this service's session has already
+            # read the automation and run rows (no writes or locks yet) and
+            # the paths cannot be known before those reads. Only in-project
+            # paths are passed on; the check below refuses the rest.
+            await ensure_readable(
+                user_id,
+                [path for _rel, path in resolved if root in path.parents],
+                project_id=row.project_id,
+                timeout_s=_RECORD_ARTIFACT_READ_TIMEOUT_S,
+            )
             declared: list[DeclaredFile] = []
-            for rel in files:
-                path = (project_cwd / rel).resolve()
+            for rel, path in resolved:
                 if root not in path.parents or not path.is_file():
                     raise AutomationArtifactInvalid(f"files: {rel!r} is not a file in the project")
                 declared.append(DeclaredFile(path=path, name=Path(rel).name, mime_type=None))

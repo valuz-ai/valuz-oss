@@ -321,3 +321,82 @@ async def test_remove_slug_and_session(staging_root: Path) -> None:
 
     await staging.remove_session_staging("local-test-owner", "sess-14")
     assert not session_dir.exists()
+
+
+# ── Workspace sync ────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def sync_port(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    return port
+
+
+def _reported(port) -> list[tuple[str, tuple[Path, ...]]]:  # type: ignore[no-untyped-def]
+    return [
+        (call.kwargs["owner_user_id"], call.kwargs["paths"])
+        for call in port.after_write.await_args_list
+    ]
+
+
+async def test_sync_slug_reports_the_rewritten_draft_and_the_target(
+    staging_root: Path, tmp_path: Path, sync_port
+) -> None:  # type: ignore[no-untyped-def]
+    session_dir = await staging.staging_dir_for_session("local-test-owner", "sess-w1", mkdir=True)
+    _write_skill(session_dir / "weekly-report", name="weekly-report")
+
+    await sync_slug("local-test-owner", "sess-w1", "weekly-report", "overwrite")
+
+    assert _reported(sync_port) == [
+        (
+            "local-test-owner",
+            (session_dir / "weekly-report", tmp_path / "user-skills" / "weekly-report"),
+        )
+    ]
+
+
+async def test_sync_slug_reports_the_rewrite_even_when_the_fork_is_refused(
+    staging_root: Path, tmp_path: Path, sync_port
+) -> None:  # type: ignore[no-untyped-def]
+    session_dir = await staging.staging_dir_for_session("local-test-owner", "sess-w2", mkdir=True)
+    _write_skill(tmp_path / "user-skills" / "weekly-report-v2", name="anything")
+    _write_skill(session_dir / "weekly-report", name="weekly-report")
+
+    with pytest.raises(FileExistsError):
+        await sync_slug(
+            "local-test-owner", "sess-w2", "weekly-report", "fork", new_slug="weekly-report-v2"
+        )
+
+    assert _reported(sync_port) == [("local-test-owner", (session_dir / "weekly-report",))]
+
+
+async def test_prepare_optimize_reports_the_seeded_draft(
+    staging_root: Path, tmp_path: Path, sync_port
+) -> None:  # type: ignore[no-untyped-def]
+    source = tmp_path / "external-skill"
+    _write_skill(source, name="external-skill")
+
+    dest = await prepare_optimize("local-test-owner", "sess-w3", source, "user:external-skill")
+
+    assert _reported(sync_port) == [("local-test-owner", (dest,))]
+
+
+async def test_removals_report_the_deleted_trees(staging_root: Path, sync_port) -> None:  # type: ignore[no-untyped-def]
+    session_dir = await staging.staging_dir_for_session("local-test-owner", "sess-w4", mkdir=True)
+    _write_skill(session_dir / "alpha", name="alpha")
+
+    await staging.remove_slug("local-test-owner", "sess-w4", "alpha")
+    await staging.remove_session_staging("local-test-owner", "sess-w4")
+    await staging.remove_slug("local-test-owner", "sess-w4", "never-there")
+
+    assert _reported(sync_port) == [
+        ("local-test-owner", (session_dir / "alpha",)),
+        ("local-test-owner", (session_dir,)),
+    ]
+    sync_port.before_read.assert_not_awaited()

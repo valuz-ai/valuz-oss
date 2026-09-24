@@ -244,6 +244,62 @@ class TestRecordArtifact:
             await svc.record_artifact("auto-1", "run-1", artifact={"summary": "x"}, user_id="u1")
 
 
+class TestRecordArtifactWorkspaceSync:
+    @pytest.mark.asyncio
+    async def test_declared_files_are_waited_for_before_their_existence_check(
+        self, svc: AutomationService, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The run's agent wrote them in its sandbox: a file that only reaches
+        the host through the barrier (here, its side effect) is found. Only
+        in-project paths are handed to it, with a short bound."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        out = project / "out" / "a.json"
+
+        def _land(**_kw: object) -> None:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("{}", encoding="utf-8")
+
+        port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock(side_effect=_land))
+        monkeypatch.setattr(ext, "workspace_sync", port)
+        seen: list[float] = []
+        from valuz_agent.modules.automations import service as service_mod
+
+        real = service_mod.ensure_readable
+
+        async def _spy(owner, paths, **kw):  # type: ignore[no-untyped-def]
+            seen.append(kw["timeout_s"])
+            await real(owner, paths, **kw)
+
+        monkeypatch.setattr(service_mod, "ensure_readable", _spy)
+        svc._ds.get_automation.return_value = _row()  # noqa: SLF001
+        svc._ds.get_run.return_value = _run()  # noqa: SLF001
+        deliver = AsyncMock(return_value=[])
+        with (
+            patch(
+                "valuz_agent.modules.automations.code_runner.resolve_project_cwd",
+                AsyncMock(return_value=project),
+            ),
+            patch("valuz_agent.modules.automations.code_runner.deliver_files", deliver),
+            patch("valuz_agent.modules.automations.code_runner.fire_artifact_hooks", AsyncMock()),
+            patch.object(svc, "_resolve_task_links", AsyncMock(return_value={})),
+        ):
+            await svc.record_artifact(
+                "auto-1", "run-1", artifact={"summary": "x"}, files=["out/a.json"], user_id="u1"
+            )
+            with pytest.raises(AutomationArtifactInvalid):
+                await svc.record_artifact(
+                    "auto-1", "run-1", artifact={"summary": "x"}, files=["../x.json"], user_id="u1"
+                )
+
+        assert seen == [2.0, 2.0]  # bounded on every call ...
+        # ... and the escaping path never reached the port (an empty list is skipped)
+        port.before_read.assert_awaited_once_with(
+            owner_user_id="u1", paths=(out.resolve(),), project_id="proj-1"
+        )
+        assert deliver.await_args.kwargs["files"][0].path == out.resolve()
+
+
 class TestContractRules:
     def test_task_cannot_declare_artifact(self) -> None:
         with pytest.raises(AutomationTaskArtifactUnsupported):

@@ -14,8 +14,14 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 
 from valuz_agent.adapters import kernel_client
+from valuz_agent.ports.workspace_sync import DEFAULT_READ_TIMEOUT_S, ensure_readable
 
 logger = logging.getLogger(__name__)
+
+#: ``read_barrier_s`` for a caller that has to collect inside an open unit of
+#: work (a recovery / heartbeat sweep that reads the run row in the same
+#: transaction). Short, because the transaction waits with it.
+IN_TRANSACTION_READ_BARRIER_S = 2.0
 
 
 class ArtifactEntry(TypedDict):
@@ -122,6 +128,7 @@ async def collect_manifest(
     *,
     since_epoch: float,
     user_id: str,
+    read_barrier_s: float | None = DEFAULT_READ_TIMEOUT_S,
 ) -> MemberManifest:
     """Build a SubtaskResult manifest after a member session completes.
 
@@ -143,8 +150,16 @@ async def collect_manifest(
                  from a deliberate "everything" cannot have a default.
     status     — the final session status string
     session_id — for cross-reference
+    read_barrier_s — how long to wait for the member's sandbox writes under
+                 ``run_dir`` to reach the host before the scan (workspace-sync
+                 port; a no-op on a single filesystem). ``None`` skips it — for
+                 a caller that already waited outside its unit of work. A
+                 caller that cannot leave its transaction passes
+                 ``IN_TRANSACTION_READ_BARRIER_S``.
     """
     summary = await last_assistant_text(user_id, session_id)
+    if read_barrier_s is not None:
+        await ensure_readable(user_id, [run_dir], timeout_s=read_barrier_s)
 
     # Scan run_dir for artifact files written during this member's run.
     # Offloaded: under v2.1 ``run_dir`` is the whole shared project cwd, so this
@@ -172,13 +187,19 @@ async def collect_manifest_safe(
     agent_slug: str,
     since_epoch: float,
     user_id: str,
+    read_barrier_s: float | None = DEFAULT_READ_TIMEOUT_S,
 ) -> MemberManifest:
     """``collect_manifest`` that never raises — the terminal-write callers'
     shape (heartbeat, recovery reconcile, loop-exit settle) spelled once:
     fall back to an empty-summary manifest and stamp the agent slug."""
     try:
         manifest = await collect_manifest(
-            session_id, run_dir, status, since_epoch=since_epoch, user_id=user_id
+            session_id,
+            run_dir,
+            status,
+            since_epoch=since_epoch,
+            user_id=user_id,
+            read_barrier_s=read_barrier_s,
         )
     except Exception:  # noqa: BLE001
         logger.exception("collect_manifest failed for %s", session_id)
@@ -188,6 +209,7 @@ async def collect_manifest_safe(
 
 
 __all__ = [
+    "IN_TRANSACTION_READ_BARRIER_S",
     "ArtifactEntry",
     "MemberManifest",
     "collect_manifest",

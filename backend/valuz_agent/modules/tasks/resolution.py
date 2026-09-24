@@ -23,7 +23,7 @@ from valuz_agent.adapters.agent_resolver import (
     build_member_session,
     embed_agent_config,
     resolve_agent_display_name,
-    spill_goal_brief_if_too_long,
+    spill_goal_brief_and_notify,
     summarize_role,
 )
 from valuz_agent.infra.fs_registry import fs_registry
@@ -320,12 +320,16 @@ class TaskSessionResolver:
         lead_agent = await _member_agent_config(lead_member, member_ds, user_id=user_id)
         lead_clone = materialize_lead_clone(lead_agent) if lead_agent is not None else None
 
-        brief = spill_goal_brief_if_too_long(
+        # The pointer the lead is handed names this doc, so it has to reach a
+        # remote sandbox before the session is dispatched.
+        brief = await spill_goal_brief_and_notify(
             brief,
             run_dir=str(env.project_cwd),
             task_id=task_id,
             label=agent_slug,
             is_lead=True,
+            user_id=user_id,
+            project_id=project_id,
         )
 
         session = await build_member_session(
@@ -387,12 +391,14 @@ class TaskSessionResolver:
         """
         member_ds = ProjectMemberDatastore(db)
 
-        brief = spill_goal_brief_if_too_long(
+        brief = await spill_goal_brief_and_notify(
             brief,
             run_dir=str(env.project_cwd),
             task_id=task_id,
             label=spill_label or agent_slug,
             is_lead=False,
+            user_id=user_id,
+            project_id=project_id,
         )
 
         session = await build_member_session(

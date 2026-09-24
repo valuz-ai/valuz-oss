@@ -48,6 +48,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +75,8 @@ from valuz_agent.modules.artifacts.service import (
     DeliveryStatus,
     deliver_artifact,
 )
-from valuz_agent.modules.files.service import owner_allowed_roots
+from valuz_agent.modules.files.service import assert_owned, owner_allowed_roots
+from valuz_agent.ports.workspace_sync import ensure_readable
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +270,25 @@ async def _deliver_one(
     return _entry(file_path, result)
 
 
+def _owned_item_paths(items: list[Any], roots: list[Path]) -> Iterator[Path]:
+    """The batch's ``filePath`` values that fall inside ``roots``, absolute and
+    normalised the way ``deliver_artifact`` normalises them.
+
+    A generator: the OSS no-op binding never iterates it, so the owner check
+    (a ``resolve()`` per entry) costs a desktop nothing extra.
+    """
+    for raw in items:
+        file_path = raw.get("filePath") if isinstance(raw, dict) else None
+        if not file_path or not isinstance(file_path, str):
+            continue
+        abs_path = Path(os.path.abspath(os.path.expanduser(file_path)))
+        try:
+            assert_owned(abs_path, roots)
+        except (PermissionError, OSError, ValueError):
+            continue
+        yield abs_path
+
+
 async def _deliver_artifacts_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
     user_id = ctx.user_id
 
@@ -300,6 +322,17 @@ async def _deliver_artifacts_handler(args: dict[str, Any], ctx: ExecContext) -> 
             content="deliver_artifacts: cannot resolve your workspace root — nothing was recorded",
             is_error=True,
         )
+
+    # The agent wrote these files in its sandbox a moment ago. Wait for them
+    # once, for the whole batch, and BEFORE the unit of work below — the
+    # barrier must never hold the transaction open. Only paths inside the
+    # caller's own roots are passed on; the rest are refused per entry below
+    # anyway, and a barrier is no place to probe somebody else's tree.
+    await ensure_readable(
+        user_id,
+        _owned_item_paths(items, roots),
+        project_id=delivery.scope.project_id,
+    )
 
     results: list[dict[str, Any]] = []
     # One transaction for the batch — see the module docstring.

@@ -312,9 +312,14 @@ async def _drain_queue_after_turn(
             try:
                 from valuz_agent.modules.worktrees.service import worktree_service
 
-                wt_snapshot = (session.metadata.get("valuz") or {}).get("worktree")
+                valuz_meta = session.metadata.get("valuz") or {}
+                wt_snapshot = valuz_meta.get("worktree")
                 if isinstance(wt_snapshot, dict):
-                    await worktree_service.heal_from_snapshot(wt_snapshot)
+                    await worktree_service.heal_from_snapshot(
+                        wt_snapshot,
+                        user_id=owner_user_id,
+                        project_id=str(valuz_meta.get("project_id") or ""),
+                    )
             except Exception:  # noqa: BLE001
                 logger.warning("drain: worktree heal failed for %s", session_id, exc_info=True)
 

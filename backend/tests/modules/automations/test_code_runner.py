@@ -472,3 +472,94 @@ async def test_a_file_the_host_cannot_record_does_not_fail_the_run(
     assert "could not record file 'report.json'" in (result.log_tail or "")
     assert result.log_tail.startswith("hi\n[host]")
     assert cr.files_to_json(result.files)[0]["error"] == "not_owned"
+
+
+# ── workspace sync ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_code_run_waits_for_what_it_reads_and_reports_what_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quiet_cancel_watch: None
+) -> None:
+    """Reads: the entry (before its existence check) and the run dir (before
+    the declared files are checked). Writes: the prepared run dir + workspace,
+    and the run dirs the trim removed — never the whole ``runs`` tree."""
+    import os
+
+    from valuz_agent.infra.config import settings
+
+    project = _project(tmp_path)
+    root = project / ".valuz/automations/auto-1"
+    stale = root / "runs" / "run-0"
+    stale.mkdir(parents=True)
+    os.utime(stale, (1, 1))  # oldest, so the trim takes it
+    monkeypatch.setattr(settings, "automation_run_dirs_keep", 1)
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+
+    async def fake_deliver(db, **kw):
+        return _Delivered(ok=True, artifact_id="art-1")
+
+    monkeypatch.setattr("valuz_agent.modules.artifacts.service.deliver_artifact", fake_deliver)
+    executor = _FakeExecutor(
+        CodeRunOutcome(status="success", exit_code=0, executor_ref="local:1"),
+        write_output=json.dumps(
+            {"artifact": {"summary": "ok"}, "files": [{"sourcePath": "files/r.json"}]}
+        ),
+        write_files={"files/r.json": b"{}"},
+    )
+    monkeypatch.setattr(ext, "automation_code_executor", executor)
+    monkeypatch.setattr(cr, "resolve_project_cwd", AsyncMock(return_value=project))
+    with patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow):
+        result = await cr.run_code_automation(
+            user_id="u1",
+            row=_row(),
+            run=_run(),
+            effective_input=None,
+            previous=None,
+            timezone="UTC",
+            locale="en-US",
+        )
+
+    assert result.status == "success", result
+    run_dir = root / "runs" / "run-1"
+    assert [c.kwargs for c in port.before_read.await_args_list] == [
+        {
+            "owner_user_id": "u1",
+            "paths": (project / "automations/daily/automation.py",),
+            "project_id": "proj-1",
+        },
+        {"owner_user_id": "u1", "paths": (run_dir,), "project_id": "proj-1"},
+    ]
+    assert [c.kwargs for c in port.after_write.await_args_list] == [
+        {"owner_user_id": "u1", "paths": (run_dir, root / "workspace"), "project_id": "proj-1"},
+        {"owner_user_id": "u1", "paths": (stale,), "project_id": "proj-1"},
+    ]
+    assert not stale.exists() and run_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_entry_is_still_waited_for_before_it_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quiet_cancel_watch: None
+) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    monkeypatch.setattr(cr, "resolve_project_cwd", AsyncMock(return_value=project))
+    with patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow):
+        result = await cr.run_code_automation(
+            user_id="u1",
+            row=_row(code_entry="later.py"),
+            run=_run(),
+            effective_input=None,
+            previous=None,
+            timezone="UTC",
+            locale="en-US",
+        )
+
+    assert result.error_code == "AUTOMATION_CODE_ENTRY_MISSING"
+    port.before_read.assert_awaited_once_with(
+        owner_user_id="u1", paths=(project / "later.py",), project_id="proj-1"
+    )
+    port.after_write.assert_not_awaited()

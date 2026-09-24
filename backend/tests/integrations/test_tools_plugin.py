@@ -157,3 +157,36 @@ def test_tool_def_shape() -> None:
     (td,) = t.build_plugin_tool_defs()
     assert td.name == "plugin" and td.parameters["required"] == ["action"]
     assert td.parameters["properties"]["slugs"]["type"] == "array"
+
+
+def test_a_path_source_is_waited_for_before_the_service_runs(monkeypatch) -> None:  # noqa: ANN001
+    """A zip / folder the agent built in its sandbox reaches the host before
+    the plugin service opens its units of work. URL / market sources and a
+    relative path (resolved against this process, never a workspace) do not
+    touch the barrier."""
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    order: list[str] = []
+    port = SimpleNamespace(
+        after_write=AsyncMock(),
+        before_read=AsyncMock(side_effect=lambda **_kw: order.append("barrier")),
+    )
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    svc = FakePluginService()
+
+    async def _with(user_id: str, fn: Any) -> Any:
+        order.append("service")
+        return await fn(svc, FakeSkills())
+
+    monkeypatch.setattr(t, "_with_plugin_service", _with)
+
+    _run({"action": "preview", "path": "/work/proj/dist/plugin.zip"})
+    _run({"action": "install", "url": "https://files.example/a.zip"})
+    _run({"action": "install", "path": "relative/plugin.zip"})
+
+    port.before_read.assert_awaited_once_with(
+        owner_user_id="owner", paths=(Path("/work/proj/dist/plugin.zip"),), project_id=None
+    )
+    assert order[:2] == ["barrier", "service"]

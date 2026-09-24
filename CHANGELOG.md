@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Workspace sync is a port** — `ext.workspace_sync`
+  (`ports/workspace_sync.py`, `WorkspaceSyncPort`) lets a deployment that
+  replicates project directories into remote sandboxes stay in step with the
+  host: `after_write` is reported once the host has written, moved or deleted
+  under a project directory (project uploads, artifact snapshots, the task
+  plan markdown, spilled goal briefs, skill staging and project-scoped skill
+  writes, git worktree add / remove / heal, code-automation run dirs), and
+  `before_read` is awaited before the host reads what an agent may just have
+  written in its sandbox (delivered artifacts, submitted / confirmed skill
+  drafts, plugin path sources, a member's run dir, code-automation entries and
+  declared files). Call sites go through `notify_written` / `ensure_readable`,
+  which batch a unit of work's paths into one call, stay outside its
+  transaction where they can (and bound the wait where they cannot), and are
+  fail-open. OSS binds `NoopWorkspaceSync`: desktop behaviour is unchanged.
+  `ProjectService` gained `write_files` (the upload route writes a batch in
+  one call), `render_plan_md` returns the path it wrote, `trim_run_dirs`
+  returns what it removed, and `WorktreeService.heal_from_snapshot` accepts
+  the owner to report under.
+
 - **`automation` tool: `read_run` long-polls with `wait_seconds`** (1-60) —
   the server re-reads the run every half second and returns the moment it is
   terminal, so a caller chains `read_run` calls instead of sleeping; the

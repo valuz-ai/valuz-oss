@@ -582,6 +582,55 @@ def test_render_plan_md_writes_file(db_factory, tmp_path) -> None:
     assert md.exists() and "## Plan" in md.read_text() and "**a**" in md.read_text()
 
 
+def test_plan_md_is_reported_to_workspace_sync_after_each_commit(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """Every plan write renders the markdown mirror and reports it — once, under
+    the owner, and only AFTER its unit of work committed (the port is never
+    awaited while the transaction is held): at report time the plan version
+    the call installed is already readable from another connection."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    seen_versions: list[int] = []
+
+    def _record(**_kw: object) -> None:
+        db = db_factory()
+        try:
+            seen_versions.append(db.get(TaskRow, "t1").plan_version or 0)
+        finally:
+            db.close()
+
+    port = SimpleNamespace(after_write=AsyncMock(side_effect=_record), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    _make_task(db_factory, tmp_path)
+    md = tmp_path / "t1.md"
+    common = {"task_id": "t1", "project_id": "w1", "user_id": OWNER, "lead_session_id": "lead"}
+
+    asyncio.run(
+        planning.plan_task(
+            **common,
+            subtasks=[
+                {"key": "a", "title": "A", "agent": "x", "status": "in_review"},
+                {"key": "b", "title": "B", "agent": "y", "status": "in_review"},
+            ],
+        )
+    )
+    asyncio.run(planning.modify_plan(**common, add=[{"key": "c", "title": "C", "agent": "z"}]))
+    asyncio.run(
+        planning.review_subtask(**common, decision="rework", subtask_key="a", feedback="redo")
+    )
+    asyncio.run(planning.review_subtask(**common, decision="approve", subtask_key="b"))
+
+    assert port.after_write.await_count == 4
+    for call in port.after_write.await_args_list:
+        assert call.kwargs == {"owner_user_id": OWNER, "paths": (md,), "project_id": "w1"}
+    assert seen_versions == [1, 2, 3, 4]
+    port.before_read.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # _auto_finalize_lead_task — host-side terminal fallback (lead ends w/o finish_task)
 # ---------------------------------------------------------------------------
@@ -878,6 +927,91 @@ def test_finalize_actor_member_error_sets_rework_not_failed(
         db.close()
     # The failed attempt is still recorded on the timeline.
     assert "subtask_failed" in _events(db_factory)
+
+
+def test_finalize_actor_waits_for_the_member_run_dir_between_its_units_of_work(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The loop-exit settle waits for the member's sandbox writes BETWEEN its
+    read and its terminal write, and tells the manifest scan (which runs inside
+    that write's transaction) not to wait again."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import run_orchestrator as run_orch
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+    from valuz_agent.ports.extensions import ext
+
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess",
+            subtasks=[{"key": "a", "title": "A", "agent": "researcher", "status": "in_progress"}],
+        )
+    )
+    run_dir = tmp_path / "work"
+    run_dir.mkdir()
+    db = db_factory()
+    try:
+        db.add(
+            TaskSessionRow(
+                user_id=OWNER,
+                id="run-mem",
+                project_id="w1",
+                task_id="t1",
+                session_id="mem-1",
+                agent_slug="researcher",
+                sequence=1,
+                kind="subtask",
+                subtask_key="a",
+                status="active",
+                dispatched_by="lead-sess",
+                run_dir=str(run_dir),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    order: list[str] = []
+    port = SimpleNamespace(
+        after_write=AsyncMock(),
+        before_read=AsyncMock(side_effect=lambda **_kw: order.append("barrier")),
+    )
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    seen: dict[str, object] = {}
+
+    async def _manifest(*_a: object, **kw: object) -> dict[str, str]:
+        order.append("manifest")
+        seen.update(kw)
+        return {"session_id": "mem-1", "status": "terminated", "summary": "x"}
+
+    async def _noop(*_a: object, **_k: object) -> None: ...
+
+    monkeypatch.setattr(run_orch, "_finalize_session", _noop)
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _manifest)
+
+    asyncio.run(
+        TaskOrchestrator().finalization.finalize_actor(
+            session_id="mem-1",
+            last_content="",
+            final_status="terminated",
+            role="subtask",
+            task_id="t1",
+            project_id="w1",
+            via_shutdown=False,  # type: ignore[call-arg]
+            user_id=OWNER,
+        )
+    )
+
+    port.before_read.assert_awaited_once_with(
+        owner_user_id=OWNER, paths=(run_dir,), project_id="w1"
+    )
+    assert order[:2] == ["barrier", "manifest"]
+    assert seen["read_barrier_s"] is None
 
 
 def test_auto_finalize_blocks_on_error_when_plan_has_unresolved_nodes(db_factory, tmp_path) -> None:
@@ -3207,6 +3341,40 @@ def test_the_backstop_attributes_only_what_the_member_wrote(
         "artifacts must be bounded by the member's own run row, not by 0 — "
         f"got {seen.get('since_epoch')!r}"
     )
+
+
+def test_the_backstop_bounds_its_in_transaction_read_barrier(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The heartbeat settles members inside one unit of work, so its manifest
+    scan's workspace-sync barrier is bounded tightly instead of the default."""
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    seen: dict[str, object] = {}
+
+    async def _capture(_sid, _run_dir, _status, **kw):
+        seen.update(kw)
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    asyncio.run(
+        member_probe.heartbeat_pending(
+            task_id="t1", project_id="w1", pending_keys={"B"}, user_id=OWNER
+        )
+    )
+
+    assert seen["read_barrier_s"] == manifest_mod.IN_TRANSACTION_READ_BARRIER_S == 2.0
 
 
 def test_the_grace_is_per_member_not_per_wait(db_factory, tmp_path, monkeypatch) -> None:

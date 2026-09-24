@@ -1317,3 +1317,36 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
         f"the ring must cut the slice short, not be ignored ({elapsed:.2f}s — the "
         "heartbeat slice is 8s)"
     )
+
+
+async def test_collect_manifest_waits_for_the_run_dir_before_scanning(
+    tmp_path: object, monkeypatch: object
+) -> None:
+    """The member wrote its outputs in a sandbox: the scan waits for them (a
+    file that only lands through the barrier is still attributed). A caller
+    that already waited outside its transaction passes ``None`` and skips it."""
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    d = Path(str(tmp_path))
+    landed = d / "late.txt"
+    port = SimpleNamespace(
+        after_write=AsyncMock(),
+        before_read=AsyncMock(side_effect=lambda **_kw: landed.write_text("x")),
+    )
+    monkeypatch.setattr(ext, "workspace_sync", port)  # type: ignore[attr-defined]
+
+    m = await collect_manifest("s1", d, "idle", since_epoch=0.0, user_id=LOCAL_USER_ID)
+
+    assert str(landed) in [a["path"] for a in m["artifacts"]]
+    port.before_read.assert_awaited_once_with(
+        owner_user_id=LOCAL_USER_ID, paths=(d,), project_id=None
+    )
+
+    await collect_manifest(
+        "s1", d, "idle", since_epoch=0.0, user_id=LOCAL_USER_ID, read_barrier_s=None
+    )
+    assert port.before_read.await_count == 1
