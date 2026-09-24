@@ -43,7 +43,7 @@ from src.core.agent_config import (
 # (resolved via sys.path injection from kernel bootstrap).
 import valuz_agent.boot.kernel  # noqa: F401 — side-effect: puts kernel on sys.path
 from valuz_agent.adapters import kernel_client
-from valuz_agent.adapters.capability_resolver import resolve_session_capabilities
+from valuz_agent.adapters.capability_resolver import resolve_session_capabilities, skill_face
 from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.adapters.model_resolver import resolve_model
 from valuz_agent.adapters.system_prompt_builder import (
@@ -1016,7 +1016,7 @@ class SessionService:
                 skills=list(session_skills),
                 mcp_servers=list(session_mcp),
                 permission_mode=effective_permission_mode,
-                metadata={"valuz": valuz_meta},
+                metadata={"valuz": {**valuz_meta, "skill_face": skill_face(session_skills)}},
             ),
         )
         await project_index.record(
@@ -1426,7 +1426,7 @@ class SessionService:
                 skills=list(caps_skills),
                 mcp_servers=list(caps_mcp),
                 permission_mode=effective_permission_mode,
-                metadata={"valuz": valuz_meta},
+                metadata={"valuz": {**valuz_meta, "skill_face": skill_face(caps_skills)}},
             ),
         )
         await project_index.record(

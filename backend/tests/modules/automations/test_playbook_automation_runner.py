@@ -184,9 +184,14 @@ def test_check_context_uses_pinned_run_not_edited_automation_definition():
     row.playbook_version = 99
     run = _automation_run()
     run.playbook_run_id = "old-run"
-    checks = _automation_check_config(row, run, SimpleNamespace(
-        definition_id="original-definition", definition_version=3,
-    ))
+    checks = _automation_check_config(
+        row,
+        run,
+        SimpleNamespace(
+            definition_id="original-definition",
+            definition_version=3,
+        ),
+    )
     assert checks.playbook_definition_id == "original-definition"
     assert checks.configuration["playbook_version"] == 3
 
@@ -335,6 +340,11 @@ async def test_playbook_session_creation_releases_sqlite_writer(tmp_path, outcom
                 assert linked.user_id == "u1"
                 assert linked.definition_version == 1
                 assert linked.status == ("completed" if outcome == "success" else "failed")
+                # the opened session records which automation run it belongs to
+                meta = session_svc.create_session.await_args.kwargs["trigger_meta"]
+                assert meta["kind"] == "automation"
+                assert (meta["automation_id"], meta["automation_run_id"]) == ("auto-1", "run-1")
+                assert (meta["playbook_definition_id"], meta["playbook_version"]) == ("pb-1", "1")
                 if outcome == "success":
                     assert run.session_id == linked.session_id == indexes[0].session_id
                     assert indexes[0].project_id == "execution-project"

@@ -43,6 +43,7 @@ from valuz_agent.adapters.capability_resolver import (
     always_on_skill_paths,
     merge_with_always_on,
     resolve_skill_slugs_to_paths,
+    skill_face,
 )
 from valuz_agent.adapters.system_prompt_builder import (
     AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
@@ -946,6 +947,7 @@ async def build_member_session(
     worktree_notice: str | None = None,
     user_id: str,
     task_title: str | None = None,
+    trigger_meta: dict[str, str] | None = None,
 ) -> CreateSessionRequest | None:
     """Construct the kernel create-session request for a dispatch member or lead.
 
@@ -1291,6 +1293,10 @@ async def build_member_session(
         # v2 actor dispatch: members carry their lead's session id so
         # member_done notifications can be routed back (M10 附录 B).
         **({"lead_session_id": lead_session_id} if lead_session_id else {}),
+        # What started the task (an automation run), same key as the chat
+        # path: sessions of one automation are comparable across runs.
+        **({"trigger_meta": trigger_meta} if trigger_meta else {}),
+        "skill_face": skill_face(session_skills),
     }
     if prompt_snapshot is not None:
         valuz_metadata["global_instructions"] = prompt_snapshot.metadata()

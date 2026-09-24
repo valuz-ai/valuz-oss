@@ -21,7 +21,7 @@ Currently covered:
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -633,6 +633,38 @@ def _resolve_to_absolute(path: str | None, project_root: str | None) -> str | No
         return str(candidate.resolve(strict=False))
     except OSError:
         return None
+
+
+def skill_face(paths: Iterable[str] | None) -> list[str]:
+    """``<slug>@<sha12>:<tree>`` for every skill directory a session is built with.
+
+    Stamped into ``metadata.valuz.skill_face`` so a session records which skill
+    TEXT it ran with: ``sha12`` is the SKILL.md content hash the catalog already
+    computes (``_read_manifest_cached``, cached on mtime + size), ``tree`` is
+    where the copy lives (``official`` / ``plugin`` / ``user``) — with same-slug
+    copies in several trees, the stamp shows which one a session actually got.
+    A missing or unreadable SKILL.md yields ``@?`` instead of failing session
+    creation.
+    """
+    from valuz_agent.integrations.skills_filesystem import _read_manifest_cached
+
+    face: list[str] = []
+    for raw in paths or ():
+        text = str(raw)
+        path = Path(text)
+        tree = (
+            "official"
+            if "/official-skills/" in text
+            else "plugin"
+            if "/plugins/" in text
+            else "user"
+        )
+        try:
+            sha12 = _read_manifest_cached(path / "SKILL.md")[3][:12]
+        except Exception:  # noqa: BLE001 — provenance must never block a session
+            sha12 = "?"
+        face.append(f"{path.name}@{sha12}:{tree}")
+    return face
 
 
 async def resolve_skill_slugs_to_paths(

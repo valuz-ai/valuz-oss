@@ -89,6 +89,29 @@ def _automation_check_config(
     )
 
 
+def _automation_trigger_meta(
+    row: AutomationRow,
+    run: AutomationRunRow,
+    playbook_run: Any | None = None,
+) -> dict[str, str]:
+    """``metadata.valuz.trigger_meta`` of the session an automation run opens.
+
+    The same identity the run's check config carries, recorded on the session
+    itself so the runs of one automation can be grouped and compared from the
+    session alone (the run row may never point at its session).
+    """
+    meta = {
+        "kind": "automation",
+        "automation_id": row.id,
+        "automation_run_id": run.id,
+        "action_kind": getattr(row, "action_kind", None),
+        "trigger_type": run.trigger_type,
+        "playbook_definition_id": getattr(playbook_run, "definition_id", None),
+        "playbook_version": getattr(playbook_run, "definition_version", None),
+    }
+    return {key: str(value) for key, value in meta.items() if value is not None}
+
+
 def _compose_playbook_prompt(
     *,
     definition: Any,
@@ -692,6 +715,7 @@ class InProcessAutomationRunner:
                         agent_slug=row.agent_slug,
                         user_id=user_id,
                         worktree=wt_spec,
+                        trigger_meta=_automation_trigger_meta(row, run, playbook_run),
                     )
                 except Exception as exc:
                     run.status = "failed"
