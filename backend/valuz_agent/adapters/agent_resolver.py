@@ -1113,7 +1113,14 @@ async def build_member_session(
         kind=agent_meta.get("agent_kind", "standard"),
         inherit_global_instructions=agent_meta.get("inherit_global_instructions", True),
     )
-    prompt_snapshot = await resolve_global_instructions(user_id) if inherits_global else None
+    # Generated before the prompt: the session id seeds a per-session prompt
+    # revision assignment, and scopes the built-in MCP headers below.
+    session_id = uuid4().hex
+    prompt_snapshot = (
+        await resolve_global_instructions(user_id, assignment_seed=session_id)
+        if inherits_global
+        else None
+    )
     instructions = assemble_session_instructions(
         [
             ("authorization-boundary", AUTHORIZATION_BOUNDARY_INSTRUCTIONS),
@@ -1243,8 +1250,8 @@ async def build_member_session(
     # Task dispatch sessions (lead AND member) do NOT flow through
     # ``resolve_session_capabilities``, so the always-on built-in HTTP MCP
     # servers (docs / schedules / connectors) must be injected here. Generate
-    # the session id up front so it can scope those servers' request headers.
-    session_id = uuid4().hex
+    # the session id up front so it can scope those servers' request headers
+    # (generated above, before the prompt was resolved).
     builtin_mcp = await always_on_http_mcp_servers(
         session_id, owner_user_id=user_id, toolkit="lead" if is_lead else "base"
     )

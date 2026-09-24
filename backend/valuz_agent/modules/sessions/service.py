@@ -866,7 +866,14 @@ class SessionService:
             kind=agent_meta.get("agent_kind", "standard"),
             inherit_global_instructions=agent_meta.get("inherit_global_instructions", True),
         )
-        prompt_snapshot = await resolve_global_instructions(user_id) if inherits_global else None
+        # Minted before the prompt: the session id seeds a per-session prompt
+        # revision assignment (``resolve_global_instructions(assignment_seed=)``).
+        session_id = mint_session_id()
+        prompt_snapshot = (
+            await resolve_global_instructions(user_id, assignment_seed=session_id)
+            if inherits_global
+            else None
+        )
         all_available_manifest = (
             await self._resolve_all_available_resources(user_id, runtime_provider)
             if agent_meta.get("resource_policy") == "all_available"
@@ -925,8 +932,6 @@ class SessionService:
                 list(declared_modalities) if declared_modalities is not None else None
             ),
         )
-
-        session_id = mint_session_id()
 
         # Guarantee the always-on baseline AT SESSION-CREATE (not "whatever the
         # agent happens to carry") — symmetric with the task path
@@ -1298,7 +1303,7 @@ class SessionService:
         from valuz_agent.modules.memory.injection import memory_instructions_block
         from valuz_agent.ports.instructions import resolve_global_instructions
 
-        prompt_snapshot = await resolve_global_instructions(user_id)
+        prompt_snapshot = await resolve_global_instructions(user_id, assignment_seed=session_id)
         session_instructions = await prepend_global_instructions(
             session_instructions,
             user_id=user_id,

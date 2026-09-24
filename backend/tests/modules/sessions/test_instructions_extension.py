@@ -159,3 +159,40 @@ async def test_raw_path_prompt_alone_when_no_project_prompt(
         f"{AUTHORIZATION_BOUNDARY_INSTRUCTIONS}\n"
         "</authorization-boundary>"
     )
+
+
+async def test_assignment_seed_reaches_providers_that_accept_it(
+    restore_provider: None,
+) -> None:
+    class _Split:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str | None]] = []
+
+        async def resolve(
+            self, user_id: str, *, assignment_seed: str | None = None
+        ) -> PromptSnapshot:
+            self.calls.append((user_id, assignment_seed))
+            arm = "candidate" if assignment_seed == "session-b" else "baseline"
+            return PromptSnapshot(content=f"{arm} prompt", revision=f"rev-{arm}", distribution="d")
+
+    provider = _Split()
+    ext.global_instructions = provider
+
+    a = await resolve_global_instructions(OWNER, assignment_seed="session-a")
+    b = await resolve_global_instructions(OWNER, assignment_seed="session-b")
+    c = await resolve_global_instructions(OWNER)
+
+    assert provider.calls == [(OWNER, "session-a"), (OWNER, "session-b"), (OWNER, None)]
+    assert (a.revision, b.revision, c.revision) == ("rev-baseline", "rev-candidate", "rev-baseline")
+
+
+async def test_providers_without_the_seed_parameter_keep_working(
+    restore_provider: None,
+) -> None:
+    provider = _OwnerProvider()
+    ext.global_instructions = provider
+
+    snapshot = await resolve_global_instructions(OWNER, assignment_seed="session-a")
+
+    assert provider.owners == [OWNER]
+    assert snapshot.revision == f"rev-{OWNER}"
