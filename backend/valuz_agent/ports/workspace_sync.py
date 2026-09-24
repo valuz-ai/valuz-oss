@@ -165,10 +165,13 @@ async def notify_written(
     port = _bound_port()
     if port is None or not owner_user_id:
         return
-    normalized = _absolute_paths(paths)
-    if not normalized:
-        return
+    normalized: tuple[Path, ...] = ()
     try:
+        # Inside the fail-open block: a caller may pass a lazy iterable that
+        # touches the filesystem, and its error must not reach the host op.
+        normalized = _absolute_paths(paths)
+        if not normalized:
+            return
         await port.after_write(owner_user_id=owner_user_id, paths=normalized, project_id=project_id)
     except Exception:  # noqa: BLE001 — fail-open: the reconcile loop converges
         logger.warning(
@@ -196,10 +199,12 @@ async def ensure_readable(
     port = _bound_port()
     if port is None or not owner_user_id:
         return
-    normalized = _absolute_paths(paths)
-    if not normalized:
-        return
+    normalized: tuple[Path, ...] = ()
     try:
+        # Inside the fail-open block, as in ``notify_written``.
+        normalized = _absolute_paths(paths)
+        if not normalized:
+            return
         await asyncio.wait_for(
             port.before_read(owner_user_id=owner_user_id, paths=normalized, project_id=project_id),
             timeout=timeout_s,

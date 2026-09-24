@@ -299,6 +299,47 @@ class TestRecordArtifactWorkspaceSync:
         )
         assert deliver.await_args.kwargs["files"][0].path == out.resolve()
 
+    @pytest.mark.asyncio
+    async def test_the_boundary_is_resolved_after_the_barrier(
+        self, svc: AutomationService, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """What the barrier brings in may be a symlink out of the project: it is
+        resolved afterwards and refused, never stat'ed or delivered."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        outside = tmp_path / "outside.json"
+        outside.write_text("{}", encoding="utf-8")
+        link = project / "out" / "a.json"
+
+        def _land(**_kw: object) -> None:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(outside)
+
+        port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock(side_effect=_land))
+        monkeypatch.setattr(ext, "workspace_sync", port)
+        svc._ds.get_automation.return_value = _row()  # noqa: SLF001
+        svc._ds.get_run.return_value = _run()  # noqa: SLF001
+        deliver = AsyncMock(return_value=[])
+        with (
+            patch(
+                "valuz_agent.modules.automations.code_runner.resolve_project_cwd",
+                AsyncMock(return_value=project),
+            ),
+            patch("valuz_agent.modules.automations.code_runner.deliver_files", deliver),
+            patch("valuz_agent.modules.automations.code_runner.fire_artifact_hooks", AsyncMock()),
+            patch.object(svc, "_resolve_task_links", AsyncMock(return_value={})),
+            pytest.raises(AutomationArtifactInvalid),
+        ):
+            await svc.record_artifact(
+                "auto-1", "run-1", artifact={"summary": "x"}, files=["out/a.json"], user_id="u1"
+            )
+
+        # the barrier got the lexical in-project path, not a pre-resolved one
+        port.before_read.assert_awaited_once_with(
+            owner_user_id="u1", paths=(project / "out" / "a.json",), project_id="proj-1"
+        )
+        deliver.assert_not_awaited()
+
 
 class TestContractRules:
     def test_task_cannot_declare_artifact(self) -> None:

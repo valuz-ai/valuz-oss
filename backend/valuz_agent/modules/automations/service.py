@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -1831,20 +1832,23 @@ class AutomationService:
             except Exception as exc:  # noqa: BLE001 — a missing project is a 422 here
                 raise AutomationArtifactInvalid(str(exc)) from exc
             root = project_cwd.resolve()
-            resolved = [(rel, (project_cwd / rel).resolve()) for rel in files]
             # The run's agent wrote these in its sandbox just before calling
             # ``output``. Bounded, because this service's session has already
             # read the automation and run rows (no writes or locks yet) and
-            # the paths cannot be known before those reads. Only in-project
-            # paths are passed on; the check below refuses the rest.
+            # the paths cannot be known before those reads. Lexical join only
+            # (in-project entries): what the barrier brings in may be a
+            # symlink, so the boundary is resolved and policed below, after it.
+            lexical_root = Path(os.path.normpath(project_cwd))
+            lexical = [Path(os.path.normpath(project_cwd / rel)) for rel in files]
             await ensure_readable(
                 user_id,
-                [path for _rel, path in resolved if root in path.parents],
+                [path for path in lexical if lexical_root in path.parents],
                 project_id=row.project_id,
                 timeout_s=_RECORD_ARTIFACT_READ_TIMEOUT_S,
             )
             declared: list[DeclaredFile] = []
-            for rel, path in resolved:
+            for rel in files:
+                path = (project_cwd / rel).resolve()
                 if root not in path.parents or not path.is_file():
                     raise AutomationArtifactInvalid(f"files: {rel!r} is not a file in the project")
                 declared.append(DeclaredFile(path=path, name=Path(rel).name, mime_type=None))

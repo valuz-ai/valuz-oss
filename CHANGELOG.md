@@ -17,12 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plan markdown, spilled goal briefs, skill staging and project-scoped skill
   writes, git worktree add / remove / heal, code-automation run dirs), and
   `before_read` is awaited before the host reads what an agent may just have
-  written in its sandbox (delivered artifacts, submitted / confirmed skill
-  drafts, plugin path sources, a member's run dir, code-automation entries and
-  declared files). Call sites go through `notify_written` / `ensure_readable`,
-  which batch a unit of work's paths into one call, stay outside its
-  transaction where they can (and bound the wait where they cannot), and are
-  fail-open. OSS binds `NoopWorkspaceSync`: desktop behaviour is unchanged.
+  written in its sandbox (delivered artifacts, submitted / confirmed /
+  panel-synced skill drafts, plugin path sources, a member's run dir, a git
+  worktree before its removal dirty check, code-automation entries and
+  declared files). Call sites batch a unit of work's paths into one
+  `notify_written` / `ensure_readable` call, placed outside the transaction
+  where they can (with a short timeout where they cannot); both helpers skip
+  empty path lists and are fail-open. OSS binds `NoopWorkspaceSync`: desktop
+  behaviour is unchanged.
   `ProjectService` gained `write_files` (the upload route writes a batch in
   one call), `render_plan_md` returns the path it wrote, `trim_run_dirs`
   returns what it removed, and `WorktreeService.heal_from_snapshot` accepts

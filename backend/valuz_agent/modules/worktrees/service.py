@@ -32,7 +32,7 @@ from valuz_agent.modules.worktrees.errors import (
     WorktreeOperationFailed,
 )
 from valuz_agent.modules.worktrees.slug_words import SLUG_ADJECTIVES, SLUG_NOUNS
-from valuz_agent.ports.workspace_sync import notify_written
+from valuz_agent.ports.workspace_sync import ensure_readable, notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +397,16 @@ class WorktreeService:
             meta = _read_sidecar(git_root, flat) or {}
             raw_base = meta.get("base_sha")
             base_sha = raw_base if isinstance(raw_base, str) and raw_base else None
+            if base_sha:
+                # The dirty check reads the host copy of a checkout an agent
+                # edits in its sandbox — and the refs / index its commits move.
+                # Wait for those first (outside the repo lock), or unsynced
+                # work reads as a clean tree and is removed.
+                await ensure_readable(
+                    user_id,
+                    _worktree_sync_paths(git_root, flat, target.path, target.branch),
+                    project_id=project_row.id,
+                )
             dirty = (
                 await asyncio.to_thread(gw.has_changes, target.path, base_sha)
                 if base_sha
@@ -485,6 +495,14 @@ class WorktreeService:
             return False
 
         branch_name = str(branch) if isinstance(branch, str) else None
+        # As in ``discard``: the dirty check must see what the agent wrote in
+        # its sandbox, so wait for it before taking the lock. Fail-open; no
+        # owner means no barrier (the helper skips it).
+        await ensure_readable(
+            user_id,
+            _worktree_sync_paths(git_root, gw.flatten_slug(name), path, branch_name),
+            project_id=project_id or None,
+        )
         try:
             async with _lock_for(git_root):
                 if await asyncio.to_thread(gw.has_changes, path, base_sha):

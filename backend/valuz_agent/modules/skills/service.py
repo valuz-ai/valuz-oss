@@ -66,7 +66,7 @@ from valuz_agent.modules.skills.models import (
     SkillView,
 )
 from valuz_agent.modules.skills.versioning import RecordedVersion
-from valuz_agent.ports.workspace_sync import notify_written
+from valuz_agent.ports.workspace_sync import ensure_readable, notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -783,6 +783,14 @@ class SkillLibraryService:
         from valuz_agent.modules.skills import staging
 
         target_root = await self._target_root_for_scope(user_id, target_scope, project_id)
+        # The drafts were written by the agent in its sandbox: wait for them
+        # once, before any slug is checked, stripped, copied or versioned.
+        # Only when something is actually synced — an all-abort request never
+        # resolved the staging dir before, and must not start to.
+        synced_slugs = [item.slug for item in items if item.strategy != "abort"]
+        if synced_slugs:
+            base = await staging.staging_dir_for_session(user_id, session_id)
+            await ensure_readable(user_id, [base / slug for slug in synced_slugs])
         results = []
         for item in items:
             result = await staging.sync_slug(

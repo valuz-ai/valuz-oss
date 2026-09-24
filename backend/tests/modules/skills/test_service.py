@@ -1217,3 +1217,55 @@ class TestWorkspaceSync:
         )
 
         assert self._reported(port) == [((Path(imported.path),), None)]
+
+    async def test_sync_staging_waits_for_the_drafts_before_syncing(
+        self, svc, tmp_path, monkeypatch, port
+    ):
+        """The panel's sync reads drafts the agent wrote in its sandbox: one
+        barrier for every slug it syncs, awaited before the first is touched."""
+        from valuz_agent.modules.skills import staging
+
+        base = tmp_path / "proj" / ".skill-staging"
+        events: list[str] = []
+
+        async def _staging_dir(user_id, session_id, *, mkdir=False):
+            assert (user_id, session_id) == ("u", "sess-1")
+            return base
+
+        async def _sync_slug(
+            user_id, session_id, slug, strategy, *, new_slug=None, target_root=None
+        ):
+            events.append(f"sync:{slug}")
+            return staging.SyncItemResult(
+                slug=slug, strategy=strategy, written_path=None, new_slug=None, skipped=True
+            )
+
+        port.before_read.side_effect = lambda **_kw: events.append("before_read")
+        monkeypatch.setattr(staging, "staging_dir_for_session", _staging_dir)
+        monkeypatch.setattr(staging, "sync_slug", _sync_slug)
+        items = [
+            SimpleNamespace(slug="a", strategy="overwrite", new_slug=None),
+            SimpleNamespace(slug="skip", strategy="abort", new_slug=None),
+            SimpleNamespace(slug="b", strategy="fork", new_slug="b-v2"),
+        ]
+
+        await svc.sync_staging("u", "sess-1", items)
+
+        port.before_read.assert_awaited_once_with(
+            owner_user_id="u", paths=(base / "a", base / "b"), project_id=None
+        )
+        assert events == ["before_read", "sync:a", "sync:skip", "sync:b"]
+
+    async def test_sync_staging_all_abort_waits_for_nothing(self, svc, monkeypatch, port):
+        from valuz_agent.modules.skills import staging
+
+        async def _never(*_a, **_kw):
+            raise AssertionError("an all-abort sync must not resolve the staging dir")
+
+        monkeypatch.setattr(staging, "staging_dir_for_session", _never)
+        items = [SimpleNamespace(slug="a", strategy="abort", new_slug=None)]
+
+        results = await svc.sync_staging("u", "sess-1", items)
+
+        assert [r.skipped for r in results] == [True]
+        port.before_read.assert_not_awaited()

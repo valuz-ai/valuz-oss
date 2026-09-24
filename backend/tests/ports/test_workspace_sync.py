@@ -140,3 +140,27 @@ async def test_notify_written_does_not_swallow_cancellation(port) -> None:  # ty
 
     with pytest.raises(asyncio.CancelledError):
         await notify_written("u1", [Path("/w/a.md")])
+
+
+def _raises_after_first() -> object:
+    yield Path("/w/a.md")
+    raise PermissionError("EACCES while walking the caller's paths")
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        pytest.param(_raises_after_first, id="raising-generator"),
+        pytest.param(lambda: [None], id="none-entry"),
+    ],
+)
+async def test_helpers_are_fail_open_when_the_paths_iterable_raises(port, caplog, paths) -> None:  # type: ignore[no-untyped-def]
+    """Normalising the caller's paths is inside the fail-open block too."""
+    with caplog.at_level(logging.WARNING, logger=ws.__name__):
+        await notify_written("u1", paths())  # must not raise
+        await ensure_readable("u1", paths())  # must not raise
+
+    assert "after_write failed" in caplog.text
+    assert "before_read failed" in caplog.text
+    port.after_write.assert_not_awaited()
+    port.before_read.assert_not_awaited()
