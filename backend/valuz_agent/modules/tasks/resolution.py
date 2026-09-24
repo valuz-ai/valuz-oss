@@ -34,35 +34,6 @@ from valuz_agent.modules.projects.datastore import ProjectDatastore
 logger = logging.getLogger(__name__)
 
 
-async def automation_trigger_meta(db: Any, *, user_id: str, task_id: str) -> dict[str, str] | None:
-    """``trigger_meta`` for the lead / member sessions of an automation-started task.
-
-    Task mode opens its sessions through the task lifecycle, not through the
-    automation runner, so the automation and run ids are read back from the
-    task row (``trigger_automation_id`` + ``metadata.automation_run_id``).
-    None for tasks nothing automated started; a failed read never blocks the
-    session.
-    """
-    from valuz_agent.modules.tasks.datastore import TaskDatastore
-
-    try:
-        row = await TaskDatastore(db).get_task(user_id, task_id)
-    except Exception:  # noqa: BLE001 — provenance must never block a session
-        logger.debug("task %s: trigger provenance read failed", task_id, exc_info=True)
-        return None
-    if row is None or not row.trigger_automation_id:
-        return None
-    meta = {
-        "kind": "automation",
-        "automation_id": str(row.trigger_automation_id),
-        "action_kind": "task",
-    }
-    run_id = (row.metadata_ or {}).get("automation_run_id")
-    if run_id:
-        meta["automation_run_id"] = str(run_id)
-    return meta
-
-
 # ---------------------------------------------------------------------------
 # Provider deps + credential pre-flight (absorbed from _session_build.py)
 # ---------------------------------------------------------------------------
@@ -343,7 +314,9 @@ class TaskSessionResolver:
         member_ds = ProjectMemberDatastore(db)
         lead_member = await member_ds.get(user_id, project_id, agent_slug)
         if lead_member is None:
-            return Failure(f"lead agent {agent_slug!r} is not a member of project {project_id!r}")
+            return Failure(
+                f"lead agent {agent_slug!r} is not a member of project {project_id!r}"
+            )
         lead_agent = await _member_agent_config(lead_member, member_ds, user_id=user_id)
         lead_clone = materialize_lead_clone(lead_agent) if lead_agent is not None else None
 
@@ -356,7 +329,6 @@ class TaskSessionResolver:
         )
 
         session = await build_member_session(
-            trigger_meta=await automation_trigger_meta(db, user_id=user_id, task_id=task_id),
             project_id=project_id,
             agent_slug=agent_slug,
             members=member_ds,
@@ -424,7 +396,6 @@ class TaskSessionResolver:
         )
 
         session = await build_member_session(
-            trigger_meta=await automation_trigger_meta(db, user_id=user_id, task_id=task_id),
             project_id=project_id,
             agent_slug=agent_slug,
             members=member_ds,

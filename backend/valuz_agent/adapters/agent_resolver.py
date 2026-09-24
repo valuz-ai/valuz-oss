@@ -928,6 +928,37 @@ def embed_agent_config(request: CreateSessionRequest, agent: object) -> CreateSe
     return request.model_copy(update={"agent_config": agent_config_to_schema(agent)})
 
 
+async def automation_trigger_meta(db: Any, *, user_id: str, task_id: str) -> dict[str, str] | None:
+    """``trigger_meta`` for the lead / member sessions of an automation-started task.
+
+    Task mode opens its sessions through the task lifecycle, not through the
+    automation runner, so the automation and run ids are read back from the
+    task row (``trigger_automation_id`` + ``metadata.automation_run_id``).
+    None for tasks nothing automated started; a failed read never blocks the
+    session.
+    """
+    if db is None:
+        return None
+    from valuz_agent.modules.tasks.datastore import TaskDatastore
+
+    try:
+        row = await TaskDatastore(db).get_task(user_id, task_id)
+    except Exception:  # noqa: BLE001 — provenance must never block a session
+        logger.debug("task %s: trigger provenance read failed", task_id, exc_info=True)
+        return None
+    if row is None or not row.trigger_automation_id:
+        return None
+    meta = {
+        "kind": "automation",
+        "automation_id": str(row.trigger_automation_id),
+        "action_kind": "task",
+    }
+    run_id = (row.metadata_ or {}).get("automation_run_id")
+    if run_id:
+        meta["automation_run_id"] = str(run_id)
+    return meta
+
+
 async def build_member_session(
     *,
     project_id: str,
@@ -947,7 +978,6 @@ async def build_member_session(
     worktree_notice: str | None = None,
     user_id: str,
     task_title: str | None = None,
-    trigger_meta: dict[str, str] | None = None,
 ) -> CreateSessionRequest | None:
     """Construct the kernel create-session request for a dispatch member or lead.
 
@@ -1278,6 +1308,9 @@ async def build_member_session(
         agent_config_to_schema,
     )
 
+    trigger_meta = await automation_trigger_meta(
+        getattr(members, "_db", None), user_id=user_id, task_id=task_id
+    )
     valuz_metadata: dict[str, object] = {
         "project_id": project_id,
         "agent_slug": agent_slug,
@@ -1294,7 +1327,9 @@ async def build_member_session(
         # member_done notifications can be routed back (M10 附录 B).
         **({"lead_session_id": lead_session_id} if lead_session_id else {}),
         # What started the task (an automation run), same key as the chat
-        # path: sessions of one automation are comparable across runs.
+        # path: sessions of one automation are comparable across runs. Read
+        # here, in the one builder every lead and member session goes
+        # through, rather than at each dispatch call site.
         **({"trigger_meta": trigger_meta} if trigger_meta else {}),
         "skill_face": skill_face(session_skills),
     }

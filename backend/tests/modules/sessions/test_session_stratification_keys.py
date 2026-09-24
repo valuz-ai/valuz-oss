@@ -17,7 +17,6 @@ import pytest
 from valuz_agent.adapters import agent_resolver
 from valuz_agent.adapters.capability_resolver import skill_face
 from valuz_agent.modules.automations.in_process_runner import _automation_trigger_meta
-from valuz_agent.modules.tasks import resolution
 
 from ..tasks.test_actor_v2 import _as_async, _async_member_get, _fake_agent_config
 
@@ -93,7 +92,7 @@ def test_task_mode_sessions_read_the_automation_back_from_the_task_row() -> None
 
     with patch("valuz_agent.modules.tasks.datastore.TaskDatastore", FakeTasks):
         read = lambda task_id: asyncio.run(  # noqa: E731
-            resolution.automation_trigger_meta(object(), user_id="u1", task_id=task_id)
+            agent_resolver.automation_trigger_meta(object(), user_id="u1", task_id=task_id)
         )
         assert read("t-auto") == {
             "kind": "automation",
@@ -109,6 +108,12 @@ def test_task_mode_sessions_read_the_automation_back_from_the_task_row() -> None
         assert read("t-user") is None
         assert read("t-missing") is None
         assert read("t-broken") is None  # provenance never blocks a session
+        assert (
+            asyncio.run(
+                agent_resolver.automation_trigger_meta(None, user_id="u1", task_id="t-auto")
+            )
+            is None
+        )
 
 
 def test_task_session_request_carries_trigger_meta_and_skill_face(
@@ -126,7 +131,9 @@ def test_task_session_request_carries_trigger_meta_and_skill_face(
         permission_mode="full_access",
         metadata={},
     )
-    members = SimpleNamespace(get=_async_member_get(), list_by_project=_as_async(lambda _u, _p: []))
+    members = SimpleNamespace(
+        get=_async_member_get(), list_by_project=_as_async(lambda _u, _p: []), _db=object()
+    )
     monkeypatch.setattr(
         agent_resolver, "_member_agent_config", _as_async(lambda _m, _ds, **_kw: fake_agent)
     )
@@ -136,6 +143,9 @@ def test_task_session_request_carries_trigger_meta_and_skill_face(
     monkeypatch.setattr(agent_resolver, "always_on_skill_paths", lambda **_kw: [])
 
     def build(trigger_meta):
+        monkeypatch.setattr(
+            agent_resolver, "automation_trigger_meta", _as_async(lambda *_a, **_k: trigger_meta)
+        )
         request = asyncio.run(
             agent_resolver.build_member_session(
                 project_id="w1",
@@ -147,7 +157,6 @@ def test_task_session_request_carries_trigger_meta_and_skill_face(
                 brief="do the thing",
                 goal_mode=True,
                 user_id="u1",
-                trigger_meta=trigger_meta,
             )
         )
         assert request is not None
