@@ -20,6 +20,7 @@ Currently covered:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -635,6 +636,18 @@ def _resolve_to_absolute(path: str | None, project_root: str | None) -> str | No
         return None
 
 
+def _skill_face_one(raw: str) -> str:
+    from valuz_agent.integrations.skills_filesystem import _read_manifest_cached
+
+    path = Path(raw)
+    tree = "official" if "/official-skills/" in raw else "plugin" if "/plugins/" in raw else "user"
+    try:
+        sha12 = _read_manifest_cached(path / "SKILL.md")[3][:12]
+    except Exception:  # noqa: BLE001 — provenance must never block a session
+        sha12 = "?"
+    return f"{path.name}@{sha12}:{tree}"
+
+
 def skill_face(paths: Iterable[str] | None) -> list[str]:
     """``<slug>@<sha12>:<tree>`` for every skill directory a session is built with.
 
@@ -645,26 +658,36 @@ def skill_face(paths: Iterable[str] | None) -> list[str]:
     copies in several trees, the stamp shows which one a session actually got.
     A missing or unreadable SKILL.md yields ``@?`` instead of failing session
     creation.
-    """
-    from valuz_agent.integrations.skills_filesystem import _read_manifest_cached
 
-    face: list[str] = []
-    for raw in paths or ():
-        text = str(raw)
-        path = Path(text)
-        tree = (
-            "official"
-            if "/official-skills/" in text
-            else "plugin"
-            if "/plugins/" in text
-            else "user"
-        )
-        try:
-            sha12 = _read_manifest_cached(path / "SKILL.md")[3][:12]
-        except Exception:  # noqa: BLE001 — provenance must never block a session
-            sha12 = "?"
-        face.append(f"{path.name}@{sha12}:{tree}")
-    return face
+    Blocking file I/O — from async code use :func:`skill_face_async`.
+    """
+    return [_skill_face_one(str(raw)) for raw in paths or ()]
+
+
+#: Faces computed at once by :func:`skill_face_async`.
+_SKILL_FACE_CONCURRENCY = 16
+
+
+async def skill_face_async(paths: Iterable[str] | None) -> list[str]:
+    """:func:`skill_face` off the event loop, the per-skill reads in parallel.
+
+    Each face costs a ``stat`` of one SKILL.md (plus a read on a cache miss),
+    and the cache cannot save the stat — it is what validates the entry. On a
+    network-mounted skill tree (cosfs) that stat alone is a remote round trip:
+    session creation used to call the sync version inline and, for 33 skills,
+    spent 2.9 s of serial stat + read ON the event loop (qa, 2026-09-29) —
+    every other request on that worker stalled with it. Same result, same
+    order."""
+    items = [str(raw) for raw in paths or ()]
+    if not items:
+        return []
+    gate = asyncio.Semaphore(_SKILL_FACE_CONCURRENCY)
+
+    async def one(raw: str) -> str:
+        async with gate:
+            return await asyncio.to_thread(_skill_face_one, raw)
+
+    return list(await asyncio.gather(*(one(raw) for raw in items)))
 
 
 async def resolve_skill_slugs_to_paths(

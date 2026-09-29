@@ -43,7 +43,7 @@ from valuz_agent.adapters.capability_resolver import (
     always_on_skill_paths,
     merge_with_always_on,
     resolve_skill_slugs_to_paths,
-    skill_face,
+    skill_face_async,
 )
 from valuz_agent.adapters.system_prompt_builder import (
     AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
@@ -1338,7 +1338,7 @@ async def build_member_session(
         # here, in the one builder every lead and member session goes
         # through, rather than at each dispatch call site.
         **({"trigger_meta": trigger_meta} if trigger_meta else {}),
-        "skill_face": skill_face(session_skills),
+        "skill_face": await skill_face_async(session_skills),
     }
     if prompt_snapshot is not None:
         valuz_metadata["global_instructions"] = prompt_snapshot.metadata()
