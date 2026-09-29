@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from valuz_agent.adapters import agent_resolver
-from valuz_agent.adapters.capability_resolver import skill_face
+from valuz_agent.adapters.capability_resolver import skill_face, skill_face_async
 from valuz_agent.modules.automations.in_process_runner import _automation_trigger_meta
 
 from ..tasks.test_actor_v2 import _as_async, _async_member_get, _fake_agent_config
@@ -114,6 +114,51 @@ def test_task_mode_sessions_read_the_automation_back_from_the_task_row() -> None
             )
             is None
         )
+
+
+def test_skill_face_async_is_the_same_stamp_in_the_same_order(tmp_path: Path) -> None:
+    paths = [str(_skill(tmp_path, "official-skills", f"s{i}", f"text {i}")) for i in range(20)] + [
+        str(tmp_path / "skills" / "gone")
+    ]
+    assert asyncio.run(skill_face_async(paths)) == skill_face(paths)
+    assert asyncio.run(skill_face_async(None)) == [] and asyncio.run(skill_face_async(())) == []
+
+
+def test_skill_face_async_keeps_the_event_loop_free_and_reads_in_parallel(
+    tmp_path: Path,
+) -> None:
+    """Session creation stamped the face inline: 33 SKILL.md stats + reads on a
+    cosfs mount were 2.9 s of blocking I/O ON the event loop (qa 2026-09-29),
+    stalling every other request of that worker."""
+    import time
+
+    def slow(manifest_path: Path) -> tuple[dict[str, object], str, str, str]:
+        time.sleep(0.2)  # one remote round trip
+        return {}, "", "", "f" * 64
+
+    paths = [str(tmp_path / "official-skills" / f"s{i}") for i in range(16)]
+
+    async def scenario() -> tuple[list[str], float, int]:
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        tick = asyncio.create_task(ticker())
+        started = time.monotonic()
+        face = await skill_face_async(paths)
+        elapsed = time.monotonic() - started
+        tick.cancel()
+        return face, elapsed, ticks
+
+    with patch("valuz_agent.integrations.skills_filesystem._read_manifest_cached", slow):
+        face, elapsed, ticks = asyncio.run(scenario())
+    assert face == [f"s{i}@ffffffffffff:official" for i in range(16)]
+    assert elapsed < 1.0, f"serial would be 3.2 s, took {elapsed:.2f}s"
+    assert ticks >= 10, "the event loop was blocked while the faces were read"
 
 
 def test_task_session_request_carries_trigger_meta_and_skill_face(
