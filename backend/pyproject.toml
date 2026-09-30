@@ -39,7 +39,14 @@ dependencies = [
     # from a symlinked/cyclic SKILL.md, crashing skill discovery for the whole
     # session. We were pinned to 0.5.3 and resolving 0.5.4, the last release
     # without the fix.
-    "deepagents>=0.5.5",
+    # >=0.6.12: 0.6 puts ``messages`` (and filesystem state) on LangGraph's
+    # ``DeltaChannel`` — intermediate checkpoints store only deltas plus a
+    # snapshot every 50 updates. Under 0.5.x every super-step re-serialized
+    # the whole message list: a 7-turn cloud session reached 396 checkpoints /
+    # 355 MB and filled its sandbox disk (valuz-ai/valuz-oss#1245). Threads
+    # written by 0.5.x resume as-is (a plain value seeds the delta channel).
+    # <0.7 until 0.7 is evaluated on its own.
+    "deepagents>=0.6.12,<0.7",
     "langchain-openai>=1.2.1",
     # OSS BPE tokenizer for the goal-mode length fence (adapters/agent_resolver
     # ``estimate_tokens``): counts a task/subtask goal in tokens to decide when to
@@ -67,7 +74,10 @@ dependencies = [
     # ``boot/kernel._set_kernel_env``). Missing this dep
     # surfaces as ``No module named 'langgraph.checkpoint.sqlite'`` on
     # the first OpenAI-protocol turn.
-    "langgraph-checkpoint-sqlite>=2.0",
+    # >=3.1: sqlite-native ``get_delta_channel_history`` for the delta
+    # channels above (earlier versions fall back to one ``aget_tuple`` per
+    # ancestor when rebuilding state).
+    "langgraph-checkpoint-sqlite>=3.1",
     "jinja2>=3.1",
     "httpx[socks,http2]>=0.27",
     "python-dotenv>=1.0",

@@ -97,16 +97,12 @@ def test_state_citation_artifacts_replays_final_middleware_tool_sidecar() -> Non
     ]
 
 
-async def _no_compaction(_saver) -> dict:
-    return {}
-
-
 @pytest.mark.asyncio
 async def test_sqlite_checkpointer_retries_transient_disk_io_once(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    from src.runtimes.deepagents import checkpoint_prune
+    from langgraph.checkpoint.sqlite import aio as checkpoint_aio
 
     setup_attempts = 0
     closed_attempts: list[int] = []
@@ -140,9 +136,7 @@ async def test_sqlite_checkpointer_retries_transient_disk_io_once(
             cls.attempts += 1
             return _ContextManager(cls.attempts)
 
-    # The runtime opens the pruning subclass; the retry wraps that open.
-    monkeypatch.setattr(checkpoint_prune, "PruningAsyncSqliteSaver", _AsyncSqliteSaver)
-    monkeypatch.setattr(checkpoint_prune, "compact_checkpoint_store", _no_compaction)
+    monkeypatch.setattr(checkpoint_aio, "AsyncSqliteSaver", _AsyncSqliteSaver)
     runtime = object.__new__(DeepAgentsRuntime)
     runtime.checkpoint_db = str(tmp_path / "checkpoints.db")
     runtime._checkpointer = None
@@ -160,7 +154,7 @@ async def test_sqlite_checkpointer_does_not_retry_other_operational_errors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    from src.runtimes.deepagents import checkpoint_prune
+    from langgraph.checkpoint.sqlite import aio as checkpoint_aio
 
     class _Saver:
         async def setup(self) -> None:
@@ -181,9 +175,7 @@ async def test_sqlite_checkpointer_does_not_retry_other_operational_errors(
             cls.attempts += 1
             return _ContextManager()
 
-    # The runtime opens the pruning subclass; the retry wraps that open.
-    monkeypatch.setattr(checkpoint_prune, "PruningAsyncSqliteSaver", _AsyncSqliteSaver)
-    monkeypatch.setattr(checkpoint_prune, "compact_checkpoint_store", _no_compaction)
+    monkeypatch.setattr(checkpoint_aio, "AsyncSqliteSaver", _AsyncSqliteSaver)
     runtime = object.__new__(DeepAgentsRuntime)
     runtime.checkpoint_db = str(tmp_path / "checkpoints.db")
     runtime._checkpointer = None

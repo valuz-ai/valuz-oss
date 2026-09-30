@@ -9,7 +9,9 @@ place rather than crash the runtime at import.
 
 from __future__ import annotations
 
+import functools
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -48,46 +50,74 @@ MAIN_GRAPH_RECURSION_LIMIT = 1_000
 #    ``.with_config``"). So every subagent — including the auto-added
 #    ``general-purpose`` one — runs at the default 25. Since the invoke path
 #    honors bound config, we bake the limit into each compiled subagent runnable
-#    at the single chokepoint where they are finalized (``_get_subagents``). A
-#    subagent handles one focused subtask, so this is a *subtask*-sized ceiling,
+#    where deepagents compiles them. Since deepagents 0.6 that is two
+#    module-level functions in ``deepagents.middleware.subagents`` (the 0.5
+#    ``SubAgentMiddleware._get_subagents`` chokepoint is gone): ``create_sub_agent``
+#    compiles every raw ``SubAgent`` spec — all of ours, including
+#    ``general-purpose`` — and ``_build_task_tool`` receives the pre-compiled
+#    ``CompiledSubAgent`` runnables. Both are looked up by name at call time, so
+#    wrapping the module attributes reaches every subagent the ``task`` tool can
+#    run. At invoke time the parent run's config is merged in per key
+#    (langgraph#7926) but a bound key wins, so the subagent gets this limit, not
+#    the main graph's. A subagent handles one focused subtask, so this is a *subtask*-sized ceiling,
 #    not the orchestrator's: ~200 supersteps (≈100 model/tool rounds). Tune here
 #    if a legitimate subtask ever needs more headroom.
 SUBAGENT_RECURSION_LIMIT = 200
 
 
+def _with_subagent_limit(runnable: Any) -> Any:
+    if runnable is not None and hasattr(runnable, "with_config"):
+        return runnable.with_config({"recursion_limit": SUBAGENT_RECURSION_LIMIT})
+    return runnable
+
+
+def _bind_subagent_limits(subagents: Any) -> list[Any]:
+    """Pre-compiled specs (``"runnable"`` present) get the limit bound here;
+    raw specs get it from the ``create_sub_agent`` wrapper when compiled."""
+    return [
+        {**spec, "runnable": _with_subagent_limit(spec["runnable"])}
+        if isinstance(spec, dict) and "runnable" in spec
+        else spec
+        for spec in subagents
+    ]
+
+
 def _patch_subagent_recursion_limit() -> None:
-    """Give deepagents subagents the same recursion budget as the main graph."""
+    """Give every deepagents subagent ``SUBAGENT_RECURSION_LIMIT``."""
     try:
-        from deepagents.middleware.subagents import SubAgentMiddleware
+        from deepagents.middleware import subagents as subagents_mod
     except Exception:  # pragma: no cover - upstream layout changed
         logger.warning(
-            "deepagents SubAgentMiddleware import failed; "
-            "subagent recursion-limit patch skipped"
+            "deepagents subagents module import failed; subagent recursion-limit patch skipped"
         )
         return
 
-    original = getattr(SubAgentMiddleware, "_get_subagents", None)
-    if original is None:  # pragma: no cover - upstream renamed the method
+    create = getattr(subagents_mod, "create_sub_agent", None)
+    build = getattr(subagents_mod, "_build_task_tool", None)
+    if create is None or build is None:  # pragma: no cover - upstream renamed them
         logger.warning(
-            "deepagents SubAgentMiddleware._get_subagents missing; "
+            "deepagents create_sub_agent/_build_task_tool missing; "
             "subagent recursion-limit patch skipped"
         )
         return
-    if getattr(original, "_valuz_recursion_patched", False):
-        return
 
-    def _get_subagents_with_recursion_limit(self):  # type: ignore[no-untyped-def]
-        specs = original(self)
-        for spec in specs:
-            runnable = spec.get("runnable")
-            if runnable is not None and hasattr(runnable, "with_config"):
-                spec["runnable"] = runnable.with_config(
-                    {"recursion_limit": SUBAGENT_RECURSION_LIMIT}
-                )
-        return specs
+    if not getattr(create, "_valuz_recursion_patched", False):
 
-    _get_subagents_with_recursion_limit._valuz_recursion_patched = True  # type: ignore[attr-defined]
-    SubAgentMiddleware._get_subagents = _get_subagents_with_recursion_limit  # type: ignore[method-assign]
+        @functools.wraps(create)
+        def create_sub_agent(*args: Any, **kwargs: Any) -> Any:
+            return _with_subagent_limit(create(*args, **kwargs))
+
+        create_sub_agent._valuz_recursion_patched = True  # type: ignore[attr-defined]
+        subagents_mod.create_sub_agent = create_sub_agent
+
+    if not getattr(build, "_valuz_recursion_patched", False):
+
+        @functools.wraps(build)
+        def _build_task_tool(subagents: Any, *args: Any, **kwargs: Any) -> Any:
+            return build(_bind_subagent_limits(subagents), *args, **kwargs)
+
+        _build_task_tool._valuz_recursion_patched = True  # type: ignore[attr-defined]
+        subagents_mod._build_task_tool = _build_task_tool
 
 
 def apply_deepagents_patches() -> None:
