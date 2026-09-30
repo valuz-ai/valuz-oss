@@ -437,3 +437,72 @@ async def test_ephemeral_review_inert_without_scoped_allocator(monkeypatch) -> N
         "u1", _Req(), "x", reuse_scope=SandboxScope(kind="session", id="s1")
     )
     assert out is None
+
+
+class _CwdAllocator(_ScopedAllocator):
+    """Declares the additive ``session_id`` / ``cwd`` kwargs and records them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hints: list[tuple[str, str]] = []
+
+    async def ensure(  # type: ignore[override]
+        self,
+        *,
+        owner_user_id: str,
+        scope: SandboxScope | None = None,
+        new_turn: bool = False,
+        session_id: str = "",
+        cwd: str = "",
+    ) -> SandboxLease:
+        self.hints.append((session_id, cwd))
+        return await super().ensure(owner_user_id=owner_user_id, scope=scope, new_turn=new_turn)
+
+
+class _CwdReq:
+    id = "chat-9"
+    cwd = "/data/workspace/u1/projects/2026/09/30/ABCD"
+
+
+class _CreatingClient:
+    async def create_session(self, user_id, req):  # noqa: ANN001
+        return "SESSION"
+
+    async def run_turn(self, *a, **k):  # noqa: ANN002, ANN003
+        return "MSG"
+
+
+async def test_create_session_hands_the_new_sessions_cwd_to_the_allocator(monkeypatch) -> None:
+    """The project row does not exist yet at creation, so the request's cwd is
+    the allocator's only way to know the workspace before the first turn."""
+    alloc = _CwdAllocator()
+    monkeypatch.setattr(ext, "sandbox_allocator", alloc)
+    monkeypatch.setattr(kc, "_endpoint_clients", {"https://session:chat-9.pool": _CreatingClient()})
+
+    assert await kc.create_session("u1", _CwdReq()) == "SESSION"
+    await kc.run_turn("u1", "chat-9", "go")
+
+    assert alloc.hints[0] == ("chat-9", _CwdReq.cwd)
+    # Only creation carries the cwd; by a later op the host knows the project.
+    assert [cwd for _, cwd in alloc.hints] == [_CwdReq.cwd, ""]
+
+
+async def test_allocator_without_cwd_kwarg_is_never_handed_one(monkeypatch) -> None:
+    alloc = _ScopedAllocator()  # declares neither session_id nor cwd
+    monkeypatch.setattr(ext, "sandbox_allocator", alloc)
+    monkeypatch.setattr(kc, "_endpoint_clients", {"https://session:chat-9.pool": _CreatingClient()})
+
+    assert await kc.create_session("u1", _CwdReq()) == "SESSION"
+    assert alloc.ensured == [("u1", SandboxScope(kind="session", id="chat-9"))]
+
+
+async def test_create_session_without_a_cwd_passes_no_hint(monkeypatch) -> None:
+    alloc = _CwdAllocator()
+    monkeypatch.setattr(ext, "sandbox_allocator", alloc)
+    monkeypatch.setattr(kc, "_endpoint_clients", {"https://session:chat-9.pool": _CreatingClient()})
+
+    class _Bare:
+        id = "chat-9"
+
+    await kc.create_session("u1", _Bare())
+    assert alloc.hints == [("chat-9", "")]

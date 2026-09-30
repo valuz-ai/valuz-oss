@@ -88,7 +88,13 @@ class SandboxAllocatorPort(ABC):
         ``new_turn`` is a hint that this ``ensure`` starts a fresh conversation
         turn (``run_turn``), not a mid-turn op. An allocator may use it to run a
         NEW instance per turn (chat) vs reusing one (task); the default and the
-        OSS ``BootSingletonAllocator`` ignore it."""
+        OSS ``BootSingletonAllocator`` ignore it.
+
+        Two more keyword arguments are passed only to an ``ensure`` that
+        declares them (additive contract): ``session_id`` — the host-preminted
+        id of the session being served — and ``cwd`` — on session creation
+        only, the working directory the new session will run in, before the
+        host has recorded the session's project."""
         ...
 
     @abstractmethod
