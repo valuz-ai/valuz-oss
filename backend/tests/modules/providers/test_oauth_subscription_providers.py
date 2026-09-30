@@ -95,7 +95,9 @@ def test_codex_subscription_recommends_known_codex_models() -> None:
     """Per https://developers.openai.com/codex/models. ``gpt-6-astra`` is the
     page's lead recommendation ("most capable model for complex work across
     code, apps, and research"); the server gates it to codex-cli >= 0.153.1,
-    which the ``openai-codex`` floor in pyproject satisfies. The 5.6 family
+    which the ``openai-codex`` floor in pyproject satisfies. ``gpt-6.1-sol``
+    (2026-09-29 changelog: "near-Astra performance ... at a lower cost") sits
+    right after it. The 5.6 family
     lists the three concrete tiers (sol = flagship, terra = price/performance,
     luna = high-volume); the ``gpt-5.6`` alias routes to sol and is
     intentionally NOT listed (concrete version ids over aliases, same as the
@@ -105,6 +107,7 @@ def test_codex_subscription_recommends_known_codex_models() -> None:
     provider = get_provider("codex-subscription")
     assert set(provider.model_options) == {
         "gpt-6-astra",
+        "gpt-6.1-sol",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -117,6 +120,7 @@ def test_subscription_models_carry_backend_labels() -> None:
     names so the frontend doesn't have to label these ids itself."""
     codex = get_provider("codex-subscription")
     assert codex.model_labels["gpt-6-astra"] == "GPT 6 Astra"
+    assert codex.model_labels["gpt-6.1-sol"] == "GPT 6.1 Sol"
     assert codex.model_labels["gpt-5.6-sol"] == "GPT 5.6 Sol"
     assert codex.model_labels["gpt-5.5"] == "GPT 5.5"
     claude = get_provider("claude-subscription")
