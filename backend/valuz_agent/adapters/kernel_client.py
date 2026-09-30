@@ -1002,6 +1002,7 @@ async def _kernel_for(
     *,
     new_turn: bool = False,
     session_id: str = "",
+    cwd: str = "",
 ) -> KernelClient:
     """Resolve the execution kernel client for ``user_id`` via the allocator.
 
@@ -1012,7 +1013,16 @@ async def _kernel_for(
     ``session_id`` is the host-preminted id of the session this allocation
     serves; a task-scoped allocator may stamp it into instance metadata when a
     member reuses the shared task instance. Additive (``_accepts``-gated) - old
-    allocators ignore it."""
+    allocators ignore it.
+
+    ``cwd`` is the working directory of the session being CREATED
+    (``CreateSessionRequest.cwd``); only ``create_session`` passes it. At that
+    moment the host has not yet recorded which project the session belongs
+    to, so it is the only way an allocator that prepares a sandbox-side copy
+    of the workspace can start that work alongside the kernel boot rather
+    than on the first turn. A hint, not an authority: the allocator must
+    still confine it to the owner's own workspace. Additive, like
+    ``session_id``."""
     from valuz_agent.ports.extensions import ext
 
     alloc = getattr(ext, "sandbox_allocator", None)
@@ -1025,6 +1035,8 @@ async def _kernel_for(
             kwargs["new_turn"] = True
     if session_id and _accepts(alloc.ensure, "session_id"):
         kwargs["session_id"] = session_id
+    if cwd and _accepts(alloc.ensure, "cwd"):
+        kwargs["cwd"] = cwd
     lease = await alloc.ensure(**kwargs)
     if lease is None or lease.endpoint is None:
         return client  # "use the process/global client" (BootSingletonAllocator default)
@@ -1111,9 +1123,10 @@ async def create_session(
         scope = await _scope_for(user_id, req_id)
     elif scope is not None and req_id:
         _scope_cache_put(req_id, scope)
-    return await (await _kernel_for(user_id, scope, session_id=req_id or "")).create_session(
-        user_id, req
+    kernel = await _kernel_for(
+        user_id, scope, session_id=req_id or "", cwd=getattr(req, "cwd", "") or ""
     )
+    return await kernel.create_session(user_id, req)
 
 
 async def runtime_availability() -> dict[str, RuntimeAvailability]:

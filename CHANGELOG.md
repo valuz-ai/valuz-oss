@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sandbox allocators can learn a new session's working directory at
+  creation** — `create_session` now hands `CreateSessionRequest.cwd` to
+  `ext.sandbox_allocator.ensure(cwd=...)`, passed only to an allocator whose
+  `ensure` declares it (the same additive contract as `session_id`). The host
+  records a session's project only after the allocation returns, so this is
+  the one moment an allocator that keeps a sandbox-side copy of the workspace
+  can start restoring it alongside the kernel boot instead of on the first
+  turn.
+
 - **Workspace sync is a port** — `ext.workspace_sync`
   (`ports/workspace_sync.py`, `WorkspaceSyncPort`) lets a deployment that
   replicates project directories into remote sandboxes stay in step with the
