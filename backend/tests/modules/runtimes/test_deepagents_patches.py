@@ -36,33 +36,84 @@ from src.runtimes.deepagents._patches import (
 )
 
 
-def _middleware_with_stub_subagent():
+class _ToolModel:
+    """Just enough of a chat model for ``create_agent`` to compile a subagent."""
+
+    @staticmethod
+    def make():
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+        class _M(GenericFakeChatModel):
+            def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN202
+                return self
+
+        return _M(messages=iter([]))
+
+
+def _task_tool_subagent_graphs(middleware) -> dict:
+    """The ``{name: runnable}`` map the ``task`` tool invokes — read from the
+    tool's closure, because that is the only place the compiled runnables live.
+    If deepagents restructures this, the test fails loudly: the patch must then
+    be re-pointed at the new compile seam."""
+    tool = middleware.tools[0]
+    for cell in tool.func.__closure__ or ():
+        value = cell.cell_contents
+        if isinstance(value, dict) and value and all(hasattr(v, "invoke") for v in value.values()):
+            return value
+    raise AssertionError("subagent graphs not found in the task tool closure")
+
+
+def _middleware(subagents):
     from deepagents.middleware.subagents import SubAgentMiddleware
 
-    stub = RunnableLambda(lambda x: x)
-    # CompiledSubAgent path: the runnable is used as-is, so the only thing that
-    # can lift its recursion limit is our patch.
-    return SubAgentMiddleware(
-        backend=object(),
-        subagents=[{"name": "t", "description": "d", "runnable": stub}],
-    )
+    return SubAgentMiddleware(backend=object(), subagents=subagents)
 
 
-def test_subagent_runnable_gets_main_graph_recursion_limit():
+def test_every_subagent_the_task_tool_runs_gets_the_limit():
+    """Both compile paths: a raw ``SubAgent`` spec (how the runtime passes all
+    of its subagents, ``general-purpose`` included) and a pre-compiled one."""
     apply_deepagents_patches()
-    mw = _middleware_with_stub_subagent()
-    spec = mw._get_subagents()[0]
-    assert spec["runnable"].config.get("recursion_limit") == SUBAGENT_RECURSION_LIMIT
+    raw = {
+        "name": "raw",
+        "description": "d",
+        "system_prompt": "p",
+        "model": _ToolModel.make(),
+        "tools": [],
+    }
+    compiled = {"name": "compiled", "description": "d", "runnable": RunnableLambda(lambda x: x)}
+    graphs = _task_tool_subagent_graphs(_middleware([raw, compiled]))
+    assert set(graphs) == {"raw", "compiled"}
+    for name, runnable in graphs.items():
+        assert runnable.config.get("recursion_limit") == SUBAGENT_RECURSION_LIMIT, name
+
+
+def test_the_bound_limit_wins_over_the_parent_runs_limit():
+    """At invoke time the parent run's config reaches the subagent through the
+    ambient context; the bound limit must still be the one enforced, or every
+    subagent would run at the main graph's (much larger) budget. Checked on a
+    real graph that never stops, invoked exactly as ``task`` invokes it."""
+    apply_deepagents_patches()
+    compiled = {"name": "c", "description": "d", "runnable": _forever_looping_graph()}
+    subagent = _task_tool_subagent_graphs(_middleware([compiled]))["c"]
+
+    def as_task_calls_it(_):  # noqa: ANN001, ANN202
+        subagent.invoke({"n": 0}, {"configurable": {"ls_agent_type": "subagent"}})
+
+    expected = f"Recursion limit of {SUBAGENT_RECURSION_LIMIT} "
+    with pytest.raises(GraphRecursionError, match=expected):
+        RunnableLambda(as_task_calls_it).invoke({}, {"recursion_limit": MAIN_GRAPH_RECURSION_LIMIT})
 
 
 def test_patch_is_idempotent():
-    from deepagents.middleware.subagents import SubAgentMiddleware
+    from deepagents.middleware import subagents as subagents_mod
 
     apply_deepagents_patches()
-    first = SubAgentMiddleware._get_subagents
+    create, build = subagents_mod.create_sub_agent, subagents_mod._build_task_tool
     apply_deepagents_patches()
-    assert SubAgentMiddleware._get_subagents is first
-    assert getattr(first, "_valuz_recursion_patched", False) is True
+    assert subagents_mod.create_sub_agent is create
+    assert subagents_mod._build_task_tool is build
+    assert getattr(create, "_valuz_recursion_patched", False) is True
+    assert getattr(build, "_valuz_recursion_patched", False) is True
 
 
 # --- main-graph path: ``astream_events`` recursion-limit behavior ------------
