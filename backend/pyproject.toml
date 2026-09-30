@@ -162,11 +162,12 @@ dependencies = [
     # macOS — see the ``[tool.uv]`` note below). The binary is pulled
     # transitively and KEPT on every platform so ``_resolve_codex_bin``
     # prefers it over a stray PATH ``codex``.
-    # Floored at ``0.154.0``: the OpenAI server refuses ``gpt-6-astra`` from
-    # any codex-cli older than 0.153.1 (``400 "requires a newer version of
-    # Codex"``, measured on 0.144.4 / 0.147.0 / 0.149.0), and 0.154.0 is the
-    # first PyPI release past that gate.
-    "openai-codex>=0.154.0",
+    # Floored at ``0.159.2``: the OpenAI server gates new models by client
+    # version (``400 "requires a newer version of Codex"``) — ``gpt-6-astra``
+    # needed >= 0.153.1 (measured on 0.144.4 / 0.147.0 / 0.149.0), and
+    # ``gpt-6.1-sol`` (2026-09-29) is verified on 0.159.2, the PyPI release
+    # current when it shipped.
+    "openai-codex>=0.159.2",
     "python-socks[asyncio]>=2.4",
     "lark-oapi>=1.7.1",
 ]
