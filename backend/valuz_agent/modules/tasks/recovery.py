@@ -21,13 +21,17 @@ from pathlib import Path
 from typing import Any
 
 from valuz_agent.adapters import kernel_client
-from valuz_agent.adapters.agent_resolver import spill_goal_brief_if_too_long
+from valuz_agent.adapters.agent_resolver import spill_goal_brief_and_notify
 from valuz_agent.i18n import t
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
-from valuz_agent.modules.tasks.manifest import MemberManifest, collect_manifest_safe
+from valuz_agent.modules.tasks.manifest import (
+    IN_TRANSACTION_READ_BARRIER_S,
+    MemberManifest,
+    collect_manifest_safe,
+)
 from valuz_agent.modules.tasks.coordination import CoordinationService
 from valuz_agent.adapters.agent_resolver import resolve_agent_display_name
 from valuz_agent.modules.tasks import launcher
@@ -199,6 +203,9 @@ class RecoveryService:
                         # three and five days earlier.
                         since_epoch=(run.created_at or 0) / 1000.0,
                         user_id=user_id,
+                        # Inside this sweep's unit of work (it reads the run
+                        # rows and settles them in one transaction): bounded.
+                        read_barrier_s=IN_TRANSACTION_READ_BARRIER_S,
                     )
                 if rec.run_status:
                     await run_ds.update_run_by_session(
@@ -348,12 +355,16 @@ class RecoveryService:
             # blow the ``/goal`` payload again on resume — spill it to a doc and
             # re-inject a short pointer instead (same fence as first dispatch).
             if brief and m_run_dir:
-                resume_prompt = spill_goal_brief_if_too_long(
+                # Reported before ``spawn_actor`` below: the pointer names the
+                # doc, and a remote sandbox must see it before the resumed turn.
+                resume_prompt = await spill_goal_brief_and_notify(
                     brief,
                     run_dir=m_run_dir,
                     task_id=task_id,
                     label=f"{m_slug}-{m_key}",
                     is_lead=False,
+                    user_id=user_id,
+                    project_id=project_id,
                 )
             # No dispatch_epoch on the recovery branch: a resumed member's
             # artifacts predate the respawn, so attribution restarts from zero.

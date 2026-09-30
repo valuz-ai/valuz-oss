@@ -210,3 +210,100 @@ def test_spill_subtask_pointer_wording(monkeypatch, tmp_path) -> None:
         },
     ), "the member pointer must not read as the whole task's goal"
     assert (tmp_path / "tasks" / "_briefs" / "t9-member-a-k1.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# spill_goal_brief_and_notify — the async fence reports the doc it wrote
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sync_port(monkeypatch):  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    return port
+
+
+async def test_notifying_spill_reports_the_doc(monkeypatch, tmp_path, sync_port) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(ar, "estimate_tokens", lambda _s: GOAL_BRIEF_MAX_TOKENS + 1)
+
+    out = await ar.spill_goal_brief_and_notify(
+        "long goal",
+        run_dir=tmp_path,
+        task_id="t1",
+        label="lead",
+        is_lead=True,
+        user_id="u1",
+        project_id="p1",
+    )
+
+    doc = tmp_path / "tasks" / "_briefs" / "t1-lead.md"
+    assert doc.read_text(encoding="utf-8") == "long goal"
+    assert str(doc) in out
+    sync_port.after_write.assert_awaited_once_with(
+        owner_user_id="u1", paths=(doc,), project_id="p1"
+    )
+
+
+async def test_notifying_spill_within_budget_reports_nothing(
+    monkeypatch, tmp_path, sync_port
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(ar, "estimate_tokens", lambda _s: 0)
+
+    out = await ar.spill_goal_brief_and_notify(
+        "short", run_dir=tmp_path, task_id="t1", label="lead", is_lead=True, user_id="u1"
+    )
+
+    assert out == "short"
+    sync_port.after_write.assert_not_awaited()
+
+
+async def test_member_resolution_reports_the_spilled_brief_before_building(
+    monkeypatch, tmp_path, sync_port
+) -> None:  # type: ignore[no-untyped-def]
+    """The pointer the member is handed names the doc, so the doc is reported
+    before the session is built (and therefore before it is dispatched)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.tasks import resolution as res_mod
+
+    order: list[str] = []
+    sync_port.after_write.side_effect = lambda **_kw: order.append("notify")
+
+    async def _build(**kwargs):  # type: ignore[no-untyped-def]
+        order.append("build")
+        return SimpleNamespace(id="sess-1", brief=kwargs["brief"])
+
+    monkeypatch.setattr(ar, "estimate_tokens", lambda _s: GOAL_BRIEF_MAX_TOKENS + 1)
+    monkeypatch.setattr(res_mod, "build_member_session", _build)
+    monkeypatch.setattr(res_mod, "resolve_agent_display_name", AsyncMock(return_value="W"))
+    monkeypatch.setattr(res_mod, "_credential_gap", AsyncMock(return_value=None))
+    env = SimpleNamespace(
+        project_cwd=tmp_path, project_row=SimpleNamespace(name="P"), instructions_md=None
+    )
+
+    resolved = await res_mod.task_session_resolver.resolve_member(
+        None,
+        env=env,  # type: ignore[arg-type]
+        project_id="p1",
+        task_id="t1",
+        task_title="T",
+        agent_slug="writer",
+        run_dir=str(tmp_path),
+        brief="a very long subtask brief",
+        user_id="u1",
+        spill_label="writer-k1",
+    )
+
+    doc = tmp_path / "tasks" / "_briefs" / "t1-writer-k1.md"
+    assert str(doc) in resolved.brief  # type: ignore[union-attr]
+    assert order == ["notify", "build"]
+    sync_port.after_write.assert_awaited_once_with(
+        owner_user_id="u1", paths=(doc,), project_id="p1"
+    )

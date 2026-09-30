@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -128,8 +129,13 @@ from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.ports.automation_event_source import EventSubscription, UnknownEventSourceError
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
 from valuz_agent.ports.extensions import ext
+from valuz_agent.ports.workspace_sync import ensure_readable
 
 logger = logging.getLogger(__name__)
+
+#: ``before_read`` bound for ``record_artifact``, which cannot wait outside
+#: this service's session (see there).
+_RECORD_ARTIFACT_READ_TIMEOUT_S = 2.0
 
 
 def _normalise_tz(value: str | None) -> str | None:
@@ -1826,6 +1832,20 @@ class AutomationService:
             except Exception as exc:  # noqa: BLE001 — a missing project is a 422 here
                 raise AutomationArtifactInvalid(str(exc)) from exc
             root = project_cwd.resolve()
+            # The run's agent wrote these in its sandbox just before calling
+            # ``output``. Bounded, because this service's session has already
+            # read the automation and run rows (no writes or locks yet) and
+            # the paths cannot be known before those reads. Lexical join only
+            # (in-project entries): what the barrier brings in may be a
+            # symlink, so the boundary is resolved and policed below, after it.
+            lexical_root = Path(os.path.normpath(project_cwd))
+            lexical = [Path(os.path.normpath(project_cwd / rel)) for rel in files]
+            await ensure_readable(
+                user_id,
+                [path for path in lexical if lexical_root in path.parents],
+                project_id=row.project_id,
+                timeout_s=_RECORD_ARTIFACT_READ_TIMEOUT_S,
+            )
             declared: list[DeclaredFile] = []
             for rel in files:
                 path = (project_cwd / rel).resolve()

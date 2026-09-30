@@ -35,6 +35,7 @@ from src.core.tools import ExecContext, ToolDef, ToolResult
 # the kernel package fails to resolve when this module is imported during
 # app startup (before any other valuz module that drags it in).
 import valuz_agent.boot.kernel  # noqa: F401
+from valuz_agent.ports.workspace_sync import ensure_readable
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,9 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
     # agent writing to an invented location, and that answer needs no
     # transaction.
     expected_dir = await staging.staging_dir_for_session(user_id, session_id) / slug
+    # The agent wrote the draft in its sandbox just before calling this: let
+    # it land before the manifest check and the proposal hashes the tree.
+    await ensure_readable(user_id, [expected_dir])
     if _detect_manifest(expected_dir) is None:
         return _not_staged(slug, expected_dir)
 
@@ -384,6 +388,9 @@ async def _prepare_skill_edit_handler(args: dict[str, object], context: ExecCont
     # that differs from the library is unsaved work, so refuse rather than
     # discard it.
     staged_dir = await staging.staging_dir_for_session(user_id, session_id) / slug
+    # An existing draft may hold edits the agent made in its sandbox; compare
+    # against those, not a stale copy, before deciding it is unsaved work.
+    await ensure_readable(user_id, [staged_dir])
     if _detect_manifest(staged_dir) is not None and not bool(args.get("discard_existing")):
         if staging.hash_skill_directory(staged_dir) != staging.hash_skill_directory(library_dir):
             return ToolResult(

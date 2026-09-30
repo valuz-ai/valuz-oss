@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -104,12 +105,15 @@ async def upload_project_files(
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
-    written: list[str] = []
-    try:
+
+    async def _parts() -> AsyncIterator[tuple[str, bytes]]:
+        # One part in memory at a time, as before; the service writes the
+        # batch and reports it to the workspace-sync port once at the end.
         for upload in files:
-            data = await upload.read()
-            rel = await svc.write_file(user_id, project_id, upload.filename or "", data)
-            written.append(rel)
+            yield upload.filename or "", await upload.read()
+
+    try:
+        written = await svc.write_files(user_id, project_id, _parts())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}") from exc
     except ValueError as exc:

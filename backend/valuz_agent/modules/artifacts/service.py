@@ -44,6 +44,7 @@ from valuz_agent.modules.artifacts.models import (
     ArtifactKind,
     ArtifactRevisionRow,
 )
+from valuz_agent.ports.workspace_sync import notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +384,12 @@ async def deliver_artifact(
             artifact_id=artifact.id,
             revision_id=revision.id,
         )
+    # The snapshot is a host write into the working directory the agent reads
+    # past versions from (``Read`` on the returned path). Reported here, not in
+    # ``snapshot.py``, because only the promoted file is a final write — staged
+    # copies are renamed or discarded. Inside the caller's unit of work: the
+    # snapshot itself is written there too, and the helper is fail-open.
+    await notify_written(scope.user_id, [stored], project_id=scope.project_id)
 
     return DeliveryResult(
         status=DeliveryStatus.RECORDED,

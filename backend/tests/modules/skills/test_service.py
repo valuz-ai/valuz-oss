@@ -1123,3 +1123,149 @@ class TestImportFromSessionConfirm:
         )
         body = (Path(result.path) / "SKILL.md").read_text(encoding="utf-8")
         assert "Fallback body." in body
+
+
+class TestWorkspaceSync:
+    """Library writes are reported to the workspace-sync port with the owner and
+    the absolute paths they touched; a project-scoped skill carries its project
+    as the hint. (A path outside every project is simply ignored by the port.)"""
+
+    @pytest.fixture
+    def port(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from valuz_agent.ports.extensions import ext
+
+        bound = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+        monkeypatch.setattr(ext, "workspace_sync", bound)
+        return bound
+
+    @staticmethod
+    def _reported(port) -> list[tuple[tuple[Path, ...], str | None]]:
+        return [
+            (call.kwargs["paths"], call.kwargs["project_id"])
+            for call in port.after_write.await_args_list
+            if call.kwargs["owner_user_id"] == "u"
+        ]
+
+    async def test_project_scoped_create_reports_the_new_skill_dir(self, svc, tmp_path, port):
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        svc._projects = FakeProjectService(
+            [FakeProject(id="p-proj", kind="project", root_path=str(project_root))]
+        )
+
+        result = await svc.create_skill(
+            "u",
+            SkillCreateRequest(
+                name="proj-skill", description="d", target_scope="project", project_id="p-proj"
+            ),
+        )
+
+        skill_dir = project_root / ".claude" / "skills" / "proj-skill"
+        assert Path(result.path).resolve() == skill_dir.resolve()
+        assert self._reported(port) == [((skill_dir,), "p-proj")]
+
+    async def test_update_and_file_actions_report_what_they_touched(self, svc, skill_root, port):
+        skill_dir = _make_skill_dir(skill_root, "editable")
+        catalog = await svc.list_catalog("u", "ws-1")
+        skill_id = catalog.skills[0].id
+
+        await svc.update_skill("u", skill_id, SkillUpdateRequest(description="new"))
+        await svc.write_skill_file(
+            "u", skill_id, SkillFileAction(action="create", path="notes/a.md", content="x")
+        )
+        await svc.write_skill_file(
+            "u",
+            skill_id,
+            SkillFileAction(action="rename", path="notes/a.md", new_path="notes/b.md"),
+        )
+        await svc.write_skill_file(
+            "u", skill_id, SkillFileAction(action="delete", path="notes/b.md")
+        )
+
+        real = skill_dir.resolve()
+        assert self._reported(port) == [
+            ((skill_dir / "SKILL.md",), None),
+            ((real / "notes" / "a.md",), None),
+            ((real / "notes" / "a.md", real / "notes" / "b.md"), None),
+            ((real / "notes" / "b.md",), None),
+        ]
+        assert not (real / "notes" / "b.md").exists()
+
+    async def test_delete_reports_the_removed_tree(self, svc, skill_root, port):
+        skill_dir = _make_skill_dir(skill_root, "doomed")
+        await svc.startup_scan("u")
+        catalog = await svc.list_catalog("u", "ws-1")
+
+        await svc.delete_skill("u", catalog.skills[0].id, mode="confirm")
+
+        assert not skill_dir.exists()
+        assert self._reported(port) == [((Path(catalog.skills[0].path),), None)]
+
+    async def test_archive_import_reports_the_imported_tree(self, svc, tmp_path, monkeypatch, port):
+        from valuz_agent.infra import fs_registry as fsr
+
+        monkeypatch.setattr(fsr.settings, "user_temp_dir", tmp_path / "temp" / "{user_id}")
+        archive = tmp_path / "skill.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("imp/SKILL.md", '---\nname: "imp"\ndescription: "I"\n---\n\nUse.\n')
+        preview = await svc.import_archive_preview("u", str(archive), target_scope="user")
+
+        imported = await svc.confirm_archive_import(
+            "u", SkillImportArchiveConfirmRequest(preview_id=preview.preview_id, name="imp")
+        )
+
+        assert self._reported(port) == [((Path(imported.path),), None)]
+
+    async def test_sync_staging_waits_for_the_drafts_before_syncing(
+        self, svc, tmp_path, monkeypatch, port
+    ):
+        """The panel's sync reads drafts the agent wrote in its sandbox: one
+        barrier for every slug it syncs, awaited before the first is touched."""
+        from valuz_agent.modules.skills import staging
+
+        base = tmp_path / "proj" / ".skill-staging"
+        events: list[str] = []
+
+        async def _staging_dir(user_id, session_id, *, mkdir=False):
+            assert (user_id, session_id) == ("u", "sess-1")
+            return base
+
+        async def _sync_slug(
+            user_id, session_id, slug, strategy, *, new_slug=None, target_root=None
+        ):
+            events.append(f"sync:{slug}")
+            return staging.SyncItemResult(
+                slug=slug, strategy=strategy, written_path=None, new_slug=None, skipped=True
+            )
+
+        port.before_read.side_effect = lambda **_kw: events.append("before_read")
+        monkeypatch.setattr(staging, "staging_dir_for_session", _staging_dir)
+        monkeypatch.setattr(staging, "sync_slug", _sync_slug)
+        items = [
+            SimpleNamespace(slug="a", strategy="overwrite", new_slug=None),
+            SimpleNamespace(slug="skip", strategy="abort", new_slug=None),
+            SimpleNamespace(slug="b", strategy="fork", new_slug="b-v2"),
+        ]
+
+        await svc.sync_staging("u", "sess-1", items)
+
+        port.before_read.assert_awaited_once_with(
+            owner_user_id="u", paths=(base / "a", base / "b"), project_id=None
+        )
+        assert events == ["before_read", "sync:a", "sync:skip", "sync:b"]
+
+    async def test_sync_staging_all_abort_waits_for_nothing(self, svc, monkeypatch, port):
+        from valuz_agent.modules.skills import staging
+
+        async def _never(*_a, **_kw):
+            raise AssertionError("an all-abort sync must not resolve the staging dir")
+
+        monkeypatch.setattr(staging, "staging_dir_for_session", _never)
+        items = [SimpleNamespace(slug="a", strategy="abort", new_slug=None)]
+
+        results = await svc.sync_staging("u", "sess-1", items)
+
+        assert [r.skipped for r in results] == [True]
+        port.before_read.assert_not_awaited()

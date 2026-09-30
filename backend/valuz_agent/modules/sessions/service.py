@@ -602,17 +602,22 @@ class SessionService:
         }
 
     @staticmethod
-    async def _heal_worktree_if_missing(session: KernelSessionT) -> dict[str, object] | None:
+    async def _heal_worktree_if_missing(
+        session: KernelSessionT, *, user_id: str | None
+    ) -> dict[str, object] | None:
         """Re-entry guard (design §4-R): recreate a removed worktree before a
         turn runs, so a historical worktree session stays usable instead of
         dying in the runtime with a missing-cwd error. Returns the refreshed
         metadata snapshot when a recreation happened (caller persists it)."""
-        snapshot = _valuz_meta(session).get("worktree")
+        meta = _valuz_meta(session)
+        snapshot = meta.get("worktree")
         if not isinstance(snapshot, dict):
             return None
         from valuz_agent.modules.worktrees.service import worktree_service
 
-        return await worktree_service.heal_from_snapshot(snapshot)
+        return await worktree_service.heal_from_snapshot(
+            snapshot, user_id=user_id or "", project_id=str(meta.get("project_id") or "")
+        )
 
     @staticmethod
     def _worktree_notice(handle: WorktreeHandle) -> str:
@@ -1607,7 +1612,7 @@ class SessionService:
         # Worktree re-entry guard: a removed worktree is recreated at its
         # deterministic path before the turn starts (raises an actionable
         # 422/500 instead of a cryptic runtime cwd failure).
-        healed_worktree = await self._heal_worktree_if_missing(session)
+        healed_worktree = await self._heal_worktree_if_missing(session, user_id=user_id)
 
         old_status = status
 
@@ -1698,7 +1703,7 @@ class SessionService:
 
         # Mirror ``send_message``: worktree re-entry guard for schedule-driven
         # sessions too — a removed worktree is recreated before the turn.
-        healed_worktree = await self._heal_worktree_if_missing(session)
+        healed_worktree = await self._heal_worktree_if_missing(session, user_id=user_id)
 
         # Mirror ``send_message``: flip the session to ``status="running"``
         # before driving the turn. The frontend's auto-resume effect on

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.exc import InvalidRequestError
@@ -40,6 +41,7 @@ from valuz_agent.modules.tasks.models import PLAN_SNAPSHOT_EVENT, TaskRow
 from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
 from valuz_agent.modules.tasks.plan_render import render_plan_md
+from valuz_agent.ports.workspace_sync import notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +249,17 @@ async def emit_plan_update(
 # ---------------------------------------------------------------------------
 
 
+async def _notify_plan_md(user_id: str, project_id: str, plan_md: Path | None) -> None:
+    """Report a rendered plan markdown to the workspace-sync port.
+
+    Called AFTER the unit of work that rendered it has closed: the file only
+    mirrors the committed plan, and the port is never awaited while the
+    transaction is held.
+    """
+    if plan_md is not None:
+        await notify_written(user_id, [plan_md], project_id=project_id)
+
+
 async def plan_task(
     *,
     task_id: str,
@@ -312,12 +325,14 @@ async def plan_task(
             plan_version=installed,
             structural=True,
         )
-        render_plan_md(task_row, plan)
-        return {
+        plan_md = render_plan_md(task_row, plan)
+        result = {
             "subtasks": plan.to_panel(),
             "ready": plan.ready_keys(),
             "current_version": installed,
         }
+    await _notify_plan_md(user_id, project_id, plan_md)
+    return result
 
 
 async def get_plan(*, task_id: str, project_id: str, user_id: str) -> dict[str, Any]:
@@ -431,12 +446,14 @@ async def modify_plan(
             plan_version=installed,
             structural=True,
         )
-        render_plan_md(task_row, plan)
-        return {
+        plan_md = render_plan_md(task_row, plan)
+        result = {
             "subtasks": plan.to_panel(),
             "ready": plan.ready_keys(),
             "current_version": installed,
         }
+    await _notify_plan_md(user_id, project_id, plan_md)
+    return result
 
 
 async def review_subtask(
@@ -580,13 +597,15 @@ async def review_subtask(
                     "agent_name": completed_agent_name,
                 },
             )
-            render_plan_md(task_row, persisted)
-            return {
+            plan_md = render_plan_md(task_row, persisted)
+            approved = {
                 "decision": "approve",
                 "subtask_key": key,
                 "ready": persisted.ready_keys(),
                 "all_done": persisted.all_done(),
             }
+        await _notify_plan_md(user_id, project_id, plan_md)
+        return approved
 
     # decision == "rework": mailbox delivery must run on the event loop
     # (asyncio.Queue is NOT thread-safe), then the DB write reflects it.
@@ -659,8 +678,8 @@ async def review_subtask(
             session_id=target_session,
             payload={"subtask_key": key, "decision": "rework", "feedback": feedback or ""},
         )
-        render_plan_md(task_row, persisted)
-        return {
+        plan_md = render_plan_md(task_row, persisted)
+        reworked = {
             "decision": "rework",
             "subtask_key": key,
             "delivered_to_live_member": delivered,
@@ -670,6 +689,8 @@ async def review_subtask(
                 else "re-dispatch this subtask by key when ready"
             ),
         }
+    await _notify_plan_md(user_id, project_id, plan_md)
+    return reworked
 
 
 # ---------------------------------------------------------------------------

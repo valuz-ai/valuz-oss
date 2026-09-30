@@ -372,3 +372,36 @@ async def test_an_unrecordable_snapshot_does_not_pass_as_delivered(  # type: ign
 
     assert retried.status is DeliveryStatus.RECORDED  # not "unchanged"
     assert Path(retried.abs_path or "").read_text(encoding="utf-8") == "v2"
+
+
+# ── Workspace sync ───────────────────────────────────────────────────────────
+
+
+async def test_a_recorded_snapshot_is_reported_to_workspace_sync(  # type: ignore[no-untyped-def]
+    session_factory, cwd, monkeypatch
+):
+    """The snapshot is a host write into the working directory the agent reads
+    past versions from — reported once, as the promoted file, under the scope's
+    owner. A replay writes nothing and reports nothing."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    src = _write(cwd / "report.md", "v1")
+
+    recorded = await _deliver(session_factory, cwd, src)
+
+    assert recorded.status is DeliveryStatus.RECORDED
+    port.after_write.assert_awaited_once_with(
+        owner_user_id="u1", paths=(Path(recorded.abs_path or ""),), project_id="p1"
+    )
+    assert Path(recorded.abs_path or "").is_absolute()
+
+    replay = await _deliver(session_factory, cwd, src)
+
+    assert replay.status is DeliveryStatus.UNCHANGED
+    assert port.after_write.await_count == 1
+    port.before_read.assert_not_awaited()

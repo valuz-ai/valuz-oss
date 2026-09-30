@@ -243,3 +243,139 @@ async def test_cleanup_rejects_path_outside_managed_dir(
     snap["path"] = str(repo)  # tampered: points at the main workspace
     assert await svc.cleanup_if_clean(snap) is False
     assert repo.exists()
+
+
+# ---- workspace sync --------------------------------------------------------
+
+
+@pytest.fixture
+def sync_port(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.ports.extensions import ext
+
+    port = SimpleNamespace(after_write=AsyncMock(), before_read=AsyncMock())
+    monkeypatch.setattr(ext, "workspace_sync", port)
+    return port
+
+
+def _expected_paths(handle) -> tuple[Path, ...]:  # noqa: ANN001
+    git_root = Path(handle.git_root)
+    common = git_root / ".git"
+    flat = gw.flatten_slug(handle.name)
+    return (
+        Path(handle.path),
+        git_root / ".valuz" / "worktrees" / f"{flat}.meta.json",
+        common / "worktrees",
+        common / "info" / "exclude",
+        common / "packed-refs",
+        common / "refs" / "heads" / handle.branch,
+        common / "logs" / "refs" / "heads" / handle.branch,
+    )
+
+
+async def test_a_created_worktree_is_reported_a_resumed_one_is_not(
+    svc: WorktreeService,
+    project: FakeProjectRow,
+    sync_port,  # noqa: ANN001
+):
+    handle = await svc.get_or_create(USER, project, name="sync-1")
+
+    sync_port.after_write.assert_awaited_once_with(
+        owner_user_id=USER, paths=_expected_paths(handle), project_id="p1"
+    )
+    # the admin dir a ``git`` run inside the checkout needs is what is covered
+    assert (Path(handle.git_root) / ".git" / "worktrees").is_dir()
+
+    await svc.get_or_create(USER, project, name="sync-1")  # fast-resume
+    assert sync_port.after_write.await_count == 1
+
+
+async def test_discard_and_clean_teardown_report_the_removal(
+    svc: WorktreeService,
+    project: FakeProjectRow,
+    sync_port,  # noqa: ANN001
+):
+    first = await svc.get_or_create(USER, project, name="sync-2")
+    second = await svc.get_or_create(USER, project, name="sync-3")
+    sync_port.after_write.reset_mock()
+
+    await svc.discard(USER, project, "sync-2")
+    assert await svc.cleanup_if_clean(_snapshot(second), user_id=USER, project_id="p1")
+
+    assert [c.kwargs for c in sync_port.after_write.await_args_list] == [
+        {"owner_user_id": USER, "paths": _expected_paths(first), "project_id": "p1"},
+        {"owner_user_id": USER, "paths": _expected_paths(second), "project_id": "p1"},
+    ]
+    assert not Path(first.path).exists() and not Path(second.path).exists()
+
+
+async def test_teardown_without_an_owner_reports_nothing(
+    svc: WorktreeService,
+    project: FakeProjectRow,
+    sync_port,  # noqa: ANN001
+):
+    handle = await svc.get_or_create(USER, project, name="sync-4")
+    sync_port.after_write.reset_mock()
+
+    assert await svc.cleanup_if_clean(_snapshot(handle)) is True
+
+    sync_port.after_write.assert_not_awaited()
+
+
+async def test_heal_reports_the_recreated_worktree(
+    svc: WorktreeService,
+    project: FakeProjectRow,
+    sync_port,  # noqa: ANN001
+):
+    handle = await svc.get_or_create(USER, project, name="sync-5")
+    snap = _snapshot(handle)
+    await svc.discard(USER, project, "sync-5")
+    sync_port.after_write.reset_mock()
+
+    assert await svc.heal_from_snapshot(snap, user_id=USER, project_id="p1") is not None
+
+    sync_port.after_write.assert_awaited_once_with(
+        owner_user_id=USER, paths=_expected_paths(handle), project_id="p1"
+    )
+
+
+async def test_the_dirty_checks_wait_for_sandbox_writes_first(
+    svc: WorktreeService,
+    project: FakeProjectRow,
+    sync_port,  # noqa: ANN001
+):
+    """Work the agent left in its sandbox lands before the host decides the
+    checkout is clean — so neither the teardown nor a plain discard removes
+    it."""
+    first = await svc.get_or_create(USER, project, name="sync-6")
+    second = await svc.get_or_create(USER, project, name="sync-7")
+
+    def _land(*, owner_user_id, paths, project_id):  # noqa: ANN001, ANN202
+        (paths[0] / "from-sandbox.txt").write_text("unsynced work")
+
+    sync_port.before_read.side_effect = _land
+
+    assert await svc.cleanup_if_clean(_snapshot(first), user_id=USER, project_id="p1") is False
+    with pytest.raises(WorktreeDirty):
+        await svc.discard(USER, project, "sync-7")
+
+    assert [c.kwargs for c in sync_port.before_read.await_args_list] == [
+        {"owner_user_id": USER, "paths": _expected_paths(first), "project_id": "p1"},
+        {"owner_user_id": USER, "paths": _expected_paths(second), "project_id": "p1"},
+    ]
+    assert Path(first.path).exists() and Path(second.path).exists()
+
+
+async def test_a_forced_discard_does_not_wait(
+    svc: WorktreeService,
+    project: FakeProjectRow,
+    sync_port,  # noqa: ANN001
+):
+    handle = await svc.get_or_create(USER, project, name="sync-8")
+
+    await svc.discard(USER, project, "sync-8", force=True)
+
+    sync_port.before_read.assert_not_awaited()
+    assert not Path(handle.path).exists()

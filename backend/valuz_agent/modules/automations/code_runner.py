@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import mimetypes
+import os
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -49,6 +50,7 @@ from valuz_agent.ports.automation_result import (
     AutomationArtifactFile,
 )
 from valuz_agent.ports.extensions import ext
+from valuz_agent.ports.workspace_sync import ensure_readable, notify_written
 from valuz_agent.resources.automation_runtime import BOOTSTRAP_PATH
 
 logger = logging.getLogger(__name__)
@@ -243,15 +245,18 @@ def build_spec(
     )
 
 
-def trim_run_dirs(root: Path, *, keep: int) -> None:
-    """Keep the newest ``keep`` run directories; the rows keep their own limit."""
+def trim_run_dirs(root: Path, *, keep: int) -> list[Path]:
+    """Keep the newest ``keep`` run directories; the rows keep their own limit.
+
+    Returns the directories it removed (for the workspace-sync report)."""
     runs = root / "runs"
     if not runs.is_dir() or keep <= 0:
-        return
+        return []
     dirs = [p for p in runs.iterdir() if p.is_dir()]
     dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     for stale in dirs[keep:]:
         shutil.rmtree(stale, ignore_errors=True)
+    return dirs[keep:]
 
 
 # ── Output ────────────────────────────────────────────────────────────
@@ -476,6 +481,15 @@ async def run_code_automation(
     try:
         async with async_unit_of_work(commit=False) as db:
             project_cwd = await resolve_project_cwd(db, user_id, row.project_id)
+        # The entry is usually a file the agent just wrote in its sandbox:
+        # let it land before ``resolve_paths`` checks that it exists.
+        # Lexical join only — ``resolve_paths`` is what polices the boundary.
+        if row.code_entry:
+            await ensure_readable(
+                user_id,
+                [os.path.normpath(project_cwd / row.code_entry)],
+                project_id=row.project_id,
+            )
         paths = resolve_paths(
             project_cwd=project_cwd,
             automation_id=row.id,
@@ -500,6 +514,9 @@ async def run_code_automation(
             error_code="AUTOMATION_CODE_PREPARE_FAILED",
             error_message=str(exc)[:500],
         )
+    # ctx / input / bootstrap in the run dir (and a stale output.json gone),
+    # the workspace dir created: a sandbox executor reads all of them.
+    await notify_written(user_id, [paths.run_dir, paths.workspace], project_id=row.project_id)
 
     spec = build_spec(paths, row=row, run=run, env=build_env(paths, row=row, run=run))
     cancel = asyncio.Event()
@@ -536,15 +553,19 @@ async def run_code_automation(
         if result.error_code is None:
             result.error_code = "AUTOMATION_CODE_EXIT"
             result.error_message = f"program exited with code {outcome.exit_code}"
-        _trim(paths, settings.automation_run_dirs_keep)
+        await _trim(paths, settings.automation_run_dirs_keep, user_id=user_id, row=row)
         return result
 
     wrapper, problem = parse_wrapper(outcome.output_json)
+    if wrapper is not None and wrapper.get("files"):
+        # Declared files were written by the program — in a sandbox, on a
+        # cloud executor. Let them land before ``collect_files`` checks them.
+        await ensure_readable(user_id, [paths.run_dir], project_id=row.project_id)
     if wrapper is None:
         result.status = "failed"
         result.error_code = "AUTOMATION_OUTPUT_INVALID"
         result.error_message = problem
-        _trim(paths, settings.automation_run_dirs_keep)
+        await _trim(paths, settings.automation_run_dirs_keep, user_id=user_id, row=row)
         return result
     try:
         artifact = validate_artifact(result_contract_of(row), wrapper["artifact"])
@@ -562,7 +583,7 @@ async def run_code_automation(
         result.status = "failed"
         result.error_code = "AUTOMATION_ARTIFACT_INVALID"
         result.error_message = f"{exc.path}: {exc}" if exc.path else str(exc)
-        _trim(paths, settings.automation_run_dirs_keep)
+        await _trim(paths, settings.automation_run_dirs_keep, user_id=user_id, row=row)
         return result
     result.artifact = artifact
     result.files = delivered
@@ -572,15 +593,19 @@ async def run_code_automation(
         # without pretending the program failed.
         tail = "\n".join(f"[host] {n}" for n in notes)
         result.log_tail = f"{result.log_tail}\n{tail}" if result.log_tail else tail
-    _trim(paths, settings.automation_run_dirs_keep)
+    await _trim(paths, settings.automation_run_dirs_keep, user_id=user_id, row=row)
     return result
 
 
-def _trim(paths: CodeRunPaths, keep: int) -> None:
+async def _trim(paths: CodeRunPaths, keep: int, *, user_id: str, row: AutomationRow) -> None:
     try:
-        trim_run_dirs(paths.root, keep=keep)
+        removed = trim_run_dirs(paths.root, keep=keep)
     except OSError:
         logger.exception("could not trim run directories under %s", paths.root)
+        return
+    # Deletions: a removed path no longer exists, which is how the port reads
+    # a delete. Only what was removed, not the whole ``runs`` tree.
+    await notify_written(user_id, removed, project_id=row.project_id)
 
 
 def artifact_event(

@@ -43,6 +43,7 @@ from valuz_agent.integrations.skills_filesystem import (
     _extract_frontmatter,
     _read_text,
 )
+from valuz_agent.ports.workspace_sync import notify_written
 
 STAGING_META_FILENAME = ".staging-meta.json"
 VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+?)(?:-v(?P<n>\d+))?$")
@@ -522,31 +523,44 @@ async def sync_slug(
     # ``confirm_submission`` does, and for the same reason: staging is deleted
     # after this and any reference to it stops resolving.
     strip_staging_paths(src, slug, src)
+    # The staging tree (just rewritten) and the target it lands in; reported
+    # once when this returns — also on a failure, since the rewrite has
+    # already happened by then. A target outside any project is ignored by
+    # the port, so the user-library case needs no special-casing.
+    written: list[Path] = [src]
+    try:
+        root = (target_root or _default_user_skill_root(user_id)).expanduser()
+        root.mkdir(parents=True, exist_ok=True)
 
-    root = (target_root or _default_user_skill_root(user_id)).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
+        if strategy == "fork":
+            chosen = (new_slug or _next_versioned_slug(root, slug)).strip()
+            if not is_slug_segment(chosen):
+                raise ValueError(f"invalid fork slug: {chosen!r}")
+            dest = root / chosen
+            if dest.exists():
+                raise FileExistsError(f"fork target already exists: {dest}")
+            written.append(dest)
+            _copy_clean(src, dest)
+            # Bump the version field in SKILL.md frontmatter so downstream
+            # consumers (catalog, scan) can show the new version cleanly.
+            _bump_skill_md_version(dest, chosen)
+            return SyncItemResult(
+                slug=slug,
+                strategy=strategy,
+                written_path=str(dest),
+                new_slug=chosen,
+                skipped=False,
+            )
 
-    if strategy == "fork":
-        chosen = (new_slug or _next_versioned_slug(root, slug)).strip()
-        if not is_slug_segment(chosen):
-            raise ValueError(f"invalid fork slug: {chosen!r}")
-        dest = root / chosen
-        if dest.exists():
-            raise FileExistsError(f"fork target already exists: {dest}")
+        # strategy == "overwrite"
+        dest = root / slug
+        written.append(dest)
         _copy_clean(src, dest)
-        # Bump the version field in SKILL.md frontmatter so downstream
-        # consumers (catalog, scan) can show the new version cleanly.
-        _bump_skill_md_version(dest, chosen)
         return SyncItemResult(
-            slug=slug, strategy=strategy, written_path=str(dest), new_slug=chosen, skipped=False
+            slug=slug, strategy=strategy, written_path=str(dest), new_slug=None, skipped=False
         )
-
-    # strategy == "overwrite"
-    dest = root / slug
-    _copy_clean(src, dest)
-    return SyncItemResult(
-        slug=slug, strategy=strategy, written_path=str(dest), new_slug=None, skipped=False
-    )
+    finally:
+        await notify_written(user_id, written)
 
 
 # ── Optimize: prepare staging from an existing skill ─────────────────
@@ -591,6 +605,8 @@ async def prepare_optimize(
             created_at=datetime.now(UTC).isoformat(),
         ),
     )
+    # The agent edits this copy in its sandbox next — it has to be there.
+    await notify_written(user_id, [dest])
     return dest
 
 
@@ -602,12 +618,14 @@ async def remove_slug(user_id: str, session_id: str, slug: str) -> None:
     target = await staging_dir_for_session(user_id, session_id) / slug
     if target.is_dir():
         shutil.rmtree(target)
+        await notify_written(user_id, [target])
 
 
 async def remove_session_staging(user_id: str, session_id: str) -> None:
     target = await staging_dir_for_session(user_id, session_id)
     if target.is_dir():
         shutil.rmtree(target)
+        await notify_written(user_id, [target])
 
 
 def _version_from_chosen_slug(chosen: str) -> int:

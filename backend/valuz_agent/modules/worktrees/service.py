@@ -18,6 +18,7 @@ import json
 import logging
 import secrets
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -31,6 +32,7 @@ from valuz_agent.modules.worktrees.errors import (
     WorktreeOperationFailed,
 )
 from valuz_agent.modules.worktrees.slug_words import SLUG_ADJECTIVES, SLUG_NOUNS
+from valuz_agent.ports.workspace_sync import ensure_readable, notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +160,41 @@ def _remove_sidecar(git_root: Path, flat: str) -> None:
         pass
 
 
+def _worktree_sync_paths(
+    git_root: Path,
+    flat: str,
+    worktree: Path,
+    branch: str | None,
+    common_dir: Path | None = None,
+) -> Iterator[Path]:
+    """Everything a worktree add / remove changes on disk, for the
+    workspace-sync port: the checkout, its sidecar, and the git bookkeeping a
+    ``git`` run inside the checkout needs (the per-worktree admin dirs, the
+    branch ref and its reflog, ``packed-refs``, ``info/exclude``).
+
+    A generator on purpose: the OSS no-op binding never iterates it, so the
+    ``.git`` probe below costs a desktop nothing. ``common_dir`` falls back to
+    ``<git_root>/.git`` when that is a directory; otherwise (a submodule or a
+    linked checkout as the project root) the internals are left to the
+    deployment's reconcile loop.
+    """
+    yield worktree
+    yield _sidecar_path(git_root, flat)
+    if common_dir is None:
+        dot_git = git_root / ".git"
+        common_dir = dot_git if dot_git.is_dir() else None
+    if common_dir is None:
+        return
+    # All admin dirs, not ``worktrees/<flat>``: git suffixes the name on a
+    # collision, so the exact one is not ours to guess.
+    yield common_dir / "worktrees"
+    yield common_dir / "info" / "exclude"
+    yield common_dir / "packed-refs"
+    if branch:
+        yield common_dir / "refs" / "heads" / branch
+        yield common_dir / "logs" / "refs" / "heads" / branch
+
+
 async def _scope_artifact_count(user_id: str, project_id: str, worktree: str) -> int:
     """How many live deliverables a worktree holds. ``0`` if it cannot be told.
 
@@ -278,6 +315,12 @@ class WorktreeService:
                 raw_base = meta.get("base_sha")
                 base_sha = raw_base if isinstance(raw_base, str) and raw_base else None
 
+        if wt.created:
+            await notify_written(
+                user_id,
+                _worktree_sync_paths(info.git_root, flat, wt.path, wt.branch, info.common_dir),
+                project_id=project_row.id,
+            )
         session_cwd = self._session_cwd(wt.path, cwd, info.git_root)
         return WorktreeHandle(
             name=slug,
@@ -354,6 +397,16 @@ class WorktreeService:
             meta = _read_sidecar(git_root, flat) or {}
             raw_base = meta.get("base_sha")
             base_sha = raw_base if isinstance(raw_base, str) and raw_base else None
+            if base_sha:
+                # The dirty check reads the host copy of a checkout an agent
+                # edits in its sandbox — and the refs / index its commits move.
+                # Wait for those first (outside the repo lock), or unsynced
+                # work reads as a clean tree and is removed.
+                await ensure_readable(
+                    user_id,
+                    _worktree_sync_paths(git_root, flat, target.path, target.branch),
+                    project_id=project_row.id,
+                )
             dirty = (
                 await asyncio.to_thread(gw.has_changes, target.path, base_sha)
                 if base_sha
@@ -382,6 +435,11 @@ class WorktreeService:
             except gw.GitWorktreeError as exc:
                 raise WorktreeOperationFailed(str(exc)) from exc
             _remove_sidecar(git_root, flat)
+        await notify_written(
+            user_id,
+            _worktree_sync_paths(git_root, flat, target.path, target.branch),
+            project_id=project_row.id,
+        )
 
         # The snapshots lived inside the worktree, so they went with it. Retire
         # the rows AFTER the removal actually succeeded — archiving first would
@@ -436,23 +494,40 @@ class WorktreeService:
             logger.info("worktrees: keeping '%s' — it holds delivered artifacts", name)
             return False
 
+        branch_name = str(branch) if isinstance(branch, str) else None
+        # As in ``discard``: the dirty check must see what the agent wrote in
+        # its sandbox, so wait for it before taking the lock. Fail-open; no
+        # owner means no barrier (the helper skips it).
+        await ensure_readable(
+            user_id,
+            _worktree_sync_paths(git_root, gw.flatten_slug(name), path, branch_name),
+            project_id=project_id or None,
+        )
         try:
             async with _lock_for(git_root):
                 if await asyncio.to_thread(gw.has_changes, path, base_sha):
                     return False
-                await asyncio.to_thread(
-                    gw.remove,
-                    git_root,
-                    path,
-                    str(branch) if isinstance(branch, str) else None,
-                )
+                await asyncio.to_thread(gw.remove, git_root, path, branch_name)
                 _remove_sidecar(git_root, gw.flatten_slug(name))
-                return True
         except Exception:  # noqa: BLE001 — cleanup must never fail the caller
             logger.warning("worktrees: clean-teardown failed for %s", path, exc_info=True)
             return False
+        # Fail-open, so still "never raises". No owner (a caller that could
+        # not supply one) means nothing to report against.
+        await notify_written(
+            user_id,
+            _worktree_sync_paths(git_root, gw.flatten_slug(name), path, branch_name),
+            project_id=project_id or None,
+        )
+        return True
 
-    async def heal_from_snapshot(self, snapshot: dict[str, object]) -> dict[str, object] | None:
+    async def heal_from_snapshot(
+        self,
+        snapshot: dict[str, object],
+        *,
+        user_id: str = "",
+        project_id: str = "",
+    ) -> dict[str, object] | None:
         """Recreate a session's worktree that was removed since creation.
 
         Re-entry path (design §4-R): a historical session's cwd is frozen to
@@ -468,6 +543,10 @@ class WorktreeService:
         still alive. Raises ``WorktreeNotAvailable`` when the recorded repo
         itself is gone — the caller surfaces that as an actionable error
         instead of a cryptic runtime failure.
+
+        ``user_id`` / ``project_id`` name the owner a recreation is reported
+        to the workspace-sync port under; without an owner it is not reported
+        (the deployment's reconcile loop still picks it up).
         """
         path = Path(str(snapshot.get("path") or ""))
         name = str(snapshot.get("name") or "")
@@ -477,7 +556,8 @@ class WorktreeService:
         if (path / ".git").exists():
             return None  # alive — nothing to heal
 
-        if not git_root.is_dir() or await asyncio.to_thread(gw.detect_git, git_root) is None:
+        info = await asyncio.to_thread(gw.detect_git, git_root) if git_root.is_dir() else None
+        if info is None:
             raise WorktreeNotAvailable(
                 f"worktree '{name}' was removed and its repository "
                 f"({git_root}) is no longer a git repository"
@@ -506,6 +586,12 @@ class WorktreeService:
                 )
                 await asyncio.to_thread(gw.init_submodules, wt.path)
 
+        if wt.created:
+            await notify_written(
+                user_id,
+                _worktree_sync_paths(git_root, flat, wt.path, wt.branch, info.common_dir),
+                project_id=project_id or None,
+            )
         logger.info("worktrees: recreated missing worktree '%s' at %s", name, wt.path)
         return {
             "name": name,

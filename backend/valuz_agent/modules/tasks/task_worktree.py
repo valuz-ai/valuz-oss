@@ -43,7 +43,11 @@ async def resolve_task_cwd(task_row: Any, default_cwd: str) -> str:
     from valuz_agent.modules.worktrees.service import worktree_service
 
     try:
-        await worktree_service.heal_from_snapshot(snapshot)
+        await worktree_service.heal_from_snapshot(
+            snapshot,
+            user_id=str(getattr(task_row, "user_id", "") or ""),
+            project_id=str(getattr(task_row, "project_id", "") or ""),
+        )
     except Exception:  # noqa: BLE001 — surface via the turn, not the dispatch plumbing
         logger.warning(
             "task_worktree: heal failed for task %s",

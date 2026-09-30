@@ -24,6 +24,7 @@ from src.core.tools import ExecContext
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
 from valuz_agent.infra.errors import ValuzError
 from valuz_agent.integrations.tools_entity_common import dump, run_with_skill_service
+from valuz_agent.ports.workspace_sync import ensure_readable
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,14 @@ async def _handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
             )
             return _ok({"plugin": dump(view)})
         if action in ("preview", "install"):
+            local = str(args.get("path") or "").strip()
+            if local:
+                # A path source is typically a zip / folder the agent just
+                # built in its sandbox. Wait for it here, before
+                # ``_with_plugin_service`` opens its units of work. A relative
+                # path is left alone: it is resolved against this process's
+                # cwd, never a workspace.
+                await ensure_readable(user_id, [Path(local).expanduser()])
 
             async def _preview_or_install(svc: Any, skills: Any) -> tuple[str, Any]:
                 source, label = await _resolve_source(args, skills)

@@ -35,7 +35,10 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
 )
 from valuz_agent.modules.tasks.events import record_subtask_failed
-from valuz_agent.modules.tasks.manifest import collect_manifest_safe
+from valuz_agent.modules.tasks.manifest import (
+    IN_TRANSACTION_READ_BARRIER_S,
+    collect_manifest_safe,
+)
 from valuz_agent.modules.tasks.member_state import classify_member
 from valuz_agent.modules.tasks.plan import TaskPlan
 
@@ -160,6 +163,9 @@ async def heartbeat_pending(
                     # passed this; this path is the one that was missed.
                     since_epoch=(run.created_at or 0) / 1000.0,
                     user_id=user_id,
+                    # Inside the heartbeat's unit of work (reads and settles
+                    # the run rows in one transaction): bounded.
+                    read_barrier_s=IN_TRANSACTION_READ_BARRIER_S,
                 )
                 await run_ds.update_run_by_session(
                     session_id=run.session_id, status="completed", result_manifest=manifest

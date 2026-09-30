@@ -48,6 +48,7 @@ from valuz_agent.modules.operations.service import proposal_hash
 from valuz_agent.modules.skills import staging, versioning
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.modules.skills.service import SkillLibraryService
+from valuz_agent.ports.workspace_sync import ensure_readable, notify_written
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,10 @@ DECISION_RENAME = "rename"
 _TERMINAL_STATES = frozenset({"succeeded", "cancelled", "failed", "stale", "expired", "superseded"})
 
 _NAME_LINE_RE = re.compile(r"^name\s*:.*$", flags=re.MULTILINE)
+
+#: ``before_read`` bound for the confirm path, which cannot leave the
+#: operation's transaction (see ``_skill_submit_handler``).
+_CONFIRM_READ_TIMEOUT_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -348,6 +353,14 @@ async def _skill_submit_handler(
 
     staging_base = await staging.staging_dir_for_session(user_id, session_id)
     staging_dir = staging_base / slug
+    # The draft was written in the agent's sandbox; the hash check below must
+    # see those bytes. This handler runs inside the operation engine's
+    # savepoint (``OperationService.confirm`` locks the record, then opens it)
+    # and the engine has no pre-transaction hook for one operation type, so
+    # the barrier cannot move earlier without changing the engine for every
+    # operation. It is therefore bounded tightly — on timeout the check runs
+    # against what is there, exactly as it would without the port.
+    await ensure_readable(user_id, [staging_dir], timeout_s=_CONFIRM_READ_TIMEOUT_S)
     if _detect_manifest(staging_dir) is None:
         raise LookupError(
             f"skill_staging_missing: {staging_dir} no longer holds SKILL.md — "
@@ -367,6 +380,9 @@ async def _skill_submit_handler(
             final_slug = _rename_staged_slug(
                 staging_base, library_root, slug, str(context.decision.get("new_slug") or "")
             ).name
+            # A move: the old staging path is gone, the new one holds the
+            # draft (with its manifest name rewritten).
+            await notify_written(user_id, [staging_dir, staging_base / final_slug])
         elif mode != DECISION_NEW_VERSION:
             raise ValueError(
                 f"skill_slug_collision: the library already has a skill named {slug!r} and "
