@@ -2006,10 +2006,7 @@ class DeepAgentsRuntime:
             self._checkpointer = FileCheckpointSaver(self.checkpoint_root)
             self._checkpointer_cm = None  # file saver has no context manager
             return self._checkpointer
-        from src.runtimes.deepagents.checkpoint_prune import (
-            PruningAsyncSqliteSaver,
-            compact_checkpoint_store,
-        )
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
         directory = os.path.dirname(self.checkpoint_db)
         if directory:
@@ -2021,9 +2018,7 @@ class DeepAgentsRuntime:
         # half-open saver: close it, yield once for the sidecar cleanup, and
         # retry exactly once.  Other SQLite errors still fail immediately.
         for attempt in range(2):
-            # Pruning saver: keeps one checkpoint per run instead of one per
-            # step — see ``checkpoint_prune`` for why that is all ever read.
-            checkpointer_cm = PruningAsyncSqliteSaver.from_conn_string(self.checkpoint_db)
+            checkpointer_cm = AsyncSqliteSaver.from_conn_string(self.checkpoint_db)
             checkpointer = await checkpointer_cm.__aenter__()
             try:
                 await checkpointer.setup()
@@ -2039,13 +2034,6 @@ class DeepAgentsRuntime:
                 continue
             self._checkpointer_cm = checkpointer_cm
             self._checkpointer = checkpointer
-            # A store written before pruning existed carries every step of
-            # every turn; shrink it once, here, before the first turn adds to
-            # it. Best effort: a store that cannot be compacted still works.
-            try:
-                await compact_checkpoint_store(checkpointer)
-            except Exception:  # noqa: BLE001
-                logger.warning("DeepAgents checkpoint compaction failed", exc_info=True)
             return checkpointer
         raise RuntimeError("unreachable")
 
