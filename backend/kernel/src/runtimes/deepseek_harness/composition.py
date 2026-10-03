@@ -67,6 +67,11 @@ DSH_HOME_ENV = "VALUZ_DSH_HOME"
 # its own Electron binary + VALUZ_NODE_IS_ELECTRON=1).
 NODE_PATH_ENV = "VALUZ_NODE_PATH"
 NODE_IS_ELECTRON_ENV = "VALUZ_NODE_IS_ELECTRON"
+#: dsh reaches Node's internal module loader (profile package resolution, HMR).
+#: Upstream does it through a native addon that supports only Electron 43+; the
+#: closure overrides that addon with a stand-in that needs this flag instead,
+#: so the same launch works under node and the desktop's Electron-as-node.
+NODE_FLAGS: tuple[str, ...] = ("--expose-internals",)
 
 #: The launcher inside an installed closure: Valuz's thin wrapper over the
 #: upstream ``runCli`` (bundled pnpm + managed-profile init), shipped in
@@ -89,7 +94,6 @@ KERNEL_BRIDGE_ROW = "valuz-kernel-bridge"
 ROLE_ENV = "VALUZ_DSH_ROLE"
 SESSION_ROLE = "session"
 MANAGER_ROLE = "manager"
-
 
 
 @dataclass(frozen=True)
@@ -155,7 +159,7 @@ def resolve_launch() -> DshLaunchSpec | None:
         node = _resolve_node()
         if node is not None:
             node_bin, extra_env = node
-            return DshLaunchSpec(argv=(node_bin, str(entry)), env=extra_env)
+            return DshLaunchSpec(argv=(node_bin, *NODE_FLAGS, str(entry)), env=extra_env)
     return None
 
 

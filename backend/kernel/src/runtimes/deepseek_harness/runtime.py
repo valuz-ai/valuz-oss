@@ -87,6 +87,7 @@ from src.runtimes.deepseek_harness.composition import (
     DshLaunchSpec,
     cleanup_session_patch,
     dsh_reasoning_effort,
+    launch_unavailable_reason,
     process_env,
     resolve_dsh_home,
     resolve_launch,
@@ -765,8 +766,8 @@ class DeepSeekHarnessRuntime:
         launch = self._launch_spec or resolve_launch()
         if launch is None:
             raise RuntimeError(
-                "deepseek_harness runtime is not launchable on this machine "
-                "(set VALUZ_DSH_RUNTIME_BIN or VALUZ_DSH_ROOT)"
+                "deepseek_harness runtime is not launchable on this machine: "
+                f"{launch_unavailable_reason()}"
             )
 
         if session.skills:

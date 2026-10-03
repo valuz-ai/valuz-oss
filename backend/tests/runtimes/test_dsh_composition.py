@@ -40,8 +40,13 @@ def _isolated_launch_env(monkeypatch, tmp_path: Path):
     ``backend/vendor/dsh-runtime``, which would otherwise make the
     auto-detect tier fire in every test on a provisioned machine.
     """
-    for env in (DSH_RUNTIME_BIN_ENV, DSH_RUNTIME_ENTRY_ENV, DSH_HOME_ENV,
-                NODE_PATH_ENV, NODE_IS_ELECTRON_ENV):
+    for env in (
+        DSH_RUNTIME_BIN_ENV,
+        DSH_RUNTIME_ENTRY_ENV,
+        DSH_HOME_ENV,
+        NODE_PATH_ENV,
+        NODE_IS_ELECTRON_ENV,
+    ):
         monkeypatch.delenv(env, raising=False)
     monkeypatch.setattr(composition, "_VENDOR_DIR", tmp_path / "no-vendor")
     yield
@@ -178,7 +183,7 @@ class TestLaunchResolution:
         monkeypatch.setenv(DSH_RUNTIME_ENTRY_ENV, str(entry))
         launch = resolve_launch()
         assert launch is not None
-        assert launch.argv[1] == str(entry)
+        assert launch.argv[1:] == ("--expose-internals", str(entry))
         assert launch.argv[0].endswith("node")
         assert launch.env == {}
         assert launch_unavailable_reason() is None
@@ -193,7 +198,7 @@ class TestLaunchResolution:
         monkeypatch.setenv(NODE_IS_ELECTRON_ENV, "1")
         launch = resolve_launch()
         assert launch is not None
-        assert launch.argv == (str(electron), str(entry))
+        assert launch.argv == (str(electron), "--expose-internals", str(entry))
         assert launch.env == {"ELECTRON_RUN_AS_NODE": "1"}
 
     def test_vendored_tree_autodetect(self, monkeypatch, tmp_path: Path) -> None:
@@ -203,7 +208,7 @@ class TestLaunchResolution:
         entry.write_text("// bin")
         monkeypatch.setattr(composition, "_VENDOR_DIR", vendor)
         launch = resolve_launch()
-        assert launch is not None and launch.argv[1] == str(entry)
+        assert launch is not None and launch.argv[-1] == str(entry)
         # Explicit exe override still wins over the vendored tree.
         exe = tmp_path / "dsh"
         exe.write_text("#!/bin/sh\n")

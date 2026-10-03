@@ -116,6 +116,25 @@ fi
 if [ "$run_tests" = 1 ]; then
   (cd "$ROOT/backend" && uv run pytest -q tests/runtimes/test_dsh_upstream_compat.py tests/runtimes/test_dsh_composition.py \
     tests/runtimes/test_dsh_runtime_turn.py tests/runtimes/test_dsh_event_mapper.py tests/runtimes/test_dsh_plan_mode.py)
+  # The packaged desktop runs dsh under its own Electron as Node, not under
+  # node — run the live compatibility suite on that carrier too (it is what
+  # caught dsh's native addon refusing older Electrons). DSH_SYNC_ELECTRON
+  # overrides the binary; otherwise the desktop app's electron dependency.
+  electron="${DSH_SYNC_ELECTRON:-}"
+  if [ -z "$electron" ]; then
+    for app in "$ROOT/frontend/apps/desktop" "$ROOT/../../frontend/apps/desktop"; do
+      [ -d "$app" ] || continue
+      electron="$(cd "$app" && node -e 'process.stdout.write(require("electron"))' 2>/dev/null || true)"
+      [ -n "$electron" ] && break
+    done
+  fi
+  if [ -n "$electron" ] && [ -x "$electron" ]; then
+    echo "compatibility suite under Electron-as-node: $electron"
+    (cd "$ROOT/backend" && VALUZ_NODE_PATH="$electron" VALUZ_NODE_IS_ELECTRON=1 \
+      uv run pytest -q tests/runtimes/test_dsh_upstream_compat.py)
+  else
+    echo "electron not installed — run test_dsh_upstream_compat.py with VALUZ_NODE_PATH=<desktop Electron> VALUZ_NODE_IS_ELECTRON=1 manually" >&2
+  fi
   vitest=""
   for candidate in "$ROOT/frontend/node_modules/.bin/vitest" "$ROOT/../../node_modules/.bin/vitest"; do
     [ -x "$candidate" ] && { vitest="$candidate"; break; }

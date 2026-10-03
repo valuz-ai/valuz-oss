@@ -5,6 +5,10 @@
   "dependencies": {
     "@deepseek-ai/dsh": "0.2.1-alpha.1",
     "valuz-dsh-bundle": "file:valuz-plugins/valuz-dsh-bundle",
-    "pnpm": "11.7.0"
+    "pnpm": "11.7.0",
+    "node-addon-require-builtin": "file:valuz-plugins/node-addon-require-builtin"
+  },
+  "overrides": {
+    "node-addon-require-builtin": "$node-addon-require-builtin"
   }
 }

@@ -82,7 +82,7 @@ RUNTIME_REGISTRY: dict[str, RuntimeSpec] = {
         display_name="DeepSeek Harness",
         supported_protocols=("openai-completion",),
         # The dsh runtime is a Node subprocess resolved by the kernel from
-        # VALUZ_DSH_RUNTIME_BIN / VALUZ_DSH_ROOT (see
+        # VALUZ_DSH_RUNTIME_BIN / VALUZ_DSH_RUNTIME_ENTRY or the vendored closure (see
         # kernel src.runtimes.deepseek_harness.composition), not a bare
         # PATH binary — availability comes from the kernel probe.
         requires_binary=None,

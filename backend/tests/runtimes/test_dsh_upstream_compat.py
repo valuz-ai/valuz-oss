@@ -55,7 +55,12 @@ def profile_dir(home: Path) -> Path:
     return home / "profiles" / PROFILE_NAME
 
 
-NODE = shutil.which("node")
+# The same Node the runtime spawns: VALUZ_NODE_PATH (+ VALUZ_NODE_IS_ELECTRON=1)
+# when set — run this suite with them pointing at the desktop's Electron binary
+# to cover the packaged carrier — else node from PATH.
+_RESOLVED_NODE = composition._resolve_node()
+NODE = _RESOLVED_NODE[0] if _RESOLVED_NODE else None
+NODE_ENV: dict[str, str] = _RESOLVED_NODE[1] if _RESOLVED_NODE else {}
 
 pytestmark = pytest.mark.skipif(
     not DSH_BIN.is_file() or not LAUNCHER.is_file() or NODE is None,
@@ -97,8 +102,8 @@ def _dump_ids(home: Path, bundles: list[str]) -> set[str]:
     )
     (directory / "cordis.patch.yml").write_text("[]\n")
     out = subprocess.run(
-        [NODE, str(DSH_BIN), "--profile", PROFILE_NAME, "--dump-config"],
-        env={**os.environ, "DSH_HOME": str(home), "VALUZ_DSH_ROLE": SESSION_ROLE},
+        [NODE, *composition.NODE_FLAGS, str(DSH_BIN), "--profile", PROFILE_NAME, "--dump-config"],
+        env={**os.environ, **NODE_ENV, "DSH_HOME": str(home), "VALUZ_DSH_ROLE": SESSION_ROLE},
         capture_output=True,
         text=True,
         timeout=120,
@@ -134,8 +139,9 @@ def test_bundle_addresses_only_rows_upstream_still_ships(tmp_path: Path) -> None
 def _launcher_dump(home: Path) -> subprocess.CompletedProcess[str]:
     """Run the launcher in dump mode — it initializes the managed profile first."""
     return subprocess.run(
-        [NODE, str(LAUNCHER), "--profile", PROFILE_NAME, "--dump-config"],
+        [NODE, *composition.NODE_FLAGS, str(LAUNCHER), "--profile", PROFILE_NAME, "--dump-config"],
         env={
+            **NODE_ENV,
             **os.environ,
             **process_env(home=home, role=SESSION_ROLE),
         },
@@ -270,11 +276,20 @@ def _run_session_turn(
     patch_path.write_text(json.dumps(build_session_patch(session, model_base_url=model_url)))
     env = {
         **os.environ,
+        **NODE_ENV,
         **process_env(home=home, role=SESSION_ROLE, permission_mode="full_access"),
         "DEEPSEEK_API_KEY": "sk-fake",
     }
     proc = subprocess.Popen(
-        [NODE, str(LAUNCHER), "--profile", PROFILE_NAME, "--patch", str(patch_path)],
+        [
+            NODE,
+            *composition.NODE_FLAGS,
+            str(LAUNCHER),
+            "--profile",
+            PROFILE_NAME,
+            "--patch",
+            str(patch_path),
+        ],
         cwd=workspace,
         env=env,
         stdin=subprocess.PIPE,
@@ -464,3 +479,22 @@ def test_guarded_bundle_names_still_ship() -> None:
         if not (NODE_MODULES / name / "package.json").is_file()
     )
     assert missing == []
+
+
+def test_require_builtin_stand_in_still_matches_what_dsh_asks_for() -> None:
+    """The closure overrides node-addon-require-builtin with a stand-in (see its
+    package.json) so dsh boots under the desktop's Electron. It mirrors the
+    0.1.x API; a dsh release that asks for another line must fail here so the
+    stand-in is re-checked against the new API before it ships."""
+    lock = json.loads((VENDOR / "package-lock.json").read_text(encoding="utf-8"))
+    asked = {
+        spec
+        for entry in lock["packages"].values()
+        for spec in (entry.get("dependencies") or {}).get("node-addon-require-builtin", "").split()
+        if spec
+    }
+    installed = lock["packages"]["node_modules/node-addon-require-builtin"]
+    assert installed.get("resolved") == "file:valuz-plugins/node-addon-require-builtin"
+    assert asked and all(spec.startswith(("^0.1.", "~0.1.", "0.1.", "file:")) for spec in asked), (
+        asked
+    )
