@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
-import { dshPluginsApi, useRegistryStore } from "@valuz/core";
+import { dshPluginsApi, extensionsApi, useRegistryStore } from "@valuz/core";
 
 vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({ setHideHeader: vi.fn() }),
@@ -135,6 +135,12 @@ describe("SettingsPage slots", () => {
 
 describe("SettingsPage extensions section", () => {
   it("registers 扩展 in the system group and renders it for ?tab=extensions", async () => {
+    vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
+      composed: false,
+      editable: true,
+      plugins: [],
+      config_schemas: {},
+    });
     vi.spyOn(dshPluginsApi, "status").mockResolvedValue({
       enabled: false,
       available: false,

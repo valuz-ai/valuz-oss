@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 import { Badge, Card, CardContent, EmptyState } from "@valuz/ui";
 import { pluginHost, useTranslation } from "@valuz/core";
 import type { PluginRecord, PluginStatus } from "@valuz/core";
+import { BackendExtensionsBlock } from "./BackendExtensionsBlock";
+import { SubHeading } from "./SubHeading";
 
 const STATUS_VARIANT: Record<
   PluginStatus,
@@ -62,7 +64,7 @@ export const ValuzExtensionsBlock = () => {
 
   return (
     <section aria-labelledby="extensions-valuz-heading" className="mb-8">
-      <div className="mb-3">
+      <div className="mb-4">
         <h3
           id="extensions-valuz-heading"
           className="text-sm font-semibold text-ink-heading"
@@ -71,6 +73,11 @@ export const ValuzExtensionsBlock = () => {
         </h3>
         <p className="text-xs text-ink-body">{t("extensions.valuz.desc")}</p>
       </div>
+      <SubHeading
+        id="extensions-frontend-heading"
+        title={t("extensions.valuz.frontend.title")}
+        desc={t("extensions.valuz.frontend.desc")}
+      />
       {records.length === 0 ? (
         <EmptyState message={t("extensions.valuz.empty")} />
       ) : (
@@ -84,6 +91,7 @@ export const ValuzExtensionsBlock = () => {
           </CardContent>
         </Card>
       )}
+      <BackendExtensionsBlock />
     </section>
   );
 };

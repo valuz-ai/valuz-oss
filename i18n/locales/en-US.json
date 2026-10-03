@@ -3486,8 +3486,8 @@
     "desc": "Manage Valuz's own UI extensions and standard DSH (DeepSeek Harness) plugins.",
     "valuz": {
       "title": "Valuz extensions",
-      "desc": "UI extensions that ship with Valuz. Read-only for now; they cannot be installed or removed at runtime.",
-      "empty": "No Valuz extensions are loaded",
+      "desc": "Extensions that ship with Valuz, in two parts: the interface (frontend) and the backend. They cannot be installed or removed at runtime.",
+      "empty": "No UI extensions are loaded",
       "legacyCount": "{count} legacy installs",
       "legacyHint": "Installed before the extension model; they stay in effect when the extension unloads: {names}",
       "failedReason": "Failed to load: {error}",
@@ -3496,6 +3496,10 @@
         "failed": "Failed",
         "loading": "Loading",
         "disposed": "Unloaded"
+      },
+      "frontend": {
+        "title": "UI extensions",
+        "desc": "Extensions that run in the interface. Read-only."
       }
     },
     "dsh": {
@@ -3593,6 +3597,32 @@
         "bundle-in-use": "The bundle is still in use and cannot be removed"
       },
       "toolsNote": "Tools from installed DSH plugins are available to every runtime while the plugin host is running (through the built-in MCP server valuz-dsh-plugins)."
+    },
+    "backend": {
+      "title": "Backend extensions",
+      "desc": "Extensions that ship with the Valuz backend and are composed when the process starts. A switch is recorded and takes effect after a restart.",
+      "loadFailed": "Could not read the backend extensions",
+      "notComposed": "This build has no backend extensions",
+      "empty": "The backend composed no extensions",
+      "readOnly": "Extensions are managed by the operator on this deployment and cannot be changed here.",
+      "restartHint": "Changes are recorded; restart Valuz to apply them.",
+      "required": "Required",
+      "requiredHint": "Valuz needs it to run; it cannot be switched off",
+      "toggleLabel": "Enable {id}",
+      "pendingEnable": "Recorded; it will be enabled after a restart",
+      "pendingDisable": "Recorded; it will be disabled after a restart",
+      "toggleFailed": "{id}: {error}",
+      "status": {
+        "active": "Active",
+        "failed": "Failed",
+        "pending": "Waiting to start",
+        "disabled": "Disabled"
+      },
+      "meta": {
+        "provides": "Provides: {list}",
+        "needs": "Needs: {list}",
+        "entitlement": "Entitlement: {key}"
+      }
     }
   }
 }

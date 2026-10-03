@@ -18,24 +18,8 @@ import type { DshManagerStatus } from "@valuz/core";
 import { t as translate } from "@valuz/shared/i18n";
 import { DshBundleList } from "./DshBundleList";
 import { DshInstallForm } from "./DshInstallForm";
+import { SubHeading } from "./SubHeading";
 import { useDshManager } from "./use-dsh-manager";
-
-const SubHeading = ({
-  id,
-  title,
-  desc,
-}: {
-  id: string;
-  title: string;
-  desc?: string;
-}) => (
-  <div className="mb-3">
-    <h4 id={id} className="text-sm font-semibold text-ink-heading">
-      {title}
-    </h4>
-    {desc ? <p className="text-xs text-ink-body">{desc}</p> : null}
-  </div>
-);
 
 /** Profile + home of the managed dsh, so the user knows where plugins live. */
 const ProfileLine = ({ status }: { status: DshManagerStatus }) => {

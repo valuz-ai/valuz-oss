@@ -319,7 +319,8 @@ def test_a_plugin_disabled_for_the_next_start_is_not_applied() -> None:
     host.set_enabled("p", False)
     host.load_all(disabled=("q",))
     assert log == []
-    assert [i.status for i in host.list()] == ["disposed", "disposed"]
+    assert [i.status for i in host.list()] == ["disabled", "disabled"]
+    assert [i.error for i in host.list()] == [None, None]
 
 
 # -- migrations -------------------------------------------------------------

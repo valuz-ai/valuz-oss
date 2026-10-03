@@ -25,7 +25,9 @@ if TYPE_CHECKING:
 #: exists for symmetry with the frontend host and DSH's PluginManager.
 ChangeResult = Literal["applied", "restart-required"]
 
-PluginStatus = Literal["pending", "active", "failed", "disposed"]
+#: ``disabled`` — switched off for this start (extension prefs or
+#: ``set_enabled``), never applied; ``disposed`` — applied, then unloaded.
+PluginStatus = Literal["pending", "active", "failed", "disabled", "disposed"]
 
 
 @runtime_checkable

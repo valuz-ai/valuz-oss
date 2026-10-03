@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import {
   Badge,
@@ -8,7 +8,6 @@ import {
   CollapsibleTrigger,
   Input,
   Spinner,
-  cn,
 } from "@valuz/ui";
 import {
   describeDshApiError,
@@ -16,11 +15,8 @@ import {
   useTranslation,
 } from "@valuz/core";
 import type { DshChangeResult, DshSpecInspection } from "@valuz/core";
-import {
-  changeTone,
-  describeManagementError,
-  type ChangeTone,
-} from "./dsh-helpers";
+import { changeTone, describeManagementError } from "./dsh-helpers";
+import { Notice } from "./Notice";
 
 type Accepted = Extract<DshSpecInspection, { status: "accepted" }>;
 
@@ -30,30 +26,6 @@ type Step =
   | { kind: "inspected"; spec: string; inspection: DshSpecInspection }
   | { kind: "installing"; spec: string; inspection: Accepted }
   | { kind: "done"; result: DshChangeResult };
-
-const NOTICE_TONE: Record<ChangeTone, string> = {
-  success: "border-success-border bg-success-light text-success-text",
-  warning: "border-warning-border bg-warning-light text-warning-text",
-  error: "border-error-border bg-error-light text-error-text",
-};
-
-const Notice = ({
-  tone,
-  children,
-}: {
-  tone: ChangeTone;
-  children: ReactNode;
-}) => (
-  <div
-    role={tone === "error" ? "alert" : "status"}
-    className={cn(
-      "space-y-1.5 rounded-md border px-3 py-2 text-xs leading-relaxed",
-      NOTICE_TONE[tone],
-    )}
-  >
-    {children}
-  </div>
-);
 
 /** Collapsible, scrollable pnpm output — the evidence behind a failed install. */
 const InstallOutput = ({

@@ -240,8 +240,7 @@ class PluginHost:
             if record.status != "pending":
                 continue
             if pid in disabled or not record.desired_enabled:
-                record.status = "disposed"
-                record.error = "disabled"
+                record.status = "disabled"
                 continue
             unmet = self._unmet_need(record, providers)
             if unmet is not None:

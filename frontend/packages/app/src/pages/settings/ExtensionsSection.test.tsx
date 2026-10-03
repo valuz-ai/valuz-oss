@@ -16,7 +16,13 @@ import {
   vi,
 } from "vitest";
 import { initI18n } from "@valuz/shared/i18n";
-import { ApiError, definePlugin, dshPluginsApi, pluginHost } from "@valuz/core";
+import {
+  ApiError,
+  definePlugin,
+  dshPluginsApi,
+  extensionsApi,
+  pluginHost,
+} from "@valuz/core";
 import type {
   DshBundleInfo,
   DshChangeResult,
@@ -95,6 +101,13 @@ const renderReady = async (bundles: DshBundleInfo[]) => {
 beforeAll(() => initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" }));
 beforeEach(() => {
   vi.restoreAllMocks();
+  // A bare OSS app: the backend half of 「Valuz 扩展」 has its own tests.
+  vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
+    composed: false,
+    editable: true,
+    plugins: [],
+    config_schemas: {},
+  });
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.warning).mockClear();
@@ -106,11 +119,13 @@ afterEach(() => {
 describe("ExtensionsSection — Valuz extensions", () => {
   // Order matters: ``pluginHost`` is a process-wide singleton, so the empty
   // state has to be asserted before any test loads a plugin.
-  it("shows an empty state while no Valuz extension is loaded", () => {
+  it("shows an empty state while no Valuz extension is loaded", async () => {
     vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
     render(<ExtensionsSection />);
+    // Let the backend half settle so its state update lands inside the test.
+    await screen.findByText("此构建没有后端扩展");
     expect(screen.getByRole("heading", { name: "扩展" })).not.toBeNull();
-    expect(screen.getByText("当前没有已加载的 Valuz 扩展")).not.toBeNull();
+    expect(screen.getByText("当前没有已加载的界面扩展")).not.toBeNull();
   });
 
   it("lists plugin-host records live with status, error and legacy count", async () => {
@@ -161,6 +176,43 @@ describe("ExtensionsSection — Valuz extensions", () => {
       '[data-extension-id="ext-late"]',
     )!;
     expect(within(late).getByText("已卸载")).not.toBeNull();
+  });
+});
+
+describe("ExtensionsSection — backend extensions", () => {
+  it("lists the backend plugins under 「Valuz 扩展」, beside the UI extensions", async () => {
+    vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
+      composed: true,
+      editable: true,
+      plugins: [
+        {
+          id: "commercial-sites",
+          status: "active",
+          required: false,
+          needs: [],
+          provides: ["sites"],
+          entitlement: null,
+          error: null,
+          hasConfig: false,
+          desiredEnabled: true,
+          boundPorts: [],
+        },
+      ],
+      config_schemas: {},
+    });
+    const { container } = render(<ExtensionsSection />);
+    await screen.findByText("commercial-sites");
+    const valuz = screen
+      .getByRole("heading", { name: "Valuz 扩展" })
+      .closest("section")!;
+    expect(within(valuz).getByRole("heading", { name: "界面扩展" })).not.toBeNull();
+    expect(within(valuz).getByRole("heading", { name: "后端扩展" })).not.toBeNull();
+    expect(
+      valuz.contains(
+        container.querySelector('[data-backend-extension="commercial-sites"]'),
+      ),
+    ).toBe(true);
   });
 });
 
