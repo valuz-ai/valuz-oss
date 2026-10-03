@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { personalProfile } from "../edition/personal-profile";
+import { fixtureProfile } from "../edition/test-profile";
 import type {
   DesktopRouteModule,
   NavItemModule,
@@ -19,7 +19,7 @@ let host: PluginHost;
 
 beforeEach(() => {
   useRegistryStore.getState().clearLayers();
-  useRegistryStore.getState().hydrate(personalProfile);
+  useRegistryStore.getState().hydrate(fixtureProfile);
   useRegistryStore.setState({ slots: {}, suppressed: {} });
   useCategoryRegistry.setState({ injected: {}, contributions: {} });
   host = createPluginHost();
@@ -295,7 +295,7 @@ describe("plugin host: page contributions over a hydrated base", () => {
     );
 
     // What hydrateOverlayIfPresent does once the overlay module has loaded.
-    state().hydrate(personalProfile);
+    state().hydrate(fixtureProfile);
 
     expect(ids(state().desktopRoutes)).toContain("early-route");
     expect(ids(state().settingsSections)).toContain("early-section");
@@ -359,7 +359,7 @@ describe("plugin host: page contributions over a hydrated base", () => {
     expect(ids(state().navItems)).not.toContain(navBefore[0]);
 
     // The base can be swapped underneath it and the entry stays hidden.
-    state().hydrate(personalProfile);
+    state().hydrate(fixtureProfile);
     expect(ids(state().desktopRoutes)).not.toContain(routesBefore[1]);
 
     await host.unload("remover");
@@ -421,5 +421,54 @@ describe("plugin host: page contributions over a hydrated base", () => {
     await host.unload("p2");
     const after = ids(state().settingsSections);
     expect(after[after.length - 1]).toBe("p1-section");
+  });
+  describe("skip", () => {
+    it("records a plugin as backend-disabled without mounting it", async () => {
+      const apply = vi.fn();
+      const record = host.skip("off", "backend-disabled");
+
+      expect(record).toEqual({ id: "off", status: "backend-disabled", legacy: [] });
+      expect(host.get("off")?.status).toBe("backend-disabled");
+      expect(host.list().map((r) => r.id)).toContain("off");
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it("notifies subscribers and keeps the load order of what it records", async () => {
+      const listener = vi.fn();
+      host.subscribe(listener);
+      await host.load(definePlugin({ id: "first", apply() {} }));
+      host.skip("second", "backend-disabled");
+
+      expect(listener).toHaveBeenCalled();
+      expect(host.list().map((r) => r.id)).toEqual(["first", "second"]);
+    });
+
+    it("leaves a plugin that is already active alone", async () => {
+      await host.load(definePlugin({ id: "live", apply() {} }));
+
+      expect(host.skip("live", "backend-disabled").status).toBe("active");
+    });
+
+    it("lets a later load replace the record and mount the plugin", async () => {
+      host.skip("late", "backend-disabled");
+      const record = await host.load(
+        definePlugin({
+          id: "late",
+          apply(ctx) {
+            ctx.registry.route(route("late-route"));
+          },
+        }),
+      );
+
+      expect(record.status).toBe("active");
+      expect(ids(state().desktopRoutes)).toContain("late-route");
+    });
+
+    it("ignores unload for a skipped plugin", async () => {
+      host.skip("off", "backend-disabled");
+      await host.unload("off");
+
+      expect(host.get("off")?.status).toBe("backend-disabled");
+    });
   });
 });

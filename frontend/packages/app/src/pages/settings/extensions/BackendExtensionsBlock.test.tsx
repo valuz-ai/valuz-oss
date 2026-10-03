@@ -242,6 +242,69 @@ describe("BackendExtensionsBlock — required plugins", () => {
   });
 });
 
+describe("BackendExtensionsBlock — locked by a dependent", () => {
+  it("locks a plugin a required plugin needs, and says who needs it instead of 必需", async () => {
+    const { container } = await renderBlock(
+      listOf([
+        row({ id: "oss-agents", required: true }),
+        row({ id: "oss-tasks", requiredBy: ["oss-agents"] }),
+        row({ id: "oss-browser", requiredBy: [] }),
+      ]),
+    );
+    const set = vi.spyOn(extensionsApi, "setBackendExtensionEnabled");
+
+    const locked = rowEl(container, "oss-tasks");
+    expect(within(locked).getByText("被 oss-agents 依赖")).not.toBeNull();
+    expect(within(locked).queryByText("必需")).toBeNull();
+    const toggle = switchOf(container, "oss-tasks");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(set).not.toHaveBeenCalled();
+
+    // A required plugin keeps 必需 even when it is also listed as required-by.
+    expect(
+      within(rowEl(container, "oss-agents")).getByText("必需"),
+    ).not.toBeNull();
+
+    // An empty requiredBy locks nothing.
+    const free = rowEl(container, "oss-browser");
+    expect(within(free).queryByText(/依赖/)).toBeNull();
+    expect(switchOf(container, "oss-browser").disabled).toBe(false);
+  });
+
+  it("names every dependent, and keeps a locked plugin on whatever the stored desire says", async () => {
+    const { container } = await renderBlock(
+      listOf([
+        row({
+          id: "oss-memory",
+          requiredBy: ["oss-core", "oss-agents"],
+          desiredEnabled: false,
+        }),
+      ]),
+    );
+
+    expect(
+      within(rowEl(container, "oss-memory")).getByText(
+        "被 oss-core, oss-agents 依赖",
+      ),
+    ).not.toBeNull();
+    expect(switchOf(container, "oss-memory").getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    // Locked rows are never "pending a restart".
+    expect(screen.queryByText(RESTART_HINT)).toBeNull();
+  });
+
+  it("treats a backend that predates requiredBy as unlocked", async () => {
+    const { container } = await renderBlock(
+      listOf([row({ id: "legacy", requiredBy: undefined })]),
+    );
+
+    expect(switchOf(container, "legacy").disabled).toBe(false);
+  });
+});
+
 describe("BackendExtensionsBlock — read-only deployment", () => {
   it("disables every Switch and explains why, once", async () => {
     const { container } = await renderBlock(

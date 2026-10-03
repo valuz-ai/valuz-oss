@@ -1,77 +1,37 @@
-import { lazy, type ComponentType } from "react";
-import { activeProfile, type DesktopRouteModule } from "@valuz/core";
+import type { ComponentType } from "react";
 import {
-  ActivityPage,
-  AgentDetailPage,
-  AgentsPage,
-  ApiKeyConfigPage,
-  AutomationPage,
-  PlaybookPage,
-  AutomationDetailPage,
-  PlaybookDetailPage,
-  ConversationPage,
-  ConnectorsPage,
-  ConversationsHomePage,
-  ContextPanelPage,
-  OnboardingFlow,
-  KnowledgePage,
-  MarketplacePage,
-  OnboardingPage,
-  OverlaysPage,
-  PluginsPage,
-  ProjectDetailPage,
-  ProjectsPage,
-  SettingsPage,
-  SkillDetailPage,
-  SkillsPage,
-  TaskDetailPage,
-  ToolCallsPage,
-} from "../pages";
+  useRegistryStore,
+  type DesktopRouteModule,
+} from "@valuz/core";
 
-const A2UIGalleryPage = lazy(() =>
-  import("../pages/A2UIGalleryPage").then(({ A2UIGalleryPage }) => ({
-    default: A2UIGalleryPage,
-  })),
-);
+import { createContributions } from "../lib/contributions";
 
-const COMPONENT_MAP: Record<string, ComponentType> = {
-  "conversations-home": ConversationsHomePage,
-  "conversation-detail": ConversationPage,
-  projects: ProjectsPage,
-  "project-detail": ProjectDetailPage,
-  "context-panel": ContextPanelPage,
-  knowledge: KnowledgePage,
-  connectors: ConnectorsPage,
-  agents: AgentsPage,
-  "agent-detail": AgentDetailPage,
-  "task-detail": TaskDetailPage,
-  overlays: OverlaysPage,
-  activity: ActivityPage,
-  automation: AutomationPage,
-  playbooks: PlaybookPage,
-  "automation-detail": AutomationDetailPage,
-  "playbook-detail": PlaybookDetailPage,
-  skills: SkillsPage,
-  "skill-detail": SkillDetailPage,
-  marketplace: MarketplacePage,
-  plugins: PluginsPage,
-  settings: SettingsPage,
-  "component-gallery": A2UIGalleryPage,
-  onboarding: OnboardingPage,
-  // /welcome — the first-run entry. The full-screen editorial flow
-  // (OnboardingFlow) owns welcome → connect (paste API key / CLI login) →
-  // team. There is no hosted-account OAuth path.
-  "first-launch": OnboardingFlow,
-  "api-key-config": ApiKeyConfigPage,
-  "tool-calls": ToolCallsPage,
-};
+/**
+ * The component behind each route id.
+ *
+ * A route in the edition registry is plain data (id, path, label, layout …) —
+ * what a composition snapshot compares across editions. The page it renders is
+ * contributed by the plugin that owns the route, through
+ * {@link registerRouteComponent}, and withdrawn with it. A route that carries
+ * its own ``component`` (overlay and edition routes) never consults this.
+ */
+const routeComponents = createContributions<ComponentType>();
+
+/**
+ * Register the component for route ``id``; the returned disposer withdraws it.
+ * Plugins call this inside ``ctx.effect`` right before registering the route.
+ */
+export const registerRouteComponent = (
+  id: string,
+  Component: ComponentType,
+): (() => void) => routeComponents.register(id, Component);
 
 export interface ResolvedRoute extends DesktopRouteModule {
   Component: ComponentType;
 }
 
 const resolveComponent = (route: DesktopRouteModule): ComponentType | null =>
-  route.component ?? COMPONENT_MAP[route.id] ?? null;
+  route.component ?? routeComponents.get(route.id) ?? null;
 
 export const resolveRoutes = (modules: DesktopRouteModule[]): ResolvedRoute[] =>
   modules.flatMap((route) => {
@@ -87,6 +47,11 @@ export const resolveRoutes = (modules: DesktopRouteModule[]): ResolvedRoute[] =>
     return [{ ...route, Component }];
   });
 
-export const resolvedDesktopRoutes: ResolvedRoute[] = resolveRoutes(
-  activeProfile.desktopRoutes,
-);
+/**
+ * The routes the registry holds right now, resolved to components. A snapshot:
+ * routes come and go as plugins load and unload, so callers that must follow
+ * those changes subscribe to ``useRegistryStore`` and call ``resolveRoutes``
+ * themselves (the apps' ``AppRouter`` does).
+ */
+export const getResolvedDesktopRoutes = (): ResolvedRoute[] =>
+  resolveRoutes(useRegistryStore.getState().desktopRoutes);

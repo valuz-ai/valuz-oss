@@ -17,6 +17,8 @@ import { t as translate } from "@valuz/shared/i18n";
 import {
   BACKEND_STATUS_LABEL,
   BACKEND_STATUS_VARIANT,
+  dependentsOf,
+  isLocked,
   isPendingRestart,
 } from "./backend-helpers";
 import { Notice } from "./Notice";
@@ -58,6 +60,9 @@ const BackendRow = ({
       : null,
   ].filter((part): part is string => part !== null);
 
+  const dependents = dependentsOf(row);
+  const locked = isLocked(row);
+
   const statusLabel =
     row.status in BACKEND_STATUS_LABEL
       ? t(`extensions.backend.status.${BACKEND_STATUS_LABEL[row.status]}`)
@@ -81,13 +86,25 @@ const BackendRow = ({
             >
               {t("extensions.backend.required")}
             </Badge>
+          ) : dependents.length > 0 ? (
+            <Badge
+              variant="metaNeutral"
+              title={t("extensions.backend.requiredByHint", {
+                ids: dependents.join(", "),
+              })}
+            >
+              {t("extensions.backend.requiredBy", {
+                ids: dependents.join(", "),
+              })}
+            </Badge>
           ) : null}
           {busy ? <Spinner className="text-ink-meta" /> : null}
           <Switch
             size="sm"
-            // A required plugin is locked on whatever the persisted desire says.
-            checked={row.required ? true : row.desiredEnabled}
-            disabled={row.required || !editable || anyBusy}
+            // A required plugin — or one a required plugin needs — is locked on
+            // whatever the persisted desire says.
+            checked={locked ? true : row.desiredEnabled}
+            disabled={locked || !editable || anyBusy}
             aria-label={t("extensions.backend.toggleLabel", { id: row.id })}
             onCheckedChange={(next) => onToggle(row, next)}
           />

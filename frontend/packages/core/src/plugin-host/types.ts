@@ -85,7 +85,22 @@ export interface ValuzPluginContext {
   plugin(child: ValuzPlugin): Promise<PluginRecord>;
 }
 
-export type PluginStatus = "loading" | "active" | "failed" | "disposed";
+/**
+ * - ``loading`` / ``active`` / ``failed`` / ``disposed`` — the lifecycle of a
+ *   plugin the host mounted.
+ * - ``backend-disabled`` — never mounted: the backend counterpart of the
+ *   plugin (same id) is switched off in this process, so its UI would only
+ *   call routes that are not there. See {@link PluginHost.skip}.
+ */
+export type PluginStatus =
+  | "loading"
+  | "active"
+  | "failed"
+  | "disposed"
+  | "backend-disabled";
+
+/** Why a plugin was recorded without being mounted. */
+export type PluginSkipReason = "backend-disabled";
 
 export interface PluginRecord {
   readonly id: string;
@@ -105,6 +120,13 @@ export interface PluginHost {
   load(plugin: ValuzPlugin): Promise<PluginRecord>;
   /** Load plugins one after another, in order. */
   loadAll(plugins: readonly ValuzPlugin[]): Promise<PluginRecord[]>;
+  /**
+   * Record ``id`` as not loaded for ``reason`` without mounting anything, so
+   * the plugin list still shows it (and why it is off). Does nothing when the
+   * plugin is already loaded or loading. A later ``load`` of the same id
+   * replaces the record.
+   */
+  skip(id: string, reason: PluginSkipReason): PluginRecord;
   /** Unload a plugin and everything it (and its children) contributed. */
   unload(id: string): Promise<void>;
   get(id: string): PluginRecord | undefined;

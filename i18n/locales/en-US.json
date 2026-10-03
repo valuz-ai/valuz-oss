@@ -3495,7 +3495,8 @@
         "active": "Active",
         "failed": "Failed",
         "loading": "Loading",
-        "disposed": "Unloaded"
+        "disposed": "Unloaded",
+        "backend-disabled": "Backend disabled"
       },
       "frontend": {
         "title": "UI extensions",
@@ -3610,6 +3611,8 @@
       "restartHint": "Changes are recorded; restart Valuz to apply them.",
       "required": "Required",
       "requiredHint": "Valuz needs it to run; it cannot be switched off",
+      "requiredBy": "Needed by {ids}",
+      "requiredByHint": "{ids} needs it to run; it cannot be switched off",
       "toggleLabel": "Enable {id}",
       "pendingEnable": "Recorded; it will be enabled after a restart",
       "pendingDisable": "Recorded; it will be disabled after a restart",

@@ -8,6 +8,7 @@ vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({ setHideHeader: vi.fn() }),
 }));
 
+import { composeOss } from "../plugins/testing/compose-oss";
 import { SettingsPage } from "./SettingsPage";
 
 type SlotRegistrar = ReturnType<typeof useRegistryStore.getState>["registerSlot"];
@@ -23,7 +24,11 @@ const renderGeneral = () =>
     </MemoryRouter>,
   );
 
-beforeAll(() => initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" }));
+beforeAll(async () => {
+  initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
+  // The sections and their panels are registered by the OSS plugins.
+  await composeOss();
+});
 beforeEach(() => {
   localStorage.clear();
   useRegistryStore.setState({ slots: {} });

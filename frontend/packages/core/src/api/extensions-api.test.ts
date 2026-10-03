@@ -75,6 +75,32 @@ describe("extensionsApi", () => {
     });
   });
 
+  it("reads which backend plugins are inactive with a plain GET on /state", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(json({ inactive: ["oss-browser", "oss-backup"] }));
+
+    await expect(extensionsApi.backendState()).resolves.toEqual({
+      inactive: ["oss-browser", "oss-backup"],
+    });
+
+    expect(call(fetchMock)).toMatchObject({
+      url: `${BASE}/v1/extensions/backend/state`,
+      method: "GET",
+    });
+  });
+
+  it("rejects the state read on an older backend (404) so callers can fall back", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      json({ detail: "Not Found" }, 404),
+    );
+
+    const error = await failureOf(extensionsApi.backendState());
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(404);
+  });
+
   it("posts { enabled } to the plugin's enabled route, encoding the id", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

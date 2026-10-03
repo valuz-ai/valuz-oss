@@ -18,6 +18,7 @@ import {
 import { initI18n } from "@valuz/shared/i18n";
 import {
   ApiError,
+  createPluginHost,
   definePlugin,
   dshPluginsApi,
   extensionsApi,
@@ -42,6 +43,7 @@ vi.mock("sonner", async (importOriginal) => {
 });
 
 import { toast } from "sonner";
+import { ossDshPluginsPlugin } from "../../plugins/dsh-plugins";
 import { ExtensionsSection } from "./ExtensionsSection";
 
 const STATUS: DshManagerStatus = {
@@ -98,7 +100,14 @@ const renderReady = async (bundles: DshBundleInfo[]) => {
   return { ...view, listBundles };
 };
 
-beforeAll(() => initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" }));
+// The DSH block is contributed by ``oss-dsh-plugins``. Load it on a host of its
+// own so the global ``pluginHost`` (whose list the first test pins) stays empty.
+const dshHost = createPluginHost();
+
+beforeAll(async () => {
+  initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
+  await dshHost.load(ossDshPluginsPlugin);
+});
 beforeEach(() => {
   vi.restoreAllMocks();
   // A bare OSS app: the backend half of 「Valuz 扩展」 has its own tests.
@@ -176,6 +185,43 @@ describe("ExtensionsSection — Valuz extensions", () => {
       '[data-extension-id="ext-late"]',
     )!;
     expect(within(late).getByText("已卸载")).not.toBeNull();
+  });
+});
+
+describe("ExtensionsSection — backend-disabled extensions", () => {
+  it("lists a frontend plugin its backend counterpart switched off, with its own status", async () => {
+    vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
+    pluginHost.skip("oss-browser", "backend-disabled");
+
+    const { container } = render(<ExtensionsSection />);
+    const row = container.querySelector<HTMLElement>(
+      '[data-extension-id="oss-browser"]',
+    )!;
+
+    expect(within(row).getByText("后端已停用")).not.toBeNull();
+    expect(within(row).queryByText("运行中")).toBeNull();
+    await screen.findByText("此构建没有后端扩展");
+  });
+});
+
+describe("ExtensionsSection — oss-dsh-plugins", () => {
+  it("drops the DSH block with the plugin and brings it back when it loads again", async () => {
+    vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
+    await dshHost.unload("oss-dsh-plugins");
+    try {
+      render(<ExtensionsSection />);
+      await screen.findByText("此构建没有后端扩展");
+      expect(screen.queryByRole("heading", { name: "DSH 插件" })).toBeNull();
+      // The page itself is core: its own list is still there.
+      expect(screen.getByRole("heading", { name: "Valuz 扩展" })).not.toBeNull();
+    } finally {
+      await dshHost.load(ossDshPluginsPlugin);
+    }
+
+    render(<ExtensionsSection />);
+    expect(
+      (await screen.findAllByRole("heading", { name: "DSH 插件" })).length,
+    ).toBeGreaterThan(0);
   });
 });
 

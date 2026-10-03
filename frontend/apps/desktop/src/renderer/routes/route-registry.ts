@@ -1,8 +1,9 @@
 export {
   createAppRouteObjects,
   createAppRouter,
+  getResolvedDesktopRoutes,
+  registerRouteComponent,
   resolveRoutes,
-  resolvedDesktopRoutes,
   useAppSetupReady,
   type AppRouteOverrides,
   type CreateAppRouteObjectsOptions,

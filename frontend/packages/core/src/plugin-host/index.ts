@@ -4,6 +4,7 @@ export type {
   PluginHost,
   PluginRecord,
   PluginRegistry,
+  PluginSkipReason,
   PluginStatus,
   ValuzPlugin,
 } from "./types";

@@ -2,9 +2,24 @@ import { render, screen } from '@testing-library/react'
 import { Outlet, RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { initI18n } from '@valuz/shared/i18n'
-import { createAppRouteObjects, resolvedDesktopRoutes } from './route-registry'
+import { createPluginHost, personalProfile, useRegistryStore } from '@valuz/core'
+import { loadOssPlugins } from '@valuz/app/plugins'
+import {
+  createAppRouteObjects,
+  getResolvedDesktopRoutes,
+  type ResolvedRoute,
+} from './route-registry'
 
-beforeAll(() => initI18n({ locale: 'zh-CN', fallbackLocale: 'zh-CN' }))
+let resolvedDesktopRoutes: ResolvedRoute[] = []
+
+beforeAll(async () => {
+  initI18n({ locale: 'zh-CN', fallbackLocale: 'zh-CN' })
+  // The routes are registered by the OSS plugins.
+  useRegistryStore.getState().clearLayers()
+  useRegistryStore.getState().hydrate(personalProfile)
+  await loadOssPlugins(createPluginHost(), { inactive: [] })
+  resolvedDesktopRoutes = getResolvedDesktopRoutes()
+})
 
 const TestProjectLayout = () => (
   <div>

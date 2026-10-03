@@ -7,6 +7,7 @@ import type {
   PluginHost,
   PluginRecord,
   PluginRegistry,
+  PluginSkipReason,
   ValuzPlugin,
 } from "./types";
 
@@ -161,6 +162,21 @@ export function createPluginHost(): PluginHost {
         records.push(await mount(plugin, root));
       }
       return records;
+    },
+    skip(id, reason: PluginSkipReason) {
+      const existing = entries.get(id);
+      if (
+        existing &&
+        (existing.record.status === "active" ||
+          existing.record.status === "loading")
+      ) {
+        return existing.record;
+      }
+      // Re-inserting keeps the list in the order the caller walked the plugins.
+      entries.delete(id);
+      entries.set(id, { record: { id, status: reason, legacy: [] } });
+      setRecord(id, {});
+      return entries.get(id)!.record;
     },
     async unload(id) {
       const entry = entries.get(id);

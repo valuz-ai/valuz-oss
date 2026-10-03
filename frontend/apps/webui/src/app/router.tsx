@@ -8,9 +8,8 @@ import { useRegistryStore } from "@valuz/core";
 import {
   AppSetupRoot,
   createAppRouteObjects,
-  createAppRouter,
+  getResolvedDesktopRoutes,
   resolveRoutes,
-  resolvedDesktopRoutes,
   type ResolvedRoute,
 } from "@valuz/app/routes";
 import { KnowledgePage, ProjectsPage } from "@valuz/app/pages";
@@ -23,8 +22,12 @@ const routeOverrides = {
   knowledge: WebKnowledgePage,
 };
 
+/**
+ * Route objects for the routes the registry holds now (the OSS plugins and an
+ * overlay register them — there is no static list).
+ */
 export const buildRouteObjects = (
-  resolved: ResolvedRoute[] = resolvedDesktopRoutes,
+  resolved: ResolvedRoute[] = getResolvedDesktopRoutes(),
 ): RouteObject[] =>
   createAppRouteObjects({
     routes: resolved,
@@ -32,15 +35,6 @@ export const buildRouteObjects = (
     layout: WebProjectLayout,
     routeOverrides,
   });
-
-export const routes: RouteObject[] = buildRouteObjects();
-export const router = createAppRouter({
-  createRouter: createBrowserRouter,
-  routes: resolvedDesktopRoutes,
-  Root: AppSetupRoot,
-  layout: WebProjectLayout,
-  routeOverrides,
-});
 
 export const AppRouter = () => {
   const desktopRoutes = useRegistryStore((state) => state.desktopRoutes);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { personalProfile } from "./personal-profile";
+import { fixtureProfile } from "./test-profile";
 import type {
   DesktopRouteModule,
   EditionProfile,
@@ -11,7 +12,7 @@ import { registerPlugin } from "./plugin";
 
 const reset = () => {
   useRegistryStore.getState().clearLayers();
-  useRegistryStore.getState().hydrate(personalProfile);
+  useRegistryStore.getState().hydrate(fixtureProfile);
 };
 
 const route = (id: string, path = `/${id}`): DesktopRouteModule => ({
@@ -45,10 +46,16 @@ const state = () => useRegistryStore.getState();
 describe("registry store", () => {
   beforeEach(reset);
 
-  it("starts seeded from the personal profile", () => {
+  it("starts seeded from the personal profile: identity and the boot service, no pages", () => {
+    useRegistryStore.getState().clearLayers();
+    useRegistryStore.getState().setEdition("personal");
     const state = useRegistryStore.getState();
     expect(state.edition).toBe("personal");
-    expect(state.desktopRoutes.map((route) => route.id)).toContain("settings");
+    // Pages are registered by the OSS plugins, not declared by the profile.
+    expect(state.desktopRoutes).toEqual([]);
+    expect(state.settingsSections).toEqual([]);
+    expect(state.navItems).toEqual([]);
+    expect(state.projectPanels).toEqual([]);
     expect(state.services.map((service) => service.name)).toEqual([
       "agent-server",
     ]);
@@ -303,8 +310,7 @@ describe("registry layering", () => {
       state().registerRoute(route("live-route"));
       state().setEdition("personal");
       expect(state().edition).toBe("personal");
-      expect(state().desktopRoutes.map((r) => r.id)).toContain("live-route");
-      expect(state().desktopRoutes.map((r) => r.id)).toContain("settings");
+      expect(state().desktopRoutes.map((r) => r.id)).toEqual(["live-route"]);
       expect(state().desktopRoutes.map((r) => r.id)).not.toContain("base-a");
     });
 

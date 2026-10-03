@@ -34,6 +34,8 @@
       "@valuz/app/hooks": ["./packages/app/src/hooks/index.ts"],
       "@valuz/app/layout": ["./packages/app/src/layout/index.ts"],
       "@valuz/app/routes": ["./packages/app/src/routes/index.ts"],
+      "@valuz/app/plugins": ["./packages/app/src/plugins/index.ts"],
+      "@valuz/app/plugins/layout": ["./packages/app/src/plugins/layout.ts"],
       "@valuz/app/lib/*": ["./packages/app/src/lib/*"],
       "@valuz/ui/tailwind-preset": ["./packages/ui/tailwind.preset.ts"],
       "@valuz/ui/styles/project.css": ["./packages/ui/src/styles/project.css"],

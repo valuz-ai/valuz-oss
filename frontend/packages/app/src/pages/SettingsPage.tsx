@@ -26,17 +26,8 @@ import { SlotRenderer, useTranslation } from "@valuz/core";
 import { useRegistryStore } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 
-import { ModelSection } from "./settings/ModelSection";
-import { ConnectorsSection } from "./settings/ConnectorsSection";
-import { GeneralSection } from "./settings/GeneralSection";
-import { MemorySection } from "./settings/MemorySection";
-import { BrowserSection } from "./settings/BrowserSection";
-import { ParsingSection } from "./settings/ParsingSection";
-import { BackupSection } from "./settings/BackupSection";
-import { SystemLogsSettingsSection } from "./settings/SystemLogsSection";
-import { AboutSection } from "./settings/AboutSection";
-import { NetworkSection } from "./settings/NetworkSection";
-import { ExtensionsSection } from "./settings/ExtensionsSection";
+import { useContributions } from "../lib/contributions";
+import { sectionComponents } from "./settings/section-components";
 
 const SETTINGS_TAB_STORAGE_KEY = "valuz-settings-tab";
 
@@ -84,26 +75,14 @@ const readStoredTab = (): string => {
   return "general";
 };
 
-const SECTION_MAP: Record<string, React.ComponentType> = {
-  model: ModelSection,
-  connectors: ConnectorsSection,
-  general: GeneralSection,
-  memory: MemorySection,
-  personalization: MemorySection,
-  browser: BrowserSection,
-  parsing: ParsingSection,
-  backup: BackupSection,
-  "system-logs": SystemLogsSettingsSection,
-  network: NetworkSection,
-  extensions: ExtensionsSection,
-  about: AboutSection,
-};
-
 export const SettingsPage = () => {
   const [searchParams] = useSearchParams();
   const { setHideHeader } = useProjectOutlet();
   const { t } = useTranslation();
   const settingsSections = useRegistryStore((s) => s.settingsSections);
+  // The panels of the built-in sections are contributed by the plugins that
+  // own them (see ../plugins); subscribing re-renders when one comes or goes.
+  useContributions(sectionComponents);
 
   const nav = useMemo(
     () =>
@@ -153,7 +132,8 @@ export const SettingsPage = () => {
     }
   }, []);
 
-  const ActiveSection = activeSectionComponent ?? SECTION_MAP[tab] ?? null;
+  const ActiveSection =
+    activeSectionComponent ?? sectionComponents.get(tab) ?? null;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-card">

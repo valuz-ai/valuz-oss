@@ -13,6 +13,7 @@ const STATUS_VARIANT: Record<
   failed: "error",
   loading: "brand",
   disposed: "metaNeutral",
+  "backend-disabled": "metaNeutral",
 };
 
 const errorText = (error: unknown): string =>

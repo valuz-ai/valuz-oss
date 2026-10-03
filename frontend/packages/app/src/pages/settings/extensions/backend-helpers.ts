@@ -38,12 +38,27 @@ export const bootEnabled = (row: BackendExtensionRow): boolean =>
   row.status !== "disabled" && row.status !== "disposed";
 
 /**
+ * The ids of the required plugins that lean on this one — empty unless it is
+ * locked on by a dependent rather than being required itself.
+ */
+export const dependentsOf = (row: BackendExtensionRow): string[] =>
+  row.required ? [] : (row.requiredBy ?? []);
+
+/**
+ * Cannot be switched off: required itself, or needed by a required plugin
+ * (switching it off would take that plugin down with it).
+ */
+export const isLocked = (row: BackendExtensionRow): boolean =>
+  row.required || (row.requiredBy?.length ?? 0) > 0;
+
+/**
  * A change is recorded but not yet running: what the next start will do
  * differs from what this boot did, or the user just toggled it here.
- * Required plugins cannot be toggled, so they are never pending.
+ * Locked plugins cannot be toggled, so they are never pending.
  */
 export const isPendingRestart = (
   row: BackendExtensionRow,
   toggled: ReadonlySet<string>,
 ): boolean =>
-  !row.required && (row.desiredEnabled !== bootEnabled(row) || toggled.has(row.id));
+  !isLocked(row) &&
+  (row.desiredEnabled !== bootEnabled(row) || toggled.has(row.id));

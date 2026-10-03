@@ -3495,7 +3495,8 @@
         "active": "运行中",
         "failed": "失败",
         "loading": "加载中",
-        "disposed": "已卸载"
+        "disposed": "已卸载",
+        "backend-disabled": "后端已停用"
       },
       "frontend": {
         "title": "界面扩展",
@@ -3610,6 +3611,8 @@
       "restartHint": "有变更已记录，重启 Valuz 后生效。",
       "required": "必需",
       "requiredHint": "Valuz 运行所必需，不能停用",
+      "requiredBy": "被 {ids} 依赖",
+      "requiredByHint": "{ids} 需要它才能运行，不能停用",
       "toggleLabel": "启用 {id}",
       "pendingEnable": "已记录，重启后启用",
       "pendingDisable": "已记录，重启后停用",
