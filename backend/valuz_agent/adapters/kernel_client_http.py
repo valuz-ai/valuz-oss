@@ -64,6 +64,40 @@ from valuz_agent.boot.kernel import kernel_api_prefix  # noqa: E402
 _TURN_TERMINAL_EVENTS = frozenset({"session_idle", "session_error"})
 
 
+_DETAIL_MAX_CHARS = 300
+
+
+def _detail_of(resp: httpx.Response) -> str:
+    """The most informative sentence this error response carries.
+
+    FastAPI — which every kernel route is — answers ``{"detail": ...}``, so
+    that key is the answer whenever it is there. When it is NOT, the responder
+    was something OTHER than the kernel: a gateway, a sidecar, or the sandbox
+    platform's own traffic edge. Falling back to the bare status code, as this
+    used to, threw away the only sentence that said WHAT went wrong.
+
+    The case that motivated this: a sandbox reclaimed after its idle grace
+    leaves the edge answering every port on that host with
+    ``{"error":"Not Found","message":"The sandbox instance does not exist or
+    has been deleted"}``. The host raised ``KernelSessionNotFoundError: 404``
+    — a true status, a misleading name, and no trace of the real reason. The
+    body is kept whole (truncated) rather than mined for known keys: the next
+    thing in front of a kernel will not use this one's schema either.
+    """
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 — not JSON; fall back to the raw text
+        body = None
+    if isinstance(body, dict) and body.get("detail") is not None:
+        return str(body["detail"])
+    raw = resp.text.strip() if body is None else str(body)
+    if not raw:
+        return str(resp.status_code)
+    if len(raw) > _DETAIL_MAX_CHARS:
+        raw = raw[:_DETAIL_MAX_CHARS] + "…"
+    return f"{resp.status_code}: {raw}"
+
+
 def _raise_for_status(status: int, detail: str) -> NoReturn:
     if status == 404:
         raise KernelSessionNotFoundError(404, detail)
@@ -146,12 +180,7 @@ class HttpKernelClient:
         except httpx.HTTPError as exc:
             raise KernelUnavailableError(503, f"kernel unreachable: {exc}") from exc
         if resp.status_code >= 400:
-            detail = str(resp.status_code)
-            try:
-                detail = str(resp.json().get("detail", detail))
-            except Exception:  # noqa: BLE001
-                pass
-            _raise_for_status(resp.status_code, detail)
+            _raise_for_status(resp.status_code, _detail_of(resp))
         payload: dict[str, Any] = resp.json()
         return payload
 
