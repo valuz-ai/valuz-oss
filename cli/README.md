@@ -42,6 +42,11 @@ The connect-only headless surface talks to a running backend over HTTP:
 - `valuz env` — use local|cloud · list · show · set (custom backend URL)
 - `valuz model` — list (runtime/provider filters) · use (pin default)
 - `valuz agent` — list / show / use (pin default)
+- `valuz ext` — Settings → 扩展 on the command line: list / enable / disable
+  Valuz backend extensions (applied at the next start); `ext dsh` status /
+  list / inspect / add (inspects first, installs only with `--yes`) / remove /
+  enable / disable / open — dsh plugins in the managed dsh profile, through
+  dsh's own PluginManager
 
 Exit codes follow the stable contract (0 completed / 1 usage / 2 timeout /
 3 agent error / 4 backend unreachable / 5 internal / 6 auth / 7 action
