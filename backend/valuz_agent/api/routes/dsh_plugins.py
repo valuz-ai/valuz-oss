@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.modules.dsh_plugins.manager import (
     PLUGIN_MANAGER_METHODS,
+    DshManagedBundleError,
     DshManagerUnavailableError,
     get_dsh_manager,
 )
@@ -62,7 +63,7 @@ async def call_plugin_manager(
         raise HTTPException(status_code=404, detail=f"unknown pluginManager method {method!r}")
     try:
         value = await get_dsh_manager().call(method, body.args)
-    except DshManagerUnavailableError as exc:
+    except (DshManagerUnavailableError, DshManagedBundleError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DshRemoteError as exc:
         raise HTTPException(

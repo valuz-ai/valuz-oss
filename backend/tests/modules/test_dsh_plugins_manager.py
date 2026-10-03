@@ -13,6 +13,7 @@ import pytest
 from valuz_agent.modules.dsh_plugins import manager as dsh_manager
 from valuz_agent.modules.dsh_plugins.manager import (
     PLUGIN_MANAGER_METHODS,
+    DshManagedBundleError,
     DshManagerHost,
     DshManagerUnavailableError,
     manager_enabled,
@@ -92,3 +93,65 @@ async def test_only_plugin_manager_methods_are_proxied() -> None:
     with pytest.raises(ValueError):
         await DshManagerHost().call("shutdown")
     assert dsh_manager.PROFILE_NAME == "valuz"
+
+
+class _FakeRemote:
+    """Records forwarded pluginManager calls; listBundles reports Valuz's rows."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def call(self, method: str, **args):
+        self.calls.append((method, args))
+        if method == "pluginManager/listBundles":
+            return [
+                {
+                    "name": "valuz-dsh-bundle",
+                    "rows": [{"rowId": "valuz-kernel-bridge", "entryId": "e-valuz"}],
+                },
+                {"name": "dsh-hello-tool", "rows": [{"rowId": "hello", "entryId": "e-hello"}]},
+            ]
+        return {"application": "applied"}
+
+
+def _host_with_fake_remote(monkeypatch) -> tuple[DshManagerHost, _FakeRemote]:
+    host = DshManagerHost()
+    remote = _FakeRemote()
+
+    async def _started() -> str:
+        host._remote = remote  # type: ignore[assignment]
+        return "http://127.0.0.1:1/"
+
+    monkeypatch.setattr(host, "ensure_started", _started)
+    return host, remote
+
+
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        ("removeBundle", {"name": "valuz-dsh-bundle"}),
+        ("removeBundle", {"name": "@deepseek-ai/dsh-sdk-app"}),
+        ("setBundleEnabled", {"name": "@deepseek-ai/dsh-base", "enabled": False}),
+        ("setPluginEnabled", {"id": "e-valuz", "enabled": False}),
+    ],
+)
+async def test_what_valuz_sessions_run_on_cannot_be_switched_off(monkeypatch, method, args) -> None:
+    host, remote = _host_with_fake_remote(monkeypatch)
+    with pytest.raises(DshManagedBundleError):
+        await host.call(method, args)
+    assert all(m != f"pluginManager/{method}" for m, _ in remote.calls)
+
+
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        ("removeBundle", {"name": "dsh-hello-tool"}),
+        ("setBundleEnabled", {"name": "valuz-dsh-bundle", "enabled": True}),
+        ("setPluginEnabled", {"id": "e-hello", "enabled": False}),
+        ("setPluginEnabled", {"id": "e-valuz", "enabled": True}),
+    ],
+)
+async def test_user_bundles_and_re_enabling_pass_through(monkeypatch, method, args) -> None:
+    host, remote = _host_with_fake_remote(monkeypatch)
+    assert await host.call(method, args) == {"application": "applied"}
+    assert remote.calls[-1] == (f"pluginManager/{method}", args)

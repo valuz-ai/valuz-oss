@@ -32,7 +32,7 @@ import logging
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +69,10 @@ PLUGIN_MANAGER_METHODS = frozenset(
 
 class DshManagerUnavailableError(RuntimeError):
     """The manager host cannot run here (disabled, no closure, or no Node)."""
+
+
+class DshManagedBundleError(RuntimeError):
+    """A change that would switch off or remove what Valuz's dsh sessions run on."""
 
 
 def manager_enabled() -> bool:
@@ -116,6 +120,8 @@ def resolve_dsh_home() -> Path:
     return base / "dsh-home"
 
 
+VALUZ_BUNDLE = "valuz-dsh-bundle"
+
 #: Bundles the launcher keeps in the managed profile (valuz-dsh-bundle's
 #: managed-profile.json); anything else in the list is a user install.
 MANAGED_BUNDLES = frozenset(
@@ -157,6 +163,8 @@ class ManagerStatus:
     home: str
     profile: str
     ui_url: str | None
+    #: Bundles Valuz keeps in the profile; they cannot be removed or switched off.
+    managed_bundles: list[str] = field(default_factory=lambda: sorted(MANAGED_BUNDLES))
 
 
 class DshManagerHost:
@@ -270,9 +278,34 @@ class DshManagerHost:
     async def call(self, method: str, args: dict[str, Any] | None = None) -> Any:
         if method not in PLUGIN_MANAGER_METHODS:
             raise ValueError(f"unsupported dsh pluginManager method {method!r}")
+        args = args or {}
         await self.ensure_started()
         assert self._remote is not None
-        return await self._remote.call(f"pluginManager/{method}", **(args or {}))
+        await self._refuse_managed_change(method, args)
+        return await self._remote.call(f"pluginManager/{method}", **args)
+
+    async def _refuse_managed_change(self, method: str, args: dict[str, Any]) -> None:
+        """dsh reports the managed bundles as ordinary profile dependencies, so
+        its PluginManager would remove or switch them off. The settings page
+        locks them; this keeps the API and ``valuz ext`` from doing it either.
+        dsh's own required rows stay dsh's to refuse; Valuz guards its own."""
+        switching_off = args.get("enabled") is False
+        if method == "removeBundle" or (method == "setBundleEnabled" and switching_off):
+            if args.get("name") in MANAGED_BUNDLES:
+                raise DshManagedBundleError(
+                    f"{args.get('name')!r} is part of Valuz's managed dsh profile"
+                )
+        if method == "setPluginEnabled" and switching_off:
+            assert self._remote is not None
+            bundles = await self._remote.call("pluginManager/listBundles")
+            for bundle in bundles if isinstance(bundles, list) else []:
+                if not isinstance(bundle, dict) or bundle.get("name") != VALUZ_BUNDLE:
+                    continue
+                rows = bundle.get("rows") if isinstance(bundle.get("rows"), list) else []
+                if any(isinstance(r, dict) and r.get("entryId") == args.get("id") for r in rows):
+                    raise DshManagedBundleError(
+                        f"{args.get('id')!r} wires Valuz's dsh sessions and cannot be switched off"
+                    )
 
     async def stop(self) -> None:
         async with self._lock:

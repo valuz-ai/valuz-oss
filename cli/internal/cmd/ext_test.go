@@ -47,6 +47,12 @@ func newFakeExtBackend(t *testing.T, installApplication string) *fakeExtBackend 
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "'commercial.identity' is required"})
 	})
+	mux.HandleFunc("/v1/dsh/plugins/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"available": true, "running": true, "profile": "valuz",
+			"managed_bundles": []string{"@deepseek-ai/dsh-base", "valuz-dsh-bundle"},
+		})
+	})
 	mux.HandleFunc("/v1/dsh/plugins/remote/", func(w http.ResponseWriter, r *http.Request) {
 		method := strings.TrimPrefix(r.URL.Path, "/v1/dsh/plugins/remote/")
 		var body struct {
@@ -61,6 +67,7 @@ func newFakeExtBackend(t *testing.T, installApplication string) *fakeExtBackend 
 		case "listBundles":
 			writeJSON(t, w, map[string]any{"value": []map[string]any{
 				{"name": "@deepseek-ai/dsh-base", "version": "0.2.1-alpha.1", "enabled": true, "removable": false},
+				{"name": "@deepseek-ai/dsh-headless", "version": "0.2.1-alpha.1", "enabled": false, "removable": false},
 				{"name": "dsh-hello-tool", "version": "1.0.0", "enabled": true, "removable": true},
 			}})
 		case "inspect":
@@ -156,8 +163,13 @@ func TestExtDshListGoesThroughPluginManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if !strings.Contains(out, "@deepseek-ai/dsh-base") || !strings.Contains(out, "managed") ||
-		!strings.Contains(out, "dsh-hello-tool") {
+	lines := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		lines[strings.Fields(line)[0]] = line
+	}
+	if !strings.HasSuffix(lines["@deepseek-ai/dsh-base"], "managed by Valuz") ||
+		!strings.HasSuffix(lines["@deepseek-ai/dsh-headless"], "ships with dsh") ||
+		!strings.HasSuffix(lines["dsh-hello-tool"], "enabled") {
 		t.Fatalf("unexpected:\n%s", out)
 	}
 	if calls := f.remoteCalls(); len(calls) != 1 || calls[0] != "listBundles {}" {

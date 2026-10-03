@@ -246,6 +246,16 @@ func newExtDshListCmd() *cobra.Command {
 			if printJSONOutput(cmd.OutOrStdout(), output, value) {
 				return nil
 			}
+			var st struct {
+				ManagedBundles []string `json:"managed_bundles"`
+			}
+			if err := client.Get(cmd.Context(), "/v1/dsh/plugins/status", &st); err != nil {
+				return err
+			}
+			managed := map[string]bool{}
+			for _, name := range st.ManagedBundles {
+				managed[name] = true
+			}
 			bundles, _ := value.([]any)
 			if len(bundles) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "(no bundles)")
@@ -258,14 +268,17 @@ func newExtDshListCmd() *cobra.Command {
 					state = "enabled"
 				}
 				notes := []string{}
-				if removable, _ := b["removable"].(bool); !removable {
-					notes = append(notes, "managed")
+				name, _ := b["name"].(string)
+				if managed[name] {
+					notes = append(notes, "managed by Valuz")
+				} else if removable, _ := b["removable"].(bool); !removable {
+					notes = append(notes, "ships with dsh")
 				}
 				if e, ok := b["error"].(map[string]any); ok {
 					notes = append(notes, fmt.Sprintf("error=%v", e["code"]))
 				}
-				line := fmt.Sprintf("%-44s  %-14v  %-8s  %s",
-					b["name"], strOr(b["version"], "-"), state, strings.Join(notes, ", "))
+				line := fmt.Sprintf("%-50s  %-14v  %-8s  %s",
+					name, strOr(b["version"], "-"), state, strings.Join(notes, ", "))
 				fmt.Fprintln(cmd.OutOrStdout(), strings.TrimRight(line, " "))
 			}
 			return nil
