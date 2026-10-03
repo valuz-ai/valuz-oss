@@ -46,6 +46,8 @@ class DshEventMapper:
             return []
 
         if etype == "assistant/chunk":
+            # dsh < 0.2 logged the token stream as session events; since
+            # session-log v4 it arrives as stream frames (map_stream_frame).
             return self._map_chunk(data)
         if etype == "assistant/message":
             text = _message_text(data)
@@ -81,6 +83,14 @@ class DshEventMapper:
         # inbox splices etc. are runtime bookkeeping — the adapter reads what it
         # needs (stop reason, usage) through the extractors below.
         return []
+
+    def map_stream_frame(self, frame: dict[str, Any]) -> list[Event]:
+        """Map one live ``agent/assistant-stream`` frame (forwarded by the
+        Valuz bundle as ``valuz.assistant-stream``). Only ``chunk`` frames
+        carry renderable deltas; ``start`` / ``end`` bracket an attempt."""
+        if frame.get("type") != "chunk":
+            return []
+        return self._map_chunk(frame)
 
     def _map_chunk(self, data: dict[str, Any]) -> list[Event]:
         chunk = data.get("chunk")
@@ -138,6 +148,22 @@ class DshEventMapper:
         content = message.get("content")
         if not isinstance(content, list):
             return []
+        # Session-log v4: the message IS the tool result — ``{role: "tool",
+        # toolCallId, isError?, content: ContentBlock[]}``.
+        if message.get("role") == "tool" and isinstance(message.get("toolCallId"), str):
+            call_id = message["toolCallId"]
+            if call_id in self._todo_call_ids or call_id in self._ask_user_call_ids:
+                return []
+            return [
+                Event(
+                    type="tool_result",
+                    data={
+                        "id": call_id,
+                        "content": _tool_result_text(message),
+                        "is_error": bool(message.get("isError", False)),
+                    },
+                )
+            ]
         events: list[Event] = []
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool-result":

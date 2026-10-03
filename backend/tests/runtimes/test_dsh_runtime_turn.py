@@ -59,7 +59,7 @@ def _runtime(
         launch_spec=DshLaunchSpec(
             argv=(sys.executable, FAKE_SERVER),
             cwd=None,
-            config_parent_dir=str(tmp_path / "cfg"),
+            plan_capable=False,
         ),
     )
 

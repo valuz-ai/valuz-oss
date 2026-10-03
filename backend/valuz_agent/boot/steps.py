@@ -1165,3 +1165,13 @@ def shutdown_tracing() -> None:
     from src.core.tracing import shutdown_tracing as _shutdown_tracing
 
     _shutdown_tracing()
+
+
+async def stop_dsh_manager() -> None:
+    """Stop the resident dsh manager host, if one was started on demand."""
+    from valuz_agent.modules.dsh_plugins.manager import get_dsh_manager
+
+    try:
+        await get_dsh_manager().stop()
+    except Exception:
+        logger.warning("dsh manager host stop failed", exc_info=True)

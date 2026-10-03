@@ -1,4 +1,4 @@
-"""Composition generation + launch/availability resolution for deepseek_harness."""
+"""Launch resolution, the managed dsh profile, and per-session patches."""
 
 from __future__ import annotations
 
@@ -10,22 +10,25 @@ from src.core.agent_config import AgentConfig
 from src.core.types import (
     McpHttpServerConfig,
     McpStdioServerConfig,
-    ModelSettings,
     Session,
 )
 from src.runtimes.availability import probe_runtime_availability
 from src.runtimes.deepseek_harness import composition
 from src.runtimes.deepseek_harness.composition import (
-    DSH_ROOT_ENV,
+    DSH_HOME_ENV,
     DSH_RUNTIME_BIN_ENV,
     DSH_RUNTIME_ENTRY_ENV,
     NODE_IS_ELECTRON_ENV,
     NODE_PATH_ENV,
-    build_composition_rows,
-    cleanup_composition,
+    build_session_patch,
+    cleanup_session_patch,
+    dsh_permission_mode,
+    dsh_reasoning_effort,
     launch_unavailable_reason,
+    process_env,
+    resolve_dsh_home,
     resolve_launch,
-    write_composition,
+    write_session_patch,
 )
 
 
@@ -37,7 +40,7 @@ def _isolated_launch_env(monkeypatch, tmp_path: Path):
     ``backend/vendor/dsh-runtime``, which would otherwise make the
     auto-detect tier fire in every test on a provisioned machine.
     """
-    for env in (DSH_RUNTIME_BIN_ENV, DSH_RUNTIME_ENTRY_ENV, DSH_ROOT_ENV,
+    for env in (DSH_RUNTIME_BIN_ENV, DSH_RUNTIME_ENTRY_ENV, DSH_HOME_ENV,
                 NODE_PATH_ENV, NODE_IS_ELECTRON_ENV):
         monkeypatch.delenv(env, raising=False)
     monkeypatch.setattr(composition, "_VENDOR_DIR", tmp_path / "no-vendor")
@@ -56,39 +59,33 @@ def _session(**overrides) -> Session:
     return Session(**defaults)
 
 
-class TestCompositionRows:
-    def test_baseline_rows_and_no_persistence(self) -> None:
-        rows = build_composition_rows(
-            _session(), workspace_root="/tmp/ws", skills_root=None, model_settings=None
-        )
-        names = [row["name"] for row in rows]
-        assert "@deepseek-ai/dsh-sdk-jsonrpc-server" in names
-        assert "@deepseek-ai/dsh-agent-spine-demo" in names
-        assert "@deepseek-ai/dsh-llm-deepseek" in names
-        assert "@deepseek-ai/dsh-bash-local" in names
-        # The kernel events table is the system of record — no dsh persistence.
-        assert "@deepseek-ai/dsh-session-persistence-jsonl" not in names
-        spine = next(row for row in rows if row["id"] == "agent-core")
-        assert spine["config"]["skills"] == {"enabled": False}
-        assert spine["config"]["workspaceContext"] is False
+class TestSessionPatch:
+    def test_minimal_session_inserts_only_the_bridge(self) -> None:
+        patch = build_session_patch(_session())
+        # Upstream rows are never given replacement config — tools, persona,
+        # skills discovery and plan mode come from the profile's agent preset.
+        # The only override targets the bundle's own bridge row.
+        assert patch == [{"id": "valuz-kernel-bridge", "config": {"planActive": False}}]
 
-    def test_persona_and_effort_and_skills(self) -> None:
-        rows = build_composition_rows(
-            _session(instructions="You are a researcher."),
-            workspace_root="/tmp/ws",
-            skills_root="/tmp/ws/.agents/skills",
-            model_settings=ModelSettings(effort="xhigh"),
+    def test_instructions_plan_and_user_questions_ride_on_the_bridge(self) -> None:
+        patch = build_session_patch(
+            _session(instructions="You are a researcher.", mode="plan"),
+            user_questions_url="http://127.0.0.1:8000/kernel/v1/dsh/user-questions/t",
         )
-        spine = next(row for row in rows if row["id"] == "agent-core")
-        assert spine["config"]["persona"] == "You are a researcher."
-        fs = spine["config"]["skills"]["filesystem"]
-        assert fs["includeDefaultRoots"] is False
-        assert fs["customSkillDirs"] == ["/tmp/ws/.agents/skills"]
-        llm = next(row for row in rows if row["id"] == "llm-deepseek")
-        assert llm["config"] == {"thinking": "enabled", "reasoningEffort": "max"}
+        bridge = patch[0]
+        assert bridge["id"] == "valuz-kernel-bridge"
+        assert bridge["config"] == {
+            "instructions": "You are a researcher.",
+            "planActive": True,
+            "userQuestionsEndpoint": "http://127.0.0.1:8000/kernel/v1/dsh/user-questions/t",
+        }
+
+    def test_model_base_url_configures_llm_deepseek_only(self) -> None:
+        patch = build_session_patch(_session(), model_base_url="http://gateway/anthropic")
+        assert patch[0] == {"id": "llm-deepseek", "config": {"baseURL": "http://gateway/anthropic"}}
 
     def test_mcp_rows_http_and_stdio(self) -> None:
-        rows = build_composition_rows(
+        patch = build_session_patch(
             _session(
                 mcp_servers=(
                     McpHttpServerConfig(
@@ -98,11 +95,9 @@ class TestCompositionRows:
                     ),
                     McpStdioServerConfig(name="local tool!", command="npx", args=("-y", "x")),
                 )
-            ),
-            workspace_root="/tmp/ws",
-            skills_root=None,
-            model_settings=None,
+            )
         )
+        rows = patch[-1]["insert"]
         mcp = [row for row in rows if row["name"] == "@deepseek-ai/dsh-mcp-client"]
         assert len(mcp) == 2
         assert mcp[0]["config"]["transport"] == "streamable-http"
@@ -112,28 +107,47 @@ class TestCompositionRows:
         # dsh server names are [A-Za-z0-9_-]{1,32}.
         assert mcp[1]["config"]["serverName"] == "local_tool_"
 
-    def test_write_and_cleanup(self, tmp_path: Path) -> None:
-        path = write_composition(
-            _session(),
-            config_parent_dir=str(tmp_path),
-            workspace_root="/tmp/ws",
-            skills_root=None,
-            model_settings=None,
-        )
-        rows = json.loads(Path(path).read_text())  # JSON body is valid YAML
-        assert rows[0]["name"] == "@deepseek-ai/dsh-sdk-jsonrpc-server"
-        cleanup_composition(path)
+    def test_write_and_cleanup(self) -> None:
+        path = write_session_patch(_session())
+        patch = json.loads(Path(path).read_text())  # JSON body is valid YAML
+        assert patch[0]["id"] == "valuz-kernel-bridge"
+        cleanup_session_patch(path)
         assert not Path(path).exists()
+
+    def test_effort_and_permission_mapping(self) -> None:
+        assert dsh_reasoning_effort(None) is None
+        assert dsh_reasoning_effort("low") == "low"
+        assert dsh_reasoning_effort("medium") == "high"
+        assert dsh_reasoning_effort("xhigh") == "max"
+        assert dsh_permission_mode("full_access") == "danger-full-access"
+        assert dsh_permission_mode("default") == "workspace-write"
+
+
+class TestManagedProfile:
+    def test_home_override_and_default(self, monkeypatch, tmp_path: Path) -> None:
+        assert resolve_dsh_home(tmp_path / "dsh-state") == tmp_path / "dsh-home"
+        monkeypatch.setenv(DSH_HOME_ENV, str(tmp_path / "custom"))
+        assert resolve_dsh_home(tmp_path / "dsh-state") == tmp_path / "custom"
+
+    def test_process_env(self, tmp_path: Path) -> None:
+        env = process_env(home=tmp_path, role="session", permission_mode="default")
+        assert env == {
+            "DSH_HOME": str(tmp_path),
+            "VALUZ_DSH_MANAGED_PROFILE": "valuz",
+            "VALUZ_DSH_ROLE": "session",
+            "DSH_TELEMETRY_DISABLED": "1",
+            "DSH_PERMISSION_MODE": "workspace-write",
+        }
 
 
 class TestLaunchResolution:
     def test_unavailable_without_any_channel(self) -> None:
         assert resolve_launch() is None
         reason = launch_unavailable_reason()
-        assert reason is not None and DSH_RUNTIME_BIN_ENV in reason
+        assert reason is not None and DSH_RUNTIME_ENTRY_ENV in reason
 
     def test_exe_override(self, monkeypatch, tmp_path: Path) -> None:
-        exe = tmp_path / "dsh-jsonrpc-agent"
+        exe = tmp_path / "dsh"
         exe.write_text("#!/bin/sh\n")
         monkeypatch.setenv(DSH_RUNTIME_BIN_ENV, str(exe))
         launch = resolve_launch()
@@ -146,7 +160,7 @@ class TestLaunchResolution:
         assert "not executable" in (launch_unavailable_reason() or "")
 
     def test_entry_env_runs_on_node(self, monkeypatch, tmp_path: Path) -> None:
-        entry = tmp_path / "packaged-bin.js"
+        entry = tmp_path / "bin.js"
         entry.write_text("// bin")
         monkeypatch.setenv(DSH_RUNTIME_ENTRY_ENV, str(entry))
         launch = resolve_launch()
@@ -157,7 +171,7 @@ class TestLaunchResolution:
         assert launch_unavailable_reason() is None
 
     def test_entry_with_electron_as_node(self, monkeypatch, tmp_path: Path) -> None:
-        entry = tmp_path / "packaged-bin.js"
+        entry = tmp_path / "bin.js"
         entry.write_text("// bin")
         electron = tmp_path / "Electron"
         electron.write_text("bin")
@@ -171,17 +185,14 @@ class TestLaunchResolution:
 
     def test_vendored_tree_autodetect(self, monkeypatch, tmp_path: Path) -> None:
         vendor = tmp_path / "vendor"
-        entry = (
-            vendor / "node_modules" / "@deepseek-ai" / "dsh-sdk-jsonrpc-demo"
-            / "lib" / "packaged-bin.js"
-        )
+        entry = vendor / "node_modules" / "valuz-dsh-bundle" / "bin" / "dsh.mjs"
         entry.parent.mkdir(parents=True)
         entry.write_text("// bin")
         monkeypatch.setattr(composition, "_VENDOR_DIR", vendor)
         launch = resolve_launch()
         assert launch is not None and launch.argv[1] == str(entry)
         # Explicit exe override still wins over the vendored tree.
-        exe = tmp_path / "dsh-jsonrpc-agent"
+        exe = tmp_path / "dsh"
         exe.write_text("#!/bin/sh\n")
         monkeypatch.setenv(DSH_RUNTIME_BIN_ENV, str(exe))
         launch = resolve_launch()

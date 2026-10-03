@@ -119,6 +119,10 @@ def _set_kernel_env() -> None:
             "VALUZ_DSH_STATE_DIR",
             str(kernel_db_path.parent / "dsh-state"),
         )
+        # The Valuz-managed DSH_HOME (profile ``valuz``: the upstream dsh
+        # distribution's bundles + valuz-dsh-bundle + whatever the user
+        # installs the dsh way). Separate from the user's own ~/.dsh.
+        os.environ.setdefault("VALUZ_DSH_HOME", str(kernel_db_path.parent / "dsh-home"))
     # OSS default (KERNEL_STORE local/unset): the DataService backend is the host
     # sqlite (valuz.db). Inject it as the durable so the kernel dual-writes
     # kernel.db -> valuz.db and reads are served from the DataService.

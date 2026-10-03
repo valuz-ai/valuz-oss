@@ -82,11 +82,16 @@ from src.runtimes.deepseek_harness.approval_bridge import (
     classify_dsh_subject,
 )
 from src.runtimes.deepseek_harness.composition import (
+    PROFILE_NAME,
+    SESSION_ROLE,
     DshLaunchSpec,
-    cleanup_composition,
+    cleanup_session_patch,
+    dsh_reasoning_effort,
+    process_env,
+    resolve_dsh_home,
     resolve_launch,
     user_questions_endpoint,
-    write_composition,
+    write_session_patch,
 )
 from src.runtimes.deepseek_harness.event_mapper import (
     DshEventMapper,
@@ -112,6 +117,8 @@ logger = logging.getLogger(__name__)
 DSH_PROVIDER_ROUTE = "deepseek-official"
 
 STATE_DIR_ENV = "VALUZ_DSH_STATE_DIR"
+#: JSON-RPC notification the Valuz bundle's stream-forwarder emits per frame.
+STREAM_NOTIFICATION = "valuz.assistant-stream"
 DEFAULT_STATE_DIR = "./dsh_state"
 
 # Cold-start grace before the first prompt of a process whose composition
@@ -318,7 +325,7 @@ class DeepSeekHarnessRuntime:
                 await client.close()
             except Exception:
                 logger.debug("dsh client close failed", exc_info=True)
-        cleanup_composition(self._config_path)
+        cleanup_session_patch(self._config_path)
         self._config_path = None
 
     async def run(self, session: Session, user_message: UserMessage) -> None:
@@ -519,6 +526,13 @@ class DeepSeekHarnessRuntime:
                 text = extract_assistant_text(event)
                 if text:
                     outcome.last_assistant_text = text
+            elif item.method == STREAM_NOTIFICATION:
+                # Live model stream frames (valuz-dsh-bundle stream-forwarder):
+                # since session-log v4 the token stream is no session event.
+                frame = payload.get("frame")
+                if received and isinstance(frame, dict):
+                    for mapped in self._mapper.map_stream_frame(frame):
+                        await self.event_sink.emit(mapped)
             elif item.method == "session.status":
                 if received and payload.get("status") == "idle":
                     return outcome
@@ -739,7 +753,7 @@ class DeepSeekHarnessRuntime:
                 await old_client.close()
             except Exception:
                 logger.debug("stale dsh client close failed", exc_info=True)
-        cleanup_composition(self._config_path)
+        cleanup_session_patch(self._config_path)
         self._config_path = None
         if self._uq_token is not None:
             # A failed spawn skips ``close()`` — drop the previous spawn's
@@ -755,9 +769,10 @@ class DeepSeekHarnessRuntime:
                 "(set VALUZ_DSH_RUNTIME_BIN or VALUZ_DSH_ROOT)"
             )
 
-        skills_root: str | None = None
         if session.skills:
-            skills_root = prepare_codex_skills(self.workspace_root, session.skills)
+            # Materialized into <workspace>/.agents/skills, a default root of
+            # dsh's skill-filesystem provider — discovered with no config.
+            prepare_codex_skills(self.workspace_root, session.skills)
 
         self._plan_capable = launch.plan_capable
         user_questions_url: str | None = None
@@ -783,12 +798,14 @@ class DeepSeekHarnessRuntime:
         # the constructor snapshot is only the fallback for callers that
         # never round-trip the session.
         model_settings = session.model_settings or self.model_settings
-        self._config_path = write_composition(
+        home = resolve_dsh_home(self._state_dir)
+        self._config_path = write_session_patch(
             session,
-            config_parent_dir=launch.config_parent_dir,
-            workspace_root=self.workspace_root,
-            skills_root=skills_root,
-            model_settings=model_settings,
+            model_base_url=(
+                self.model_provider.base_url
+                if self.model_provider is not None and self.model_provider.base_url
+                else None
+            ),
             kernel_toolkit=self._register_kernel_toolkit(session),
             plan_capable=launch.plan_capable,
             user_questions_url=user_questions_url,
@@ -797,22 +814,32 @@ class DeepSeekHarnessRuntime:
 
         env = os.environ.copy()
         env.update(launch.env)
-        env["DSH_CORDIS_CONFIG"] = self._config_path
-        env["DSH_CWD"] = self.workspace_root
+        env.update(
+            process_env(
+                home=home,
+                role=SESSION_ROLE,
+                permission_mode=getattr(session, "permission_mode", None) or "full_access",
+            )
+        )
         if self.model_provider is not None:
             env["DEEPSEEK_API_KEY"] = self.model_provider.api_key
-            if self.model_provider.base_url:
-                env["DEEPSEEK_BASE_URL"] = self.model_provider.base_url
 
-        client = DshRuntimeClient(launch.argv, cwd=launch.cwd, env=env)
+        argv = (*launch.argv, "--profile", PROFILE_NAME, "--patch", self._config_path)
+        # dsh's sandbox policy anchors the workspace at process.cwd(), so the
+        # child runs in the session workspace (the SDK ``initialize`` cwd is
+        # only recorded on session headers).
+        cwd = launch.cwd or self.workspace_root or None
+        client = DshRuntimeClient(argv, cwd=cwd, env=env)
         await client.start()
         max_tokens = model_settings.max_tokens if model_settings is not None else None
+        effort = model_settings.effort if model_settings is not None else None
         try:
             await client.initialize(
                 cwd=self.workspace_root or os.getcwd(),
                 provider=DSH_PROVIDER_ROUTE,
                 model=self.model,
                 max_tokens=max_tokens,
+                reasoning_effort=dsh_reasoning_effort(effort),
             )
         except BaseException:
             await client.close()

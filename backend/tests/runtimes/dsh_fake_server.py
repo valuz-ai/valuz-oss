@@ -68,15 +68,22 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
         notify("session.status", {"sessionId": session_id, "status": "idle"})
         return
     answer = "42" if mode != "bigframe" else ("4" + "2" * 1_000_000)
-    for delta in ("4", "2"):
-        session_event(
-            session_id,
+    # dsh >= 0.2 (session-log v4) streams tokens as live frames, forwarded by
+    # valuz-dsh-bundle's stream-forwarder as ``valuz.assistant-stream``.
+    notify(
+        "valuz.assistant-stream",
+        {"sessionId": session_id, "frame": {"type": "start", "attemptId": "a1", "revision": 1}},
+    )
+    for index, delta in enumerate(("4", "2")):
+        notify(
+            "valuz.assistant-stream",
             {
-                "type": "assistant/chunk",
-                "seq": next(seq),
-                "data": {
-                    "turn": 1,
-                    "step": 1,
+                "sessionId": session_id,
+                "frame": {
+                    "type": "chunk",
+                    "attemptId": "a1",
+                    "revision": 1,
+                    "index": index,
                     "chunk": {"type": "text-delta", "index": 0, "text": delta},
                 },
             },
@@ -106,7 +113,14 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
 
 def main() -> None:
     mode = os.environ.get("FAKE_DSH_MODE", "ok")
-    assert os.environ.get("DSH_CORDIS_CONFIG"), "runtime always demands an explicit config"
+    # The launch contract: the managed profile in the session role, plus one
+    # per-session patch file (composition.process_env / runtime argv).
+    argv = sys.argv[1:]
+    assert argv[argv.index("--profile") + 1] == "valuz", argv
+    assert os.path.isfile(argv[argv.index("--patch") + 1]), argv
+    assert os.environ.get("DSH_HOME"), "runtime always pins the managed DSH_HOME"
+    assert os.environ.get("VALUZ_DSH_ROLE") == "session"
+    assert os.environ.get("DSH_TELEMETRY_DISABLED") == "1"
     prompt_count = 0
     for line in sys.stdin:
         line = line.strip()

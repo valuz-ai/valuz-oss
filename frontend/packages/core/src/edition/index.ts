@@ -10,6 +10,7 @@ export * from "./list-fanout";
 export * from "./project-activity";
 export * from "./composer-catalog";
 export * from "./slot-catalog";
+export * from "./dsh-slot-map";
 export { HOST_SLOTS } from "./host-slots";
 export {
   EditionOverlayLoadError,

@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     set_draining()
     await steps.stop_managed_browser()
+    await steps.stop_dsh_manager()
     await steps.stop_decision_aggregator(app)
     await steps.stop_host_background_services(app)
     await steps.stop_automation_runtime(app)

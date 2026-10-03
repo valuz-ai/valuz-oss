@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Refresh the vendored DeepSeek Harness runtime closure.
 #
-# backend/vendor/dsh-runtime/package.json is the Valuz deploy root for the dsh
-# SDK runtime: its dependency closure IS the plugin set packaged-bin.js can
-# mount (bare Cordis plugins resolve from this node_modules). Only the pins +
-# lockfile are committed; node_modules is fetched at build time.
+# backend/vendor/dsh-runtime/package.json is the Valuz deploy root for dsh:
+# the upstream distribution (@deepseek-ai/dsh), the Valuz layer as a dsh
+# bundle (valuz-plugins/valuz-dsh-bundle, whose bin/dsh.mjs is the launcher)
+# and the bundled pnpm plugin installs use. Only the pins + lockfile are
+# committed; node_modules is fetched at build time. To move to a new dsh
+# release use scripts/dsh-upstream-sync.sh (pins + closure + compat tests).
 #
 # Usage:
 #   bash scripts/vendor-dsh-runtime.sh            # npm ci from the lockfile
@@ -29,6 +31,6 @@ else
   npm ci --omit=dev --no-audit --no-fund --loglevel=error
 fi
 
-ENTRY="node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+ENTRY="node_modules/valuz-dsh-bundle/bin/dsh.mjs"
 [ -f "$ENTRY" ] || { echo "closure is missing $ENTRY" >&2; exit 1; }
 echo "dsh runtime closure ready: $VENDOR_DIR/$ENTRY ($(du -sh node_modules | cut -f1))"
