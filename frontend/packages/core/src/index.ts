@@ -43,6 +43,7 @@ export * from "./conversation";
 export * from "./hooks";
 export * from "./agent";
 export * from "./edition";
+export * from "./plugin-host";
 export * from "./ipc/transport";
 export * from "./parser/registry";
 export * from "./parser/types";

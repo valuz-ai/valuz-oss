@@ -1,0 +1,94 @@
+import type { ResourceCategory } from "@valuz/shared";
+import type { Capabilities } from "../edition/capabilities";
+import type {
+  DesktopRouteModule,
+  NavItemModule,
+  ProjectPanelModule,
+  ServiceDescriptor,
+  SettingsSectionModule,
+} from "../edition/profile";
+import type { SlotRegistration } from "../edition/registries/slots";
+
+/**
+ * A unit of UI capability. Every contribution a plugin makes through its
+ * {@link ValuzPluginContext} is an effect of the plugin: it is withdrawn when the
+ * plugin unloads, and rolled back if ``apply`` throws.
+ */
+export interface ValuzPlugin {
+  /** Stable id, unique within a host. */
+  readonly id: string;
+  /** Contribute UI and behaviour. May be async; the host waits for it. */
+  apply(ctx: ValuzPluginContext): void | Promise<void>;
+}
+
+/**
+ * Registration helpers scoped to one plugin. Each call writes into the shared
+ * registries exactly as the bare store API would, and ties the undo to the
+ * plugin's lifetime.
+ */
+export interface PluginRegistry {
+  /** Contribute to a UI slot (list / single / keyed — see SlotRegistration). */
+  slot(name: string, registration: SlotRegistration): void;
+  /** Add a route, or replace one by id; unloading restores the replaced route. */
+  route(route: DesktopRouteModule): void;
+  /** Add a settings section, or replace one by id (restored on unload). */
+  settingsSection(section: SettingsSectionModule): void;
+  /** Add a project panel, or replace one by id (restored on unload). */
+  projectPanel(panel: ProjectPanelModule): void;
+  /** Add a sidebar nav item, or replace one by id (restored on unload). */
+  navItem(item: NavItemModule): void;
+  /** Add a service descriptor. */
+  service(descriptor: ServiceDescriptor): void;
+  /** Contribute resource-library categories for ``type`` alongside others. */
+  categories(type: string, categories: ResourceCategory<unknown>[]): void;
+  /** Suppress a host surface while the plugin is loaded. */
+  suppress(surface: string): void;
+  /** Override capabilities while loaded; unloading restores the previous values. */
+  capabilities(patch: Partial<Capabilities>): void;
+}
+
+export interface ValuzPluginContext {
+  readonly pluginId: string;
+  readonly registry: PluginRegistry;
+  /**
+   * Hold a resource for the plugin's lifetime: ``setup`` runs now, the
+   * disposer it returns runs when the plugin unloads.
+   */
+  effect(setup: () => (() => void) | void): void;
+  /**
+   * Run an install function that predates the plugin model and cannot be
+   * undone (it returns no disposer). Recorded on the plugin so an unload can
+   * report what stays behind. Prefer ``effect`` for anything new.
+   */
+  legacy(name: string, install: () => void): void;
+  /** Mount a child plugin whose lifetime is bound to this one. */
+  plugin(child: ValuzPlugin): Promise<PluginRecord>;
+}
+
+export type PluginStatus = "loading" | "active" | "failed" | "disposed";
+
+export interface PluginRecord {
+  readonly id: string;
+  readonly status: PluginStatus;
+  /** Why ``apply`` failed, when ``status === "failed"``. */
+  readonly error?: unknown;
+  /** Names of legacy installs this plugin ran (see ValuzPluginContext.legacy). */
+  readonly legacy: readonly string[];
+}
+
+export interface PluginHost {
+  /**
+   * Load one plugin. Never rejects: a plugin whose ``apply`` throws is marked
+   * ``failed`` (its partial contributions rolled back) and the returned record
+   * says so — the caller decides whether that plugin was optional.
+   */
+  load(plugin: ValuzPlugin): Promise<PluginRecord>;
+  /** Load plugins one after another, in order. */
+  loadAll(plugins: readonly ValuzPlugin[]): Promise<PluginRecord[]>;
+  /** Unload a plugin and everything it (and its children) contributed. */
+  unload(id: string): Promise<void>;
+  get(id: string): PluginRecord | undefined;
+  /** Records in load order. The same array is returned until something changes. */
+  list(): readonly PluginRecord[];
+  subscribe(listener: () => void): () => void;
+}

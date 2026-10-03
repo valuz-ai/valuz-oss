@@ -9,6 +9,8 @@ export * from "./entity-origin";
 export * from "./list-fanout";
 export * from "./project-activity";
 export * from "./composer-catalog";
+export * from "./slot-catalog";
+export { HOST_SLOTS } from "./host-slots";
 export {
   EditionOverlayLoadError,
   hydrateOverlayIfPresent,

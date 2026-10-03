@@ -82,6 +82,77 @@ const upsertById = <T extends { id: string }>(list: T[], item: T): T[] => {
   return next;
 };
 
+/**
+ * What each registered item replaced (by id) when it went in — the restore
+ * target its disposer puts back. Keyed by the registered object itself, so a
+ * registration and its disposer agree on identity without extra bookkeeping.
+ */
+const restoreTargets = new WeakMap<object, object | undefined>();
+
+/**
+ * Upsert ``item`` by id and return a disposer that undoes exactly this
+ * registration.
+ *
+ * - If ``item`` replaced an existing entry (a plugin overriding a host page),
+ *   disposing puts that entry back at the same position instead of deleting
+ *   the id outright.
+ * - If ``item`` was itself replaced by a later registration, disposing leaves
+ *   the newer entry alone and splices ``item`` out of the restore chain, so the
+ *   newer one later restores what ``item`` replaced rather than resurrecting a
+ *   disposed registration.
+ */
+function registerReplaceable<T extends { id: string }>(
+  read: () => T[],
+  write: (next: T[]) => void,
+  item: T,
+): () => void {
+  const list = read();
+  const index = list.findIndex((entry) => entry.id === item.id);
+  restoreTargets.set(item, index === -1 ? undefined : list[index]);
+  write(upsertById(list, item));
+
+  return () => {
+    if (!restoreTargets.has(item)) return; // already disposed
+    const replaced = restoreTargets.get(item) as T | undefined;
+    restoreTargets.delete(item);
+
+    const current = read();
+    const at = current.findIndex((entry) => entry.id === item.id);
+    if (at !== -1 && current[at] === item) {
+      if (replaced) {
+        const next = current.slice();
+        next[at] = replaced;
+        write(next);
+      } else {
+        write(current.filter((entry) => entry !== item));
+      }
+      return;
+    }
+
+    // Superseded: whoever replaced ``item`` should now restore ``replaced``.
+    if (at === -1) return;
+    let cursor: object | undefined = current[at];
+    while (cursor && restoreTargets.has(cursor)) {
+      const target = restoreTargets.get(cursor);
+      if (target === item) {
+        restoreTargets.set(cursor, replaced);
+        return;
+      }
+      cursor = target;
+    }
+  };
+}
+
+/** Stable sort by ``priority`` (default 0); equal priorities keep insertion order. */
+const byPriority = <T extends { priority?: number }>(list: T[]): T[] =>
+  list
+    .map((entry, index) => ({ entry, index }))
+    .sort(
+      (a, b) =>
+        (a.entry.priority ?? 0) - (b.entry.priority ?? 0) || a.index - b.index,
+    )
+    .map(({ entry }) => entry);
+
 const upsertByName = <T extends { name: string }>(list: T[], item: T): T[] => {
   const existing = list.findIndex((entry) => entry.name === item.name);
   if (existing === -1) {
@@ -92,7 +163,7 @@ const upsertByName = <T extends { name: string }>(list: T[], item: T): T[] => {
   return next;
 };
 
-export const useRegistryStore = create<RegistryState>((set) => ({
+export const useRegistryStore = create<RegistryState>((set, get) => ({
   edition: seed.edition,
   features: seed.features,
   desktopRoutes: [...seed.desktopRoutes],
@@ -143,46 +214,34 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       capabilities: { ...state.capabilities, ...patch },
     })),
 
-  registerRoute: (route) => {
-    set((state) => ({ desktopRoutes: upsertById(state.desktopRoutes, route) }));
-    return () => {
-      set((state) => ({
-        desktopRoutes: state.desktopRoutes.filter((r) => r.id !== route.id),
-      }));
-    };
-  },
+  registerRoute: (route) =>
+    registerReplaceable(
+      () => get().desktopRoutes,
+      (desktopRoutes) => set({ desktopRoutes }),
+      route,
+    ),
   unregisterRoute: (id) =>
     set((state) => ({
       desktopRoutes: state.desktopRoutes.filter((r) => r.id !== id),
     })),
 
-  registerSettingsSection: (section) => {
-    set((state) => ({
-      settingsSections: upsertById(state.settingsSections, section),
-    }));
-    return () => {
-      set((state) => ({
-        settingsSections: state.settingsSections.filter(
-          (s) => s.id !== section.id,
-        ),
-      }));
-    };
-  },
+  registerSettingsSection: (section) =>
+    registerReplaceable(
+      () => get().settingsSections,
+      (settingsSections) => set({ settingsSections }),
+      section,
+    ),
   unregisterSettingsSection: (id) =>
     set((state) => ({
       settingsSections: state.settingsSections.filter((s) => s.id !== id),
     })),
 
-  registerProjectPanel: (panel) => {
-    set((state) => ({
-      projectPanels: upsertById(state.projectPanels, panel),
-    }));
-    return () => {
-      set((state) => ({
-        projectPanels: state.projectPanels.filter((p) => p.id !== panel.id),
-      }));
-    };
-  },
+  registerProjectPanel: (panel) =>
+    registerReplaceable(
+      () => get().projectPanels,
+      (projectPanels) => set({ projectPanels }),
+      panel,
+    ),
   unregisterProjectPanel: (id) =>
     set((state) => ({
       projectPanels: state.projectPanels.filter((p) => p.id !== id),
@@ -201,14 +260,12 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       services: state.services.filter((s) => s.name !== name),
     })),
 
-  registerNavItem: (item) => {
-    set((state) => ({ navItems: upsertById(state.navItems, item) }));
-    return () => {
-      set((state) => ({
-        navItems: state.navItems.filter((n) => n.id !== item.id),
-      }));
-    };
-  },
+  registerNavItem: (item) =>
+    registerReplaceable(
+      () => get().navItems,
+      (navItems) => set({ navItems }),
+      item,
+    ),
   unregisterNavItem: (id) =>
     set((state) => ({
       navItems: state.navItems.filter((n) => n.id !== id),
@@ -222,7 +279,7 @@ export const useRegistryStore = create<RegistryState>((set) => ({
     set((state) => ({
       slots: {
         ...state.slots,
-        [name]: upsertById(state.slots[name] ?? [], registration),
+        [name]: byPriority(upsertById(state.slots[name] ?? [], registration)),
       },
     }));
     return () => {

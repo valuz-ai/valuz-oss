@@ -57,6 +57,77 @@ describe("registry store", () => {
     ).toBe(false);
   });
 
+  it("restores the base route, in place, when a replacing registration is disposed", () => {
+    const store = useRegistryStore.getState();
+    const before = store.desktopRoutes;
+    const settings = before.find((r) => r.id === "settings")!;
+    const dispose = store.registerRoute({
+      ...settings,
+      path: "/plugin-settings",
+    });
+
+    expect(
+      useRegistryStore.getState().desktopRoutes.find((r) => r.id === "settings")
+        ?.path,
+    ).toBe("/plugin-settings");
+
+    dispose();
+
+    // Used to delete the route outright: a plugin that replaced a host page
+    // and then unloaded took the host page down with it.
+    expect(useRegistryStore.getState().desktopRoutes.map((r) => r.id)).toEqual(
+      before.map((r) => r.id),
+    );
+    expect(
+      useRegistryStore
+        .getState()
+        .desktopRoutes.find((r) => r.id === "settings"),
+    ).toBe(settings);
+  });
+
+  it("leaves a newer replacement in place when an older one is disposed", () => {
+    const store = useRegistryStore.getState();
+    const settings = store.desktopRoutes.find((r) => r.id === "settings")!;
+    const disposeOlder = store.registerRoute({ ...settings, path: "/older" });
+    useRegistryStore.getState().registerRoute({ ...settings, path: "/newer" });
+
+    disposeOlder();
+
+    expect(
+      useRegistryStore.getState().desktopRoutes.find((r) => r.id === "settings")
+        ?.path,
+    ).toBe("/newer");
+  });
+
+  it("restores a replaced settings section when its replacement is disposed", () => {
+    const store = useRegistryStore.getState();
+    const [first] = store.settingsSections;
+    const dispose = store.registerSettingsSection({ ...first, icon: "radio" });
+    dispose();
+    expect(useRegistryStore.getState().settingsSections[0]).toBe(first);
+  });
+
+  it("orders slot registrations by priority, then by registration order", () => {
+    const store = useRegistryStore.getState();
+    const Noop = () => null;
+    store.registerSlot("test.ordering", { id: "late", component: Noop });
+    store.registerSlot("test.ordering", {
+      id: "early",
+      component: Noop,
+      priority: -10,
+    });
+    store.registerSlot("test.ordering", { id: "default", component: Noop });
+    store.registerSlot("test.ordering", {
+      id: "last",
+      component: Noop,
+      priority: 10,
+    });
+
+    expect(
+      useRegistryStore.getState().slots["test.ordering"]?.map((r) => r.id),
+    ).toEqual(["early", "late", "default", "last"]);
+  });
+
   // 原 'edition hot-swap' 测试已删除：Slice 3 把 enterpriseProfile 从公共骨架移除，
   // 当前 setEdition 永远 reseed 为 personalProfile。未来如果真引入 enterprise overlay，
   // 由 overlay 直接 hydrate() 即可，不再走 setEdition('enterprise')。
