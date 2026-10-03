@@ -3479,5 +3479,120 @@
     "contextPanel": "Context panel",
     "overlays": "Overlays",
     "playbookDetail": "Playbook detail"
+  },
+  "extensions": {
+    "title": "Extensions",
+    "navDesc": "Valuz extensions and DSH plugins",
+    "desc": "Manage Valuz's own UI extensions and standard DSH (DeepSeek Harness) plugins.",
+    "valuz": {
+      "title": "Valuz extensions",
+      "desc": "UI extensions that ship with Valuz. Read-only for now; they cannot be installed or removed at runtime.",
+      "empty": "No Valuz extensions are loaded",
+      "legacyCount": "{count} legacy installs",
+      "legacyHint": "Installed before the extension model; they stay in effect when the extension unloads: {names}",
+      "failedReason": "Failed to load: {error}",
+      "status": {
+        "active": "Active",
+        "failed": "Failed",
+        "loading": "Loading",
+        "disposed": "Unloaded"
+      }
+    },
+    "dsh": {
+      "title": "DSH plugins",
+      "desc": "Standard DeepSeek Harness plugins, installed and toggled by DSH's own plugin manager. They only affect sessions on the DSH runtime.",
+      "connecting": "Connecting to the DSH plugin manager. The first start can take about 30 seconds",
+      "loadFailed": "Could not reach the DSH plugin manager",
+      "unavailable": {
+        "title": "DSH plugins are unavailable here",
+        "disabled": "Cloud and shared deployments keep DSH plugins off by default: plugin code runs with the user's privileges, so it is a local-workstation capability.",
+        "generic": "No DSH plugin manager is available in this deployment.",
+        "reason": "Reason: {reason}"
+      },
+      "profile": "Profile",
+      "home": "Directory",
+      "openManager": "Open DSH plugin manager",
+      "openManagerLabel": "Native DSH manager",
+      "openManagerDesc": "Opens DSH's own plugin UI in your browser, for plugin configuration, rollback, build-script approval and version exemptions.",
+      "openFailed": "Could not open the DSH plugin manager: {error}",
+      "bundles": {
+        "title": "Installed bundles",
+        "desc": "A bundle is DSH's unit of distribution; one bundle can contain several plugins.",
+        "empty": "No bundles yet",
+        "builtin": "Built-in",
+        "builtinHint": "Provided by Valuz or DSH; it cannot be switched off or removed",
+        "optional": "Optional",
+        "optionalHint": "Shipped with DSH, off by default; switch it on if you need it",
+        "broken": "Unreadable",
+        "toggleLabel": "Enable {name}",
+        "remove": "Remove",
+        "removeTitle": "Remove {name}?",
+        "removeDesc": "This uninstalls {package} and removes its plugins. It cannot be undone.",
+        "enabledToast": "Enabled {name}",
+        "disabledToast": "Disabled {name}",
+        "removedToast": "Removed {name}",
+        "restartRequired": "{name}: saved, restart DSH for it to take effect",
+        "overridden": "{name}: saved, but overridden by a higher-priority configuration",
+        "changeFailed": "{name}: {error}"
+      },
+      "install": {
+        "title": "Install a DSH plugin",
+        "desc": "Enter an npm package name (optionally with a version range), an absolute path, a tarball or a git URL. Inspect first, then confirm the install.",
+        "specLabel": "Package spec",
+        "placeholder": "@scope/package@^1.0.0 or /absolute/path",
+        "inspect": "Inspect",
+        "install": "Install",
+        "cancel": "Cancel",
+        "inspectFailed": "Inspection failed: {error}",
+        "installing": "Installing, this can take a few minutes",
+        "accepted": "Ready to install",
+        "refused": "Cannot install",
+        "bundleUnknown": "Whether it is a DSH bundle is only known after it is downloaded",
+        "from": "From: {host}",
+        "kind": {
+          "registry": "npm package",
+          "path": "Local directory",
+          "git": "Git repository",
+          "tarball": "Tarball"
+        },
+        "problem": {
+          "invalid-spec": "The spec is malformed",
+          "already-installed": "Already installed",
+          "not-found": "Package or version not found",
+          "not-a-package": "Not a valid package",
+          "not-a-bundle": "Not a DSH bundle",
+          "network": "Network unreachable",
+          "unknown": "Unknown reason"
+        },
+        "result": {
+          "applied": "Installed and enabled {target}",
+          "restartRequired": "Installed {target}; restart DSH for it to take effect",
+          "overridden": "Installed {target}, but overridden by a higher-priority configuration",
+          "failed": "Install failed",
+          "cancelled": "Install cancelled"
+        },
+        "pendingBuilds": "These packages need their build scripts approved first: {packages}. Handle it in the \"Native DSH manager\", then try again.",
+        "incompatible": "{name}@{version} declares DSH version requirements that the running DSH {runtime} does not meet. You can set a version exemption in the \"Native DSH manager\".",
+        "output": "Install output",
+        "outputTruncated": "Output truncated; full log: {path}",
+        "warnings": "Note: {warnings}"
+      },
+      "errorCode": {
+        "invalid-spec": "The spec is malformed",
+        "ambiguous-install": "The spec is ambiguous",
+        "not-bundle": "This package is not a DSH bundle",
+        "stale-approval": "The build approval is stale",
+        "incompatible-version": "Incompatible with the running DSH version",
+        "operation-error": "The operation failed",
+        "other": "Failed ({code})",
+        "management-required": "A built-in component DSH needs for management; it cannot be changed",
+        "unaddressable": "This entry cannot be changed through the profile configuration",
+        "unknown-plugin": "Plugin not found",
+        "not-removable": "This bundle cannot be removed",
+        "stop-profile": "Stop the running profile before removing it",
+        "bundle-in-use": "The bundle is still in use and cannot be removed"
+      },
+      "toolsNote": "Tools from installed DSH plugins are available to every runtime while the plugin host is running (through the built-in MCP server valuz-dsh-plugins)."
+    }
   }
 }

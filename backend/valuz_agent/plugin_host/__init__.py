@@ -4,6 +4,7 @@ Named ``plugin_host``, not ``plugins``: ``valuz_agent.modules.plugins`` is the
 Agent Plugins installer, a different concept.
 """
 
+from valuz_agent.plugin_host.active import active_plugin_host, set_active_plugin_host
 from valuz_agent.plugin_host.context import AppApi, PluginContext
 from valuz_agent.plugin_host.discovery import (
     BUNDLE_ENTRY_POINT_GROUP,
@@ -29,9 +30,23 @@ from valuz_agent.plugin_host.plugin import (
     ChangeResult,
     PluginStatus,
 )
+from valuz_agent.plugin_host.prefs import (
+    ExtensionPrefs,
+    effective_disabled,
+    load_extension_prefs,
+    save_config,
+    save_enabled,
+)
 
 __all__ = [
     "BUNDLE_ENTRY_POINT_GROUP",
+    "ExtensionPrefs",
+    "active_plugin_host",
+    "effective_disabled",
+    "load_extension_prefs",
+    "save_config",
+    "save_enabled",
+    "set_active_plugin_host",
     "AppApi",
     "BackendPlugin",
     "BackendPluginBase",

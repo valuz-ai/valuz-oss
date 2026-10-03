@@ -79,6 +79,17 @@ export const personalSettingsSections: SettingsSectionModule[] = [
     edition: "personal",
   },
   {
+    id: "extensions",
+    label: "extensions.title",
+    description: "extensions.navDesc",
+    icon: "puzzle",
+    group: {
+      id: "system",
+      label: "settings.group.system",
+    },
+    edition: "personal",
+  },
+  {
     id: "system-logs",
     label: "settings.tab.systemLogs.label",
     description: "settings.tab.systemLogs.desc",

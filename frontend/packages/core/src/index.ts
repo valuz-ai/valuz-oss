@@ -12,6 +12,7 @@ export * from "./api/runtime-protocols";
 export * from "./api/connectors-api";
 export * from "./api/notifications-api";
 export * from "./api/docs-api";
+export * from "./api/dsh-plugins-api";
 export * from "./api/base-resolver";
 export * from "./api/fetch-json";
 export * from "./api/artifacts-api";

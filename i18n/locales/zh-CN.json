@@ -3479,5 +3479,120 @@
     "contextPanel": "上下文面板",
     "overlays": "浮层预览",
     "playbookDetail": "手册详情"
+  },
+  "extensions": {
+    "title": "扩展",
+    "navDesc": "Valuz 扩展与 DSH 插件",
+    "desc": "管理 Valuz 自带的界面扩展，以及标准 DSH（DeepSeek Harness）插件。",
+    "valuz": {
+      "title": "Valuz 扩展",
+      "desc": "随 Valuz 发行的界面扩展。目前只读，运行时不能安装或卸载。",
+      "empty": "当前没有已加载的 Valuz 扩展",
+      "legacyCount": "{count} 项旧式安装",
+      "legacyHint": "这些安装早于扩展模型，卸载扩展时不会被撤销：{names}",
+      "failedReason": "加载失败：{error}",
+      "status": {
+        "active": "运行中",
+        "failed": "失败",
+        "loading": "加载中",
+        "disposed": "已卸载"
+      }
+    },
+    "dsh": {
+      "title": "DSH 插件",
+      "desc": "标准 DeepSeek Harness 插件，由 DSH 自己的插件管理器安装与启停，只对 DSH 运行时的会话生效。",
+      "connecting": "正在连接 DSH 插件管理服务，首次启动可能需要约 30 秒",
+      "loadFailed": "无法连接 DSH 插件管理服务",
+      "unavailable": {
+        "title": "DSH 插件在此环境不可用",
+        "disabled": "云端和共享部署默认关闭 DSH 插件：插件代码以用户权限运行，只能在本机使用。",
+        "generic": "此部署没有可用的 DSH 插件管理服务。",
+        "reason": "原因：{reason}"
+      },
+      "profile": "Profile",
+      "home": "目录",
+      "openManager": "打开 DSH 插件管理",
+      "openManagerLabel": "DSH 原生管理界面",
+      "openManagerDesc": "在浏览器中打开 DSH 自带的插件管理界面，可配置插件、回滚、批准构建脚本、设置版本豁免。",
+      "openFailed": "无法打开 DSH 插件管理：{error}",
+      "bundles": {
+        "title": "已安装的 Bundle",
+        "desc": "Bundle 是 DSH 的发行单位，一个 bundle 可以包含多个插件。",
+        "empty": "还没有任何 bundle",
+        "builtin": "内置",
+        "builtinHint": "由 Valuz 或 DSH 随包提供，不能关闭或移除",
+        "optional": "可选",
+        "optionalHint": "DSH 随包提供，默认关闭，可按需开启",
+        "broken": "无法读取",
+        "toggleLabel": "启用 {name}",
+        "remove": "移除",
+        "removeTitle": "移除 {name}？",
+        "removeDesc": "将卸载 {package} 并移除它的插件，此操作无法撤销。",
+        "enabledToast": "已启用 {name}",
+        "disabledToast": "已停用 {name}",
+        "removedToast": "已移除 {name}",
+        "restartRequired": "{name}：变更已保存，重启 DSH 后生效",
+        "overridden": "{name}：变更已保存，但被更高优先级的配置覆盖",
+        "changeFailed": "{name}：{error}"
+      },
+      "install": {
+        "title": "安装 DSH 插件",
+        "desc": "输入 npm 包名（可带版本范围）、本地绝对路径、tarball 或 git 地址。先检查，再确认安装。",
+        "specLabel": "安装来源",
+        "placeholder": "@scope/package@^1.0.0 或 /绝对/路径",
+        "inspect": "检查",
+        "install": "安装",
+        "cancel": "取消",
+        "inspectFailed": "检查失败：{error}",
+        "installing": "正在安装，可能需要几分钟",
+        "accepted": "可以安装",
+        "refused": "无法安装",
+        "bundleUnknown": "是否为 DSH bundle 要在下载后才能确认",
+        "from": "来源：{host}",
+        "kind": {
+          "registry": "npm 包",
+          "path": "本地目录",
+          "git": "Git 仓库",
+          "tarball": "Tarball"
+        },
+        "problem": {
+          "invalid-spec": "安装来源格式不正确",
+          "already-installed": "已经安装过",
+          "not-found": "找不到这个包或版本",
+          "not-a-package": "不是有效的包",
+          "not-a-bundle": "不是 DSH bundle",
+          "network": "网络不可达",
+          "unknown": "未知原因"
+        },
+        "result": {
+          "applied": "已安装并启用 {target}",
+          "restartRequired": "已安装 {target}，重启 DSH 后生效",
+          "overridden": "已安装 {target}，但被更高优先级的配置覆盖",
+          "failed": "安装失败",
+          "cancelled": "安装已取消"
+        },
+        "pendingBuilds": "需要先批准这些包的构建脚本：{packages}。请在「DSH 原生管理界面」中处理后重试。",
+        "incompatible": "{name}@{version} 声明的 DSH 版本要求与当前运行的 DSH {runtime} 不符。可以在「DSH 原生管理界面」里设置版本豁免。",
+        "output": "安装输出",
+        "outputTruncated": "输出已截断，完整日志：{path}",
+        "warnings": "提示：{warnings}"
+      },
+      "errorCode": {
+        "invalid-spec": "安装来源格式不正确",
+        "ambiguous-install": "安装来源有歧义",
+        "not-bundle": "这个包不是 DSH bundle",
+        "stale-approval": "构建批准已过期",
+        "incompatible-version": "与当前 DSH 版本不兼容",
+        "operation-error": "操作出错",
+        "other": "出错（{code}）",
+        "management-required": "这是 DSH 管理所需的内置组件，不能更改",
+        "unaddressable": "这一项无法通过 profile 配置更改",
+        "unknown-plugin": "找不到这个插件",
+        "not-removable": "这个 bundle 不能移除",
+        "stop-profile": "需要先停止正在运行的 profile 才能移除",
+        "bundle-in-use": "bundle 仍在使用中，无法移除"
+      },
+      "toolsNote": "已安装的 DSH 插件所提供的工具，在插件宿主运行期间对所有运行时可用（通过内置 MCP 服务 valuz-dsh-plugins）。"
+    }
   }
 }

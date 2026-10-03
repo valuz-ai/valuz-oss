@@ -16,6 +16,7 @@ import {
   HardDrive,
   Info,
   Palette,
+  Puzzle,
   Radio,
   Settings,
   Wifi,
@@ -35,6 +36,7 @@ import { BackupSection } from "./settings/BackupSection";
 import { SystemLogsSettingsSection } from "./settings/SystemLogsSection";
 import { AboutSection } from "./settings/AboutSection";
 import { NetworkSection } from "./settings/NetworkSection";
+import { ExtensionsSection } from "./settings/ExtensionsSection";
 
 const SETTINGS_TAB_STORAGE_KEY = "valuz-settings-tab";
 
@@ -65,6 +67,7 @@ const TAB_ICON_MAP: Record<string, ReactNode> = {
   browser: <Globe className="h-4 w-4" />,
   network: <Wifi className="h-4 w-4" />,
   flask: <FlaskConical className="h-4 w-4" />,
+  puzzle: <Puzzle className="h-4 w-4" />,
 };
 
 const readStoredTab = (): string => {
@@ -92,6 +95,7 @@ const SECTION_MAP: Record<string, React.ComponentType> = {
   backup: BackupSection,
   "system-logs": SystemLogsSettingsSection,
   network: NetworkSection,
+  extensions: ExtensionsSection,
   about: AboutSection,
 };
 

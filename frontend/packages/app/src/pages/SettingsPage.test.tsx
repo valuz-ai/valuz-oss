@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
-import { useRegistryStore } from "@valuz/core";
+import { dshPluginsApi, useRegistryStore } from "@valuz/core";
 
 vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({ setHideHeader: vi.fn() }),
@@ -130,5 +130,33 @@ describe("SettingsPage slots", () => {
       item.compareDocumentPosition(shortcuts) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+});
+
+describe("SettingsPage extensions section", () => {
+  it("registers 扩展 in the system group and renders it for ?tab=extensions", async () => {
+    vi.spyOn(dshPluginsApi, "status").mockResolvedValue({
+      enabled: false,
+      available: false,
+      running: false,
+      unavailable_reason: "disabled",
+      home: "",
+      profile: "valuz",
+      ui_url: null,
+    });
+    render(
+      <MemoryRouter initialEntries={["/settings?tab=extensions"]}>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    expect(
+      useRegistryStore
+        .getState()
+        .settingsSections.find((s) => s.id === "extensions")?.group?.id,
+    ).toBe("system");
+    expect(screen.getByRole("heading", { name: "扩展" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Valuz 扩展" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "DSH 插件" })).not.toBeNull();
+    expect(await screen.findByText("DSH 插件在此环境不可用")).not.toBeNull();
   });
 });
