@@ -354,10 +354,10 @@ fi
 # ============================================================
 # Phase A5: Stage DeepSeek Harness runtime (vendored npm closure)
 # ============================================================
-# The kernel's deepseek_harness runtime spawns the dsh SDK runtime as
-# `node <packaged-bin.js>` from a vendored deploy-root closure
-# (backend/vendor/dsh-runtime — the manifest defines the plugin set,
-# including dsh-mcp-client, which the upstream runtime-bin closure lacks).
+# The kernel's deepseek_harness runtime (and the resident plugin-manager
+# host) spawn `node <valuz-dsh-bundle/bin/dsh.mjs>` — the upstream dsh
+# distribution's CLI with the bundled pnpm — from the vendored deploy-root
+# closure (backend/vendor/dsh-runtime: @deepseek-ai/dsh + valuz-dsh-bundle).
 # Same distribution pattern as chrome-devtools-mcp above: only pins +
 # lockfile are committed, `npm ci` fetches the tree at build time, and the
 # packaged app runs it under its own Electron binary as plain Node
@@ -368,7 +368,7 @@ if ! $SKIP_NODE; then
   log "=== Phase A5: Staging DeepSeek Harness runtime (dsh closure) ==="
 
   DSH_VENDOR_DIR="$BACKEND_DIR/vendor/dsh-runtime"
-  DSH_ENTRY_REL="@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+  DSH_ENTRY_REL="valuz-dsh-bundle/bin/dsh.mjs"
   [ -f "$DSH_VENDOR_DIR/package-lock.json" ] || \
     die "Missing $DSH_VENDOR_DIR/package-lock.json. Refresh: bash scripts/vendor-dsh-runtime.sh --update"
   log "Installing dsh runtime closure (npm ci) ..."

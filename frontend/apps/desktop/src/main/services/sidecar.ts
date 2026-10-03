@@ -381,16 +381,15 @@ function resolveCdtEntry(): string | null {
  * "node" is this Electron binary under ELECTRON_RUN_AS_NODE=1.
  *
  * Returns null when not bundled (dev), so the backend falls back to the
- * dev-checkout vendor tree / VALUZ_DSH_ROOT source mode.
+ * dev-checkout vendor tree.
  */
 function resolveDshRuntimeEntry(): string | null {
   const rel = path.join(
     "dsh-runtime",
     "node_modules",
-    "@deepseek-ai",
-    "dsh-sdk-jsonrpc-demo",
-    "lib",
-    "packaged-bin.js",
+    "valuz-dsh-bundle",
+    "bin",
+    "dsh.mjs",
   );
 
   const bundled = path.join(process.resourcesPath, "libexec", rel);
@@ -516,7 +515,7 @@ export const startSidecar = async (
   // Point the kernel's deepseek_harness runtime at the staged dsh closure,
   // run under the same Electron-as-node contract as the browser engine.
   // Entry absent (dev) → the backend falls back to the dev vendor tree /
-  // VALUZ_DSH_ROOT source mode.
+  // (backend/vendor/dsh-runtime).
   const dshEntry = resolveDshRuntimeEntry();
   if (dshEntry) {
     env.VALUZ_NODE_PATH = process.execPath;
