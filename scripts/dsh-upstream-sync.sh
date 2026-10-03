@@ -108,10 +108,15 @@ EOF
 bash "$ROOT/scripts/vendor-dsh-runtime.sh" --update
 
 # Generated fixture: the dsh client SlotMap catalog shipped in this release.
-catalog_mod="$CLOSURE/node_modules/@deepseek-ai/dsh-cordis-client-runner/lib/client/slot-catalog.js"
-if [ -f "$catalog_mod" ]; then
-  node "$ROOT/scripts/dsh-slot-catalog.mjs" "$catalog_mod" "$SLOT_FIXTURE" "$version"
+# The client SlotMap literal (CLIENT_SLOT_API) ships inside the runner's client
+# bundle. A missing file must stop the sync: skipping it would leave the drift
+# guard comparing against the previous release's catalog.
+catalog_mod="$CLOSURE/node_modules/@deepseek-ai/dsh-cordis-client-runner/lib/client.js"
+if [ ! -f "$catalog_mod" ]; then
+  echo "dsh client slot catalog not found at $catalog_mod — upstream moved it; update dsh-upstream-sync.sh" >&2
+  exit 1
 fi
+node "$ROOT/scripts/dsh-slot-catalog.mjs" "$catalog_mod" "$SLOT_FIXTURE" "$version"
 
 if [ "$run_tests" = 1 ]; then
   (cd "$ROOT/backend" && uv run pytest -q tests/runtimes/test_dsh_upstream_compat.py tests/runtimes/test_dsh_composition.py \

@@ -91,6 +91,14 @@ def test_pins_move_together() -> None:
     peer = _json(BUNDLE_SRC / "package.json")["peerDependencies"]["@deepseek-ai/dsh"]
     installed = _json(NODE_MODULES / "@deepseek-ai" / "dsh" / "package.json")["version"]
     assert pinned == peer == installed, (pinned, peer, installed)
+    # The renderer's Cordis must be the one dsh itself depends on (dsh client
+    # plugins share it through the module table) — the sync script moves it.
+    dsh_cordis = _json(NODE_MODULES / "@deepseek-ai" / "dsh" / "package.json")["dependencies"][
+        "@deepseek-ai/cordis"
+    ]
+    core = Path(__file__).resolve().parents[3] / "frontend" / "packages" / "core" / "package.json"
+    frontend_cordis = _json(core)["dependencies"]["@deepseek-ai/cordis"]
+    assert frontend_cordis == dsh_cordis, (frontend_cordis, dsh_cordis)
 
 
 def _dump_ids(home: Path, bundles: list[str]) -> set[str]:

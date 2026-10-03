@@ -6,8 +6,9 @@
 #             configured exactly as in dsh (Plugins page, plugin_manager).
 #
 # Only upstream row ids are referenced here (no upstream config is copied), so
-# a dsh upgrade carries its own defaults. tests/runtimes/test_dsh_bundle_drift.py
-# fails when an id below disappears upstream.
+# a dsh upgrade carries its own defaults. tests/runtimes/test_dsh_upstream_compat.py
+# (test_bundle_addresses_only_rows_upstream_still_ships) fails when an id below
+# disappears upstream.
 
 # ── role: the web surface exists only in the manager ─────────────────────────
 - id: web-startup

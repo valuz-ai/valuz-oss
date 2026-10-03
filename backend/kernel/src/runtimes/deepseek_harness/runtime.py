@@ -1,10 +1,11 @@
 """DeepSeekHarnessRuntime — drives a DeepSeek Harness SDK runtime as a RuntimePort.
 
 One dsh runtime subprocess per kernel Session, spoken to over stdio JSON-RPC
-(``jsonrpc_client``). The wire has no cancel / resume / fork / approval
-methods yet (verified against dsh 0.1.0-rc.5 — see
-docs/references/deepseek-harness/runtime-gap-analysis.md), so this adapter
-ships the documented v1 stances:
+(``jsonrpc_client``): the managed profile ``valuz`` in the session role, plus a
+per-session ``--patch`` (composition.build_session_patch). The SDK wire has no
+cancel / resume / fork / approval methods (dsh 0.2.1-alpha.1 — the gaps are
+listed in docs/references/deepseek-harness/runtime-gap-analysis.md), so this
+adapter ships these stances:
 
 * **Interrupt = kill.** ``interrupt()`` hard-stops the subprocess; the turn
   settles as ``user_interrupt`` and the next ``run`` cold-starts.
@@ -13,18 +14,20 @@ ships the documented v1 stances:
   transcript sidecar under the state dir and prepends a
   ``<conversation-history>`` block on the first prompt of a fresh process.
   Within one live process, dsh continues the session natively.
-* **No tool approvals.** Tools composed into the session run unattended;
-  ``permission_mode="auto_review"`` is rejected at session create (route
-  guard). The ONE parked surface is the user-questions bridge below.
+* **Tool approvals through the bridge.** dsh's ``approval/request`` is
+  answered by the ``valuz-kernel-bridge`` row: it forwards the request as a
+  question ("Allow once" / "Deny") to the user-questions endpoint below and
+  fails closed (rejected) when nobody answers. ``permission_mode="auto_review"``
+  is still rejected at session create (route guard).
 * **No native fork / task coverage.** ``fork_session`` and
   ``run_task_coverage`` raise; ``supports_native_continuation`` is False so
   the orchestrator marks task coverage unavailable instead of calling it.
 * **Plan mode + user questions = in-process plugins + HTTP bridge.** The
-  wire has no plan or user-questions channel either, so the composition
-  (on a plan-capable closure) mounts ``dsh-plan-mode`` /
-  ``dsh-user-questions`` / ``dsh-tool-ask-user`` plus the Valuz
-  ``valuz-dsh-kernel-bridge`` plugin, which converges dsh plan state to
-  ``session.mode`` at spawn and forwards ``ask()`` to the kernel's
+  wire has no plan or user-questions channel either; dsh's own plan-mode and
+  user-questions plugins run in the profile, and the ``valuz-kernel-bridge``
+  row of ``valuz-dsh-bundle`` (configured per session through the patch)
+  converges dsh plan state to ``session.mode`` on the first ``agent/pre-step``
+  and forwards ``ask()`` to the kernel's
   ``/kernel/v1/dsh/user-questions/{token}`` endpoint. The forward parks as
   a standard ``requires_action`` (subject ``exit_plan_mode`` for the plan
   review, ``clarifying_questions`` for ask_user_question batches) and
