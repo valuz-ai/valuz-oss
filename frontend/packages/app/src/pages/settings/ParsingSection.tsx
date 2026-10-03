@@ -2,13 +2,16 @@ import { SettingsSection } from "@valuz/ui";
 import { ParserSettingsSection } from "@valuz/app/components";
 import { ParserSetupCard } from "@valuz/app/components";
 import { useTranslation } from "@valuz/core";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 export const ParsingSection = () => {
+  const headerActions = useSectionHeaderActions("parsing");
   const { t } = useTranslation();
 
   return (
     <>
       <SettingsSection
+        actions={headerActions}
         title={t("settings.parsing.title")}
         desc={t("settings.parsing.desc")}
         contentClassName="pt-2"

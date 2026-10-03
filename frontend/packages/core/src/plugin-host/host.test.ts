@@ -221,4 +221,19 @@ describe("plugin host", () => {
       "watched:disposed",
     ]);
   });
+  it("can load a plugin again after it failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let shouldFail = true;
+    const flaky = definePlugin({
+      id: "flaky",
+      apply(ctx) {
+        if (shouldFail) throw new Error("not yet");
+        ctx.registry.slot("retry.slot", { id: "flaky-cell", component: Noop });
+      },
+    });
+    expect((await host.load(flaky)).status).toBe("failed");
+    shouldFail = false;
+    expect((await host.load(flaky)).status).toBe("active");
+    expect(slotIds("retry.slot")).toEqual(["flaky-cell"]);
+  });
 });

@@ -34,6 +34,7 @@ import {
   ResourceTitleBadgeSlot,
 } from "../components/ResourceActionSlot";
 import {
+  SlotRenderer,
   agentsApi,
   projectsApi,
   useExecutionTargetsRevision,
@@ -568,6 +569,11 @@ export const AgentsPage = () => {
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {/* ``resource.agent.list.actions`` — h-7 icon buttons. */}
+          <SlotRenderer
+            name="resource.agent.list.actions"
+            context={{ navigate }}
+          />
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"

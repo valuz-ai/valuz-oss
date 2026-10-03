@@ -283,6 +283,24 @@ export interface TodoListItem {
   activeForm?: string | null;
 }
 
+/** A host-supplied tab in the panel's tab header — see
+ *  {@link ProjectContextPanelProps.extraTabs}. */
+export interface ProjectContextPanelExtraTab {
+  /** Tab value. Must not be ``context`` / ``files`` / ``memory``. */
+  id: string;
+  /** Trigger content. The host resolves any i18n before passing it in. */
+  label: React.ReactNode;
+  /** Tab body, rendered inside a scrolling ``px-2`` pane. */
+  content: React.ReactNode;
+}
+
+/** Tab values the panel owns; host tabs may not reuse them. */
+const BUILT_IN_TAB_IDS: ReadonlySet<string> = new Set([
+  "context",
+  "files",
+  "memory",
+]);
+
 export interface ProjectContextPanelProps {
   width?: number;
   /** Panel header title (spec 5.8: 15px / 500 / #131313). */
@@ -401,6 +419,20 @@ export interface ProjectContextPanelProps {
    * unchanged when it is absent.
    */
   generatedFilesAction?: React.ReactNode;
+  /**
+   * Host-supplied tabs appended after the built-in tabs. Ids that collide with
+   * a built-in tab (``context`` / ``files`` / ``memory``) are ignored. Absent
+   * or empty, the tab header renders exactly as before.
+   */
+  extraTabs?: ProjectContextPanelExtraTab[];
+  /**
+   * Host-supplied controls at the right end of the tab header. Rendered inside
+   * a wrapper only when truthy, so pass ``undefined`` — not an element that
+   * renders nothing — while the host has nothing to show.
+   */
+  headerActions?: React.ReactNode;
+  /** Host-supplied sections after the generated-files section. */
+  extraSections?: React.ReactNode;
   /** Open one delivered artifact (its absolute path) in the OS. */
   onOpenGeneratedFile?: (path: string) => void;
   /**
@@ -1111,6 +1143,9 @@ export const ProjectDetailContextPanel = ({
   onOpenUploadedFile,
   generatedFiles,
   generatedFilesAction,
+  extraTabs,
+  headerActions,
+  extraSections,
   onOpenGeneratedFile,
   todos,
   worktrees,
@@ -1182,6 +1217,11 @@ export const ProjectDetailContextPanel = ({
   // Memory tab shows only when the caller passes project memory (real-project
   // home panel). Conversation panels / chat projects pass undefined → no tab.
   const showMemory = projectMemory !== undefined;
+  // Host tabs, minus any that would reuse a built-in tab's value (two triggers
+  // sharing one value would both select it and render its content twice).
+  const visibleExtraTabs = (extraTabs ?? []).filter(
+    (tab) => !BUILT_IN_TAB_IDS.has(tab.id),
+  );
   const defaultOpenSection =
     initialOpenSection !== undefined
       ? initialOpenSection
@@ -2889,6 +2929,7 @@ export const ProjectDetailContextPanel = ({
           a tab instead of an accordion (project sessions) this is simply the
           last section, which is the same relationship. */}
       {generatedFilesSection}
+      {extraSections}
     </div>
   );
 
@@ -2922,7 +2963,23 @@ export const ProjectDetailContextPanel = ({
                 {t("project.projectMemory")}
               </TabsTrigger>
             )}
+            {visibleExtraTabs.map((tab) => (
+              <TabsTrigger
+                key={tab.id}
+                value={tab.id}
+                className="after:!opacity-0"
+              >
+                {tab.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
+          {/* The wrapper exists only while the host has something to put in
+              it, so an unused slot leaves the header exactly as it was. */}
+          {headerActions ? (
+            <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
+              {headerActions}
+            </div>
+          ) : null}
         </header>
         <TabsContent value="context" className="min-h-0 overflow-y-auto px-2">
           {contextSections}
@@ -2947,6 +3004,15 @@ export const ProjectDetailContextPanel = ({
             />
           </TabsContent>
         )}
+        {visibleExtraTabs.map((tab) => (
+          <TabsContent
+            key={tab.id}
+            value={tab.id}
+            className="min-h-0 overflow-y-auto px-2 pb-2"
+          >
+            {tab.content}
+          </TabsContent>
+        ))}
       </Tabs>
       {mcpServers !== undefined && onToggleMcpServer && (
         <ConnectorPickerDialog

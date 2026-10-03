@@ -29,7 +29,7 @@
  * map to ``POST /v1/sessions/{id}/actions`` with the appropriate
  * decision verb.
  */
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   ClipboardList,
@@ -95,6 +95,13 @@ export interface ApprovalCardProps {
   onReject: (reason: string) => void;
   onApproveWithChanges: (modifiedInput: Record<string, unknown>) => void;
   onApproveForSession: () => void;
+  /**
+   * Host-supplied buttons rendered at the start of the action row, before
+   * Reject / Approve. A ReactNode (not a registry lookup) because
+   * ``@valuz/ui`` must not depend on ``@valuz/core``. Absent → the row is
+   * exactly as it always was.
+   */
+  extraActions?: ReactNode;
 }
 
 const _SUBJECT_META: Record<
@@ -254,6 +261,7 @@ export const ApprovalCard = memo(function ApprovalCard({
   onReject,
   onApproveWithChanges,
   onApproveForSession,
+  extraActions,
 }: ApprovalCardProps) {
   const { t } = useI18n();
   const meta = _SUBJECT_META[subject] ?? _SUBJECT_META.tool_input;
@@ -355,6 +363,7 @@ export const ApprovalCard = memo(function ApprovalCard({
               {pendingId.slice(0, 8)}…
             </span>
             <div className="flex items-center gap-2">
+              {extraActions}
               <Button
                 variant="outline"
                 size="sm"

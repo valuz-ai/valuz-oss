@@ -231,6 +231,7 @@ export const ConnectStep = ({
       subtitle={t("onboarding.connectSubtitle" as Parameters<typeof t>[0])}
       footer={
         <StepFooter
+          step="connect"
           onSkip={onSkip}
           skipLabel={t("onboarding.skip" as Parameters<typeof t>[0])}
           primaryLabel={t("onboarding.continue" as Parameters<typeof t>[0])}

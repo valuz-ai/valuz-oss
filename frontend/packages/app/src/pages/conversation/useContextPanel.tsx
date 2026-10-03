@@ -18,7 +18,6 @@ import {
   type TodoItem,
 } from "@valuz/core";
 import {
-  ProjectDetailContextPanel,
   SkillStagingPanel,
   type ArtifactOpenTarget,
   type FileTreeNode,
@@ -28,7 +27,7 @@ import {
 import { usePlatform } from "@valuz/app/platform";
 import { toAbsoluteProjectPath } from "../../lib/project-paths";
 import { formatFileSize } from "./file-tree-utils";
-import { SlotRenderer } from "@valuz/core";
+import { SlottedProjectContextPanel } from "./SlottedProjectContextPanel";
 
 type ContextPanelParams = {
   /** Route param (``/conversation/{id}``), defaulted to ``NEW_SESSION_ID``. */
@@ -280,7 +279,12 @@ export function useContextPanel({
     };
 
     return (
-      <ProjectDetailContextPanel
+      <SlottedProjectContextPanel
+        // Slot context for the context-panel extension points. These reach the
+        // wrapper as props, so both are memo dependencies below.
+        projectId={selectedProjectId}
+        sessionId={selectedSession?.id ?? null}
+        surface="conversation"
         // Conversation page intentionally omits ``instructions`` so the
         // panel hides the "Instructions" card. The instructions surface lives
         // on the project home page only — duplicating it here was
@@ -293,13 +297,9 @@ export function useContextPanel({
         onOpenUploadedFile={(path) => void openArtifactFile(path)}
         // Agent-delivered deliverables (产物) — shown in both chat and
         // project sessions; rows open in the in-app artifact viewer.
+        // ``project.generatedFiles.actions`` rides on this list inside the
+        // wrapper, and only while something is registered for it.
         generatedFiles={generatedFiles}
-        generatedFilesAction={
-          <SlotRenderer
-            name="project.generatedFiles.actions"
-            context={{ generatedFiles }}
-          />
-        }
         onOpenGeneratedFile={(path) => void openArtifactFile(path)}
         onDownloadGeneratedFile={downloadArtifactFile}
         onLoadArtifactVersions={handleLoadArtifactVersions}
@@ -388,6 +388,7 @@ export function useContextPanel({
     id,
     navigate,
     selectedSession,
+    selectedProjectId,
   ]);
 
   // The conversation page renders its own header inline (see JSX below) so the

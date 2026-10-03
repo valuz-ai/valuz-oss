@@ -416,3 +416,75 @@ describe("Composer mode guidance", () => {
     expect(tooltip!.classList.contains("text-balance")).toBe(false);
   });
 });
+
+describe("Composer host extension nodes", () => {
+  const plusTrigger = () =>
+    screen.getByRole("button", { name: "添加附件、技能和连接器" });
+
+  it("adds no element, wrapper or separator while the nodes are unset", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Composer />);
+
+    expect(container.querySelector("[data-testid^='ext-']")).toBeNull();
+    // No attachments row: it only exists for chips or a host node.
+    expect(container.querySelector(".mb-3.flex.flex-wrap")).toBeNull();
+
+    await user.click(plusTrigger());
+    await screen.findByRole("menu");
+    // The menu's own separators only (the one ahead of the skills entry); an
+    // unset ``plusMenuItems`` contributes none.
+    expect(screen.getAllByRole("separator")).toHaveLength(1);
+    expect(screen.queryByTestId("ext-plus")).toBeNull();
+  });
+
+  it("renders the toolbar nodes at the end of the left cluster and before Send", () => {
+    render(
+      <Composer
+        toolbarLeft={<span data-testid="ext-left">L</span>}
+        toolbarRight={<span data-testid="ext-right">R</span>}
+      />,
+    );
+    const left = screen.getByTestId("ext-left");
+    const right = screen.getByTestId("ext-right");
+    const send = screen.getByRole("button", { name: "发送" });
+
+    // Left cluster and right cluster are the two children of the toolbar row.
+    expect(left.parentElement!.nextElementSibling).toBe(right.parentElement);
+    // The left node is the LAST item of its cluster (no wrapper added).
+    expect(left.parentElement!.lastElementChild).toBe(left);
+    // The right node sits directly before the Send button, same cluster.
+    expect(right.nextElementSibling).toBe(send);
+  });
+
+  it("renders attachmentsExtra in its own row between the chips and the editor", () => {
+    render(
+      <Composer
+        pinnedAttachments={[{ id: "a1", name: "notes.pdf" }]}
+        attachmentsExtra={<span data-testid="ext-att">chip</span>}
+      />,
+    );
+    const row = screen.getByTestId("ext-att").parentElement!;
+    expect(row.className).toContain("mb-3");
+    expect(row.className).toContain("flex-wrap");
+    const chips = screen.getByText("notes.pdf").closest(".mb-3")!;
+    const editor = screen.getByRole("textbox");
+    // chips row -> extra row -> editor block, in document order.
+    expect(chips.nextElementSibling).toBe(row);
+    expect(row.nextElementSibling!.contains(editor)).toBe(true);
+  });
+
+  it("appends plusMenuItems after one extra separator at the end of the + menu", async () => {
+    const user = userEvent.setup();
+    render(<Composer plusMenuItems={<div data-testid="ext-plus">item</div>} />);
+
+    await user.click(plusTrigger());
+    const item = await screen.findByTestId("ext-plus");
+    const menu = item.closest("[role='menu']")!;
+    expect(menu.lastElementChild).toBe(item);
+    // The menu's own separator (1, see the unset case) plus the one added
+    // directly before the contributed item.
+    const separators = screen.getAllByRole("separator");
+    expect(separators).toHaveLength(2);
+    expect(item.previousElementSibling).toBe(separators[1]);
+  });
+});

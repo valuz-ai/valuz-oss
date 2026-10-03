@@ -873,9 +873,12 @@ function buildTrailingCitationContext(
 const UserMessageActions = ({
   text,
   timestamp,
+  extraActions,
 }: {
   text: string;
   timestamp?: number;
+  /** Host-supplied controls appended after the copy button. */
+  extraActions?: ReactNode;
 }) => {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -925,6 +928,7 @@ const UserMessageActions = ({
           <Copy className="h-3.5 w-3.5" />
         )}
       </TurnActionButton>
+      {extraActions}
     </div>
   );
 };
@@ -1038,6 +1042,23 @@ interface TurnRowProps {
    * contract as ``renderTurnActions``.
    */
   renderPlanActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * Host-supplied controls appended to a USER message's action row (after
+   * copy). Called only for rows that render that row (``turn.userText``).
+   * Returning null adds nothing. External state it depends on must be folded
+   * into ``turnActionsKey`` — same memo contract as ``renderTurnActions``.
+   */
+  renderUserMessageActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * Host content rendered LAST in a turn, after the error card. ``isLatest`` /
+   * ``inFlight`` describe the row at render time (the latest row re-renders on
+   * every change, so both stay current). Returning null adds nothing. External
+   * state it depends on must be folded into ``turnActionsKey``.
+   */
+  renderTurnTail?: (
+    turn: ConversationTurn,
+    state: { isLatest: boolean; inFlight: boolean },
+  ) => ReactNode | null;
   /** Predicate marking an overridden tool card as *foldable* — it collapses
    * away with the process trail when the turn ends (visible while running or
    * when the turn is expanded), instead of staying pinned at its position.
@@ -1076,6 +1097,8 @@ const TurnRow = memo(
     showTokenUsage,
     renderTurnLeading,
     renderPlanActions,
+    renderUserMessageActions,
+    renderTurnTail,
     isToolCardFoldable,
     onRevealFile,
     isLocalFileHref,
@@ -1328,6 +1351,7 @@ const TurnRow = memo(
                 <UserMessageActions
                   text={turn.userText}
                   timestamp={turn.userTimestamp}
+                  extraActions={renderUserMessageActions?.(turn)}
                 />
               ) : null}
             </div>
@@ -1588,6 +1612,8 @@ const TurnRow = memo(
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
               />
             ) : null}
+
+            {renderTurnTail?.(turn, { isLatest, inFlight })}
           </div>
         </div>
       </div>
@@ -1662,6 +1688,10 @@ interface ConversationTurnListProps {
   ) => ReactNode | null;
   /** See ``TurnRowProps.renderPlanActions``. */
   renderPlanActions?: (turn: ConversationTurn) => ReactNode | null;
+  /** See ``TurnRowProps.renderUserMessageActions``. */
+  renderUserMessageActions?: (turn: ConversationTurn) => ReactNode | null;
+  /** See ``TurnRowProps.renderTurnTail``. */
+  renderTurnTail?: TurnRowProps["renderTurnTail"];
   /** See ``TurnRowProps.isToolCardFoldable``. */
   isToolCardFoldable?: (tool: PrototypeToolCall) => boolean;
   /** See ``TurnRowProps.onRevealFile``. */
@@ -1687,6 +1717,23 @@ interface ConversationTurnListProps {
    *  (e.g. an edition workbench panel) keep the title + suggestions but drop
    *  the illustration, which reads as filler at panel widths. */
   hideEmptyMascot?: boolean;
+  /**
+   * Host replacement for the welcome's mascot AND title. Absent → the default
+   * mascot + ``emptyTitle``; the suggestions below are unaffected. Hosts that
+   * also pass ``emptyTitle`` / ``hideEmptyMascot`` decide precedence themselves
+   * (this node is rendered whenever it is given).
+   */
+  welcomeHero?: ReactNode;
+  /**
+   * Host replacement for ONLY the default mascot image. Ignored when
+   * ``hideEmptyMascot`` is set or ``welcomeHero`` replaces the whole hero.
+   */
+  welcomeMascot?: ReactNode;
+  /**
+   * Host content below the suggestions on the welcome. Wrapped in the same
+   * ``max-w-[750px]`` column as the suggestions, and only when given.
+   */
+  welcomeExtra?: ReactNode;
   /** Show the new-chat welcome (mascot + title + suggestions) when there are no
    *  turns. Only true for a genuinely fresh conversation — an existing
    *  conversation whose transcript is still loading has no turns yet either, and
@@ -1724,6 +1771,8 @@ export function ConversationTurnList({
   showTokenUsage,
   renderTurnLeading,
   renderPlanActions,
+  renderUserMessageActions,
+  renderTurnTail,
   isToolCardFoldable,
   onRevealFile,
   isLocalFileHref,
@@ -1734,6 +1783,9 @@ export function ConversationTurnList({
   emptySuggestions,
   onEmptySuggestionClick,
   hideEmptyMascot,
+  welcomeHero,
+  welcomeMascot,
+  welcomeExtra,
   showWelcome,
   startingRuntime,
 }: ConversationTurnListProps) {
@@ -1904,6 +1956,8 @@ export function ConversationTurnList({
                     showTokenUsage={showTokenUsage}
                     renderTurnLeading={renderTurnLeading}
                     renderPlanActions={renderPlanActions}
+                    renderUserMessageActions={renderUserMessageActions}
+                    renderTurnTail={renderTurnTail}
                     isToolCardFoldable={isToolCardFoldable}
                     onRevealFile={onRevealFile}
                     isLocalFileHref={isLocalFileHref}
@@ -1956,17 +2010,25 @@ export function ConversationTurnList({
                   empty new-chat page feels less bare. Gated on ``showWelcome``
                   so an existing conversation still fetching its transcript (no
                   turns yet) doesn't flash this new-chat state mid-load. */}
-              {hideEmptyMascot ? null : (
-                <img
-                  src={assetUrl("mascot.png")}
-                  alt=""
-                  aria-hidden="true"
-                  className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
-                />
+              {welcomeHero ? (
+                welcomeHero
+              ) : (
+                <>
+                  {hideEmptyMascot ? null : (
+                    (welcomeMascot ?? (
+                      <img
+                        src={assetUrl("mascot.png")}
+                        alt=""
+                        aria-hidden="true"
+                        className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
+                      />
+                    ))
+                  )}
+                  <div className="text-center text-2xl font-medium leading-tight text-ink-heading">
+                    {emptyTitle ?? t("conversation.startHere")}
+                  </div>
+                </>
               )}
-              <div className="text-center text-2xl font-medium leading-tight text-ink-heading">
-                {emptyTitle ?? t("conversation.startHere")}
-              </div>
               {emptySuggestions && emptySuggestions.length > 0 ? (
                 <div className="mx-auto mt-5 max-w-[750px]">
                   <SuggestionList
@@ -1974,6 +2036,9 @@ export function ConversationTurnList({
                     onClick={onEmptySuggestionClick}
                   />
                 </div>
+              ) : null}
+              {welcomeExtra ? (
+                <div className="mx-auto mt-5 max-w-[750px]">{welcomeExtra}</div>
               ) : null}
             </>
           ) : null}

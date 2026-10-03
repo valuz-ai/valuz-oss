@@ -151,6 +151,9 @@ export function createPluginHost(): PluginHost {
         error,
       );
       setRecord(plugin.id, { status: "failed", error });
+      // Cordis keeps a FAILED fiber attached to its parent; release it so a
+      // later reload of the same id starts clean.
+      await fiber.dispose().catch(() => undefined);
     }
     return entry.record;
   }
@@ -182,4 +185,3 @@ export function createPluginHost(): PluginHost {
 
 /** The app-wide host that editions load their plugins into. */
 export const pluginHost: PluginHost = createPluginHost();
-

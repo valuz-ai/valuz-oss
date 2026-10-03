@@ -20,8 +20,10 @@ import {
 import { toast } from "sonner";
 import { FolderKanban, MoreVertical, Plus, Upload } from "lucide-react";
 import {
+  SlotRenderer,
   projectsApi,
   recordEntityOrigin,
+  useHasSlot,
   useProjectStore,
   useTranslation,
   type ProjectListItem,
@@ -48,6 +50,10 @@ export const ProjectsPage = ({
   const [searchParams, setSearchParams] = useSearchParams();
   const { setHeader, setHeaderClassName, setContentInnerClassName } =
     useProjectOutlet();
+  // ``PageHeader`` wraps ``action`` only when it is truthy, and a
+  // ``<SlotRenderer/>`` element always is — so the slot goes in only while
+  // something is registered for it.
+  const hasListActions = useHasSlot("resource.project.list.actions");
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const { ref: gridRef, columns: gridTemplateColumns } = useCardGridColumns(
     projects.length,
@@ -108,11 +114,8 @@ export const ProjectsPage = ({
     );
   }, [searchParams, setSearchParams]);
 
-  const pageHeader = useMemo(
-    () => (
-      <PageHeader
-        title={t("sidebar.projects" as Parameters<typeof t>[0])}
-        action={
+  const pageHeader = useMemo(() => {
+    const createMenu = (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="default" size="sm">
@@ -134,11 +137,26 @@ export const ProjectsPage = ({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+    );
+    return (
+      <PageHeader
+        title={t("sidebar.projects" as Parameters<typeof t>[0])}
+        action={
+          hasListActions ? (
+            <div className="flex items-center gap-2">
+              <SlotRenderer
+                name="resource.project.list.actions"
+                context={{ navigate }}
+              />
+              {createMenu}
+            </div>
+          ) : (
+            createMenu
+          )
         }
       />
-    ),
-    [t],
-  );
+    );
+  }, [t, hasListActions, navigate]);
 
   useEffect(() => {
     setHeader(pageHeader);

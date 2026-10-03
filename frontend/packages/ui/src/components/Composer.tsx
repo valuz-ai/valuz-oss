@@ -497,6 +497,27 @@ export interface ComposerProps {
    * here; the input card paints above it, so the strip's top edge tucks
    * under the card's rounded corners. */
   footerBar?: React.ReactNode;
+  /**
+   * Host-supplied nodes for the composer's extension points. ``@valuz/ui``
+   * cannot reach the slot registry, so the app host fills these with its
+   * slot hosts.
+   *
+   * ``toolbarLeft`` / ``toolbarRight`` are rendered bare (no wrapper), so an
+   * element that renders nothing leaves the toolbar untouched. ``plusMenuItems``
+   * and ``attachmentsExtra`` draw a separator / row wrapper whenever the node
+   * is truthy — a host must pass those ONLY while something occupies the slot,
+   * never an always-present element that may render empty.
+   *
+   * ``toolbarLeft`` — end of the left toolbar cluster (h-7 items; the row
+   * never wraps, so keep it compact).
+   */
+  toolbarLeft?: React.ReactNode;
+  /** Right toolbar cluster, before the Send / Stop button (h-7 items). */
+  toolbarRight?: React.ReactNode;
+  /** DropdownMenu items at the end of the "+" menu, after a separator. */
+  plusMenuItems?: React.ReactNode;
+  /** A row of extra chips above the editor, after the attachment chips. */
+  attachmentsExtra?: React.ReactNode;
   /** Entry point to create/add an agent to the project. */
   onAddAgent?: () => void;
   /** Disable the send button regardless of content (e.g. no agent picked). */
@@ -630,6 +651,10 @@ export const Composer = ({
   onProjectChange,
   projectLocked = false,
   footerBar,
+  toolbarLeft,
+  toolbarRight,
+  plusMenuItems,
+  attachmentsExtra,
   onAddAgent,
   sendDisabled = false,
   mode = "chat",
@@ -1646,6 +1671,12 @@ export const Composer = ({
             </div>
           )}
 
+          {attachmentsExtra ? (
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {attachmentsExtra}
+            </div>
+          ) : null}
+
           <div className="relative">
             {/* Contenteditable replaces the old textarea so skill
                 tokens can render as inline chips next to the user's
@@ -2037,6 +2068,12 @@ export const Composer = ({
                     </ComposerSubmenuContent>
                   </DropdownMenuSub>
                 )}
+                {plusMenuItems ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    {plusMenuItems}
+                  </>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
             {/* ADR-013/014 cross-runtime approval mode picker. Visible
@@ -2240,6 +2277,7 @@ export const Composer = ({
                 </Tooltip>
               </TooltipProvider>
             )}
+            {toolbarLeft}
           </div>
           <div className="flex min-w-0 items-center gap-2">
             {/* 09-assistant 📁 project chip — switches the conversation
@@ -3326,6 +3364,7 @@ export const Composer = ({
                 )}
               </div>
             )}
+            {toolbarRight}
             {/* Send button: 28×28 / radius 6 / accent bg / arrow 13px.
                 Doubles as the stop button while a turn is in flight —
                 clicking it routes to ``onStop`` (the page maps to its

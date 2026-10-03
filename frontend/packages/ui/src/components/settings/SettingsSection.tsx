@@ -13,6 +13,9 @@ export interface SettingsSectionProps {
    *  the log panel fills the window and scrolls internally instead of the
    *  whole page scrolling). Requires a full-height flex parent. */
   fill?: boolean;
+  /** Controls rendered beside the title, right-aligned. Omitted (or empty), the
+   *  title block renders exactly as before — no wrapper, no spacing change. */
+  actions?: ReactNode;
 }
 
 export const SettingsSection = ({
@@ -22,9 +25,10 @@ export const SettingsSection = ({
   children,
   contentClassName,
   fill,
-}: SettingsSectionProps) => (
-  <section className={cn("mb-8", fill && "mb-0 flex min-h-0 flex-1 flex-col")}>
-    <div className="mb-3">
+  actions,
+}: SettingsSectionProps) => {
+  const heading = (
+    <>
       {kicker ? (
         <div className="text-micro uppercase tracking-[0.8px] text-ink-section">
           {kicker}
@@ -32,15 +36,34 @@ export const SettingsSection = ({
       ) : null}
       <h2 className="text-base font-semibold text-ink-heading">{title}</h2>
       {desc ? <p className="text-xs text-ink-body">{desc}</p> : null}
-    </div>
-    {contentClassName || fill ? (
-      <div
-        className={cn(fill && "flex min-h-0 flex-1 flex-col", contentClassName)}
-      >
-        {children}
+    </>
+  );
+  return (
+    <section
+      className={cn("mb-8", fill && "mb-0 flex min-h-0 flex-1 flex-col")}
+    >
+      <div className="mb-3">
+        {actions ? (
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">{heading}</div>
+            <div className="flex shrink-0 items-center gap-2">{actions}</div>
+          </div>
+        ) : (
+          heading
+        )}
       </div>
-    ) : (
-      children
-    )}
-  </section>
-);
+      {contentClassName || fill ? (
+        <div
+          className={cn(
+            fill && "flex min-h-0 flex-1 flex-col",
+            contentClassName,
+          )}
+        >
+          {children}
+        </div>
+      ) : (
+        children
+      )}
+    </section>
+  );
+};

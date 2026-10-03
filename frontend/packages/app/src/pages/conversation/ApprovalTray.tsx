@@ -1,3 +1,4 @@
+import { KeyedSlot, SlotRenderer, useHasSlot } from "@valuz/core";
 import {
   ApprovalCard,
   ApprovalResolvedStrip,
@@ -28,6 +29,10 @@ export function ApprovalTray({
   autoApprovedNotices,
   handleApprovalDecision,
 }: ApprovalTrayProps) {
+  // ``ApprovalCard`` is in ``@valuz/ui`` and takes the plugin buttons as a
+  // node, drawn only when the slot is occupied (an always-present node would
+  // be truthy even when empty).
+  const hasApprovalActions = useHasSlot("conversation.approval.actions");
   return (
     <>
       {/* ADR-013 v2 (kernel d008b53) approval tray — renders any
@@ -59,37 +64,71 @@ export function ApprovalTray({
               );
             }
             return (
-              <ApprovalCard
+              // A plugin may take over the whole card for one approval subject
+              // (``key`` = ``entry.subject``); unclaimed subjects render the
+              // default card, so an empty slot changes nothing.
+              <KeyedSlot
                 key={entry.pendingId}
-                pendingId={entry.pendingId}
-                subject={entry.subject}
-                payload={entry.payload}
-                availableDecisions={entry.availableDecisions}
-                sessionRulePreviewDisplay={entry.sessionRulePreviewDisplay}
-                originalInput={entry.originalInput}
-                receivedAtLabel={
-                  entry.receivedAt
-                    ? new Date(entry.receivedAt).toLocaleTimeString()
-                    : undefined
-                }
-                submitting={entry.submitting}
-                onApprove={() =>
-                  handleApprovalDecision(entry.pendingId, "approve")
-                }
-                onReject={(reason) =>
-                  handleApprovalDecision(entry.pendingId, "reject", {
-                    message: reason,
-                  })
-                }
-                onApproveWithChanges={(modifiedInput) =>
-                  handleApprovalDecision(
-                    entry.pendingId,
-                    "approve_with_changes",
-                    { modifiedInput },
-                  )
-                }
-                onApproveForSession={() =>
-                  handleApprovalDecision(entry.pendingId, "approve_for_session")
+                name="conversation.approval.card"
+                slotKey={entry.subject}
+                context={{
+                  entry,
+                  // Bound to this entry: ``decide("approve")``,
+                  // ``decide("reject", { message })``,
+                  // ``decide("approve_with_changes", { modifiedInput })``.
+                  decide: (
+                    decision: Parameters<typeof handleApprovalDecision>[1],
+                    opts?: Parameters<typeof handleApprovalDecision>[2],
+                  ) => handleApprovalDecision(entry.pendingId, decision, opts),
+                }}
+                fallback={
+                  <ApprovalCard
+                    pendingId={entry.pendingId}
+                    subject={entry.subject}
+                    payload={entry.payload}
+                    availableDecisions={entry.availableDecisions}
+                    sessionRulePreviewDisplay={entry.sessionRulePreviewDisplay}
+                    originalInput={entry.originalInput}
+                    receivedAtLabel={
+                      entry.receivedAt
+                        ? new Date(entry.receivedAt).toLocaleTimeString()
+                        : undefined
+                    }
+                    submitting={entry.submitting}
+                    onApprove={() =>
+                      handleApprovalDecision(entry.pendingId, "approve")
+                    }
+                    onReject={(reason) =>
+                      handleApprovalDecision(entry.pendingId, "reject", {
+                        message: reason,
+                      })
+                    }
+                    onApproveWithChanges={(modifiedInput) =>
+                      handleApprovalDecision(
+                        entry.pendingId,
+                        "approve_with_changes",
+                        { modifiedInput },
+                      )
+                    }
+                    onApproveForSession={() =>
+                      handleApprovalDecision(
+                        entry.pendingId,
+                        "approve_for_session",
+                      )
+                    }
+                    extraActions={
+                      hasApprovalActions ? (
+                        <SlotRenderer
+                          name="conversation.approval.actions"
+                          context={{
+                            pendingId: entry.pendingId,
+                            subject: entry.subject,
+                            payload: entry.payload,
+                          }}
+                        />
+                      ) : undefined
+                    }
+                  />
                 }
               />
             );

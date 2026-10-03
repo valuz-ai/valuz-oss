@@ -33,6 +33,7 @@ import {
   networkRuntimeLabel,
   shouldShowNetworkDiagnosticsAction,
 } from "./network-presentation";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 type Health = EgressSnapshot["health"];
 
@@ -63,6 +64,7 @@ const healthBadgeVariant: Record<
 };
 
 export const NetworkSection = () => {
+  const headerActions = useSectionHeaderActions("network");
   const { t } = useTranslation();
   const { count: activeRunCount } = useRunningRuns();
   const [status, setStatus] = useState<EgressManagerStatus | null>(null);
@@ -267,6 +269,7 @@ export const NetworkSection = () => {
   if (!bridge()) {
     return (
       <SettingsSection
+        actions={headerActions}
         title={t("settings.network.title")}
         desc={t("settings.network.desc")}
       >
@@ -280,6 +283,7 @@ export const NetworkSection = () => {
   if (capabilityChecked && !capability?.available) {
     return (
       <SettingsSection
+        actions={headerActions}
         title={t("settings.network.title")}
         desc={t("settings.network.desc")}
       >
@@ -300,6 +304,7 @@ export const NetworkSection = () => {
 
   return (
     <SettingsSection
+      actions={headerActions}
       title={t("settings.network.title")}
       desc={t("settings.network.desc")}
     >

@@ -51,6 +51,7 @@ import {
   type CatalogField,
   type UpdateConnectorRequest,
 } from "@valuz/core";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 // Connector directory display types -- used by the recommended-
 // connectors section to render every catalog entry uniformly as
@@ -89,6 +90,7 @@ const ConnectorIcon = ({
 };
 
 export const ConnectorsSection = () => {
+  const headerActions = useSectionHeaderActions("connectors");
   const { t } = useTranslation();
   const { locale } = useSettingsStore();
 
@@ -829,6 +831,7 @@ export const ConnectorsSection = () => {
   return (
     <>
       <SettingsSection
+        actions={headerActions}
         title={t("settings.connectors.title")}
         desc={t("settings.connectors.desc")}
         contentClassName="pt-2"

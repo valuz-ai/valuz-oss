@@ -21,7 +21,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { SettingsNav, cn } from "@valuz/ui";
-import { useTranslation } from "@valuz/core";
+import { SlotRenderer, useTranslation } from "@valuz/core";
 import { useRegistryStore } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 
@@ -164,7 +164,13 @@ export const SettingsPage = () => {
               : "py-5 pb-12 md:py-6 md:pb-14",
           )}
         >
+          <SlotRenderer name="settings.header" context={{ tab, setTab }} />
           {ActiveSection ? <ActiveSection /> : null}
+          <SlotRenderer
+            name="settings.section.footer"
+            slotKey={tab}
+            context={{ tab }}
+          />
         </div>
       </div>
     </div>

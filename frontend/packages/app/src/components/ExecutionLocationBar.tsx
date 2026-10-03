@@ -18,6 +18,7 @@
  */
 
 import {
+  SlotRenderer,
   getDefaultExecutionTarget,
   selectableExecutionTargets,
   useExecutionTargets,
@@ -62,6 +63,12 @@ export interface ExecutionLocationBarProps {
    * drives the static location chip when ``locked``.
    */
   lockedOriginId?: string;
+  /**
+   * Which composer this bar is attached to. Handed to ``conversation.composer.bar``
+   * contributions so a plugin can tell the conversation composer from the
+   * project-home one. Defaults to ``"conversation"``.
+   */
+  surface?: "conversation" | "project-home";
   className?: string;
 }
 
@@ -82,6 +89,7 @@ export function ExecutionLocationBar({
   onProjectChange,
   locked = false,
   lockedOriginId,
+  surface = "conversation",
   className,
 }: ExecutionLocationBarProps) {
   const { t } = useTranslation();
@@ -296,6 +304,12 @@ export function ExecutionLocationBar({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+      {/* End of the strip — chips contributed by plugins. Renders nothing
+          while the slot is empty, so the strip is exactly as before. */}
+      <SlotRenderer
+        name="conversation.composer.bar"
+        context={{ targetId, locked, selectedProjectId, surface }}
+      />
     </div>
   );
 }

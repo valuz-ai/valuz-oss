@@ -116,6 +116,15 @@ export function ConversationHeader({
       <header className="flex h-12 shrink-0 items-center px-5">
         <div className="flex w-full items-center justify-between">
           <div className="flex min-w-0 items-center gap-2">
+            <SlotRenderer
+              name="conversation.header.leading"
+              context={{
+                sessionId: selectedSessionId,
+                session: selectedSession,
+                project: activeProject,
+                fromTaskId,
+              }}
+            />
             {fromTaskId ? (
               <>
                 <button
@@ -251,6 +260,14 @@ export function ConversationHeader({
                         {t("conversation.fork" as Parameters<typeof t>[0])}
                       </DropdownMenuItem>
                     )}
+                    <SlotRenderer
+                      name="conversation.title.menu-items"
+                      context={{
+                        sessionId: selectedSessionId,
+                        session: selectedSession,
+                        turns: effectiveTurns,
+                      }}
+                    />
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       variant="destructive"
@@ -345,6 +362,15 @@ export function ConversationHeader({
                 {activeProject.name}
               </Badge>
             ) : null}
+            <SlotRenderer
+              name="conversation.header.badges"
+              context={{
+                sessionId: selectedSessionId,
+                session: selectedSession,
+                project: activeProject,
+                agentSlug: headerAgentSlug,
+              }}
+            />
           </div>
           {/* Host actions for THIS session (share, export…) — the row's right
               end, opposite the identity cluster, rather than wedged between

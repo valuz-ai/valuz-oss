@@ -67,10 +67,15 @@ import type {
   KbListItem,
   KbTreeNode,
 } from "@valuz/core";
+import { useNavigate } from "react-router-dom";
 import { useProjectOutlet } from "@valuz/app/layout";
 import type { DirectoryFieldMode } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
-import { useTranslation, useResourceCategories } from "@valuz/core";
+import {
+  SlotRenderer,
+  useTranslation,
+  useResourceCategories,
+} from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
 import { CreateKbDialog } from "../components";
 import { useCardGridColumns } from "../hooks/use-card-grid-columns";
@@ -297,6 +302,7 @@ export const KnowledgePage = ({
   managedRootAutoDiscovers?: boolean;
 } = {}) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const platform = usePlatform();
   const { copyFiles } = platform;
   const [kbs, setKbs] = useState<KbListItem[]>([]);
@@ -1248,6 +1254,13 @@ export const KnowledgePage = ({
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-2">
+            {/* ``resource.kb.list.actions`` — the element subscribes to the
+                registry itself, so this memo needs ``navigate`` and nothing
+                else for it. */}
+            <SlotRenderer
+              name="resource.kb.list.actions"
+              context={{ navigate }}
+            />
             {!loading && health && (
               <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
                 <span className="text-ink-heading font-medium">
@@ -1287,6 +1300,7 @@ export const KnowledgePage = ({
     loading,
     rescanning,
     uploading,
+    navigate,
     t,
   ]);
 

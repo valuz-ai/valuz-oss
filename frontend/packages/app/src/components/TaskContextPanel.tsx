@@ -13,6 +13,10 @@ import {
 } from "lucide-react";
 import {
   RUNTIME_DISPLAY_NAME,
+  SlotContribution,
+  SlotRenderer,
+  useHasSlot,
+  useSlotRegistrations,
   useTranslation,
   type MemberWithAgent,
   type TaskRun,
@@ -73,7 +77,13 @@ export interface PlannedSubtask {
   review_feedback?: string | null;
 }
 
+/** Tab values the tabbed shell owns; plugin tabs may not reuse them. */
+const BUILT_IN_TAB_IDS: ReadonlySet<string> = new Set(["context", "files"]);
+
 export interface TaskContextPanelProps {
+  /** Id of the project this task runs in. Handed to ``task.panel.*`` slot
+   *  contributions as context; absent, they receive ``undefined``. */
+  projectId?: string;
   /** All runs in the task (lead + sub-Runs). Lead is identified by
    *  ``run.kind === "lead"`` so callers don't pass it separately. */
   runs: TaskRun[];
@@ -139,6 +149,7 @@ export interface TaskContextPanelProps {
  *     filters on the global task list.
  */
 export const TaskContextPanel = ({
+  projectId,
   runs,
   members,
   plannedSubtasks = [],
@@ -153,6 +164,27 @@ export const TaskContextPanel = ({
 }: TaskContextPanelProps) => {
   const { t } = useTranslation();
   const [planReviewOpen, setPlanReviewOpen] = useState(false);
+  // ``task.panel.*`` extension points. The header wrapper is rendered only when
+  // something is registered for it, so an unused slot leaves the tab header as
+  // it was; ``task.panel.tabs`` adds a trigger + body per registration.
+  const hasHeaderActions = useHasSlot("task.panel.header.actions");
+  const tabRegistrations = useSlotRegistrations("task.panel.tabs");
+  const extraTabs = useMemo(() => {
+    // A key that repeats or that names one of the shell's own tabs would give
+    // Radix two triggers for one value: the shell's tabs win, and the
+    // higher-priority registration of a repeated key wins.
+    const seen = new Set<string>(BUILT_IN_TAB_IDS);
+    return tabRegistrations.flatMap((registration) => {
+      const tabId = registration.key ?? registration.id;
+      if (seen.has(tabId)) return [];
+      seen.add(tabId);
+      return [{ tabId, registration }];
+    });
+  }, [tabRegistrations]);
+  const slotContext = useMemo(
+    () => ({ projectId, runs, members, taskStatus }),
+    [projectId, runs, members, taskStatus],
+  );
   // On a halted task (anything but ``active``) no member is live, yet the
   // backend leaves ``in_review`` / ``rework`` nodes projected as the spinning
   // ``active`` panel state (it parks only ``in_progress``). Surface those as
@@ -441,7 +473,28 @@ export const TaskContextPanel = ({
                 label stays in sync across surfaces. */}
             {t("project.projectFiles" as Parameters<typeof t>[0])}
           </TabsTrigger>
+          {extraTabs.map(({ tabId, registration }) => (
+            <TabsTrigger
+              key={tabId}
+              value={tabId}
+              className="after:!opacity-0"
+            >
+              {t(
+                (registration.label ?? registration.id) as Parameters<
+                  typeof t
+                >[0],
+              )}
+            </TabsTrigger>
+          ))}
         </TabsList>
+        {hasHeaderActions && (
+          <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
+            <SlotRenderer
+              name="task.panel.header.actions"
+              context={slotContext}
+            />
+          </div>
+        )}
       </header>
       <TabsContent
         value="context"
@@ -510,6 +563,19 @@ export const TaskContextPanel = ({
           </div>
         </div>
       </TabsContent>
+      {extraTabs.map(({ tabId, registration }) => (
+        <TabsContent
+          key={tabId}
+          value={tabId}
+          className="min-h-0 overflow-y-auto px-2 pb-2"
+        >
+          <SlotContribution
+            name="task.panel.tabs"
+            registration={registration}
+            context={slotContext}
+          />
+        </TabsContent>
+      ))}
     </Tabs>
   );
 };

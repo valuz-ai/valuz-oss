@@ -20,8 +20,10 @@ import {
   type MemoryView,
   type PreferencesResponse,
 } from "@valuz/core";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 export const MemorySection = () => {
+  const headerActions = useSectionHeaderActions("personalization");
   const { t } = useTranslation();
   const [view, setView] = useState<MemoryView | null>(null);
   const [preferences, setPreferences] = useState<PreferencesResponse | null>(null);
@@ -127,6 +129,7 @@ export const MemorySection = () => {
 
   return (
     <SettingsSection
+      actions={headerActions}
       title={t("settings.tab.personalization.label")}
       desc={t("settings.tab.personalization.desc")}
     >

@@ -402,6 +402,9 @@ interface ProjectRowProps {
   onProjectOpenInFinder?: (projectId: string) => void;
   onProjectExport?: (projectId: string) => void;
   onProjectRemove?: (projectId: string) => void;
+  /** Extra items for this project's "..." menu, after Open-in-Finder and before
+   * Remove. Counts as an action: a row with nothing else still gets the "..." */
+  projectMenuItems?: (projectId: string) => ReactNode;
 }
 
 const ProjectRow = ({
@@ -420,6 +423,7 @@ const ProjectRow = ({
   onProjectOpenInFinder,
   onProjectExport,
   onProjectRemove,
+  projectMenuItems,
 }: ProjectRowProps) => {
   const { t } = useI18n();
   const isActiveProject = isActivePath(activePath, project.href);
@@ -428,7 +432,8 @@ const ProjectRow = ({
     !!onProjectOpenInFinder ||
     !!onProjectRenameStart ||
     !!onProjectRemove ||
-    !!onProjectExport;
+    !!onProjectExport ||
+    !!projectMenuItems;
 
   return (
     <div className="mx-1">
@@ -583,6 +588,7 @@ const ProjectRow = ({
                   {t("sidebar.openInFinder")}
                 </DropdownMenuItem>
               )}
+              {projectMenuItems?.(project.id)}
               {onProjectRemove && (
                 <>
                   <DropdownMenuSeparator />
@@ -658,6 +664,12 @@ export interface DesktopSidebarProps {
    * account switcher. Rendered in both collapsed and expanded states. */
   sidebarHeader?: ReactNode;
   sidebarExtraItems?: ReactNode;
+  /** Extra sections rendered after the Chats group inside the scrollable list.
+   * Expanded sidebar only — the collapsed rail has no section list. */
+  sidebarSections?: ReactNode;
+  /** Actions on the Chats section label (right-aligned, like the Projects
+   * "+"). Omit to leave the label bare. */
+  chatsActions?: ReactNode;
   /** Optional content pinned at the very bottom of the sidebar, below the
    * Library / Settings nav block. Overlay editions use this to inject a
    * bottom-left account / org menu. Rendered in both collapsed and expanded
@@ -691,6 +703,10 @@ export interface DesktopSidebarProps {
    * just persists the rename. */
   onProjectRename?: (projectId: string, newName: string) => void;
   onProjectRemove?: (projectId: string) => void;
+  /** Extra items in a project row's "..." menu, after Open-in-Finder and before
+   * Remove. Providing it also makes the "..." appear on rows that would
+   * otherwise have no actions, so pass it only when there is something to show. */
+  projectMenuItems?: (projectId: string) => ReactNode;
   /** When provided, chat rows in RECENTS show a "..." menu with a Rename
    * entry that swaps the title for an inline input. Tasks are skipped —
    * no task-rename endpoint exists yet. */
@@ -702,6 +718,11 @@ export interface DesktopSidebarProps {
   /** When provided, chat rows whose ``canFork`` is true show a Fork entry
    * (whole-session fork — docs/design/session-fork.md). */
   onRecentFork?: (recentId: string) => void;
+  /** Extra items in a chat row's "..." menu, after Fork and before Delete.
+   * Chats only, like the other row actions; providing it also makes the "..."
+   * appear on rows that would otherwise have no menu, so pass it only when
+   * there is something to show. */
+  recentMenuItems?: (item: DesktopSidebarRecentItem) => ReactNode;
   /** Row whose fork request is in flight (forks can take seconds on
    * remote-kernel deployments — #879). That row's right-edge slot shows a
    * spinner, and every Fork entry is disabled until the request settles. */
@@ -718,6 +739,8 @@ export const DesktopSidebar = ({
   chats = [],
   sidebarHeader,
   sidebarExtraItems,
+  sidebarSections,
+  chatsActions,
   sidebarFooter,
   LinkComponent = DefaultNavLink,
   primaryActionHref = "/conversation/new",
@@ -730,9 +753,11 @@ export const DesktopSidebar = ({
   onProjectExport,
   onProjectRename,
   onProjectRemove,
+  projectMenuItems,
   onRecentRename,
   onRecentDelete,
   onRecentFork,
+  recentMenuItems,
   recentForkPendingId = null,
   collapsed = false,
 }: DesktopSidebarProps) => {
@@ -865,7 +890,7 @@ export const DesktopSidebar = ({
     }
     const showRowMenu =
       item.kind === "chat" &&
-      (onRecentRename || onRecentDelete || onRecentFork);
+      (onRecentRename || onRecentDelete || onRecentFork || recentMenuItems);
     // This row's fork request is in flight — the right-edge slot swaps to a
     // spinner (replacing the dot / "…" menu) until the request settles.
     const forkPending = recentForkPendingId === item.id;
@@ -938,6 +963,7 @@ export const DesktopSidebar = ({
                       {t("sidebar.fork")}
                     </DropdownMenuItem>
                   )}
+                  {recentMenuItems?.(item)}
                   {onRecentDelete && (
                     <>
                       <DropdownMenuSeparator />
@@ -1335,6 +1361,7 @@ export const DesktopSidebar = ({
                             onProjectOpenInFinder={onProjectOpenInFinder}
                             onProjectExport={onProjectExport}
                             onProjectRemove={onProjectRemove}
+                            projectMenuItems={projectMenuItems}
                           />
                           {expanded &&
                             project.items &&
@@ -1364,6 +1391,7 @@ export const DesktopSidebar = ({
                   <SectionLabel
                     open={chatsSectionOpen}
                     onToggle={() => setChatsSectionOpen((v) => !v)}
+                    action={chatsActions}
                   >
                     {t("sidebar.chats")}
                   </SectionLabel>
@@ -1371,6 +1399,7 @@ export const DesktopSidebar = ({
                     chats.length > 0 &&
                     renderGroupItems("chats", chats, "chats")}
                 </>
+                {sidebarSections}
               </div>
             </nav>
 

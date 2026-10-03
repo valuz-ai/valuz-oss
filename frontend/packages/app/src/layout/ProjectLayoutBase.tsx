@@ -19,7 +19,9 @@ import {
   useGlobalShortcuts,
   usePanelStore,
   useConnectorAlert,
+  SingleSlot,
   SlotRenderer,
+  useHasSlot,
   refreshConnectorAlert,
   useRegistryStore,
   useRunningRuns,
@@ -208,6 +210,19 @@ export function ProjectLayoutBase({
     (state) =>
       (state.slots["sidebar.projects.add.menu-items"]?.length ?? 0) > 0,
   );
+  // Extension-point hosts below only pass a node (or add a separator / wrapper)
+  // while their slot is occupied: ``DesktopSidebar`` branches on the presence of
+  // these props (a "..." trigger, a menu entry), and a ``<SlotRenderer/>``
+  // element is always truthy even when it renders nothing.
+  const hasBrandMenuItems = useHasSlot("shell.brand.menu-items");
+  const hasNoticeSlot = useHasSlot("shell.notice");
+  const hasSidebarHeaderSlot = useHasSlot("sidebar.header");
+  const hasSidebarNavSlot = useHasSlot("sidebar.nav.items");
+  const hasSidebarFooterSlot = useHasSlot("sidebar.footer");
+  const hasChatsActionsSlot = useHasSlot("sidebar.chats.actions");
+  const hasSidebarSectionsSlot = useHasSlot("sidebar.sections");
+  const hasProjectMenuSlot = useHasSlot("sidebar.project.menu-items");
+  const hasSessionMenuSlot = useHasSlot("sidebar.session.menu-items");
   const fetchSessions = useSessionStore((state) => state.fetchSessions);
   const openConversationProjectId = useSessionStore(
     (state) => state.activeProjectId,
@@ -896,8 +911,72 @@ export function ProjectLayoutBase({
     <div className="flex items-center gap-1">
       <NotificationBadge />
       {topbarActions}
+      <SlotRenderer
+        name="shell.topbar.actions"
+        context={{
+          pathname: location.pathname,
+          activeProjectId,
+          rightPanelCollapsed,
+        }}
+      />
       {rightPanelControls}
     </div>
+  );
+
+  // Sidebar slot compositions. The same node renders in the collapsed rail and
+  // in the expanded sidebar, so contributions read ``collapsed``. With the slot
+  // empty the host's own value passes through untouched.
+  const sidebarSlotContext = {
+    collapsed: sidebarCollapsed,
+    activePath: location.pathname,
+  };
+  const sidebarHeaderNode = hasSidebarHeaderSlot ? (
+    <>
+      {sidebarHeader}
+      <SlotRenderer name="sidebar.header" context={sidebarSlotContext} />
+    </>
+  ) : (
+    sidebarHeader
+  );
+  const sidebarExtraItemsNode = hasSidebarNavSlot ? (
+    <>
+      {sidebarExtraItems}
+      <SlotRenderer name="sidebar.nav.items" context={sidebarSlotContext} />
+    </>
+  ) : (
+    sidebarExtraItems
+  );
+  const sidebarFooterNode = hasSidebarFooterSlot ? (
+    <>
+      {sidebarFooter}
+      <SlotRenderer
+        name="sidebar.footer"
+        context={{ collapsed: sidebarCollapsed }}
+      />
+    </>
+  ) : (
+    sidebarFooter
+  );
+
+  // Degraded multi-target hint rides the shell's notice slot — pinned at the
+  // very top of the middle panel, above the header and outside the page's
+  // padded/scrolling content, so every page (headered, hidden-header,
+  // outer-scroll) shows it in the same place.
+  const degradedNotice = degradedLabels ? (
+    <div className="shrink-0 border-b border-warning-border bg-warning-light px-4 py-1.5 text-xs text-warning-text">
+      {t("system.execTargetUnreachable", { targets: degradedLabels })}
+    </div>
+  ) : null;
+  const noticeNode = hasNoticeSlot ? (
+    <>
+      {degradedNotice}
+      <SlotRenderer
+        name="shell.notice"
+        context={{ pathname: location.pathname, activeProjectId }}
+      />
+    </>
+  ) : (
+    degradedNotice
   );
 
   return (
@@ -926,11 +1005,16 @@ export function ProjectLayoutBase({
                     aria-label={`${branding.appName} menu`}
                     className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-surface-soft focus:outline-none"
                   >
-                    <img
-                      src={logoSrc}
-                      alt="Valuz"
-                      className="h-5 w-5 object-contain"
-                    />
+                    <SingleSlot
+                      name="shell.brand.mark"
+                      context={{ appName: branding.appName, logoSrc }}
+                    >
+                      <img
+                        src={logoSrc}
+                        alt="Valuz"
+                        className="h-5 w-5 object-contain"
+                      />
+                    </SingleSlot>
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -965,6 +1049,15 @@ export function ProjectLayoutBase({
                     <HelpCircle className="mr-2 h-3.5 w-3.5" />
                     {t("sidebar.help")}
                   </DropdownMenuItem>
+                  {hasBrandMenuItems ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <SlotRenderer
+                        name="shell.brand.menu-items"
+                        context={{ navigate, platform }}
+                      />
+                    </>
+                  ) : null}
                   {platform.isElectron ? (
                     <>
                       <DropdownMenuSeparator />
@@ -985,6 +1078,10 @@ export function ProjectLayoutBase({
                 {platform.isElectron && (
                   <UpdateButton onClick={handleOpenUpdateWindow} />
                 )}
+                <SlotRenderer
+                  name="shell.topbar.leading"
+                  context={{ pathname: location.pathname, platform }}
+                />
                 {platform.isElectron && !platform.isMac && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1080,6 +1177,21 @@ export function ProjectLayoutBase({
             // (#879); its runs-refresh event re-fetches the finished window.
             onRecentFork={(sessionId) => void forkSession(sessionId)}
             recentForkPendingId={forkingSessionId}
+            recentMenuItems={
+              hasSessionMenuSlot
+                ? (item) => (
+                    <SlotRenderer
+                      name="sidebar.session.menu-items"
+                      context={{
+                        sessionId: item.id,
+                        kind: item.kind,
+                        href: item.href,
+                        isRunning: item.isRunning ?? false,
+                      }}
+                    />
+                  )
+                : undefined
+            }
             onRecentDelete={(sessionId) => {
               // Optimistic local removal — the row disappears immediately
               // even though the backend round-trip is still in flight.
@@ -1104,9 +1216,22 @@ export function ProjectLayoutBase({
                   refreshFinishedRuns();
                 });
             }}
-            sidebarHeader={sidebarHeader}
-            sidebarFooter={sidebarFooter}
-            sidebarExtraItems={sidebarExtraItems}
+            sidebarHeader={sidebarHeaderNode}
+            sidebarFooter={sidebarFooterNode}
+            sidebarExtraItems={sidebarExtraItemsNode}
+            chatsActions={
+              hasChatsActionsSlot ? (
+                <SlotRenderer name="sidebar.chats.actions" />
+              ) : undefined
+            }
+            sidebarSections={
+              hasSidebarSectionsSlot ? (
+                <SlotRenderer
+                  name="sidebar.sections"
+                  context={{ activePath: location.pathname }}
+                />
+              ) : undefined
+            }
             LinkComponent={Link}
             primaryActionHref="/conversation/new"
             onPrimaryAction={refreshConnectorAlert}
@@ -1161,6 +1286,22 @@ export function ProjectLayoutBase({
               );
               if (ws) setExportTarget({ id: ws.id, name: ws.name });
             }}
+            projectMenuItems={
+              hasProjectMenuSlot
+                ? (projectId) => (
+                    <SlotRenderer
+                      name="sidebar.project.menu-items"
+                      context={{
+                        projectId,
+                        project: allProjects.find(
+                          (project) => project.id === projectId,
+                        ),
+                        navigate,
+                      }}
+                    />
+                  )
+                : undefined
+            }
           />
         }
         shellClassName="bg-background"
@@ -1179,17 +1320,7 @@ export function ProjectLayoutBase({
         rightPanelResizeLabel={t("sidebar.resizePanel")}
         mainClassName={mainClassName}
         contentInnerClassName={contentInnerClassName}
-        // Degraded multi-target hint rides the shell's notice slot — pinned
-        // at the very top of the middle panel, above the header and outside
-        // the page's padded/scrolling content, so every page (headered,
-        // hidden-header, outer-scroll) shows it in the same place.
-        notice={
-          degradedLabels ? (
-            <div className="shrink-0 border-b border-warning-border bg-warning-light px-4 py-1.5 text-xs text-warning-text">
-              {t("system.execTargetUnreachable", { targets: degradedLabels })}
-            </div>
-          ) : null
-        }
+        notice={noticeNode}
         header={header}
         headerClassName={headerClassName}
         aside={
@@ -1206,6 +1337,10 @@ export function ProjectLayoutBase({
         </div>
       </AppShell>
       <AppToaster />
+      <SlotRenderer
+        name="shell.overlay"
+        context={{ pathname: location.pathname, navigate }}
+      />
 
       <Dialog
         open={createOpen}

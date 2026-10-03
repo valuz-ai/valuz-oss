@@ -228,6 +228,7 @@ const PresetDetail = ({
             label={t("onboarding.switchTeam" as Parameters<typeof t>[0])}
           />
           <StepFooter
+            step="team"
             primaryLabel={
               entering
                 ? t("onboarding.enteringProject" as Parameters<typeof t>[0])

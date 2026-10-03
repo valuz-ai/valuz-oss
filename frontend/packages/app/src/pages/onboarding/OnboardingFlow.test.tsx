@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { initI18n } from "@valuz/shared/i18n";
+import { useRegistryStore } from "@valuz/core";
 
 // vi.hoisted so the (hoisted) vi.mock factories below can reference these.
 const {
@@ -49,6 +50,7 @@ import { OnboardingFlow } from "./OnboardingFlow";
 
 beforeAll(() => initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" }));
 beforeEach(() => {
+  useRegistryStore.setState({ slots: {} });
   navigateMock.mockClear();
   markOnboardedMock.mockClear();
   createExampleProjectMock.mockReset();
@@ -104,5 +106,52 @@ describe("OnboardingFlow", () => {
     fireEvent.click(screen.getByText("跳过引导"));
     await waitFor(() => expect(markOnboardedMock).toHaveBeenCalled());
     expect(navigateMock).toHaveBeenCalledWith("/");
+  });
+});
+
+describe("OnboardingFlow header actions slot", () => {
+  const registerHeaderAction = () =>
+    useRegistryStore.getState().registerSlot("onboarding.header.actions", {
+      id: "test-header-action",
+      component: ({
+        step,
+        stepIndex,
+      }: {
+        step?: string;
+        stepIndex?: number;
+      }) => <button type="button">{`扩展:${step}:${stepIndex}`}</button>,
+    });
+
+  it("adds no wrapper to the header's right cluster while the slot is empty", () => {
+    render(<OnboardingFlow />);
+    const cluster = screen.getByText("跳过引导").parentElement;
+    // Welcome step: the cluster holds the Skip button and nothing else.
+    expect(Array.from(cluster?.children ?? [])).toHaveLength(1);
+  });
+
+  it("renders a contribution before Skip, in a no-drag wrapper, with step context", () => {
+    registerHeaderAction();
+    render(<OnboardingFlow />);
+    const action = screen.getByText("扩展:welcome:0");
+    const skip = screen.getByText("跳过引导");
+    expect(
+      action.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The header is a window-drag region, so the contribution gets a wrapper
+    // that opts out of it (``-webkit-app-region: no-drag``, as on the Skip
+    // button — jsdom discards that non-standard property, so the style itself
+    // cannot be asserted here). It sits in the same cluster as Skip.
+    const wrapper = action.parentElement as HTMLElement;
+    expect(wrapper.parentElement).toBe(skip.parentElement);
+    expect(wrapper).not.toBe(skip.parentElement);
+  });
+
+  it("follows the step machine: context carries the current step and index", () => {
+    registerHeaderAction();
+    render(<OnboardingFlow />);
+    fireEvent.click(screen.getByText("mock-welcome-start"));
+    expect(screen.getByText("扩展:connect:1")).toBeTruthy();
+    fireEvent.click(screen.getByText("mock-connect-continue"));
+    expect(screen.getByText("扩展:team:2")).toBeTruthy();
   });
 });

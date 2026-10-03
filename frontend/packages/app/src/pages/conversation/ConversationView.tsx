@@ -1,4 +1,10 @@
-import { useSurfaceSuppressed, type SessionMessageHostRef } from "@valuz/core";
+import {
+  SlotRenderer,
+  useHasSlot,
+  useSurfaceSuppressed,
+  type SessionListItem,
+  type SessionMessageHostRef,
+} from "@valuz/core";
 import { DeleteConfirmDialog, BackgroundTaskStrip } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { ArtifactSplitPane } from "../../components/ArtifactSplitPane";
@@ -125,6 +131,41 @@ function useOrchestration(
     onPrefillConsumed: props.onPrefillConsumed,
   });
   return core;
+}
+
+interface ConversationStripsProps {
+  sessionId: string | null;
+  /** Real project the conversation is in, ``null`` for a temporary chat. */
+  projectId: string | null;
+  session: SessionListItem | null;
+  busy: boolean;
+  variant: ConversationViewVariant;
+}
+
+/**
+ * ``conversation.strips`` — rows between the transcript's trays and the
+ * composer, after the background-task strip. The ``max-w-[760px]`` column
+ * mirrors ``ApprovalTray``'s so a strip lines up with the cards above it.
+ * The column exists only while something occupies the slot; an empty slot adds
+ * no element (and so no margin) to the page.
+ */
+export function ConversationStrips({
+  sessionId,
+  projectId,
+  session,
+  busy,
+  variant,
+}: ConversationStripsProps) {
+  const hasStrips = useHasSlot("conversation.strips");
+  if (!hasStrips) return null;
+  return (
+    <div className="mx-auto mb-2 w-full max-w-[760px] space-y-2 px-4">
+      <SlotRenderer
+        name="conversation.strips"
+        context={{ sessionId, projectId, session, busy, variant }}
+      />
+    </div>
+  );
 }
 
 /** ``variant="page"`` — the conversation ROUTE. Adds the chrome
@@ -295,6 +336,9 @@ function ConversationViewPage(props: ConversationViewProps) {
             onRateTurn={feedback.rateTurn}
             onCopyTurn={feedback.reportCopy}
             activeTurnIndex={core.activeTurnIndex}
+            projectId={core.isProjectProject ? core.selectedProjectId : null}
+            agentSlug={core.effectiveAgentSlug}
+            variant="page"
           />
 
           <ApprovalTray
@@ -311,6 +355,14 @@ function ConversationViewPage(props: ConversationViewProps) {
             page mid-run; hides itself once every task reaches a terminal
             state (finished / stopped-on-runtime-close). */}
           <BackgroundTaskStrip tasks={core.runningBgTasks} />
+
+          <ConversationStrips
+            sessionId={core.selectedSessionId}
+            projectId={core.isProjectProject ? core.selectedProjectId : null}
+            session={core.selectedSession}
+            busy={core.displayBusy}
+            variant="page"
+          />
 
           {/* An overlay in a take-over mode (share selection) suppresses this:
               leaving the composer live invites sending a message in a mode
@@ -472,6 +524,9 @@ function ConversationViewPanel(props: ConversationViewProps) {
         turnRatings={feedback.ratings}
         onRateTurn={feedback.rateTurn}
         onCopyTurn={feedback.reportCopy}
+        projectId={core.isProjectProject ? core.selectedProjectId : null}
+        agentSlug={core.effectiveAgentSlug}
+        variant="panel"
       />
 
       <ApprovalTray
@@ -481,6 +536,14 @@ function ConversationViewPanel(props: ConversationViewProps) {
       />
 
       <BackgroundTaskStrip tasks={core.runningBgTasks} />
+
+      <ConversationStrips
+        sessionId={core.selectedSessionId}
+        projectId={core.isProjectProject ? core.selectedProjectId : null}
+        session={core.selectedSession}
+        busy={core.displayBusy}
+        variant="panel"
+      />
 
       <ComposerPane
         discardStagedAttachments={core.discardStagedAttachments}

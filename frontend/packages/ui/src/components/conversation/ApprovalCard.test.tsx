@@ -57,3 +57,27 @@ describe("ApprovalCard — exit_plan_mode", () => {
     expect(screen.queryByTestId("markdown-content")).toBeNull();
   });
 });
+
+describe("ApprovalCard — extraActions", () => {
+  it("renders exactly the two decision buttons while extraActions is unset", () => {
+    render(<ApprovalCard {...baseProps} />);
+    expect(
+      screen.getAllByRole("button").map((b) => b.textContent?.trim()),
+    ).toEqual(["拒绝", "批准"]);
+  });
+
+  it("puts the host buttons at the start of the action row, before Reject", () => {
+    render(
+      <ApprovalCard
+        {...baseProps}
+        extraActions={<button data-testid="ext-action">extra</button>}
+      />,
+    );
+    const extra = screen.getByTestId("ext-action");
+    const row = extra.parentElement!;
+    // Same flex row as the decision buttons, no wrapper around the node.
+    expect(row.className).toContain("flex");
+    expect(extra).toBe(row.firstElementChild);
+    expect(extra.nextElementSibling?.textContent?.trim()).toBe("拒绝");
+  });
+});
