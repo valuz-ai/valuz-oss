@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -108,6 +109,28 @@ def resolve_dsh_home() -> Path:
     data_dir = os.environ.get("VALUZ_DATA_DIR", "").strip()
     base = Path(data_dir).expanduser() if data_dir else Path.home() / ".valuz-oss"
     return base / "dsh-home"
+
+
+#: Bundles the launcher keeps in the managed profile (valuz-dsh-bundle's
+#: managed-profile.json); anything else in the list is a user install.
+MANAGED_BUNDLES = frozenset(
+    {
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@deepseek-ai/dsh-sdk-app",
+        "valuz-dsh-bundle",
+    }
+)
+
+
+def has_user_bundles() -> bool:
+    """Whether the managed profile selects any bundle a user installed."""
+    manifest = resolve_dsh_home() / "profiles" / PROFILE_NAME / "package.json"
+    try:
+        bundles = json.loads(manifest.read_text(encoding="utf-8"))["dsh"]["profile"]["bundles"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return isinstance(bundles, list) and any(name not in MANAGED_BUNDLES for name in bundles)
 
 
 def unavailable_reason() -> str | None:

@@ -107,6 +107,19 @@ class TestSessionPatch:
         # dsh server names are [A-Za-z0-9_-]{1,32}.
         assert mcp[1]["config"]["serverName"] == "local_tool_"
 
+    def test_dsh_sessions_skip_the_dsh_plugins_bridge_server(self) -> None:
+        patch = build_session_patch(
+            _session(
+                mcp_servers=(
+                    McpHttpServerConfig(name="valuz-dsh-plugins", url="http://h/_internal/mcp/dsh"),
+                    McpHttpServerConfig(name="valuz-docs", url="http://h/_internal/mcp/docs"),
+                )
+            )
+        )
+        names = [row["config"]["serverName"] for row in patch[-1]["insert"]]
+        # A dsh session loads the plugins natively from the profile.
+        assert names == ["valuz-docs"]
+
     def test_write_and_cleanup(self) -> None:
         path = write_session_patch(_session())
         patch = json.loads(Path(path).read_text())  # JSON body is valid YAML

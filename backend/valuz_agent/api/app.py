@@ -322,7 +322,30 @@ def create_app(
     # 404'd under every prefixed deployment. Specs registered before
     # ``create_app`` (i.e. in ``register_capabilities``) are picked up here;
     # a spec without a factory is an edition that still mounts its own.
+    from valuz_agent.modules.dsh_plugins.manager import manager_enabled
     from valuz_agent.ports.extensions import ext
+
+    # dsh plugin tools for every non-dsh runtime (local workstations only):
+    # the resident dsh manager host's tool bridge, fronted as an always-on MCP
+    # server. dsh sessions load the plugins natively and skip it.
+    if manager_enabled():
+        from valuz_agent.modules.dsh_plugins.mcp_server import (
+            MOUNT_PATH as _DSH_MCP_PATH,
+        )
+        from valuz_agent.modules.dsh_plugins.mcp_server import (
+            SERVER_NAME as _DSH_MCP_NAME,
+        )
+        from valuz_agent.modules.dsh_plugins.mcp_server import build_dsh_plugins_mcp_asgi
+        from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
+
+        if not any(spec.name == _DSH_MCP_NAME for spec in ext.always_on_mcp_specs):
+            ext.always_on_mcp_specs.append(
+                AlwaysOnMcpServerSpec(
+                    name=_DSH_MCP_NAME,
+                    path=_DSH_MCP_PATH,
+                    app_factory=build_dsh_plugins_mcp_asgi,
+                )
+            )
 
     for _spec in ext.always_on_mcp_specs:
         if _spec.app_factory is not None:

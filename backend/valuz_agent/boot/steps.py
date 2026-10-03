@@ -822,6 +822,14 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     await stack.enter_async_context(playbooks_mcp_session_manager_run())
     await stack.enter_async_context(connectors_mcp_session_manager_run())
     await stack.enter_async_context(toolkit_mcp_session_managers_run())
+    from valuz_agent.modules.dsh_plugins.manager import manager_enabled
+
+    if manager_enabled():
+        from valuz_agent.modules.dsh_plugins.mcp_server import (
+            dsh_plugins_mcp_session_manager_run,
+        )
+
+        await stack.enter_async_context(dsh_plugins_mcp_session_manager_run())
     app.state.docs_mcp_stack = stack
 
 
@@ -1175,3 +1183,28 @@ async def stop_dsh_manager() -> None:
         await get_dsh_manager().stop()
     except Exception:
         logger.warning("dsh manager host stop failed", exc_info=True)
+
+
+async def start_dsh_manager_if_plugins_installed() -> None:
+    """Bring the dsh manager host up in the background when the managed
+    profile carries user-installed bundles, so their tools reach every
+    runtime's sessions (the always-on ``valuz-dsh-plugins`` MCP server) without
+    the user opening Settings → Extensions first. Never blocks boot."""
+    import asyncio
+
+    from valuz_agent.modules.dsh_plugins.manager import (
+        get_dsh_manager,
+        has_user_bundles,
+        unavailable_reason,
+    )
+
+    if unavailable_reason() is not None or not has_user_bundles():
+        return
+
+    async def _start() -> None:
+        try:
+            await get_dsh_manager().ensure_started()
+        except Exception:
+            logger.warning("dsh manager host autostart failed", exc_info=True)
+
+    asyncio.get_running_loop().create_task(_start())

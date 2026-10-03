@@ -81,6 +81,8 @@ PROFILE_NAME = "valuz"
 VALUZ_BUNDLE = "valuz-dsh-bundle"
 #: Asks the launcher to initialize/repair the named managed profile.
 MANAGED_PROFILE_ENV = "VALUZ_DSH_MANAGED_PROFILE"
+#: The host's always-on MCP server fronting dsh plugin tools for non-dsh runtimes.
+DSH_PLUGINS_MCP_SERVER = "valuz-dsh-plugins"
 #: The kernel bridge row valuz-dsh-bundle declares; sessions override its config.
 KERNEL_BRIDGE_ROW = "valuz-kernel-bridge"
 #: Process-role switch read by the Valuz bundle's patch.
@@ -353,6 +355,10 @@ def _mcp_rows(session: Session) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     for index, server in enumerate(session.mcp_servers):
+        if server.name == DSH_PLUGINS_MCP_SERVER:
+            # dsh plugin tools reach other runtimes through this server; a dsh
+            # session loads the same plugins natively from the profile.
+            continue
         if isinstance(server, McpHttpServerConfig):
             config: dict[str, Any] = {
                 "serverName": _server_name(server.name, index),

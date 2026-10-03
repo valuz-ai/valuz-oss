@@ -56,3 +56,8 @@
     - id: valuz-kernel-bridge
       name: ./lib/kernel-bridge.js
       disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # dsh plugin tools for Claude / Codex / DeepAgents sessions: the manager
+    # host serves them to the Valuz backend's always-on MCP server.
+    - id: valuz-tool-bridge
+      name: ./lib/tool-bridge.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'manager'"

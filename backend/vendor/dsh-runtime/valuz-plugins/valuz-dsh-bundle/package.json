@@ -1,9 +1,9 @@
 {
   "name": "valuz-dsh-bundle",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "type": "module",
-  "description": "The Valuz layer over the upstream DeepSeek Harness distribution, shipped as a standard dsh bundle (dsh.bundle.patch). It selects each process's role on one shared profile (VALUZ_DSH_ROLE=session: the SDK JSON-RPC child of a kernel session; manager: the resident web host that manages plugins the dsh way), switches off every row that ships data to the model vendor, and mounts the Valuz plugins: session-preset (joins SDK-created agents to the profile's agent preset), stream-forwarder (live model stream frames → kernel) and kernel-bridge (plan state, user questions, tool approvals, Valuz instructions). Its peer dependency pins the exact dsh release it was written against; scripts/dsh-upstream-sync.sh moves both together.",
+  "description": "The Valuz layer over the upstream DeepSeek Harness distribution, shipped as a standard dsh bundle (dsh.bundle.patch). It selects each process's role on one shared profile (VALUZ_DSH_ROLE=session: the SDK JSON-RPC child of a kernel session; manager: the resident web host that manages plugins the dsh way), switches off every row that ships data to the model vendor, and mounts the Valuz plugins: session-preset (joins SDK-created agents to the profile's agent preset), stream-forwarder (live model stream frames \u2192 kernel) and kernel-bridge (plan state, user questions, tool approvals, Valuz instructions). Its peer dependency pins the exact dsh release it was written against; scripts/dsh-upstream-sync.sh moves both together.",
   "files": [
     "bin",
     "lib",
@@ -16,7 +16,8 @@
     "./kernel-bridge": "./lib/kernel-bridge.js",
     "./package.json": "./package.json",
     "./bin/dsh.mjs": "./bin/dsh.mjs",
-    "./managed-profile.json": "./managed-profile.json"
+    "./managed-profile.json": "./managed-profile.json",
+    "./tool-bridge": "./lib/tool-bridge.js"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": "0.2.1-alpha.1"

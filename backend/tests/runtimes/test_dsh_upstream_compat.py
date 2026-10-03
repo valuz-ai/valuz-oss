@@ -16,6 +16,7 @@ pin to a new dsh release. They need the vendored closure installed
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import queue
@@ -418,8 +419,29 @@ async def test_a_plugin_installed_the_dsh_way_is_live_in_sessions(
         assert result["enabled"] is True and result["packageResult"]["exitCode"] == 0
         bundles = {b["name"] for b in await manager.call("listBundles")}
         assert "dsh-hello-tool" in bundles
+
+        # Every other runtime reaches the same tool through the backend's
+        # always-on MCP server, which fronts the manager host's tool bridge.
+        from valuz_agent.modules.dsh_plugins.mcp_server import (
+            call_bridge_tool,
+            list_bridge_tools,
+        )
+
+        deadline = time.monotonic() + 30
+        bridged: list[dict[str, Any]] = []
+        while time.monotonic() < deadline:
+            bridged = await list_bridge_tools()
+            if any(tool["name"] == "hello_valuz" for tool in bridged):
+                break
+            await asyncio.sleep(0.5)
+        assert any(tool["name"] == "hello_valuz" for tool in bridged), bridged
+        is_error, text = await call_bridge_tool("hello_valuz", {})
+        assert (is_error, text) == (False, "hello from a standard dsh plugin")
     finally:
         await manager.stop()
+    from valuz_agent.modules.dsh_plugins.mcp_server import read_bridge
+
+    assert read_bridge() is None, "the bridge withdraws its endpoint when the host stops"
 
     workspace = tmp_path / "ws"
     workspace.mkdir()

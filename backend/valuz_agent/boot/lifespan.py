@@ -72,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.start_decision_aggregator(app)
     steps.mark_boot_complete()  # LAST blocking startup step
     await steps.start_post_boot_agent_channels(app)
+    await steps.start_dsh_manager_if_plugins_installed()  # background, non-blocking
 
     yield
 
