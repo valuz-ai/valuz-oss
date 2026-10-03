@@ -40,6 +40,13 @@ def test_local_workstations_may_manage_plugins(monkeypatch) -> None:
     assert manager_enabled() is True
 
 
+def test_cloud_deployments_may_not(monkeypatch) -> None:
+    from valuz_agent.infra.config import settings
+
+    monkeypatch.setattr(settings, "deployment_type", "cloud")
+    assert manager_enabled() is False
+
+
 def test_shared_deployments_may_not(monkeypatch) -> None:
     # Plugin code runs unsandboxed with the user's privileges.
     for store in ("pg", "remote"):

@@ -75,13 +75,18 @@ def manager_enabled() -> bool:
     """Whether this deployment may run a dsh manager host.
 
     Plugin code runs unsandboxed with the user's privileges, so this is a
-    local-workstation capability: on by default for a local kernel store,
-    off for shared/remote deployments (``KERNEL_STORE`` pg/remote). Explicit
-    ``VALUZ_DSH_MANAGER_ENABLED`` (``1``/``0``) wins.
+    local-workstation capability: on by default for a ``local`` deployment
+    with a local kernel store; off for ``cloud`` deployments
+    (``VALUZ_DEPLOYMENT_TYPE``) and shared/remote kernel stores (``KERNEL_STORE``
+    pg/remote). Explicit ``VALUZ_DSH_MANAGER_ENABLED`` (``1``/``0``) wins.
     """
     explicit = os.environ.get("VALUZ_DSH_MANAGER_ENABLED", "").strip().lower()
     if explicit:
         return explicit in {"1", "true", "yes", "on"}
+    from valuz_agent.infra.config import settings
+
+    if getattr(settings, "deployment_type", "local") != "local":
+        return False
     return os.environ.get("KERNEL_STORE", "local").strip().lower() in {"", "local"}
 
 
