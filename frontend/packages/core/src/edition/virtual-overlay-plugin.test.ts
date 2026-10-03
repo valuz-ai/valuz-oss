@@ -46,6 +46,33 @@ describe("editionOverlayPlugin", () => {
     else delete process.env.VALUZ_OVERLAY_PACKAGE;
   });
 
+  it("defines the configured overlay package for hydrateOverlayIfPresent", () => {
+    const original = process.env.VALUZ_OVERLAY_PACKAGE;
+    process.env.VALUZ_OVERLAY_PACKAGE = "@valuz/commercial";
+
+    const plugin = editionOverlayPlugin();
+    const config = plugin.config as () => { define: Record<string, string> };
+
+    expect(config().define.__VALUZ_EDITION_OVERLAY__).toBe(
+      JSON.stringify("@valuz/commercial"),
+    );
+
+    if (original !== undefined) process.env.VALUZ_OVERLAY_PACKAGE = original;
+    else delete process.env.VALUZ_OVERLAY_PACKAGE;
+  });
+
+  it("defines an empty overlay package when none is configured", () => {
+    const original = process.env.VALUZ_OVERLAY_PACKAGE;
+    delete process.env.VALUZ_OVERLAY_PACKAGE;
+
+    const plugin = editionOverlayPlugin();
+    const config = plugin.config as () => { define: Record<string, string> };
+
+    expect(config().define.__VALUZ_EDITION_OVERLAY__).toBe(JSON.stringify(""));
+
+    if (original !== undefined) process.env.VALUZ_OVERLAY_PACKAGE = original;
+  });
+
   it("skips load for unrelated IDs", () => {
     const plugin = editionOverlayPlugin();
     const load = plugin.load as (id: string) => string | void;

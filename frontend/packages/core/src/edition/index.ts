@@ -9,7 +9,10 @@ export * from "./entity-origin";
 export * from "./list-fanout";
 export * from "./project-activity";
 export * from "./composer-catalog";
-export { hydrateOverlayIfPresent } from "./hydrate-overlay";
+export {
+  EditionOverlayLoadError,
+  hydrateOverlayIfPresent,
+} from "./hydrate-overlay";
 
 import type { EditionProfile } from "./profile";
 import { getActiveProfile } from "./resolve";
