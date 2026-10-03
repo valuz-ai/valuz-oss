@@ -39,10 +39,23 @@ class ModuleRegistry:
         prefix: str,
         *,
         tags: list[str] | None = None,
-    ) -> None:
-        self._modules.append(
-            _ModuleEntry(name=name, router=router, prefix=prefix, tags=tags or [name])
-        )
+    ) -> _ModuleEntry:
+        """Register a router; returns the entry so a caller can ``unregister`` it."""
+        entry = _ModuleEntry(name=name, router=router, prefix=prefix, tags=tags or [name])
+        self._modules.append(entry)
+        return entry
+
+    def unregister(self, entry: _ModuleEntry) -> None:
+        """Remove an entry returned by :meth:`register` (no-op when absent).
+
+        Only meaningful before :meth:`apply`: a router already mounted on an app
+        stays mounted. Used by the backend plugin host to roll back a plugin
+        that failed during startup.
+        """
+        try:
+            self._modules.remove(entry)
+        except ValueError:
+            pass
 
     def apply(self, target: FastAPI | APIRouter) -> None:
         """Mount every registered router onto ``target``.

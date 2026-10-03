@@ -47,8 +47,18 @@ class MiddlewareRegistry:
         cls: type,
         order: int | MiddlewareOrder,
         **kwargs: Any,
-    ) -> None:
-        self._entries.append(_MiddlewareEntry(cls=cls, order=int(order), kwargs=kwargs))
+    ) -> _MiddlewareEntry:
+        """Register middleware; returns the entry so a caller can ``unregister`` it."""
+        entry = _MiddlewareEntry(cls=cls, order=int(order), kwargs=kwargs)
+        self._entries.append(entry)
+        return entry
+
+    def unregister(self, entry: _MiddlewareEntry) -> None:
+        """Remove an entry returned by :meth:`register` (no-op when absent)."""
+        try:
+            self._entries.remove(entry)
+        except ValueError:
+            pass
 
     def apply(self, app: FastAPI) -> None:
         for entry in sorted(self._entries, key=lambda e: e.order, reverse=True):
