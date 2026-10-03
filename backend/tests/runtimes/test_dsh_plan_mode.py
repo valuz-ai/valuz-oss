@@ -85,7 +85,7 @@ def _runtime(sink: _CollectSink | None = None) -> DeepSeekHarnessRuntime:
         model="deepseek-v4-flash",
         event_sink=sink or _CollectSink(),
         workspace_root="/tmp/ws",
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(api_key="k", api_protocol="anthropic"),
     )
 
 

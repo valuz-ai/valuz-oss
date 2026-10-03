@@ -23,8 +23,8 @@ def _session(**overrides) -> Session:
         model="deepseek-v4-flash",
         model_provider=ModelProvider(
             api_key="k",
-            base_url="https://api.deepseek.com",
-            api_protocol="openai_completion",
+            base_url="https://api.deepseek.com/anthropic",
+            api_protocol="anthropic",
         ),
     )
     defaults.update(overrides)
@@ -33,17 +33,13 @@ def _session(**overrides) -> Session:
 
 def test_dispatches_deepseek_harness_runtime() -> None:
     session = _session()
-    runtime = create_runtime(
-        session.agent_config, session, _NullSink(), workspace_root="/tmp/ws"
-    )
+    runtime = create_runtime(session.agent_config, session, _NullSink(), workspace_root="/tmp/ws")
     assert isinstance(runtime, DeepSeekHarnessRuntime)
 
 
 def test_requires_model_and_provider() -> None:
     with pytest.raises(ValueError, match="model_provider"):
-        create_runtime(
-            _session().agent_config, _session(model_provider=None), _NullSink()
-        )
+        create_runtime(_session().agent_config, _session(model_provider=None), _NullSink())
     with pytest.raises(ValueError):
         create_runtime(_session().agent_config, _session(model=""), _NullSink())
 
@@ -51,18 +47,17 @@ def test_requires_model_and_provider() -> None:
 def test_requires_explicit_base_url() -> None:
     # dsh's empty-endpoint fallback is DeepSeek's public API — wrong for any
     # other channel's key, so the factory demands an explicit endpoint.
-    provider = ModelProvider(api_key="k", api_protocol="openai_completion")
+    provider = ModelProvider(api_key="k", api_protocol="anthropic")
     with pytest.raises(ValueError, match="base_url"):
-        create_runtime(
-            _session().agent_config, _session(model_provider=provider), _NullSink()
-        )
+        create_runtime(_session().agent_config, _session(model_provider=provider), _NullSink())
 
 
 def test_protocol_allowlist() -> None:
-    validate_api_protocol("deepseek_harness", "openai_completion")
+    # dsh 0.2's llm-deepseek adapter speaks only the Anthropic Messages API.
+    validate_api_protocol("deepseek_harness", "anthropic")
     validate_api_protocol("deepseek_harness", None)
     with pytest.raises(ValueError, match="api_protocol"):
-        validate_api_protocol("deepseek_harness", "anthropic")
+        validate_api_protocol("deepseek_harness", "openai_completion")
 
 
 def test_rejects_managed_egress_descriptor() -> None:

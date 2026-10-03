@@ -124,7 +124,7 @@ _RUNTIME_TO_DEFAULT_PROTOCOL: dict[RuntimeProvider, ApiProtocol] = {
     "claude_agent": "anthropic",
     "codex": "openai_response",
     "deepagents": "openai_completion",
-    "deepseek_harness": "openai_completion",
+    "deepseek_harness": "anthropic",
 }
 
 _ZHIPU_CODING_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
@@ -201,10 +201,10 @@ async def resolve_model_provider(
     if runtime_provider == "deepseek_harness" and base_url is None:
         # ``None`` normally means "the runtime SDK's ambient first-party
         # default" — but dsh's empty-endpoint fallback is DeepSeek's public
-        # API, which is only right for the DeepSeek channel (and that one
-        # always resolves a concrete URL above). Materialize the kind's own
-        # default so e.g. an OpenAI key posts to api.openai.com, not
-        # api.deepseek.com. Kinds with no default (blank ``compatible``)
+        # Messages API (api.deepseek.com/anthropic), which is only right for
+        # the DeepSeek channel (and that one always resolves a concrete URL
+        # above). Materialize the kind's own default so e.g. an Anthropic key
+        # posts to api.anthropic.com, not api.deepseek.com. Kinds with no default (blank ``compatible``)
         # stay ``None`` and are rejected by the kernel factory.
         from valuz_agent.modules.providers.service import _PROVIDER_MAP
 

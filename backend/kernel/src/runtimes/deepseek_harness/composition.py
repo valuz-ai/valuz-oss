@@ -238,6 +238,27 @@ def dsh_permission_mode(permission_mode: str) -> str:
 _EFFORT_MAP = {"low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max"}
 
 
+#: Output cap for a non-DeepSeek model that declares none. dsh's llm-deepseek
+#: adapter otherwise sends DeepSeek's own default (256000), which other
+#: Messages endpoints reject (GLM via the Valuz gateway: "max_tokens … [1,131072]").
+#: 32000 is the claude runtime's CLI default and within every current model's
+#: output limit.
+NON_DEEPSEEK_DEFAULT_MAX_TOKENS = 32000
+
+
+def dsh_max_tokens(model: str | None, declared: int | None) -> int | None:
+    """The ``maxTokens`` to initialize a dsh session with.
+
+    A declared output cap wins. A DeepSeek model keeps dsh's own default
+    (``None``); any other model gets ``NON_DEEPSEEK_DEFAULT_MAX_TOKENS``.
+    """
+    if declared is not None:
+        return declared
+    if (model or "").strip().lower().startswith("deepseek"):
+        return None
+    return NON_DEEPSEEK_DEFAULT_MAX_TOKENS
+
+
 def dsh_reasoning_effort(effort: str | None) -> str | None:
     return _EFFORT_MAP.get(effort) if effort else None
 

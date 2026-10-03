@@ -49,7 +49,7 @@ _SUBSCRIPTION_KINDS: frozenset[str] = frozenset({"claude-subscription", "codex-s
 # Preferred runtime when a model can run on more than one. Onboarding's one-click
 # pick uses ``default_runtime``; this order is the tie-break. claude_agent first
 # (richest reasoning), then codex, then the generic deepagents, then
-# deepseek_harness (chat-completions channels; never the one-click default).
+# deepseek_harness (Anthropic Messages channels; never the one-click default).
 _RUNTIME_PRIORITY: tuple[str, ...] = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 
 # provider_kind → the CLI tool the client probes / launches for login.
@@ -102,16 +102,11 @@ def runtimes_for(
     ):
         out.add("deepagents")
 
-    # deepseek_harness: any non-subscription channel speaking the
-    # chat-completions wire — protocol-scoped, exactly like codex on the
-    # Responses wire above. The dsh adapter posts a plain
-    # ``${base_url}/chat/completions`` body (the same convention the
-    # deepagents client uses), honors the channel's endpoint via
-    # $DEEPSEEK_BASE_URL, and parses standard streaming chunks, so it is
-    # not limited to DeepSeek's own channel or models. (DeepSeek-dialect
-    # extras — ``thinking`` / ``reasoning_effort`` — only go on the wire
-    # when the agent sets effort; clear effort on a model that rejects
-    # them, same per-model rule as deepagents.)
+    # deepseek_harness: any non-subscription channel speaking the Anthropic
+    # Messages wire — protocol-scoped, exactly like codex on the Responses
+    # wire above. dsh 0.2's adapter posts ``<base_url>/v1/messages`` with
+    # ``x-api-key`` (the session patch sets llm-deepseek's ``baseURL``), so
+    # it is not limited to DeepSeek's own channel or models.
     if provider_kind not in _SUBSCRIPTION_KINDS and (
         protos & set(RUNTIME_REGISTRY["deepseek_harness"].supported_protocols)
     ):

@@ -42,7 +42,7 @@ def _session(session_id: str = "s-dsh", cwd: str = "/tmp") -> Session:
         cwd=cwd,
         runtime_provider="deepseek_harness",
         model="deepseek-v4-flash",
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(api_key="k", api_protocol="anthropic"),
     )
 
 
@@ -54,7 +54,7 @@ def _runtime(
         "deepseek-v4-flash",
         sink,
         workspace_root=str(tmp_path / "ws"),
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(api_key="k", api_protocol="anthropic"),
         state_dir=str(tmp_path / "state"),
         launch_spec=DshLaunchSpec(
             argv=(sys.executable, FAKE_SERVER),

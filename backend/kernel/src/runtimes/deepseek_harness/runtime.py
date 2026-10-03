@@ -89,6 +89,7 @@ from src.runtimes.deepseek_harness.composition import (
     SESSION_ROLE,
     DshLaunchSpec,
     cleanup_session_patch,
+    dsh_max_tokens,
     dsh_reasoning_effort,
     launch_unavailable_reason,
     process_env,
@@ -835,7 +836,9 @@ class DeepSeekHarnessRuntime:
         cwd = launch.cwd or self.workspace_root or None
         client = DshRuntimeClient(argv, cwd=cwd, env=env)
         await client.start()
-        max_tokens = model_settings.max_tokens if model_settings is not None else None
+        max_tokens = dsh_max_tokens(
+            self.model, model_settings.max_tokens if model_settings is not None else None
+        )
         effort = model_settings.effort if model_settings is not None else None
         try:
             await client.initialize(

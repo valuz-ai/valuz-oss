@@ -91,11 +91,11 @@ class TestRuntimesFor:
         # A user OpenAI key speaking both wires drives codex (Responses) AND
         # deepagents (chat completions). The kernel codex runtime reaches a
         # user-supplied key via OPENAI_API_KEY / the model_providers.harness
-        # block — it does NOT require the subscription keychain.
+        # block — it does NOT require the subscription keychain. dsh 0.2 speaks
+        # only the Anthropic Messages API, so it is not derived here.
         assert runtimes_for(["openai-completion", "openai-response"], provider_kind="openai") == [
             "codex",
             "deepagents",
-            "deepseek_harness",
         ]
 
     def test_response_only_user_row_drives_codex(self) -> None:
@@ -117,19 +117,20 @@ class TestRuntimesFor:
             ["anthropic", "openai-completion", "openai-response"], provider_kind="deepseek"
         ) == ["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
-    def test_completion_wire_derives_harness_protocol_scoped(self) -> None:
+    def test_messages_wire_derives_harness_protocol_scoped(self) -> None:
         # deepseek_harness is protocol-scoped, exactly like codex on the
-        # Responses wire: ANY non-subscription channel speaking
-        # chat-completions derives it — the dsh adapter posts a plain
-        # ``${base_url}/chat/completions`` body and follows the channel's
-        # endpoint via $DEEPSEEK_BASE_URL.
-        assert runtimes_for(["openai-completion"], provider_kind="compatible") == [
+        # Responses wire: ANY non-subscription channel speaking the Anthropic
+        # Messages wire derives it — dsh 0.2's adapter posts
+        # ``<base_url>/v1/messages`` (x-api-key) to the channel's endpoint.
+        assert runtimes_for(["anthropic"], provider_kind="compatible") == [
+            "claude_agent",
             "deepagents",
             "deepseek_harness",
         ]
+        assert "deepseek_harness" in runtimes_for(["anthropic"], provider_kind="anthropic")
 
-    def test_anthropic_only_channel_does_not_derive_harness(self) -> None:
-        assert "deepseek_harness" not in runtimes_for(["anthropic"], provider_kind="anthropic")
+    def test_completion_only_channel_does_not_derive_harness(self) -> None:
+        assert runtimes_for(["openai-completion"], provider_kind="compatible") == ["deepagents"]
 
     def test_subscription_channels_do_not_derive_harness(self) -> None:
         # Subscription channels expose no API key + base_url for the dsh
@@ -194,7 +195,11 @@ class TestBuildModelOptions:
         )
         provider = build_model_options([sys_provider], _NO_DEFAULT).groups[0].providers[0]
         by_id = {m.model_id: m for m in provider.models}
-        assert by_id["sys-reportify-pro"].runtimes == ["claude_agent", "deepagents"]
+        assert by_id["sys-reportify-pro"].runtimes == [
+            "claude_agent",
+            "deepagents",
+            "deepseek_harness",
+        ]
         assert by_id["sys-reportify-pro"].default_runtime == "claude_agent"
         assert by_id["sys-reportify-pro"].label == "Valuz Pro"
         assert by_id["valuz-lite"].label == "Valuz Lite"
@@ -249,7 +254,11 @@ class TestBuildModelOptions:
         assert owner["sys-reportify-pro"] == "valuz-channel"
         assert owner["gpt-5.4-nano"] == "valuz-channel-codex"
         by_id = {m.model_id: m for m in card.models}
-        assert by_id["sys-reportify-pro"].runtimes == ["claude_agent", "deepagents"]
+        assert by_id["sys-reportify-pro"].runtimes == [
+            "claude_agent",
+            "deepagents",
+            "deepseek_harness",
+        ]
         assert by_id["gpt-5.4-nano"].runtimes == ["codex"]
 
     def test_subscription_status_is_client_resolved_with_cli_tool(self) -> None:

@@ -220,3 +220,21 @@ class TestLaunchResolution:
         out = probe_runtime_availability()
         assert out["deepseek_harness"]["available"] is False
         assert out["deepseek_harness"]["unavailable_reason"]
+
+
+def test_max_tokens_keeps_deepseek_default_and_caps_other_models() -> None:
+    from src.runtimes.deepseek_harness.composition import (
+        NON_DEEPSEEK_DEFAULT_MAX_TOKENS,
+        dsh_max_tokens,
+    )
+
+    # A declared cap always wins.
+    assert dsh_max_tokens("glm-5.3-flash", 8192) == 8192
+    assert dsh_max_tokens("deepseek-v4-flash", 4096) == 4096
+    # DeepSeek models keep dsh's own default (256000 is accepted there).
+    assert dsh_max_tokens("deepseek-flash-anthropic", None) is None
+    assert dsh_max_tokens("DeepSeek-V4", None) is None
+    # Anything else gets a cap every current model accepts (GLM rejects > 131072).
+    assert dsh_max_tokens("glm-5.3-flash", None) == NON_DEEPSEEK_DEFAULT_MAX_TOKENS
+    assert dsh_max_tokens(None, None) == NON_DEEPSEEK_DEFAULT_MAX_TOKENS
+    assert NON_DEEPSEEK_DEFAULT_MAX_TOKENS <= 131072

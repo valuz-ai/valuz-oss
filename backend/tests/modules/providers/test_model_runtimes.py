@@ -100,7 +100,9 @@ def test_stamp_contributed_fills_none_runtimes() -> None:
         [LLMModel(id="glm", label=None, selection_hint="1.5×")],
     )
     out = _stamp_contributed_runtimes(ch)
-    assert tuple(out.models[0].runtimes or ()) == ("deepagents", "deepseek_harness")
+    # A chat-completions channel no longer derives deepseek_harness: dsh 0.2
+    # speaks only the Anthropic Messages API.
+    assert tuple(out.models[0].runtimes or ()) == ("deepagents",)
     assert out.models[0].selection_hint == "1.5×"
 
 
@@ -184,13 +186,20 @@ def test_codex_capability_is_kind_scoped() -> None:
     assert "codex" not in (_row_to_list_item(row).models[0].runtimes or ())
 
 
-def test_compatible_completion_channel_derives_harness_for_every_model() -> None:
+def test_compatible_messages_channel_derives_harness_for_every_model() -> None:
     # deepseek_harness is protocol-scoped (like codex on the Responses wire):
-    # every model of a chat-completions-speaking channel derives it, DeepSeek
-    # branding or not — the dsh adapter posts plain chat-completions to the
-    # channel's own endpoint.
+    # every model of an Anthropic-Messages-speaking channel derives it,
+    # DeepSeek branding or not — dsh 0.2's adapter posts <base_url>/v1/messages
+    # to the channel's own endpoint. A chat-completions channel does not.
+    completion = _row(
+        provider_kind="compatible",
+        model_ids='["deepseek-ai/DeepSeek-V3.1", "glm-4-plus"]',
+    )
+    for m in _row_to_list_item(completion).models:
+        assert "deepseek_harness" not in tuple(m.runtimes or ())
     row = _row(
         provider_kind="compatible",
+        protocol="anthropic",
         model_ids='["deepseek-ai/DeepSeek-V3.1", "glm-4-plus"]',
     )
     for m in _row_to_list_item(row).models:
