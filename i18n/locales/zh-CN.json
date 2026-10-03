@@ -3537,7 +3537,9 @@
         "removedToast": "已移除 {name}",
         "restartRequired": "{name}：变更已保存，重启 DSH 后生效",
         "overridden": "{name}：变更已保存，但被更高优先级的配置覆盖",
-        "changeFailed": "{name}：{error}"
+        "changeFailed": "{name}：{error}",
+        "incompatible": "不适用",
+        "incompatibleHint": "这个 bundle 自带一套进程入口（ACP / 单次运行 / 精简 SDK），与 Valuz 的 DSH 会话共用同一个 profile 时会冲突，因此不能在这里启用。"
       },
       "install": {
         "title": "安装 DSH 插件",

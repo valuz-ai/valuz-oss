@@ -19,6 +19,22 @@ export const MANAGED_DSH_BUNDLES: ReadonlySet<string> = new Set([
   "valuz-dsh-bundle",
 ]);
 
+/**
+ * Installation-provided bundles with a process surface of their own (ACP stdio,
+ * one-shot runner, a second minimal SDK). Valuz's dsh sessions already serve
+ * SDK JSON-RPC from this profile, so the backend refuses to switch these on;
+ * mirrors ``SURFACE_BUNDLES`` in ``modules/dsh_plugins/manager.py``.
+ */
+export const INCOMPATIBLE_DSH_BUNDLES: ReadonlySet<string> = new Set([
+  "@deepseek-ai/dsh-acp-app",
+  "@deepseek-ai/dsh-headless",
+  "@deepseek-ai/dsh-sdk-minimal",
+]);
+
+/** Cannot be switched on in Valuz's managed profile. */
+export const isIncompatibleBundle = (bundle: DshBundleInfo): boolean =>
+  INCOMPATIBLE_DSH_BUNDLES.has(bundle.name) && !bundle.enabled;
+
 /** Built-in: Valuz-managed, or one dsh itself refuses to switch off / remove. */
 export const isLockedBundle = (bundle: DshBundleInfo): boolean =>
   MANAGED_DSH_BUNDLES.has(bundle.name) || bundle.readOnlyReason !== undefined;

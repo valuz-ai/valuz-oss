@@ -133,6 +133,8 @@ def _host_with_fake_remote(monkeypatch) -> tuple[DshManagerHost, _FakeRemote]:
         ("removeBundle", {"name": "@deepseek-ai/dsh-sdk-app"}),
         ("setBundleEnabled", {"name": "@deepseek-ai/dsh-base", "enabled": False}),
         ("setPluginEnabled", {"id": "e-valuz", "enabled": False}),
+        ("setBundleEnabled", {"name": "@deepseek-ai/dsh-acp-app", "enabled": True}),
+        ("setBundleEnabled", {"name": "@deepseek-ai/dsh-headless", "enabled": True}),
     ],
 )
 async def test_what_valuz_sessions_run_on_cannot_be_switched_off(monkeypatch, method, args) -> None:
@@ -149,6 +151,7 @@ async def test_what_valuz_sessions_run_on_cannot_be_switched_off(monkeypatch, me
         ("setBundleEnabled", {"name": "valuz-dsh-bundle", "enabled": True}),
         ("setPluginEnabled", {"id": "e-hello", "enabled": False}),
         ("setPluginEnabled", {"id": "e-valuz", "enabled": True}),
+        ("setBundleEnabled", {"name": "@deepseek-ai/dsh-acp-app", "enabled": False}),
     ],
 )
 async def test_user_bundles_and_re_enabling_pass_through(monkeypatch, method, args) -> None:

@@ -1061,6 +1061,8 @@ I18nKey = Literal[
     "extensions.dsh.bundles.disabledToast",
     "extensions.dsh.bundles.empty",
     "extensions.dsh.bundles.enabledToast",
+    "extensions.dsh.bundles.incompatible",
+    "extensions.dsh.bundles.incompatibleHint",
     "extensions.dsh.bundles.optional",
     "extensions.dsh.bundles.optionalHint",
     "extensions.dsh.bundles.overridden",

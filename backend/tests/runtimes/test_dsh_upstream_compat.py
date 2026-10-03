@@ -449,3 +449,18 @@ async def test_a_plugin_installed_the_dsh_way_is_live_in_sessions(
     _run_session_turn(home, workspace, session, fake_model, tmp_path / "session.patch.json")
     assert _FakeModel.requests, "the model was never called"
     assert "hello_valuz" in _request_tools(_FakeModel.requests[-1])
+
+
+def test_guarded_bundle_names_still_ship() -> None:
+    """The manager proxy guards dsh bundles by name; a rename upstream must
+    fail here instead of silently dropping the guard. Its managed set must
+    also be exactly what the launcher keeps in the profile."""
+    from valuz_agent.modules.dsh_plugins import manager as dsh_manager
+
+    assert dsh_manager.MANAGED_BUNDLES == set(MANAGED_BUNDLES)
+    missing = sorted(
+        name
+        for name in dsh_manager.MANAGED_BUNDLES | dsh_manager.SURFACE_BUNDLES
+        if not (NODE_MODULES / name / "package.json").is_file()
+    )
+    assert missing == []

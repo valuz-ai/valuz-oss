@@ -3537,7 +3537,9 @@
         "removedToast": "Removed {name}",
         "restartRequired": "{name}: saved, restart DSH for it to take effect",
         "overridden": "{name}: saved, but overridden by a higher-priority configuration",
-        "changeFailed": "{name}: {error}"
+        "changeFailed": "{name}: {error}",
+        "incompatible": "Not for Valuz",
+        "incompatibleHint": "This bundle brings a process surface of its own (ACP / one-shot runner / minimal SDK); on the profile Valuz's dsh sessions share it would conflict, so it cannot be switched on here."
       },
       "install": {
         "title": "Install a DSH plugin",

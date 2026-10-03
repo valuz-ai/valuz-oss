@@ -133,6 +133,20 @@ MANAGED_BUNDLES = frozenset(
     }
 )
 
+#: Installation-provided bundles that define a process surface of their own
+#: (stdio ACP server, one-shot runner, a second minimal SDK). Valuz's session
+#: processes already serve SDK JSON-RPC on stdout from the same profile, so
+#: switching one of these on would put two protocol servers on one stdout.
+#: test_dsh_upstream_compat checks each still ships, so a rename cannot
+#: silently drop the guard.
+SURFACE_BUNDLES = frozenset(
+    {
+        "@deepseek-ai/dsh-acp-app",
+        "@deepseek-ai/dsh-headless",
+        "@deepseek-ai/dsh-sdk-minimal",
+    }
+)
+
 
 def has_user_bundles() -> bool:
     """Whether the managed profile selects any bundle a user installed."""
@@ -165,6 +179,8 @@ class ManagerStatus:
     ui_url: str | None
     #: Bundles Valuz keeps in the profile; they cannot be removed or switched off.
     managed_bundles: list[str] = field(default_factory=lambda: sorted(MANAGED_BUNDLES))
+    #: Bundles that cannot be switched on in this profile (SURFACE_BUNDLES).
+    incompatible_bundles: list[str] = field(default_factory=lambda: sorted(SURFACE_BUNDLES))
 
 
 class DshManagerHost:
@@ -290,6 +306,12 @@ class DshManagerHost:
         locks them; this keeps the API and ``valuz ext`` from doing it either.
         dsh's own required rows stay dsh's to refuse; Valuz guards its own."""
         switching_off = args.get("enabled") is False
+        if method == "setBundleEnabled" and args.get("enabled") is True:
+            if args.get("name") in SURFACE_BUNDLES:
+                raise DshManagedBundleError(
+                    f"{args.get('name')!r} runs its own process surface and would break "
+                    "Valuz's dsh sessions on this profile"
+                )
         if method == "removeBundle" or (method == "setBundleEnabled" and switching_off):
             if args.get("name") in MANAGED_BUNDLES:
                 raise DshManagedBundleError(

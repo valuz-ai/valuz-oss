@@ -23,6 +23,7 @@ import {
   bundleDescription,
   bundleTitle,
   changeTone,
+  isIncompatibleBundle,
   isLockedBundle,
   isRemovableBundle,
   managementErrorLine,
@@ -75,6 +76,7 @@ const BundleRow = ({
   const { t, locale } = useTranslation();
   const title = bundleTitle(bundle, locale);
   const locked = isLockedBundle(bundle);
+  const incompatible = !locked && isIncompatibleBundle(bundle);
   const mine = busy?.name === bundle.name ? busy.action : null;
   const anyBusy = busy !== null;
 
@@ -104,7 +106,15 @@ const BundleRow = ({
               {t("extensions.dsh.bundles.builtin")}
             </Badge>
           ) : null}
-          {!locked && bundle.optional ? (
+          {incompatible ? (
+            <Badge
+              variant="metaNeutral"
+              title={t("extensions.dsh.bundles.incompatibleHint")}
+            >
+              {t("extensions.dsh.bundles.incompatible")}
+            </Badge>
+          ) : null}
+          {!locked && !incompatible && bundle.optional ? (
             <Badge
               variant="metaOutline"
               title={t("extensions.dsh.bundles.optionalHint")}
@@ -130,7 +140,7 @@ const BundleRow = ({
           <Switch
             size="sm"
             checked={bundle.enabled}
-            disabled={locked || anyBusy}
+            disabled={locked || incompatible || anyBusy}
             aria-label={t("extensions.dsh.bundles.toggleLabel", {
               name: title,
             })}

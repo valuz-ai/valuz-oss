@@ -451,6 +451,27 @@ describe("ExtensionsSection — DSH plugins available", () => {
     ).toBe(true);
   });
 
+  it("keeps process-surface bundles off: 不适用 badge, switch locked", async () => {
+    const { container } = await renderReady([
+      bundle({ name: "@deepseek-ai/dsh-acp-app", enabled: false, removable: false }),
+      bundle({ name: "@deepseek-ai/dsh-headless", enabled: false, removable: false, optional: true }),
+      // Already on (e.g. switched on before the guard): it can still be switched off.
+      bundle({ name: "@deepseek-ai/dsh-sdk-minimal", enabled: true, removable: false }),
+    ]);
+    for (const name of ["@deepseek-ai/dsh-acp-app", "@deepseek-ai/dsh-headless"]) {
+      const row = rowOf(container, name);
+      expect(within(row).getByText("不适用")).not.toBeNull();
+      expect(within(row).queryByText("可选")).toBeNull();
+      expect(
+        (within(row).getByRole("switch") as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
+    const on = rowOf(container, "@deepseek-ai/dsh-sdk-minimal");
+    expect(
+      (within(on).getByRole("switch") as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
   it("does not offer removal for a bundle the installation ships, but still lets it be switched", async () => {
     const { container } = await renderReady([
       bundle({
