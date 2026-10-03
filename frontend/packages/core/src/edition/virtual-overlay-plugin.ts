@@ -20,6 +20,19 @@ export function editionOverlayPlugin(): Plugin {
     name: "valuz-edition-overlay",
     enforce: "pre",
 
+    // Tell hydrateOverlayIfPresent which overlay this build expects, so a
+    // configured overlay that fails to import is reported instead of being
+    // indistinguishable from "no overlay" (the personal edition).
+    config() {
+      return {
+        define: {
+          __VALUZ_EDITION_OVERLAY__: JSON.stringify(
+            process.env.VALUZ_OVERLAY_PACKAGE ?? "",
+          ),
+        },
+      };
+    },
+
     resolveId(id) {
       if (id === VIRTUAL_ID) return RESOLVED_ID;
     },
