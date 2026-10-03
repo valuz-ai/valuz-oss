@@ -1,6 +1,5 @@
 import { Context } from "@deepseek-ai/cordis";
 
-import type { Capabilities } from "../edition/capabilities";
 import { useRegistryStore } from "../edition/registry-store";
 import { useCategoryRegistry } from "../hooks/use-resource-categories";
 import type {
@@ -49,35 +48,31 @@ export function createPluginHost(): PluginHost {
       scope.effect(() => dispose);
     };
 
+    const store = () => useRegistryStore.getState();
+
     const registry: PluginRegistry = {
       slot: (name, registration) =>
-        hold(useRegistryStore.getState().registerSlot(name, registration)),
-      route: (route) => hold(useRegistryStore.getState().registerRoute(route)),
-      settingsSection: (section) =>
-        hold(useRegistryStore.getState().registerSettingsSection(section)),
-      projectPanel: (panel) =>
-        hold(useRegistryStore.getState().registerProjectPanel(panel)),
-      navItem: (item) =>
-        hold(useRegistryStore.getState().registerNavItem(item)),
-      service: (descriptor) =>
-        hold(useRegistryStore.getState().registerService(descriptor)),
+        hold(store().registerSlot(name, registration)),
+      route: (route, placement) => hold(store().registerRoute(route, placement)),
+      removeRoute: (routeId) => hold(store().registerRouteRemoval(routeId)),
+      settingsSection: (section, placement) =>
+        hold(store().registerSettingsSection(section, placement)),
+      removeSettingsSection: (sectionId) =>
+        hold(store().registerSettingsSectionRemoval(sectionId)),
+      projectPanel: (panel) => hold(store().registerProjectPanel(panel)),
+      navItem: (item, placement) =>
+        hold(store().registerNavItem(item, placement)),
+      removeNavItem: (itemId) => hold(store().registerNavItemRemoval(itemId)),
+      navGroup: (group, placement) =>
+        hold(store().registerNavGroup(group, placement)),
+      service: (descriptor) => hold(store().registerService(descriptor)),
       categories: (type, categories) =>
         hold(useCategoryRegistry.getState().contribute(type, id, categories)),
       suppress: (surface) => {
-        useRegistryStore.getState().setSuppressed(surface, true);
-        hold(() => useRegistryStore.getState().setSuppressed(surface, false));
+        store().setSuppressed(surface, true);
+        hold(() => store().setSuppressed(surface, false));
       },
-      capabilities: (patch) => {
-        const current = useRegistryStore.getState().capabilities;
-        const previous = Object.fromEntries(
-          Object.keys(patch).map((key) => [
-            key,
-            current[key as keyof Capabilities],
-          ]),
-        ) as Partial<Capabilities>;
-        useRegistryStore.getState().setCapabilities(patch);
-        hold(() => useRegistryStore.getState().setCapabilities(previous));
-      },
+      capabilities: (patch) => hold(store().registerCapabilities(patch)),
     };
 
     return {

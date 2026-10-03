@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { personalProfile } from "../edition/personal-profile";
+import type {
+  DesktopRouteModule,
+  NavItemModule,
+  SettingsSectionModule,
+} from "../edition/profile";
 import { useRegistryStore } from "../edition/registry-store";
 import { useCategoryRegistry } from "../hooks/use-resource-categories";
 import { createPluginHost, definePlugin } from "./host";
@@ -13,6 +18,7 @@ const slotIds = (name: string) =>
 let host: PluginHost;
 
 beforeEach(() => {
+  useRegistryStore.getState().clearLayers();
   useRegistryStore.getState().hydrate(personalProfile);
   useRegistryStore.setState({ slots: {}, suppressed: {} });
   useCategoryRegistry.setState({ injected: {}, contributions: {} });
@@ -235,5 +241,185 @@ describe("plugin host", () => {
     shouldFail = false;
     expect((await host.load(flaky)).status).toBe("active");
     expect(slotIds("retry.slot")).toEqual(["flaky-cell"]);
+  });
+});
+
+describe("plugin host: page contributions over a hydrated base", () => {
+  const route = (id: string): DesktopRouteModule => ({
+    id,
+    path: `/${id}`,
+    label: id,
+    description: id,
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  });
+  const section = (id: string): SettingsSectionModule => ({
+    id,
+    label: id,
+    description: id,
+    edition: "personal",
+  });
+  const nav = (id: string): NavItemModule => ({
+    id,
+    label: id,
+    href: `/${id}`,
+    position: "top",
+    edition: "personal",
+  });
+  const ids = (list: Array<{ id: string }>) => list.map((entry) => entry.id);
+  const state = () => useRegistryStore.getState();
+
+  it("keeps contributions made BEFORE the host hydrates the registry", async () => {
+    await host.load(
+      definePlugin({
+        id: "early",
+        apply(ctx) {
+          ctx.registry.route(route("early-route"));
+          ctx.registry.settingsSection(section("early-section"));
+          ctx.registry.navItem(nav("early-nav"));
+          ctx.registry.navGroup({ id: "early-group", label: "Early" });
+          ctx.registry.projectPanel({
+            id: "early-panel",
+            label: "Early",
+            edition: "personal",
+          });
+          ctx.registry.service({
+            name: "early-service",
+            defaultPort: 1,
+            requiredForBoot: false,
+          });
+          ctx.registry.capabilities({ managedRuntimeSetup: true });
+        },
+      }),
+    );
+
+    // What hydrateOverlayIfPresent does once the overlay module has loaded.
+    state().hydrate(personalProfile);
+
+    expect(ids(state().desktopRoutes)).toContain("early-route");
+    expect(ids(state().settingsSections)).toContain("early-section");
+    expect(ids(state().navItems)).toContain("early-nav");
+    expect(ids(state().navGroups)).toContain("early-group");
+    expect(ids(state().projectPanels)).toContain("early-panel");
+    expect(state().services.map((s) => s.name)).toContain("early-service");
+    expect(state().capabilities.managedRuntimeSetup).toBe(true);
+
+    await host.unload("early");
+    expect(ids(state().desktopRoutes)).not.toContain("early-route");
+    expect(ids(state().navGroups)).not.toContain("early-group");
+    expect(state().capabilities.managedRuntimeSetup).toBe(false);
+  });
+
+  it("places entries with before / after and puts them back on unload", async () => {
+    const sections = ids(state().settingsSections);
+    const anchor = sections[1];
+    await host.load(
+      definePlugin({
+        id: "placed",
+        apply(ctx) {
+          ctx.registry.settingsSection(section("placed-section"), {
+            after: anchor,
+          });
+          ctx.registry.route(route("placed-route"), {
+            before: ids(state().desktopRoutes)[0],
+          });
+          ctx.registry.navItem(nav("placed-nav"), {
+            after: ids(state().navItems)[0],
+          });
+        },
+      }),
+    );
+
+    expect(ids(state().settingsSections)[2]).toBe("placed-section");
+    expect(ids(state().desktopRoutes)[0]).toBe("placed-route");
+    expect(ids(state().navItems)[1]).toBe("placed-nav");
+
+    await host.unload("placed");
+    expect(ids(state().settingsSections)).toEqual(sections);
+  });
+
+  it("hides base entries while loaded and restores them in place on unload", async () => {
+    const routesBefore = ids(state().desktopRoutes);
+    const sectionsBefore = ids(state().settingsSections);
+    const navBefore = ids(state().navItems);
+    await host.load(
+      definePlugin({
+        id: "remover",
+        apply(ctx) {
+          ctx.registry.removeRoute(routesBefore[1]);
+          ctx.registry.removeSettingsSection(sectionsBefore[0]);
+          ctx.registry.removeNavItem(navBefore[0]);
+        },
+      }),
+    );
+
+    expect(ids(state().desktopRoutes)).not.toContain(routesBefore[1]);
+    expect(ids(state().settingsSections)).not.toContain(sectionsBefore[0]);
+    expect(ids(state().navItems)).not.toContain(navBefore[0]);
+
+    // The base can be swapped underneath it and the entry stays hidden.
+    state().hydrate(personalProfile);
+    expect(ids(state().desktopRoutes)).not.toContain(routesBefore[1]);
+
+    await host.unload("remover");
+    expect(ids(state().desktopRoutes)).toEqual(routesBefore);
+    expect(ids(state().settingsSections)).toEqual(sectionsBefore);
+    expect(ids(state().navItems)).toEqual(navBefore);
+  });
+
+  it("rolls back every layer entry of a plugin that throws, removals and placements included", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const routesBefore = ids(state().desktopRoutes);
+    const sectionsBefore = ids(state().settingsSections);
+    const record = await host.load(
+      definePlugin({
+        id: "half-done",
+        apply(ctx) {
+          ctx.registry.removeRoute(routesBefore[0]);
+          ctx.registry.route(route("half-route"), { after: routesBefore[2] });
+          ctx.registry.settingsSection(section("half-section"));
+          ctx.registry.capabilities({ configureModelChannel: false });
+          throw new Error("boom");
+        },
+      }),
+    );
+
+    expect(record.status).toBe("failed");
+    expect(ids(state().desktopRoutes)).toEqual(routesBefore);
+    expect(ids(state().settingsSections)).toEqual(sectionsBefore);
+    expect(state().capabilities.configureModelChannel).toBe(true);
+  });
+
+  it("orders contributions of several plugins by registration, whatever the anchors", async () => {
+    const [first] = ids(state().settingsSections);
+    await host.loadAll([
+      definePlugin({
+        id: "p1",
+        apply(ctx) {
+          ctx.registry.settingsSection(section("p1-section"), {
+            after: "p2-section", // registered by a plugin that loads later
+          });
+        },
+      }),
+      definePlugin({
+        id: "p2",
+        apply(ctx) {
+          ctx.registry.settingsSection(section("p2-section"), {
+            after: first,
+          });
+        },
+      }),
+    ]);
+    expect(ids(state().settingsSections).slice(0, 3)).toEqual([
+      first,
+      "p2-section",
+      "p1-section",
+    ]);
+
+    // Unloading the anchor's plugin lets the follower fall back to the end.
+    await host.unload("p2");
+    const after = ids(state().settingsSections);
+    expect(after[after.length - 1]).toBe("p1-section");
   });
 });

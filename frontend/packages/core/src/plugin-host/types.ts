@@ -2,11 +2,13 @@ import type { ResourceCategory } from "@valuz/shared";
 import type { Capabilities } from "../edition/capabilities";
 import type {
   DesktopRouteModule,
+  NavGroupModule,
   NavItemModule,
   ProjectPanelModule,
   ServiceDescriptor,
   SettingsSectionModule,
 } from "../edition/profile";
+import type { Placement } from "../edition/registries/layers";
 import type { SlotRegistration } from "../edition/registries/slots";
 
 /**
@@ -29,21 +31,39 @@ export interface ValuzPlugin {
 export interface PluginRegistry {
   /** Contribute to a UI slot (list / single / keyed — see SlotRegistration). */
   slot(name: string, registration: SlotRegistration): void;
-  /** Add a route, or replace one by id; unloading restores the replaced route. */
-  route(route: DesktopRouteModule): void;
+  /**
+   * Add a route, or replace one by id (in place; unloading restores the
+   * replaced route). ``placement`` positions a route whose id is new.
+   */
+  route(route: DesktopRouteModule, placement?: Placement): void;
+  /** Hide the route with ``id`` while the plugin is loaded; unloading restores it. */
+  removeRoute(id: string): void;
   /** Add a settings section, or replace one by id (restored on unload). */
-  settingsSection(section: SettingsSectionModule): void;
+  settingsSection(
+    section: SettingsSectionModule,
+    placement?: Placement,
+  ): void;
+  /** Hide the settings section with ``id`` while loaded; unloading restores it. */
+  removeSettingsSection(id: string): void;
   /** Add a project panel, or replace one by id (restored on unload). */
   projectPanel(panel: ProjectPanelModule): void;
   /** Add a sidebar nav item, or replace one by id (restored on unload). */
-  navItem(item: NavItemModule): void;
+  navItem(item: NavItemModule, placement?: Placement): void;
+  /** Hide the nav item with ``id`` while loaded; unloading restores it. */
+  removeNavItem(id: string): void;
+  /** Declare a custom labelled sidebar group for nav items to join. */
+  navGroup(group: NavGroupModule, placement?: Placement): void;
   /** Add a service descriptor. */
   service(descriptor: ServiceDescriptor): void;
   /** Contribute resource-library categories for ``type`` alongside others. */
   categories(type: string, categories: ResourceCategory<unknown>[]): void;
   /** Suppress a host surface while the plugin is loaded. */
   suppress(surface: string): void;
-  /** Override capabilities while loaded; unloading restores the previous values. */
+  /**
+   * Override capabilities while loaded. The override is a layer over the
+   * edition's capabilities: it survives the host hydrating the registry, wins
+   * over ``setCapabilities`` while loaded, and unloading withdraws it.
+   */
   capabilities(patch: Partial<Capabilities>): void;
 }
 
