@@ -318,6 +318,10 @@ async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -
     project = await _load_project()
     if project is None:
         return False
+    from valuz_agent.ports.mcp_always_on import builtin_server_enabled
+
+    if not builtin_server_enabled("valuz-docs"):
+        return False  # ``oss-knowledge`` is off: no docs MCP server to attach
     _docs_skill_dir = project_docs_skill_dir(session.user_id)
     if not _docs_skill_dir.is_dir():
         return False

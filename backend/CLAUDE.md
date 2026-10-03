@@ -30,10 +30,12 @@ backend/
 │
 └── valuz_agent/                  # Host application
     ├── api/                      # HTTP: app.py (factory), deps.py, middleware.py, routes/
+    ├── features/                 # the OSS backend as plugins (one module per feature) + canonical order
+    ├── plugin_host/              # PluginHost / PluginContext / registries / prefs (§Composition)
     ├── adapters/                 # kernel ↔ host bridge — the ONLY kernel coupling
     ├── modules/                  # business modules — flat, no router (HTTP lives in api/routes)
     ├── infra/                    # config, db (async), secret_store, fs_registry, eventbus, errors
-    ├── boot/                     # process lifecycle: schema + kernel bootstrap, lifespan
+    ├── boot/                     # process lifecycle: steps, phases (the load-bearing order), lifespan
     ├── ports/                    # cross-cutting protocols (Auth, Docs, Parser, Tool, policy, …)
     ├── integrations/             # port implementations (auth_reportify, docs_embedded, …)
     ├── resources/                # bundled official skills (skill-creator)
@@ -139,6 +141,49 @@ and referenced from
 `session.mcp_servers` as the `harness` entry — every runtime consumes
 them through its standard MCP client path, in-process and remote alike.
 
+## Composition: the backend is a set of plugins
+
+`create_app()` no longer hard-wires routers or a startup script. Valuz's own backend
+is composed by the same `PluginHost` the commercial overlay uses
+(`valuz_agent/plugin_host`): `features.oss_plugins()` returns one plugin per
+feature, and each only **registers** what it owns through `PluginContext` —
+routers (`ctx.host_routes`), boot steps (`ctx.boot`), internal mounts / always-on
+MCP servers (`ctx.internal_mounts`, `ctx.mcp_always_on`) and harness tool groups
+(`ctx.toolkit`). `create_app` and the lifespan then **assemble** from the host's
+registry, in the canonical order kept in one place:
+
+| What | Canonical order lives in |
+|------|--------------------------|
+| routers | `features/order.py` (`ROUTE_REFS`; overlay `module_registry` routes follow) |
+| boot steps | `boot/phases.py` (`STARTUP_ORDER` / `SHUTDOWN_ORDER`, with the load-bearing comments) |
+| internal mounts | `features/order.py` (`MOUNT_SLOTS`), definitions in `features/mounts.py` |
+| harness tools | `features/order.py` (`TOOL_SLOTS`), builders in `features/toolkit.py` |
+
+Plugins: `oss-core` and `oss-agents` are **required**; `oss-tasks`, `oss-automations`,
+`oss-activity`, `oss-skills`, `oss-connectors`, `oss-knowledge`, `oss-memory`,
+`oss-browser`, `oss-channels`, `oss-backup`, `oss-marketplace`, `oss-agent-plugins`,
+`oss-dsh-plugins`, `oss-citations`, `oss-notifications`, `oss-feedback` are optional
+(`<data root>/extensions.json` switches them off; a disabled plugin contributes
+no routes, steps, mounts or tools). Each provides `oss.<feature>`; a plugin that
+cannot work without one `needs` it, and a plugin a *required* plugin needs is
+**locked** on (`PluginInfo.requiredBy`, `POST /v1/extensions/backend/{id}/enabled`
+answers 409). `GET /v1/extensions/backend/state` (public, ids only) lists the
+plugins not active this boot.
+
+`create_app(plugin_host=None)` composes the OSS plugins itself; the commercial overlay
+builds one host — `oss_plugins()` first, then its own, then the edition's — and passes
+it in (`create_app(api_prefix=..., lifespan_hooks=..., plugin_host=host)`; call
+`host.attach_app(app)` after). The overlay seams are unchanged: `module_registry`,
+`middleware_registry`, `ext` ports, `lifespan_hooks`.
+
+Adding a feature: write `features/<x>.py` (a plugin registering its routers / steps /
+mounts), add it to `oss_plugins()`, give each registration its position in the tables
+above, and run `tests/plugin_host` — the goldens pin the route table, boot sequence and
+always-on MCP of the bare app (`UPDATE_OSS_GOLDENS=1` regenerates them deliberately).
+Route modules are imported at assembly (lazy `"module:attr"` refs), after every
+plugin has applied — an overlay contribution that an OSS module snapshots at import
+(the connector catalog) depends on it.
+
 ## Anatomy of a business module
 
 `modules/<x>/` is a flat package with a conventional split (not every module
@@ -169,7 +214,8 @@ api/routes/<x>.py  →  modules/<x>/service.py  →  modules/<x>/datastore.py
 ```
 
 - A route file declares `router = APIRouter(prefix="/v1/<x>", tags=["<x>"])`
-  and is wired in `api/app.py` via `app.include_router(...)`.
+  and is wired by the feature plugin that owns it (`features/<x>.py` registers
+  it; its place in the router order is `features/order.py::ROUTE_REFS`).
 - Services and the current user arrive by dependency injection from
   `api/deps.py` (`get_current_user`, `get_<x>_service`, …).
 - Routes open DB work with `async_unit_of_work()` from `infra/db.py`; they
@@ -282,7 +328,8 @@ VALUZ_USER_TEMP_DIR=/data/valuz-tmp/{user_id}
 ## Adding an endpoint (contract-first recipe)
 
 1. Edit `api/openapi.yaml` (the contract leads).
-2. Add/extend `api/routes/<x>.py`; include its router in `api/app.py`.
+2. Add/extend `api/routes/<x>.py`; register its router in the owning feature plugin
+   (`features/<x>.py`) and give it a slot in `features/order.py::ROUTE_REFS`.
 3. Implement logic in `modules/<x>/service.py` (+ `datastore.py`, `errors.py`,
    `schemas.py` as needed). Respect both boundary contracts.
 4. If kernel data is involved, go through an `adapters/*` resolver.

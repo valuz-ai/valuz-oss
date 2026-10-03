@@ -7,17 +7,21 @@ plugins: ``<shared data root>/extensions.json``::
     {"disabled": ["commercial-sites"], "configs": {"<plugin id>": {...}}}
 
 The composing process passes it to ``PluginHost.load_all`` (disabled ids are
-filtered to optional plugins there — a required plugin can never be switched
-off). Deployment-wide, not per user.
+filtered to unlocked plugins there — a required plugin, or one a required plugin
+needs, can never be switched off). Deployment-wide, not per user.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from valuz_agent.plugin_host.host import PluginHost
 
 PREFS_FILENAME = "extensions.json"
 
@@ -77,6 +81,19 @@ def save_config(plugin_id: str, values: dict[str, Any], path: Path | None = None
     return updated
 
 
-def effective_disabled(prefs: ExtensionPrefs, required_ids: set[str]) -> frozenset[str]:
-    """Disabled ids a host may honour: never a required plugin."""
-    return frozenset(pid for pid in prefs.disabled if pid not in required_ids)
+def effective_disabled(prefs: ExtensionPrefs, locked_ids: Collection[str]) -> frozenset[str]:
+    """Disabled ids a host may honour: never a locked plugin.
+
+    ``locked_ids`` are the required plugins and the ones a locked plugin depends on
+    (``PluginHost.locks()``). ``PluginHost.load_all`` applies the same filter itself,
+    so passing only the required ids -- the original contract -- is still safe.
+    """
+    return frozenset(pid for pid in prefs.disabled if pid not in locked_ids)
+
+
+def load_host_with_prefs(host: PluginHost) -> None:
+    """``host.load_all`` with the persisted prefs: plugins the user switched off stay
+    off, locked ones (required, or needed by one) always load, and per-plugin config
+    edits apply."""
+    prefs = load_extension_prefs()
+    host.load_all(configs=prefs.configs, disabled=prefs.disabled)

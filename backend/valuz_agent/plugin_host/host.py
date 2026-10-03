@@ -24,7 +24,9 @@ from valuz_agent.plugin_host.errors import (
     PluginHostError,
     PluginStartupError,
 )
+from valuz_agent.plugin_host.locks import compute_locks
 from valuz_agent.plugin_host.plugin import BackendPlugin, ChangeResult, PluginStatus
+from valuz_agent.plugin_host.registry import HostRegistry
 
 logger = logging.getLogger("valuz_agent.plugin_host")
 
@@ -67,6 +69,10 @@ class PluginInfo:
     has_config: bool
     desired_enabled: bool
     bound_ports: tuple[str, ...]
+    #: Ids of locked plugins that need what this one provides (see ``locks``).
+    #: Empty for a plugin nothing locked depends on; ``required`` plugins are locked
+    #: regardless.
+    required_by: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +86,7 @@ class PluginInfo:
             "hasConfig": self.has_config,
             "desiredEnabled": self.desired_enabled,
             "boundPorts": list(self.bound_ports),
+            "requiredBy": list(self.required_by),
         }
 
 
@@ -110,12 +117,16 @@ class PluginHost:
         extensions: Any = None,
         module_registry: Any = None,
         middleware_registry: Any = None,
+        registry: HostRegistry | None = None,
     ) -> None:
         """
+        ``registry``: the host-composition registries (routes / boot steps / mounts /
+        toolkit, see :mod:`~valuz_agent.plugin_host.registry`); one per host.
         ``available``: names the *base* provides (default: every public port on
-        the extension container) so a plugin may ``need`` an OSS-default port
-        without a provider plugin. ``extensions`` / the registries default to the
-        process-wide OSS singletons, resolved lazily.
+        the extension container, plus the OSS feature capabilities ``oss.*``) so a
+        plugin may ``need`` an OSS-default port or feature without a provider plugin.
+        ``extensions`` / the registries default to the process-wide OSS singletons,
+        resolved lazily.
         """
         self.role = role
         self.facets = frozenset(facets)
@@ -123,6 +134,7 @@ class PluginHost:
         self._extensions = extensions
         self._module_registry = module_registry
         self._middleware_registry = middleware_registry
+        self.registry = registry if registry is not None else HostRegistry()
         self._available_override = None if available is None else frozenset(available)
         self._records: dict[str, PluginRecord] = {}
         self._order: list[str] = []
@@ -154,7 +166,13 @@ class PluginHost:
     def _available(self) -> frozenset[str]:
         if self._available_override is not None:
             return self._available_override
-        return frozenset(n for n in vars(self._ext()) if not n.startswith("_"))
+        ports = frozenset(n for n in vars(self._ext()) if not n.startswith("_"))
+        # The OSS features (``oss.<feature>``) are part of the base too: the OSS
+        # plugins only switch them on. A host that does not include them -- a worker,
+        # a compat entry point, an edition loaded on its own -- may still ``need`` one.
+        from valuz_agent.features import oss_capabilities
+
+        return ports | oss_capabilities()
 
     # -- registration -----------------------------------------------------
 
@@ -235,6 +253,9 @@ class PluginHost:
         order = self.order()
         providers = self._providers()
         configs = configs or {}
+        # Never honour a request to switch off a locked plugin (a hand-edited
+        # extensions.json must not turn into a startup failure).
+        disabled = self.effective_disabled(disabled)
         for pid in order:
             record = self._records[pid]
             if record.status != "pending":
@@ -269,6 +290,7 @@ class PluginHost:
             extensions=self._ext(),
             module_registry_getter=self._module_registry_now,
             middleware_registry_getter=self._middleware_registry_now,
+            registry=self.registry,
         )
         try:
             config = self._build_config(record, configs)
@@ -388,7 +410,37 @@ class PluginHost:
 
     # -- management projection -------------------------------------------
 
-    def list(self) -> list[PluginInfo]:
+    def locks(self, disabled: Collection[str] | None = None) -> dict[str, list[str]]:
+        """Locked plugins (``required`` or needed by one) -> the locked ids needing them.
+
+        ``disabled`` is the requested switched-off set (default: what this host was
+        asked to leave off); see :func:`~valuz_agent.plugin_host.locks.compute_locks`.
+        """
+        requested = self._requested_disabled() if disabled is None else disabled
+        return compute_locks({pid: r.plugin for pid, r in self._records.items()}, requested)
+
+    def effective_disabled(self, requested: Collection[str]) -> frozenset[str]:
+        """``requested`` minus the locked plugins and ids this host does not know."""
+        locked = self.locks(requested)
+        return frozenset(p for p in requested if p in self._records and p not in locked)
+
+    def _requested_disabled(self) -> set[str]:
+        return {
+            pid
+            for pid, record in self._records.items()
+            if record.status == "disabled" or not record.desired_enabled
+        }
+
+    def is_active(self, plugin_id: str) -> bool:
+        record = self._records.get(plugin_id)
+        return record is not None and record.status == "active"
+
+    def inactive_ids(self) -> _list[str]:
+        """Plugins that are not active in this process (disabled, failed, unloaded)."""
+        return sorted(pid for pid, r in self._records.items() if r.status != "active")
+
+    def list(self, disabled: Collection[str] | None = None) -> list[PluginInfo]:
+        locks = self.locks(disabled)
         return [
             PluginInfo(
                 id=pid,
@@ -401,6 +453,7 @@ class PluginHost:
                 has_config=getattr(record.plugin, "Config", None) is not None,
                 desired_enabled=record.desired_enabled,
                 bound_ports=tuple(record.bound_ports),
+                required_by=tuple(locks.get(pid, ())),
             )
             for pid, record in self._records.items()
         ]

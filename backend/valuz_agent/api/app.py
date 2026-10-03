@@ -16,72 +16,57 @@ from valuz_agent.api.middleware import (
     LocaleMiddleware,
     TimingMiddleware,
 )
-from valuz_agent.api.routes.activity import router as activity_router
-from valuz_agent.api.routes.agent_templates import router as agent_templates_router
-from valuz_agent.api.routes.agents import router as agents_router
-from valuz_agent.api.routes.analytics import router as analytics_router
-from valuz_agent.api.routes.artifacts import router as artifacts_router
-from valuz_agent.api.routes.automations import router as automations_router
-from valuz_agent.api.routes.backup import router as backup_router
-from valuz_agent.api.routes.browser import router as browser_router
-from valuz_agent.api.routes.channels import router as channels_router
-from valuz_agent.api.routes.citations import router as citations_router
-from valuz_agent.api.routes.connectors import router as connectors_router
-from valuz_agent.api.routes.docs import router as docs_router
-from valuz_agent.api.routes.document_research import router as document_research_router
-from valuz_agent.api.routes.dsh_plugins import router as dsh_plugins_router
-from valuz_agent.api.routes.extensions import router as extensions_router
-from valuz_agent.api.routes.feedback import router as feedback_router
-from valuz_agent.api.routes.files import router as files_router
-from valuz_agent.api.routes.marketplace import router as marketplace_router
-from valuz_agent.api.routes.memory import router as memory_router
-from valuz_agent.api.routes.notifications import router as notifications_router
-from valuz_agent.api.routes.onboarding import router as onboarding_router
-from valuz_agent.api.routes.operations import router as operations_router
-from valuz_agent.api.routes.parser import settings_router as parser_settings_router
-from valuz_agent.api.routes.parser import system_router as parser_system_router
-from valuz_agent.api.routes.playbooks import router as playbooks_router
-from valuz_agent.api.routes.plugins import router as plugins_router
-from valuz_agent.api.routes.projects import router as projects_router
-from valuz_agent.api.routes.providers import router as providers_router
-from valuz_agent.api.routes.resources import router as resources_router
-from valuz_agent.api.routes.runs import router as runs_router
-from valuz_agent.api.routes.runtimes import router as runtimes_router
-from valuz_agent.api.routes.sessions import attachments_router
-from valuz_agent.api.routes.sessions import router as sessions_router
-from valuz_agent.api.routes.settings import router as settings_router
-from valuz_agent.api.routes.skills import router as skills_router
-from valuz_agent.api.routes.stream import router as stream_router
-from valuz_agent.api.routes.system import router as system_router
-from valuz_agent.api.routes.tasks import router as tasks_router
-from valuz_agent.api.routes.worktrees import router as worktrees_router
 from valuz_agent.boot import lifespan
+from valuz_agent.boot.phases import BootPlan
 from valuz_agent.infra.config import settings
 from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.plugin_host import PluginHost
 
 logger = logging.getLogger("valuz_agent.api")
 
 LifespanHook = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 
-def _build_lifespan(lifespan_hooks: list[LifespanHook] | None) -> LifespanHook:
-    if not lifespan_hooks:
+def _oss_lifespan(app: FastAPI, plan: BootPlan | None) -> AbstractAsyncContextManager[None]:
+    # ``lifespan`` is read at call time (not bound at import): embedders and tests
+    # may replace it on this module.
+    return lifespan(app) if plan is None else lifespan(app, plan)
+
+
+def _build_lifespan(
+    lifespan_hooks: list[LifespanHook] | None, plan: BootPlan | None = None
+) -> LifespanHook:
+    if not lifespan_hooks and plan is None:
         return lifespan
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async with lifespan(app):
+        async with _oss_lifespan(app, plan):
             async with AsyncExitStack() as stack:
-                for hook in lifespan_hooks:
+                for hook in lifespan_hooks or []:
                     await stack.enter_async_context(hook(app))
                 yield
 
     return _lifespan
 
 
+def _compose_bare_host() -> PluginHost:
+    """A bare OSS app composes its own host: the OSS plugins, with the persisted
+    extension prefs (``<data root>/extensions.json``) applied, recorded as the
+    process's active host so ``/v1/extensions`` can report it."""
+    from valuz_agent.features import compose_oss_host
+    from valuz_agent.plugin_host import load_host_with_prefs, set_active_plugin_host
+
+    host = compose_oss_host()
+    load_host_with_prefs(host)
+    set_active_plugin_host(host)
+    return host
+
+
 def create_app(
     api_prefix: list[str] | None = None,
     lifespan_hooks: list[LifespanHook] | None = None,
+    plugin_host: PluginHost | None = None,
 ) -> FastAPI:
     """Build the host FastAPI application.
 
@@ -101,6 +86,14 @@ def create_app(
 
     ``lifespan_hooks`` lets overlays contribute resource lifecycles without
     mutating the returned app with deprecated startup/shutdown events.
+
+    ``plugin_host`` is the composition. The OSS backend is itself a set of plugins
+    (``valuz_agent.features.oss_plugins()``): each registers the routers, boot steps,
+    internal mounts and harness tools it owns, and this factory *assembles* them
+    from the host's registry. ``None`` (bare OSS) composes the OSS plugins itself
+    and applies the extension prefs; a caller that composed a host -- the commercial
+    overlay builds ``oss_plugins()`` + its own + the edition's -- passes it already
+    loaded (and calls ``plugin_host.attach_app(app)`` afterwards).
     """
     if getattr(sys, "frozen", False):
         from valuz_agent.infra.local_identity import resolve_local_user_id
@@ -110,12 +103,21 @@ def create_app(
         _env_path = Path(__file__).resolve().parents[2] / ".env"
     load_dotenv(_env_path)
 
+    bare = plugin_host is None
+    host = _compose_bare_host() if plugin_host is None else plugin_host
+    if not host.is_active("oss-core"):
+        raise ValueError(
+            "create_app(plugin_host=...) needs a loaded host that includes the OSS "
+            "plugins (valuz_agent.features.oss_plugins())"
+        )
+    registry = host.registry
+
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
         docs_url="/docs" if settings.debug else None,
         redoc_url=None,
-        lifespan=_build_lifespan(lifespan_hooks),
+        lifespan=_build_lifespan(lifespan_hooks, BootPlan.from_registry(registry)),
     )
 
     @app.exception_handler(RequestValidationError)
@@ -161,50 +163,13 @@ def create_app(
     # via ``_mount_internal`` — mounted under each base path so a sandbox that can
     # only reach the host through the prefixed ingress resolves them too.
     api = APIRouter()
-    api.include_router(providers_router)
-    api.include_router(channels_router)
-    api.include_router(citations_router)
-    api.include_router(document_research_router)
-    api.include_router(feedback_router)
-    api.include_router(connectors_router)
-    api.include_router(browser_router)
-    api.include_router(runs_router)
-    api.include_router(activity_router)
-    api.include_router(runtimes_router)
-    api.include_router(system_router)
-    api.include_router(projects_router)
-    api.include_router(files_router)
-    api.include_router(artifacts_router)
-    api.include_router(worktrees_router)
-    api.include_router(sessions_router)
-    # Attachments live outside ``/v1/sessions``: a file uploads before any
-    # session exists and is bound by the turn that ships it.
-    api.include_router(attachments_router)
-    api.include_router(stream_router)
-    api.include_router(skills_router)
-    api.include_router(docs_router)
-    api.include_router(automations_router)
-    api.include_router(playbooks_router)
-    api.include_router(operations_router)
-    api.include_router(backup_router)
-    api.include_router(notifications_router)
-    api.include_router(agents_router)
-    api.include_router(agent_templates_router)
-    api.include_router(marketplace_router)
-    api.include_router(plugins_router)
-    api.include_router(dsh_plugins_router)
-    api.include_router(extensions_router)
-    api.include_router(tasks_router)
-    api.include_router(analytics_router)
-    api.include_router(resources_router)
-    api.include_router(onboarding_router)
-    api.include_router(settings_router)
-    api.include_router(memory_router)
-    # Parser routes live in a separate module because they straddle the
-    # ``/v1/system`` and ``/v1/settings`` namespaces (setup jobs vs.
-    # routing config). One module, two ``APIRouter`` instances.
-    api.include_router(parser_system_router)
-    api.include_router(parser_settings_router)
+    # The host's own routers, in canonical order (``features/order.ROUTE_REFS``).
+    # Resolved only now -- after every plugin has applied -- so a route module's
+    # import-time snapshot (e.g. the connector catalog) sees what overlays contributed.
+    from valuz_agent.features.order import ROUTE_SLOTS
+
+    for route_entry in registry.routes(ROUTE_SLOTS):
+        api.include_router(route_entry.resolve())
 
     # Apply overlay-registered modules into the same aggregate router so they
     # inherit the prefix too; middleware is not path-based and stays on the app
@@ -266,97 +231,54 @@ def create_app(
         for _p in resolved_prefixes:
             app.mount(f"{_p}{path}", subapp)
 
-    # In-process docs MCP server. Mounted as a Starlette ASGI sub-app
-    # because FastMCP owns its own request pipeline (streamable HTTP
-    # protocol). The kernel's MCP client gets an URL of the form
-    # ``{backend_base_url}/_internal/mcp/docs/{session_id}/mcp`` injected
-    # into ``session.mcp_servers`` whenever the project has any KB
-    # binding — see ``adapters/capability_resolver.py``.
-    from valuz_agent.integrations.docs_mcp_server import build_docs_mcp_asgi
-
-    _mount_internal("/_internal/mcp/docs", build_docs_mcp_asgi())
-
-    # Host-mounted DataService (kernel three-table CRUD over /rpc/{op}). Mounted
-    # here as a sub-app; its store + JWT verifier are bound in the lifespan
-    # (``steps.bind_data_service``) once the backend is known. A sandbox kernel
-    # reaches this over HTTP+JWT instead of holding a DB credential. /health +
-    # /openapi.json work pre-bind; /rpc is 401 until bound.
-    from valuz_agent.boot.kernel import make_data_service_placeholder
-
-    app.state.data_service_app = make_data_service_placeholder()
-    _mount_internal("/_internal/data", app.state.data_service_app)
-
-    # In-process automations MCP server — exposes the ``automation`` tool
-    # to every session. Replaces the legacy ``cronjob`` tool per ADR-021.
-    from valuz_agent.integrations.automations_mcp_server import (
-        build_automations_mcp_asgi,
-    )
-
-    _mount_internal("/_internal/mcp/automations", build_automations_mcp_asgi())
-
-    # Owner-scoped Playbook library + in-session invocation tool.
-    from valuz_agent.integrations.playbooks_mcp_server import build_playbooks_mcp_asgi
-
-    _mount_internal("/_internal/mcp/playbooks", build_playbooks_mcp_asgi())
-
-    # In-process connectors MCP server — exposes the ``create_mcp`` tool to
-    # every session so the agent can create connectors on behalf of the user.
-    from valuz_agent.integrations.connectors_mcp_server import (
-        build_connectors_mcp_asgi,
-    )
-
-    _mount_internal("/_internal/mcp/connectors", build_connectors_mcp_asgi())
-
-    # In-process toolkit MCP server — serves the harness tools (dispatch /
-    # orchestration / memory / submit_skill) per toolset. Sessions reference
-    # it via an ``mcp_servers`` entry named ``harness`` so every runtime
-    # consumes host tools through its standard MCP client path.
-    from valuz_agent.integrations.toolkit_mcp_server import build_toolkit_mcp_asgi
-
-    _mount_internal("/_internal/mcp/toolkit/base", build_toolkit_mcp_asgi("base"))
-    _mount_internal("/_internal/mcp/toolkit/lead", build_toolkit_mcp_asgi("lead"))
-
-    # Edition-registered always-on servers, through the same seam. The resolver
-    # advertises them as ``{backend_base_url}{path}/mcp`` — the identical shape
-    # it uses for the built-ins above — so they need the identical mounting, and
-    # an edition mounting by hand in ``register_api`` has to rediscover that.
-    # One that mounted at the bare path only shipped a spec whose advertised URL
-    # 404'd under every prefixed deployment. Specs registered before
-    # ``create_app`` (i.e. in ``register_capabilities``) are picked up here;
-    # a spec without a factory is an edition that still mounts its own.
-    from valuz_agent.modules.dsh_plugins.manager import manager_enabled
+    # The host's internal mounts, in canonical order (``features/order.MOUNT_SLOTS``):
+    # the in-process MCP servers (docs, automations, playbooks, connectors, the harness
+    # toolkit) -- Starlette ASGI sub-apps, because FastMCP owns its own request
+    # pipeline (streamable HTTP) -- and the host-mounted DataService (kernel three-table
+    # CRUD over /rpc/{op}; its store + JWT verifier are bound in the lifespan by
+    # ``steps.bind_data_service``). Each is owned by a plugin: a disabled feature mounts
+    # nothing, and sessions are not handed its server. The MCP client gets a URL of the
+    # form ``{backend_base_url}/_internal/mcp/docs/{session_id}/mcp`` -- see
+    # ``adapters/capability_resolver.py``.
+    from valuz_agent.features.order import MOUNT_SLOTS
+    from valuz_agent.plugin_host.registry import resolve_ref
     from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.mcp_always_on import set_enabled_builtin_servers
 
-    # dsh plugin tools for every non-dsh runtime (local workstations only):
-    # the resident dsh manager host's tool bridge, fronted as an always-on MCP
-    # server. dsh sessions load the plugins natively and skip it.
-    if manager_enabled():
-        from valuz_agent.modules.dsh_plugins.mcp_server import (
-            MOUNT_PATH as _DSH_MCP_PATH,
-        )
-        from valuz_agent.modules.dsh_plugins.mcp_server import (
-            SERVER_NAME as _DSH_MCP_NAME,
-        )
-        from valuz_agent.modules.dsh_plugins.mcp_server import build_dsh_plugins_mcp_asgi
-        from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
+    mounted = registry.mounts(MOUNT_SLOTS)
+    for mount_entry in mounted:
+        mount = mount_entry.mount
+        if mount.spec is not None:
+            continue
+        factory = resolve_ref(mount.build)
+        _mount_internal(mount.path, factory(app) if mount.takes_app else factory())
+    set_enabled_builtin_servers(m.mount.server for m in mounted if m.mount.server)
 
-        if not any(spec.name == _DSH_MCP_NAME for spec in ext.always_on_mcp_specs):
-            ext.always_on_mcp_specs.append(
-                AlwaysOnMcpServerSpec(
-                    name=_DSH_MCP_NAME,
-                    path=_DSH_MCP_PATH,
-                    app_factory=build_dsh_plugins_mcp_asgi,
-                )
-            )
-
+    # Always-on servers registered as specs (``ext.always_on_mcp_specs``: the dsh bridge
+    # of the ``oss-dsh-plugins`` plugin and whatever an overlay registered), through the
+    # same seam. The resolver advertises them as ``{backend_base_url}{path}/mcp`` — the
+    # identical shape it uses for the built-ins above — so they need the identical
+    # mounting, and an edition mounting by hand in ``register_api`` has to rediscover
+    # that. One that mounted at the bare path only shipped a spec whose advertised URL
+    # 404'd under every prefixed deployment. Specs registered before ``create_app``
+    # (plugins append them while they apply) are picked up here; a spec without a
+    # factory is an edition that still mounts its own.
     for _spec in ext.always_on_mcp_specs:
         if _spec.app_factory is not None:
             _mount_internal(_spec.path, _spec.app_factory())
 
-    # Startup/shutdown orchestration lives in ``boot/lifespan.py`` (bound via
-    # ``lifespan=lifespan`` above). The startup order is load-bearing; see the
-    # order table in the boot-refactor exec plan.
+    if bare:
+        host.attach_app(app)
+
+    # Startup/shutdown orchestration lives in ``boot/lifespan.py`` and runs the boot
+    # steps the plugins registered (bound via ``lifespan=`` above). The startup order
+    # is load-bearing; see ``boot/phases.py``.
     return app
 
 
-app = create_app()
+def __getattr__(name: str) -> FastAPI:
+    # ``valuz_agent.api.app:app`` used to be built at import time. Composing an app
+    # has side effects now (the active plugin host), so it is built on first access.
+    if name == "app":
+        return create_app()
+    raise AttributeError(name)

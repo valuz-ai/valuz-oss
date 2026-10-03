@@ -254,6 +254,7 @@ def test_list_reports_declarations_and_bound_ports() -> None:
         "hasConfig": False,
         "desiredEnabled": True,
         "boundPorts": ["cache"],
+        "requiredBy": [],
     }
 
 

@@ -1,12 +1,19 @@
 """``/v1/extensions`` — what the backend plugin host loaded.
 
 The management view of Valuz's own backend extensions (plugin-architecture
-design §8): every plugin the running process composed, its status (active /
-failed / disabled / skipped), whether it is required, its entitlement key and
-its config schema (JSON Schema 2020-12, the dsh ``--dump-config-schema``
-shape). Toggles and config edits are recorded and take effect on the next
-start (``restart-required``) — FastAPI cannot drop routes from a live app.
-A bare OSS app composes without a plugin host and reports an empty list.
+design §8): every plugin the running process composed — the OSS features
+(``oss-core``, ``oss-tasks``, …) as well as an overlay's — its status (active /
+failed / disabled / skipped), whether it is required, what locks it on, its
+entitlement key and its config schema (JSON Schema 2020-12, the dsh
+``--dump-config-schema`` shape). Toggles and config edits are recorded and take
+effect on the next start (``restart-required``) — FastAPI cannot drop routes from
+a live app.
+
+A plugin is *locked* — it cannot be switched off — when it is required, or when a
+locked plugin needs something only it provides (``requiredBy`` names them).
+
+``GET /v1/extensions/backend/state`` is public: the renderer reads it before any
+session exists to decide which frontend plugins to load.
 """
 
 from __future__ import annotations
@@ -27,6 +34,17 @@ class EnabledChange(BaseModel):
     enabled: bool
 
 
+@router.get("/backend/state")
+async def backend_extensions_state() -> dict[str, list[str]]:
+    """Ids of the backend plugins that are not active in this process.
+
+    Deliberately unauthenticated (no ``get_current_user_id``) and deliberately
+    minimal: ids only, nothing about why or how.
+    """
+    host = active_plugin_host()
+    return {"inactive": [] if host is None else host.inactive_ids()}
+
+
 @router.get("/backend")
 async def list_backend_extensions(
     _user_id: str = Depends(get_current_user_id),
@@ -39,7 +57,7 @@ async def list_backend_extensions(
         return {"composed": False, "editable": editable, "plugins": [], "config_schemas": {}}
     disabled = load_extension_prefs().disabled
     plugins = []
-    for info in host.list():
+    for info in host.list(disabled=disabled):
         row = info.to_dict()
         # The persisted desire (applied at the next start), not just this boot's.
         row["desiredEnabled"] = info.id not in disabled
@@ -71,7 +89,16 @@ async def set_backend_extension_enabled(
         record = host.get(plugin_id)
     except PluginHostError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if record.plugin.required and not body.enabled:
-        raise HTTPException(status_code=409, detail=f"{plugin_id!r} is required")
+    if not body.enabled:
+        if record.plugin.required:
+            raise HTTPException(status_code=409, detail=f"{plugin_id!r} is required")
+        # Locked by a dependency: a required (or locked) plugin needs what only this
+        # one provides. Judged against what is already switched off for the next start.
+        required_by = host.locks(load_extension_prefs().disabled).get(plugin_id)
+        if required_by:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{plugin_id!r} is required by {', '.join(required_by)}",
+            )
     save_enabled(plugin_id, body.enabled)
     return {"application": host.set_enabled(plugin_id, body.enabled)}

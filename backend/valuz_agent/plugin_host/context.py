@@ -13,6 +13,13 @@ from contextlib import ExitStack
 from typing import TYPE_CHECKING, Any
 
 from valuz_agent.plugin_host.errors import UnknownPortError
+from valuz_agent.plugin_host.registry import (
+    BootStep,
+    HostRegistry,
+    InternalMount,
+    Ref,
+    ToolGroup,
+)
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -154,6 +161,67 @@ class MiddlewareApi:
         return self._ctx._on_stack(_unregister)
 
 
+class HostRoutesApi:
+    """Routers of the aggregate ``api`` router (see :mod:`registry`).
+
+    Distinct from :class:`RoutesApi`: that one feeds the overlay ``module_registry``,
+    which is applied *after* these, so overlay routes still follow the host's.
+    """
+
+    def __init__(self, ctx: PluginContext, registry: HostRegistry) -> None:
+        self._ctx = ctx
+        self._registry = registry
+
+    def include(self, router: Ref, *, slot: str | None = None) -> Disposer:
+        """Add ``router`` (an ``APIRouter`` or a ``"module:attr"`` ref) at ``slot``.
+
+        ``slot`` is the router's name in the canonical order
+        (``valuz_agent.features.order.ROUTE_SLOTS``); an unlisted slot sorts last.
+        """
+        entry = self._registry.add_route(self._ctx.plugin_id, router, slot)
+        return self._ctx._on_stack(lambda: self._registry.remove(entry))
+
+
+class BootApi:
+    """Startup / shutdown steps, per phase (``valuz_agent.boot.phases``)."""
+
+    def __init__(self, ctx: PluginContext, registry: HostRegistry) -> None:
+        self._ctx = ctx
+        self._registry = registry
+
+    def startup(self, phase: str, step: BootStep) -> Disposer:
+        entry = self._registry.add_step(self._ctx.plugin_id, "startup", str(phase), step)
+        return self._ctx._on_stack(lambda: self._registry.remove(entry))
+
+    def shutdown(self, phase: str, step: BootStep) -> Disposer:
+        entry = self._registry.add_step(self._ctx.plugin_id, "shutdown", str(phase), step)
+        return self._ctx._on_stack(lambda: self._registry.remove(entry))
+
+
+class InternalMountsApi:
+    """Internal ASGI mounts and always-on MCP servers (``/_internal/...``)."""
+
+    def __init__(self, ctx: PluginContext, registry: HostRegistry) -> None:
+        self._ctx = ctx
+        self._registry = registry
+
+    def mount(self, mount: InternalMount) -> Disposer:
+        entry = self._registry.add_mount(self._ctx.plugin_id, mount)
+        return self._ctx._on_stack(lambda: self._registry.remove(entry))
+
+
+class ToolkitApi:
+    """Harness toolkit tool groups (served by the ``harness`` MCP server)."""
+
+    def __init__(self, ctx: PluginContext, registry: HostRegistry) -> None:
+        self._ctx = ctx
+        self._registry = registry
+
+    def add(self, tool: ToolGroup) -> Disposer:
+        entry = self._registry.add_tool_group(self._ctx.plugin_id, tool)
+        return self._ctx._on_stack(lambda: self._registry.remove(entry))
+
+
 class AppApi:
     """What a plugin may do once the FastAPI app exists (``after_app`` hooks).
 
@@ -240,6 +308,7 @@ class PluginContext:
         extensions: Any,
         module_registry_getter: Callable[[], Any],
         middleware_registry_getter: Callable[[], Any],
+        registry: HostRegistry | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         #: Free-form label of the composing process ("web", "worker", ...).
@@ -255,6 +324,13 @@ class PluginContext:
         self.ports = PortsApi(self, extensions)
         self.routes = RoutesApi(self, module_registry_getter)
         self.middleware = MiddlewareApi(self, middleware_registry_getter)
+        #: The host's own composition registries (routes / boot steps / mounts /
+        #: toolkit). A context built without a host gets a private, throwaway one.
+        self.registry = registry if registry is not None else HostRegistry()
+        self.host_routes = HostRoutesApi(self, self.registry)
+        self.boot = BootApi(self, self.registry)
+        self.internal_mounts = InternalMountsApi(self, self.registry)
+        self.toolkit = ToolkitApi(self, self.registry)
 
     # -- plumbing ---------------------------------------------------------
 

@@ -1,0 +1,76 @@
+{
+ "advertised": [
+  {
+   "headers": [
+    "X-Valuz-Internal",
+    "X-Valuz-Session-Id"
+   ],
+   "name": "valuz-docs",
+   "url": "http://127.0.0.1:8000/_internal/mcp/docs/mcp"
+  },
+  {
+   "headers": [
+    "X-Valuz-Internal",
+    "X-Valuz-Session-Id"
+   ],
+   "name": "valuz-automations",
+   "url": "http://127.0.0.1:8000/_internal/mcp/automations/mcp"
+  },
+  {
+   "headers": [
+    "X-Valuz-Internal",
+    "X-Valuz-Session-Id"
+   ],
+   "name": "valuz-playbooks",
+   "url": "http://127.0.0.1:8000/_internal/mcp/playbooks/mcp"
+  },
+  {
+   "headers": [
+    "X-Valuz-Internal",
+    "X-Valuz-Session-Id"
+   ],
+   "name": "valuz-connectors",
+   "url": "http://127.0.0.1:8000/_internal/mcp/connectors/mcp"
+  },
+  {
+   "headers": [
+    "X-Valuz-Internal",
+    "X-Valuz-Session-Id"
+   ],
+   "name": "harness",
+   "url": "http://127.0.0.1:8000/_internal/mcp/toolkit/base/mcp"
+  },
+  {
+   "headers": [
+    "X-Valuz-Internal",
+    "X-Valuz-Session-Id"
+   ],
+   "name": "valuz-dsh-plugins",
+   "url": "http://127.0.0.1:8000/_internal/mcp/dsh-plugins/mcp"
+  }
+ ],
+ "managers": [
+  "enter kernel-mcp-router",
+  "enter docs",
+  "enter automations",
+  "enter playbooks",
+  "enter connectors",
+  "enter toolkit",
+  "enter dsh-plugins",
+  "started",
+  "exit dsh-plugins",
+  "exit toolkit",
+  "exit connectors",
+  "exit playbooks",
+  "exit automations",
+  "exit docs",
+  "exit kernel-mcp-router"
+ ],
+ "specs": [
+  {
+   "has_factory": true,
+   "name": "valuz-dsh-plugins",
+   "path": "/_internal/mcp/dsh-plugins"
+  }
+ ]
+}

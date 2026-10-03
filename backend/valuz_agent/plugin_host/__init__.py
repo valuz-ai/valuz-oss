@@ -24,6 +24,7 @@ from valuz_agent.plugin_host.errors import (
     UnknownPortError,
 )
 from valuz_agent.plugin_host.host import PluginHost, PluginInfo, PluginRecord
+from valuz_agent.plugin_host.locks import compute_locks
 from valuz_agent.plugin_host.plugin import (
     BackendPlugin,
     BackendPluginBase,
@@ -34,8 +35,17 @@ from valuz_agent.plugin_host.prefs import (
     ExtensionPrefs,
     effective_disabled,
     load_extension_prefs,
+    load_host_with_prefs,
     save_config,
     save_enabled,
+)
+from valuz_agent.plugin_host.registry import (
+    BootStep,
+    HostRegistry,
+    InternalMount,
+    Ref,
+    ToolGroup,
+    resolve_ref,
 )
 
 __all__ = [
@@ -44,11 +54,19 @@ __all__ = [
     "active_plugin_host",
     "effective_disabled",
     "load_extension_prefs",
+    "load_host_with_prefs",
     "save_config",
     "save_enabled",
     "set_active_plugin_host",
     "AppApi",
     "BackendPlugin",
+    "BootStep",
+    "HostRegistry",
+    "InternalMount",
+    "Ref",
+    "ToolGroup",
+    "compute_locks",
+    "resolve_ref",
     "BackendPluginBase",
     "ChangeResult",
     "DiscoveryResult",

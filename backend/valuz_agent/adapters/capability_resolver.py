@@ -428,12 +428,16 @@ def always_on_skill_paths(*, user_id: str) -> list[str]:
     install can't break session creation.
     """
     from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.mcp_always_on import builtin_server_enabled
 
     candidates = [
-        project_docs_skill_dir(user_id),
         citation_skill_dir(user_id),
         official_skill_dir("skill-creator", user_id),
     ]
+    # The docs skill teaches the tools of the ``valuz-docs`` MCP server and must
+    # travel with it: without ``oss-knowledge`` there is no such server.
+    if builtin_server_enabled("valuz-docs"):
+        candidates.insert(0, project_docs_skill_dir(user_id))
     # The browser skill teaches the ``chrome-devtools`` CLI, which only works
     # where the bound engine can run the daemon (host Node + chrome-devtools-mcp,
     # or a sandbox image that ships them); don't inject a dead skill otherwise.
@@ -535,6 +539,7 @@ async def always_on_http_mcp_servers(
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_url
     from valuz_agent.integrations.playbooks_mcp_server import playbooks_mcp_url
     from valuz_agent.integrations.toolkit_mcp_server import toolkit_mcp_url
+    from valuz_agent.ports.mcp_always_on import builtin_server_enabled
     from valuz_agent.ports.sandbox_credential import get_sandbox_credential_verifier
 
     internal_credential = await get_sandbox_credential_verifier().credential_for(owner_user_id)
@@ -543,41 +548,26 @@ async def always_on_http_mcp_servers(
         "X-Valuz-Session-Id": session_id,
     }
     base = _settings.backend_base_url
+    builtins = [
+        ("valuz-docs", docs_mcp_url(base_url=base)),
+        ("valuz-automations", automations_mcp_url(base_url=base)),
+        ("valuz-playbooks", playbooks_mcp_url(base_url=base)),
+        ("valuz-connectors", connectors_mcp_url(base_url=base)),
+        ("harness", toolkit_mcp_url(base_url=base, toolset=toolkit)),
+    ]
+    # Only the servers the composed app mounts: a disabled feature plugin (see
+    # ``features/``) serves none, and a session must not carry a dead URL.
     return [
-        McpHttpServerConfig(
-            name="valuz-docs",
-            url=docs_mcp_url(base_url=base),
-            transport="http",
-            headers=dict(headers),
-            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
-        ),
-        McpHttpServerConfig(
-            name="valuz-automations",
-            url=automations_mcp_url(base_url=base),
-            transport="http",
-            headers=dict(headers),
-            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
-        ),
-        McpHttpServerConfig(
-            name="valuz-playbooks",
-            url=playbooks_mcp_url(base_url=base),
-            transport="http",
-            headers=dict(headers),
-            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
-        ),
-        McpHttpServerConfig(
-            name="valuz-connectors",
-            url=connectors_mcp_url(base_url=base),
-            transport="http",
-            headers=dict(headers),
-            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
-        ),
-        McpHttpServerConfig(
-            name="harness",
-            url=toolkit_mcp_url(base_url=base, toolset=toolkit),
-            transport="http",
-            headers=dict(headers),
-            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+        *(
+            McpHttpServerConfig(
+                name=name,
+                url=url,
+                transport="http",
+                headers=dict(headers),
+                tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+            )
+            for name, url in builtins
+            if builtin_server_enabled(name)
         ),
         *_edition_always_on_servers(base, headers),
     ]
