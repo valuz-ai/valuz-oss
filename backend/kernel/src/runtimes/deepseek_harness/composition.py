@@ -210,6 +210,13 @@ def process_env(
     """Environment every Valuz dsh process gets, on top of the caller's."""
     env = {
         "DSH_HOME": str(home),
+        # skill-filesystem's user root defaults to ~/.agents/skills — the
+        # user's personal skills, shared with other agent CLIs, which bypass
+        # the Valuz skill library and its enabled state. Point it at a
+        # Valuz-owned directory nothing writes skills into; session skills
+        # reach dsh only through <cwd>/.agents/skills, materialized from the
+        # library. (Only skill-filesystem reads this variable.)
+        "DSH_AGENTS_HOME": str(home / "agents"),
         # The launcher initializes/repairs this profile before boot.
         MANAGED_PROFILE_ENV: PROFILE_NAME,
         ROLE_ENV: role,

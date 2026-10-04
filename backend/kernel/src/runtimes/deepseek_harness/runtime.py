@@ -774,10 +774,12 @@ class DeepSeekHarnessRuntime:
                 f"{launch_unavailable_reason()}"
             )
 
-        if session.skills:
+        if self.workspace_root:
             # Materialized into <workspace>/.agents/skills, a default root of
             # dsh's skill-filesystem provider — discovered with no config.
-            prepare_codex_skills(self.workspace_root, session.skills)
+            # Even an empty set is materialized, so entries a previous spawn
+            # wrote are cleared when the library switches them off (as codex).
+            prepare_codex_skills(self.workspace_root, list(session.skills))
 
         self._plan_capable = launch.plan_capable
         user_questions_url: str | None = None

@@ -282,7 +282,13 @@ def _reader(stream, sink: queue.Queue) -> None:
 
 
 def _run_session_turn(
-    home: Path, workspace: Path, session: Session, model_url: str, patch_path: Path
+    home: Path,
+    workspace: Path,
+    session: Session,
+    model_url: str,
+    patch_path: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Boot one session child on the managed profile and run one prompt."""
     patch_path.write_text(json.dumps(build_session_patch(session, model_base_url=model_url)))
@@ -291,6 +297,7 @@ def _run_session_turn(
         **NODE_ENV,
         **process_env(home=home, role=SESSION_ROLE, permission_mode="full_access"),
         "DEEPSEEK_API_KEY": "sk-fake",
+        **(extra_env or {}),
     }
     proc = subprocess.Popen(
         [
@@ -415,6 +422,51 @@ def test_one_real_session_turn(tmp_path: Path, fake_model: str) -> None:
         else " ".join(block.get("text", "") for block in (system or []))
     )
     assert "VALUZ-INSTRUCTIONS-MARKER" in system_text
+
+
+def _write_skill(root: Path, name: str) -> Path:
+    directory = root / name
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Marker skill {name}.\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    return directory
+
+
+def test_user_agents_skills_stay_out_of_sessions(tmp_path: Path, fake_model: str) -> None:
+    """A session's skills come from the Valuz library, materialized into
+    ``<cwd>/.agents/skills``; the user's personal ``~/.agents/skills`` (dsh's
+    default user root) bypasses the library's enabled state and stays out."""
+    from src.runtimes.skills_materialize import prepare_codex_skills
+
+    home = tmp_path / "dsh-home"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    user_home = tmp_path / "user-home"
+    _write_skill(user_home / ".agents" / "skills", "personal-agents-skill")
+    enabled = _write_skill(tmp_path / "library", "valuz-enabled-skill")
+    prepare_codex_skills(str(workspace), [str(enabled)])
+
+    session = Session(
+        id="s-skills",
+        agent_config=AgentConfig(id="a", name="a"),
+        cwd=str(workspace),
+        skills=(str(enabled),),
+    )
+    _run_session_turn(
+        home,
+        workspace,
+        session,
+        fake_model,
+        tmp_path / "session.patch.json",
+        extra_env={"HOME": str(user_home)},
+    )
+
+    assert _FakeModel.requests, "the model was never called"
+    request = json.dumps(_FakeModel.requests[0])
+    assert "valuz-enabled-skill" in request
+    assert "personal-agents-skill" not in request
 
 
 async def test_a_plugin_installed_the_dsh_way_is_live_in_sessions(

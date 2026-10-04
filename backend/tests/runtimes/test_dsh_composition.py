@@ -151,6 +151,8 @@ class TestManagedProfile:
         env = process_env(home=tmp_path, role="session", permission_mode="default")
         assert env == {
             "DSH_HOME": str(tmp_path),
+            # Not the user's ~/.agents: skills come from the Valuz library.
+            "DSH_AGENTS_HOME": str(tmp_path / "agents"),
             "VALUZ_DSH_MANAGED_PROFILE": "valuz",
             "VALUZ_DSH_ROLE": "session",
             "DSH_TELEMETRY_DISABLED": "1",
