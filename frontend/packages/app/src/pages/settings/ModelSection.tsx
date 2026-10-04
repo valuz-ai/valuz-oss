@@ -663,9 +663,6 @@ export const ModelSection = () => {
                             disabled={!r.available}
                           >
                             {r.display_name}
-                            {!r.available && r.unavailable_reason
-                              ? ` · ${r.unavailable_reason}`
-                              : ""}
                           </SelectItem>
                         ))}
                       </SelectContent>
