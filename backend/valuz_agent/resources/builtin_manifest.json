@@ -52,7 +52,7 @@
     {
       "type": "plugin",
       "slug": "office",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "provisioning": "provisioned",
       "asset": "bundled_plugins/office",
       "runtime_scope": "any",

@@ -60,9 +60,7 @@ def _office_like(tmp_path: Path) -> Path:
     return root
 
 
-async def test_builtin_install_lands_members_in_official_root(
-    env: Env, tmp_path: Path
-) -> None:
+async def test_builtin_install_lands_members_in_official_root(env: Env, tmp_path: Path) -> None:
     root = _office_like(tmp_path)
     result = await env.svc.install(USER, path=str(root), builtin=True)
     assert result.plugin.source == "builtin"
@@ -107,3 +105,20 @@ async def test_builtin_never_clobbers_a_user_install(env: Env, tmp_path: Path) -
     await env.svc.install(USER, path=str(root))  # ordinary local_dir install
     with pytest.raises(PluginConflict):
         await env.svc.install(USER, path=str(root), builtin=True)
+
+
+async def test_the_packaged_office_plugin_installs_its_three_skills(env: Env) -> None:
+    """The office plugin shipped in resources/ installs as-is: every skill lands
+    whole (scripts, references, license), with nothing outside its directory."""
+    import valuz_agent
+
+    root = Path(valuz_agent.__file__).parent / "resources" / "bundled_plugins" / "office"
+    result = await env.svc.install(USER, path=str(root), builtin=True)
+    assert result.plugin.version == "2.0.0"
+    official = fs_registry.official_skill_root(user_id=USER)
+    for name in ("docx", "xlsx", "pptx"):
+        landed = official / name
+        assert (landed / "SKILL.md").read_text(encoding="utf-8").startswith(f"---\nname: {name}\n")
+        assert (landed / "LICENSE.txt").is_file()
+        assert (landed / "scripts" / "check_office.py").is_file()
+        assert not list(landed.rglob("__pycache__"))
