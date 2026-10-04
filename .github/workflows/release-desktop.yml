@@ -148,6 +148,15 @@ jobs:
             exit 1
           fi
           echo "OK: latest-mac.yml present, version=$actual"
+          # The Electron this ships needs macOS 13 (Electron 44's
+          # LSMinimumSystemVersion). electron-updater compares os.release() —
+          # the Darwin kernel version — against minimumSystemVersion, so an
+          # older Mac stops being offered a build it cannot open. Darwin 22 =
+          # macOS 13; it must be semver ("13.0" is ignored and the update is
+          # offered anyway). Stamped here, before this job uploads the manifest,
+          # so the merged one inherits it too. Moves with the Electron pin.
+          grep -q '^minimumSystemVersion:' "$yml" || printf 'minimumSystemVersion: 22.0.0\n' >> "$yml"
+          grep '^minimumSystemVersion:' "$yml"
 
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.
@@ -320,6 +329,15 @@ jobs:
             exit 1
           fi
           echo "OK: latest-mac.yml present, version=$actual"
+          # The Electron this ships needs macOS 13 (Electron 44's
+          # LSMinimumSystemVersion). electron-updater compares os.release() —
+          # the Darwin kernel version — against minimumSystemVersion, so an
+          # older Mac stops being offered a build it cannot open. Darwin 22 =
+          # macOS 13; it must be semver ("13.0" is ignored and the update is
+          # offered anyway). Stamped here, before this job uploads the manifest,
+          # so the merged one inherits it too. Moves with the Electron pin.
+          grep -q '^minimumSystemVersion:' "$yml" || printf 'minimumSystemVersion: 22.0.0\n' >> "$yml"
+          grep '^minimumSystemVersion:' "$yml"
 
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.

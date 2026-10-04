@@ -140,8 +140,9 @@ lockfile are committed; `npm ci` fetches the tree at build
 `libexec/dsh-runtime`, and the packaged app runs `packaged-bin.js` under its
 own Electron binary as plain Node (`VALUZ_DSH_RUNTIME_ENTRY` +
 `VALUZ_NODE_PATH` + `VALUZ_NODE_IS_ELECTRON=1` — the chrome-devtools-mcp
-pattern; Electron 36's embedded Node 22.19.0 exactly meets dsh's `^22.19`
-floor, watch that coupling on Electron upgrades). Because we own the
+pattern; the desktop pins the exact Electron dsh's own desktop locks —
+44.0.0 for dsh 0.2.1 — because dsh's native addon accepts only the Electron
+releases it fingerprints). Because we own the
 manifest, the closure includes `dsh-mcp-client` (which the upstream
 runtime-bin closure lacks) — `packaged-bin` resolves bare plugins from its
 own installed tree, so the composition file lives in a temp dir.

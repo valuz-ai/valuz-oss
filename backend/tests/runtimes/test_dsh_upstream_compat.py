@@ -11,7 +11,9 @@ pin to a new dsh release. They need the vendored closure installed
 * one real session turn against a local fake model: the agent joins the
   profile's preset (tools), live stream frames reach the kernel, Valuz
   instructions land in the system prompt, and nothing is shipped to the
-  vendor besides the model request.
+  vendor besides the model request;
+* dsh's native addon accepts the runtime, and the desktop pins the exact
+  Electron it needs.
 """
 
 from __future__ import annotations
@@ -47,6 +49,8 @@ DSH_BIN = NODE_MODULES / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
 LAUNCHER = NODE_MODULES / VALUZ_BUNDLE / "bin" / "dsh.mjs"
 BUNDLE_SRC = VENDOR / "valuz-plugins" / VALUZ_BUNDLE
 FIXTURES = Path(__file__).parent / "fixtures"
+#: The desktop app whose Electron the packaged build runs dsh under.
+DESKTOP_PACKAGE = Path(__file__).resolve().parents[3] / "frontend/apps/desktop/package.json"
 MANAGED = json.loads((BUNDLE_SRC / "managed-profile.json").read_text(encoding="utf-8"))
 MANAGED_BUNDLES = MANAGED["bundles"]
 
@@ -489,20 +493,35 @@ def test_guarded_bundle_names_still_ship() -> None:
     assert missing == []
 
 
-def test_require_builtin_stand_in_still_matches_what_dsh_asks_for() -> None:
-    """The closure overrides node-addon-require-builtin with a stand-in (see its
-    package.json) so dsh boots under the desktop's Electron. It mirrors the
-    0.1.x API; a dsh release that asks for another line must fail here so the
-    stand-in is re-checked against the new API before it ships."""
-    lock = json.loads((VENDOR / "package-lock.json").read_text(encoding="utf-8"))
-    asked = {
-        spec
-        for entry in lock["packages"].values()
-        for spec in (entry.get("dependencies") or {}).get("node-addon-require-builtin", "").split()
-        if spec
-    }
-    installed = lock["packages"]["node_modules/node-addon-require-builtin"]
-    assert installed.get("resolved") == "file:valuz-plugins/node-addon-require-builtin"
-    assert asked and all(spec.startswith(("^0.1.", "~0.1.", "0.1.", "file:")) for spec in asked), (
-        asked
+def test_native_addon_accepts_the_runtime() -> None:
+    """dsh's node-addon-require-builtin fingerprints the runtime: node, or only
+    the exact Electron releases it was built against. Load it the way dsh
+    does — no --expose-internals — under the Node this suite resolved, so with
+    VALUZ_NODE_PATH at the desktop's Electron an Electron pin that drifted
+    from dsh's fails here with the addon's own message, not as a dead session."""
+    probe = (
+        "require('node:module').createRequire(process.argv[1])"
+        "('node-addon-require-builtin').requireBuiltin('internal/modules/esm/loader')"
     )
+    assert NODE is not None
+    result = subprocess.run(
+        [NODE, "-e", probe, str(VENDOR / "package.json")],
+        env={**os.environ, **NODE_ENV},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_desktop_pins_the_exact_electron() -> None:
+    """The closure runs dsh's own addon (no override), so the desktop's Electron
+    must be one exact release — a range would let an install float to a patch
+    release the addon refuses. It moves with the Electron dsh's desktop locks."""
+    lock = json.loads((VENDOR / "package-lock.json").read_text(encoding="utf-8"))
+    addon = lock["packages"]["node_modules/node-addon-require-builtin"]
+    assert not addon.get("resolved", "").startswith("file:"), addon
+    desktop = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))
+    pin = {**desktop.get("dependencies", {}), **desktop.get("devDependencies", {})}["electron"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?", pin), pin

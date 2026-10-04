@@ -235,8 +235,8 @@ class DshManagerHost:
             process = await asyncio.create_subprocess_exec(
                 node_bin,
                 # Same flag as the kernel's session launch (deepseek_harness
-                # composition.NODE_FLAGS): dsh's internal-loader access goes
-                # through --expose-internals under node and Electron alike.
+                # composition.NODE_FLAGS): dsh's HMR and plugin loader reach
+                # Node's internal loader through it first.
                 "--expose-internals",
                 str(launcher),
                 "--profile",

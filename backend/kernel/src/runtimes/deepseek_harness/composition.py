@@ -68,9 +68,10 @@ DSH_HOME_ENV = "VALUZ_DSH_HOME"
 NODE_PATH_ENV = "VALUZ_NODE_PATH"
 NODE_IS_ELECTRON_ENV = "VALUZ_NODE_IS_ELECTRON"
 #: dsh reaches Node's internal module loader (profile package resolution, HMR).
-#: Upstream does it through a native addon that supports only Electron 43+; the
-#: closure overrides that addon with a stand-in that needs this flag instead,
-#: so the same launch works under node and the desktop's Electron-as-node.
+#: Profile resolution goes through dsh's native addon node-addon-require-builtin,
+#: which accepts node and only the exact Electron releases it fingerprints — so
+#: the desktop pins the Electron dsh's own desktop locks. dsh's HMR and plugin
+#: loader take --expose-internals first when it is present (HMR requires it).
 NODE_FLAGS: tuple[str, ...] = ("--expose-internals",)
 
 #: The launcher inside an installed closure: Valuz's thin wrapper over the

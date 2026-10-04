@@ -129,7 +129,9 @@ if [ "$run_tests" = 1 ]; then
   if [ -z "$electron" ]; then
     for app in "$ROOT/frontend/apps/desktop" "$ROOT/../../frontend/apps/desktop"; do
       [ -d "$app" ] || continue
-      electron="$(cd "$app" && node -e 'process.stdout.write(require("electron"))' 2>/dev/null || true)"
+      # Electron 44+ downloads its binary on first require and announces that
+      # on stdout — send it to stderr so only the path is captured.
+      electron="$(cd "$app" && node -e 'console.log = console.error; process.stdout.write(require("electron"))' 2>/dev/null || true)"
       [ -n "$electron" ] && break
     done
   fi

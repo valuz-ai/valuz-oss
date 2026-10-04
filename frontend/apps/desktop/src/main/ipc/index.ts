@@ -19,6 +19,11 @@ import {
 } from "./install-cli";
 import { registerNotificationHandlers } from "./notifications";
 
+// Electron 43+ opens a dialog with no defaultPath in Downloads and keeps the
+// OS from restoring the last folder, so the folder the user last picked from
+// is remembered here (the per-run equivalent of the old OS behaviour).
+let lastDialogDirectory: string | undefined;
+
 export const registerIpcHandlers = () => {
   const handlers = serviceHandlers(desktopRuntime);
 
@@ -32,6 +37,7 @@ export const registerIpcHandlers = () => {
     const win = getMainWindow();
     const opts: Electron.OpenDialogOptions = {
       properties: ["openDirectory", "createDirectory"],
+      ...(lastDialogDirectory ? { defaultPath: lastDialogDirectory } : {}),
     };
     const result = win
       ? await dialog.showOpenDialog(win, opts)
@@ -39,6 +45,7 @@ export const registerIpcHandlers = () => {
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true, path: null };
     }
+    lastDialogDirectory = dirname(result.filePaths[0]);
     return { canceled: false, path: result.filePaths[0] };
   });
 
@@ -118,13 +125,15 @@ export const registerIpcHandlers = () => {
     async (_event, args: { path: string; suggestedName?: string }) => {
       if (!args?.path) return { saved: false, error: "No path" };
       const win = getMainWindow();
+      const name = args.suggestedName || args.path.split(/[/\\]/).pop() || "";
       const opts: Electron.SaveDialogOptions = {
-        defaultPath: args.suggestedName || args.path.split(/[/\\]/).pop() || "",
+        defaultPath: lastDialogDirectory ? join(lastDialogDirectory, name) : name,
       };
       const result = win
         ? await dialog.showSaveDialog(win, opts)
         : await dialog.showSaveDialog(opts);
       if (result.canceled || !result.filePath) return { saved: false };
+      lastDialogDirectory = dirname(result.filePath);
       try {
         await copyFile(args.path, result.filePath);
         return { saved: true, path: result.filePath };
