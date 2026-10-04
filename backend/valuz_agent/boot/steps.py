@@ -166,6 +166,26 @@ async def enrich_login_shell_path() -> None:
     await _enrich()
 
 
+def install_session_tools() -> None:
+    """Put the bundled session commands (``valuz-python``, ``dsoffice``) on PATH.
+
+    Every runtime's agent subprocess inherits this process's PATH at spawn, so
+    the wrappers must exist before the first session starts. Fail-open: a
+    missing tool only means the skills that use it report it as unavailable —
+    see ``infra/session_tools.py``.
+    """
+    from valuz_agent.infra.fs_registry import FsRegistry
+    from valuz_agent.infra.session_tools import ensure_session_tools_on_path
+
+    try:
+        installed = ensure_session_tools_on_path(FsRegistry().session_bin_dir())
+    except Exception:  # noqa: BLE001 — a convenience wrapper must not break boot
+        logger.warning("failed to install session command wrappers", exc_info=True)
+        return
+    if installed:
+        logger.info("session commands on PATH: %s", ", ".join(installed))
+
+
 def migrate_data_dir() -> None:
     """One-time data-dir cutover: carry a pre-rename ``~/.valuz/app`` install
     into the new flat ``~/.valuz-oss`` root (copy → rewrite DB path prefixes →

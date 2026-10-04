@@ -95,6 +95,7 @@ class CorePlugin(OssPlugin):
             step("enrich_login_shell_path"),
             step("migrate_data_dir"),
             step("ensure_local_identity"),
+            step("install_session_tools"),
         )
         startup(
             ctx,

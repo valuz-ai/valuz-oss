@@ -117,6 +117,32 @@ install_backend() {
     uv sync --extra dev --extra postgres --extra tracing
     ok "backend deps ready"
     install_dsh_runtime
+    install_python_runtime
+}
+
+install_python_runtime() {
+    # The bundled session Python (backend/vendor/python-runtime): CPython plus
+    # the libraries the bundled skills import, exposed to every session as
+    # `valuz-python` (backend/valuz_agent/infra/session_tools.py). Pins are
+    # committed; dist/ is built on demand. The script compares a stamp of the
+    # pins and returns at once when dist/ is current.
+    #
+    # Fail-open: without uv or network the backend still starts; the Office
+    # skills report `valuz-python` as unavailable.
+    if [[ -n "${VALUZ_PYTHON_RUNTIME:-}" ]]; then
+        return 0  # explicit runtime (packaged layout / another checkout)
+    fi
+    if ! command -v uv >/dev/null 2>&1; then
+        warn "uv not found — the bundled session Python stays unavailable" \
+            "(install uv, then run scripts/vendor-python-runtime.sh)"
+        return 0
+    fi
+    if bash "$ROOT_DIR/scripts/vendor-python-runtime.sh" >/dev/null; then
+        ok "session python ready"
+    else
+        warn "session python build failed — valuz-python stays unavailable" \
+            "(run scripts/vendor-python-runtime.sh manually to see why)"
+    fi
 }
 
 install_dsh_runtime() {

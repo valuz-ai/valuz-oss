@@ -432,6 +432,18 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   `libexec/rg`. The binary is vendored per platform at
   `backend/vendor/rg/<platform-tag>-<arch-tag>/` (refresh with
   `scripts/download-rg.sh`).
+- **Session commands** (`infra/session_tools.py`): at boot (`install_session_tools`)
+  the host writes two wrappers into `FsRegistry.session_bin_dir()` and prepends it to
+  PATH, so every runtime's agent shell can call them: `valuz-python` — the bundled
+  CPython 3.12 with the bundled skills' libraries (`backend/vendor/python-runtime`:
+  committed `python-version` + hash-locked `requirements.txt`; `dist/` built by
+  `scripts/vendor-python-runtime.sh`, staged by `build-desktop.sh` into
+  `libexec/python-runtime`, sidecar sets `VALUZ_PYTHON_RUNTIME`) — and `dsoffice`, the
+  LibreOffice Kit CLI from the dsh closure (convert / render / recalculate), run on
+  `VALUZ_NODE_PATH` (Electron-as-node when packaged). The runtime keeps its
+  EXTERNALLY-MANAGED marker (read-only in the app bundle); a task that needs more
+  packages uses `valuz-python -m venv --system-site-packages .venv`. Cloud sandboxes
+  get the same two commands from the kernel image (`/usr/local/bin`).
 - **Browser engine** (`modules/browser`) runs the `chrome-devtools-mcp` CLI
   under Node. Packaged desktop can't see the user's Node (stripped GUI PATH), so
   the sidecar sets `VALUZ_NODE_PATH` = the app's own Electron binary (run as

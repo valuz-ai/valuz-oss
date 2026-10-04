@@ -393,6 +393,28 @@ else
 fi
 
 # ============================================================
+# Phase A6: Stage the bundled session Python
+# ============================================================
+# Agent sessions call `valuz-python` — CPython plus the libraries the bundled
+# skills import (backend/vendor/python-runtime; the Office skills need
+# python-docx / python-pptx / openpyxl / pandas / Pillow). The vendor script
+# builds a relocatable python-build-standalone CPython for this build's
+# platform with hash-checked wheels; the app ships it as-is under
+# libexec/python-runtime and sidecar.ts sets VALUZ_PYTHON_RUNTIME.
+# SKIP_PYTHON_RUNTIME=1 skips it (the Office skills then report it missing).
+
+if [ "${SKIP_PYTHON_RUNTIME:-0}" != "1" ]; then
+  log "=== Phase A6: Staging session Python runtime ==="
+  bash "$ROOT_DIR/scripts/vendor-python-runtime.sh" --target "$PLATFORM_TAG-$ARCH_TAG"
+  PY_RUNTIME_TARGET="$RESOURCES_LIBEXEC/python-runtime"
+  rm -rf "$PY_RUNTIME_TARGET"
+  cp -R "$BACKEND_DIR/vendor/python-runtime/dist" "$PY_RUNTIME_TARGET"
+  log "session python staged at: $PY_RUNTIME_TARGET ($(du -sh "$PY_RUNTIME_TARGET" | cut -f1))"
+else
+  log "=== Phase A6: Skipping session Python runtime (SKIP_PYTHON_RUNTIME=1) ==="
+fi
+
+# ============================================================
 # Phase B: Build frontend (Electron)
 # ============================================================
 

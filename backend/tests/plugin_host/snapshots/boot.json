@@ -28,6 +28,7 @@
   "migrate_data_dir()",
   "apply_backup_restore()",
   "ensure_local_identity()",
+  "install_session_tools()",
   "bootstrap_schema()",
   "configure_i18n()",
   "colocate_kernel_history()",
