@@ -49,6 +49,15 @@ function mimeFor(p: string): string {
 }
 
 /**
+ * Every response carries this: the renderer page (``http://`` dev server,
+ * ``file://`` when packaged) reads the scheme cross-origin, and Electron 44
+ * (unlike 36) enforces CORS on that. The handler only ever sees a ``null``
+ * Origin, so there is no narrower value to echo; the scheme is reachable only
+ * from the app's own pages either way.
+ */
+const CORS = { "access-control-allow-origin": "*" } as const;
+
+/**
  * Must be called AFTER ``app.whenReady()`` (register the scheme as privileged
  * separately, before ready). Registers the ``valuz-local://`` request handler.
  */
@@ -61,7 +70,7 @@ export function registerLocalFileProtocolHandler(): void {
     const abs = parseLocalFileUrl(request.url);
     if (!abs) {
       console.error("valuz-local:// unparseable url", request.url);
-      return new Response("bad request", { status: 400 });
+      return new Response("bad request", { status: 400, headers: CORS });
     }
     try {
       const fileStat = await stat(abs);
@@ -69,13 +78,14 @@ export function registerLocalFileProtocolHandler(): void {
       if (range === "invalid") {
         return new Response("range not satisfiable", {
           status: 416,
-          headers: { "content-range": `bytes */${fileStat.size}` },
+          headers: { ...CORS, "content-range": `bytes */${fileStat.size}` },
         });
       }
 
       const start = range?.start ?? 0;
       const end = range?.end ?? Math.max(fileStat.size - 1, 0);
       const headers = new Headers({
+        ...CORS,
         "accept-ranges": "bytes",
         "cache-control": "no-store",
         "content-length": String(range ? end - start + 1 : fileStat.size),
@@ -98,7 +108,7 @@ export function registerLocalFileProtocolHandler(): void {
         "->",
         err instanceof Error ? err.message : String(err),
       );
-      return new Response("not found", { status: 404 });
+      return new Response("not found", { status: 404, headers: CORS });
     }
   });
 }
