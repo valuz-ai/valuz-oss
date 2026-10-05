@@ -1202,8 +1202,6 @@ class DeepAgentsRuntime:
                     message=cause,
                 )
                 await self.event_sink.emit(Event(type="session_error", data={"message": cause}))
-                if self.config.hooks:
-                    await self.config.hooks.fire("on_error", error=exc, session_id=session.id)
         finally:
             self._active_task = None
             await self.event_sink.emit(

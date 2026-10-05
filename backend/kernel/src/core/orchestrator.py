@@ -36,6 +36,22 @@ from src.core.citation import (
 from src.core.claim_evidence_resolution import SemanticVerifierPort
 from src.core.claim_normalization import ClaimNormalizerPort
 from src.core.events import Event, EventSink, GlobalEventTap
+from src.core.hooks import (
+    COMMAND_RUN,
+    PROMPT_SUBMIT,
+    SESSION_END,
+    SESSION_START,
+    TURN_COMPLETE,
+    TURN_START,
+    CommandOutput,
+    CommandSpec,
+    HookEvent,
+    PromptDecision,
+    SessionRef,
+    command_registry,
+    hook_registry,
+    run_command,
+)
 from src.core.prompt_builder import wrap_for_mode
 from src.core.runtime_port import RuntimePort
 from src.core.session_approval_cache import SessionApprovalCache, SessionRule
@@ -50,6 +66,7 @@ from src.core.task_coverage_continuation import (
 from src.core.time_utils import now_ms
 from src.core.tracing import TurnTracingSink, start_turn_trace, turn_trace_context
 from src.core.types import (
+    EndTurn,
     Error,
     Message,
     Session,
@@ -1428,6 +1445,63 @@ class _MessageObserverSink:
             await self._inner.emit(event)
 
 
+async def _observed(_event: HookEvent) -> None:
+    return None
+
+
+async def _fire_observe(event: str, ref: SessionRef, data: dict[str, Any]) -> None:
+    """Dispatch a notification event; never lets a hook break the turn."""
+    if not hook_registry.wants(event, ref):
+        return
+    try:
+        await hook_registry.dispatch(event, ref, data, _observed)
+    except Exception:  # noqa: BLE001 — handlers are contained by the chain already
+        logger.warning("hook dispatch of %s failed", event, exc_info=True)
+
+
+def _turn_complete_data(message: Message) -> dict[str, Any]:
+    stop = message.stop_reason
+    return {
+        "message_id": message.id,
+        "status": message.status,
+        "stop_reason": getattr(stop, "type", None),
+        "assistant_text": message.assistant_message or "",
+    }
+
+
+async def _dispatch_prompt_submit(
+    ref: SessionRef, user_message: UserMessage
+) -> tuple[UserMessage, str | None]:
+    """Run ``prompt.submit``; the (possibly rewritten) message, or a drop reason."""
+
+    async def core(event: HookEvent) -> PromptDecision:
+        return PromptDecision(text=str(event.get("text") or ""))
+
+    try:
+        decision = await hook_registry.dispatch(
+            PROMPT_SUBMIT,
+            ref,
+            {
+                "text": user_message.text,
+                "attachments": [a.source_path for a in user_message.attachments],
+            },
+            core,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("prompt.submit dispatch failed; sending the prompt as typed", exc_info=True)
+        return user_message, None
+    if not isinstance(decision, PromptDecision):
+        return user_message, None
+    if decision.drop:
+        return user_message, decision.drop
+    text = decision.text
+    if decision.context:
+        text = "\n\n".join([text, *decision.context])
+    if text != user_message.text:
+        user_message = dataclasses.replace(user_message, text=text)
+    return user_message, None
+
+
 class SessionOrchestrator:
     """Manages Runtime lifecycle for sessions.
 
@@ -1525,6 +1599,9 @@ class SessionOrchestrator:
         self._global_taps: list[GlobalEventTap] = []
         self._semantic_verifier_factory = semantic_verifier_factory
         self._claim_normalizer_factory = claim_normalizer_factory
+        # Hook bus: the session each warm runtime serves, so ``session.end``
+        # can be dispatched when the runtime goes away.
+        self._runtime_hook_refs: dict[str, SessionRef] = {}
 
     @property
     def active_sessions(self) -> set[str]:
@@ -1817,6 +1894,14 @@ class SessionOrchestrator:
         # clarification decisions, so discard that obsolete control state at
         # the turn boundary without changing the user's current message.
         _clear_legacy_pending_task_clarification(session)
+        # Hook bus, host level (the same for every runtime): a registered
+        # ``/command`` is answered without the model; otherwise the prompt
+        # goes through ``prompt.submit`` before anything else sees it.
+        hook_ref = SessionRef.from_session(session, user_id=user_id)
+        invoked_command = None if hook_ref.bare else command_registry.match(user_message.text)
+        prompt_drop: str | None = None
+        if invoked_command is None and hook_registry.wants(PROMPT_SUBMIT, hook_ref):
+            user_message, prompt_drop = await _dispatch_prompt_submit(hook_ref, user_message)
         citation_policy_snapshot = _session_citation_quality_policy(session)
         document_scope = _session_document_scope(session)
         task_coverage_enabled = _session_task_coverage_enabled(session)
@@ -1950,6 +2035,24 @@ class SessionOrchestrator:
             mode_persist=_make_mode_persist(self._store, user_id, session_id),
         )
 
+        if invoked_command is not None or prompt_drop is not None:
+            try:
+                return await self._complete_turn_without_runtime(
+                    user_id,
+                    session,
+                    message,
+                    observer,
+                    user_message,
+                    hook_ref,
+                    command=invoked_command,
+                    drop=prompt_drop,
+                )
+            finally:
+                if turn_trace is not None:
+                    turn_trace.end(error=None)
+                trace_scope.close()
+                self._active_message.pop(session_id, None)
+
         # Sessions are self-sufficient: ``session.cwd`` is required at
         # creation. Seed the workspace stub lazily (idempotent, one stat on
         # the hot path) — there is no project-creation moment to hook.
@@ -2041,6 +2144,9 @@ class SessionOrchestrator:
                     type="session_update",
                     data={"status": "running", "message_id": message.id},
                 )
+            )
+            await _fire_observe(
+                TURN_START, hook_ref, {"message_id": message.id, "text": user_message.text}
             )
             with self._lend_runtime_context(session, runtime_context):
                 await runtime.run(session, user_message)
@@ -2193,6 +2299,7 @@ class SessionOrchestrator:
                     },
                 )
             )
+            await _fire_observe(TURN_COMPLETE, hook_ref, _turn_complete_data(message))
             return message
         finally:
             if turn_trace is not None:
@@ -2229,6 +2336,97 @@ class SessionOrchestrator:
                         "orchestrator: defensive status reset save_session failed for %s",
                         session_id,
                     )
+
+    async def _complete_turn_without_runtime(
+        self,
+        user_id: str,
+        session: Session,
+        message: Message,
+        observer: _MessageObserverSink,
+        user_message: UserMessage,
+        hook_ref: SessionRef,
+        *,
+        command: tuple[CommandSpec, str] | None,
+        drop: str | None,
+    ) -> Message:
+        """Finish a turn the model never sees: a ``/command`` or a dropped prompt.
+
+        Emits the same event sequence a runtime turn does (user message,
+        running, answer or error, idle, final status), so every client
+        renders it like any other turn.
+        """
+        await observer.emit(
+            Event(
+                type="user_message",
+                data={
+                    "message": user_message.text,
+                    "attachments": [
+                        {"source_path": a.source_path, "parsed_path": a.parsed_path}
+                        for a in user_message.attachments
+                    ],
+                },
+            )
+        )
+        await observer.emit(
+            Event(type="session_update", data={"status": "running", "message_id": message.id})
+        )
+        if command is not None:
+            spec, args = command
+
+            async def core(event: HookEvent) -> CommandOutput:
+                return await run_command(spec, event.session, str(event.get("args") or ""))
+
+            try:
+                output = await hook_registry.dispatch(
+                    COMMAND_RUN, hook_ref, {"name": spec.name, "args": args}, core
+                )
+            except Exception as exc:  # noqa: BLE001 — a broken command fails its own turn
+                logger.warning("command /%s failed: %s", spec.name, exc, exc_info=True)
+                output = CommandOutput(text=f"/{spec.name} failed: {exc}", is_error=True)
+            if not isinstance(output, CommandOutput):
+                output = CommandOutput(text=f"/{spec.name} returned no output", is_error=True)
+            if output.is_error:
+                session.stop_reason = Error(
+                    category="command_failed", retry_status="terminal", message=output.text
+                )
+                await observer.emit(
+                    Event(
+                        type="session_error",
+                        data={"category": "command_failed", "message": output.text},
+                    )
+                )
+            else:
+                await observer.emit(Event(type="assistant_message", data={"text": output.text}))
+                session.stop_reason = EndTurn()
+        else:
+            reason = drop or "blocked by a hook"
+            session.stop_reason = Error(
+                category="prompt_blocked", retry_status="terminal", message=reason
+            )
+            await observer.emit(
+                Event(type="session_error", data={"category": "prompt_blocked", "message": reason})
+            )
+        session.status = "idle"
+        await observer.emit(
+            Event(
+                type="session_idle",
+                data={"stop_reason": dataclasses.asdict(session.stop_reason), "num_turns": 0},
+            )
+        )
+        await observer.ensure_partial_assistant_message()
+        await observer.finalize_sidecars()
+        await observer.release_session_idle()
+        self._finalize_message(message, session, observer)
+        await self._store.save_session(session)
+        await self._store.save_message(user_id, message)
+        await observer.emit(
+            Event(
+                type="session_update",
+                data={"status": session.status, "message_id": message.id, "fork_anchor": False},
+            )
+        )
+        await _fire_observe(TURN_COMPLETE, hook_ref, _turn_complete_data(message))
+        return message
 
     def active_message_id(self, session_id: str) -> str | None:
         message = self._active_message.get(session_id)
@@ -2302,11 +2500,14 @@ class SessionOrchestrator:
         self._runtime_last_used.pop(session_id, None)
         self._runtime_owners.pop(session_id, None)
         self._runtime_create_locks.pop(session_id, None)
+        hook_ref = self._runtime_hook_refs.pop(session_id, None)
         if runtime is not None:
             try:
                 await runtime.close()
             except Exception:
                 logger.debug("Error closing runtime for session %s", session_id, exc_info=True)
+            if hook_ref is not None:
+                await _fire_observe(SESSION_END, hook_ref, {"reason": "closed"})
         from src.runtimes.network_egress import get_network_egress_registry
 
         registry = get_network_egress_registry()
@@ -2434,6 +2635,17 @@ class SessionOrchestrator:
             self._runtime_last_used[session_id] = time.monotonic()
             if user_id is not None:
                 self._runtime_owners[session_id] = user_id
+            hook_ref = SessionRef.from_session(runtime_session, user_id=user_id)
+            self._runtime_hook_refs[session_id] = hook_ref
+            await _fire_observe(
+                SESSION_START,
+                hook_ref,
+                {
+                    "source": "resume"
+                    if getattr(runtime_session, "runtime_session_id", None)
+                    else "new"
+                },
+            )
             # Enforce the hard LRU ceiling after admitting the new runtime.
             await self._enforce_runtime_cap(exclude=session_id)
             return runtime
@@ -2566,6 +2778,7 @@ class SessionOrchestrator:
         self._runtime_owners.pop(session_id, None)
         self._runtime_create_locks.pop(session_id, None)
         self._session_approval_cache.clear(session_id)
+        hook_ref = self._runtime_hook_refs.pop(session_id, None)
         if runtime is not None:
             try:
                 await runtime.close()
@@ -2573,6 +2786,8 @@ class SessionOrchestrator:
                 logger.debug("Error evicting runtime for session %s", session_id, exc_info=True)
             else:
                 logger.info("Evicted warm runtime for idle/over-cap session %s", session_id)
+            if hook_ref is not None:
+                await _fire_observe(SESSION_END, hook_ref, {"reason": "evicted"})
         from src.runtimes.network_egress import get_network_egress_registry
 
         registry = get_network_egress_registry()

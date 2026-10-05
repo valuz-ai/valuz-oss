@@ -5,7 +5,7 @@ agent at creation time and seed their own ``instructions`` / ``skills`` /
 ``mcp_servers`` from the agent's defaults; once the session exists, the
 runtime reads those fields from the *session*, not the agent. The agent's
 ``tools`` / ``callable_agents`` / ``permission_mode`` / ``max_turns`` /
-``max_cost_usd`` / ``effort`` / ``thinking`` / ``hooks`` remain
+``max_cost_usd`` / ``effort`` / ``thinking`` remain
 agent-level (runtime identity, not per-turn config).
 
 ``instructions`` is intentionally named — it is appended to the runtime's
@@ -17,7 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from src.core.hooks import Hooks
 from src.core.time_utils import now_ms
 from src.core.tools import ToolDef
 from src.core.types import EffortLevel, McpServerConfig, RuntimeProvider
@@ -61,8 +60,6 @@ class AgentConfig:
     callable_agents: tuple[SubAgentDef, ...] = ()
     skills: tuple[str, ...] = ()
     mcp_servers: tuple[McpServerConfig, ...] = ()
-
-    hooks: Hooks | None = None
 
     permission_mode: Literal["default", "auto_review", "full_access"] = "full_access"
 

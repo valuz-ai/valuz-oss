@@ -2,7 +2,6 @@
 
 from src.core.agent_config import AgentConfig, SubAgentDef
 from src.core.events import Event, EventSink, EventType, InboundEventType, OutboundEventType
-from src.core.hooks import HookResult, Hooks
 from src.core.prompt_builder import build_user_prompt
 from src.core.runtime_port import RuntimePort
 from src.core.skills import Skill, SkillLoader
@@ -57,8 +56,6 @@ __all__ = [
     "EventSink",
     "EventType",
     "ExecContext",
-    "HookResult",
-    "Hooks",
     "InboundEventType",
     "get_registered_tool",
     "McpHttpServerConfig",
