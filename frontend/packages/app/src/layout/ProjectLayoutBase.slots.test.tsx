@@ -149,6 +149,19 @@ describe("ProjectLayoutBase slots", () => {
     expect(typeof seen.appName).toBe("string");
   });
 
+  it("shell.brand.mark can keep the stock frame and swap only the image", async () => {
+    register("shell.brand.mark", {
+      id: "test-mark",
+      component: ({ renderDefault }: { renderDefault?: (o: Record<string, unknown>) => ReactNode }) =>
+        renderDefault?.({ logoSrc: "/plugin-logo.png" }),
+    });
+    renderLayout();
+    // Same <img> the host draws (alt, classes), with the plugin's source.
+    const img = await screen.findByAltText("Valuz");
+    expect(img.getAttribute("src")).toBe("/plugin-logo.png");
+    expect(img.className).toContain("object-contain");
+  });
+
   it("shell.brand.menu-items adds a separator and items after Help, with navigate / platform", async () => {
     let seen: { navigate?: unknown; platform?: { isElectron?: boolean } } = {};
     register("shell.brand.menu-items", {

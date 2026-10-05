@@ -19,6 +19,8 @@ interface SlotErrorBoundaryProps {
   slot: string;
   registration: string;
   children: ReactNode;
+  /** Drawn instead of a contribution that failed (default: nothing). */
+  fallback?: ReactNode;
 }
 
 /**
@@ -43,7 +45,7 @@ class SlotErrorBoundary extends Component<SlotErrorBoundaryProps, { failed: bool
   }
 
   render(): ReactNode {
-    return this.state.failed ? null : this.props.children;
+    return this.state.failed ? (this.props.fallback ?? null) : this.props.children;
   }
 }
 
@@ -107,20 +109,90 @@ export function SlotRenderer({ name, context, slotKey }: ListSlotProps) {
   return <>{registrations.map((reg) => renderContribution(name, reg, context))}</>;
 }
 
+/**
+ * What a single-slot contribution receives besides the slot's context.
+ *
+ * ``renderDefault`` draws what the slot would show without this contribution:
+ * the next contribution by priority, or at the end of the chain the host's
+ * default. A contribution therefore replaces the default (never calls it),
+ * keeps it and adds around it (puts ``renderDefault()`` in its own tree), or
+ * changes one detail of it (``renderDefault({ logoSrc })``: the overrides are
+ * merged into the context the rest of the chain draws with, and reach the
+ * host's default when the host passes it as a function of that context). It is
+ * the ``next(e)`` a Claude Code mod gets at a render site.
+ */
+export interface SingleSlotDefaultProps {
+  renderDefault: (overrides?: Record<string, unknown>) => ReactNode;
+}
+
+/** A single slot's default: a node, or a function of the slot's context. */
+export type SingleSlotDefault =
+  | ReactNode
+  | ((context: Record<string, unknown>) => ReactNode);
+
 interface SingleSlotProps extends SlotRendererProps {
-  /** The host's own rendering, shown while nothing occupies the slot. */
-  children?: ReactNode;
+  /**
+   * The host's own rendering: shown while nothing occupies the slot, and what
+   * the last contribution's ``renderDefault`` draws. Pass a function of the
+   * context to let contributions change a detail of it through
+   * ``renderDefault(overrides)``.
+   */
+  children?: SingleSlotDefault;
+}
+
+function renderSingleDefault(
+  fallback: SingleSlotDefault | undefined,
+  context: Record<string, unknown>,
+): ReactNode {
+  return typeof fallback === "function" ? fallback(context) : (fallback ?? null);
 }
 
 /**
- * Single slot: the highest-priority contribution REPLACES the host's default
- * (``children``). Use it where a plugin should be able to take a whole region
- * over — a brand mark, an empty-state hero — rather than add next to it.
+ * Draw ``chain[index]`` with a ``renderDefault`` that draws the rest of the
+ * chain. A contribution that fails to render falls through to the rest, as a
+ * Claude Code mod hook that throws is skipped.
+ */
+function renderSingleChain(
+  name: string,
+  chain: readonly SlotRegistration[],
+  index: number,
+  context: Record<string, unknown>,
+  fallback: SingleSlotDefault | undefined,
+): ReactNode {
+  const registration = chain[index];
+  if (!registration) return renderSingleDefault(fallback, context);
+  const renderDefault = (overrides?: Record<string, unknown>): ReactNode =>
+    renderSingleChain(
+      name,
+      chain,
+      index + 1,
+      overrides ? { ...context, ...overrides } : context,
+      fallback,
+    );
+  const Contribution = registration.component;
+  return (
+    <SlotErrorBoundary
+      key={registration.id}
+      slot={name}
+      registration={registration.id}
+      fallback={renderDefault()}
+    >
+      <Contribution {...context} renderDefault={renderDefault} />
+    </SlotErrorBoundary>
+  );
+}
+
+/**
+ * Single slot: the highest-priority contribution takes the region over. It
+ * gets ``renderDefault`` (``SingleSlotDefaultProps``) to keep, wrap or adjust
+ * what would be there without it, so contributions chain the way Claude Code
+ * mods do at a render site; one that never calls it replaces the host's
+ * default (``children``). Use it where a plugin should be able to own a whole
+ * region — a brand mark, an empty-state hero — rather than add next to it.
  */
 export function SingleSlot({ name, context, children }: SingleSlotProps) {
-  const winner = useRegistryStore((s) => s.slots[name]?.[0]);
-  if (!winner) return <>{children ?? null}</>;
-  return <>{renderContribution(name, winner, context)}</>;
+  const chain = useRegistryStore((s) => s.slots[name]) ?? _empty;
+  return <>{renderSingleChain(name, chain, 0, context ?? {}, children)}</>;
 }
 
 interface KeyedSlotProps extends SlotRendererProps {

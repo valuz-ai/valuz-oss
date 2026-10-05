@@ -1009,11 +1009,15 @@ export function ProjectLayoutBase({
                       name="shell.brand.mark"
                       context={{ appName: branding.appName, logoSrc }}
                     >
-                      <img
-                        src={logoSrc}
-                        alt="Valuz"
-                        className="h-5 w-5 object-contain"
-                      />
+                      {/* A function of the context, so an occupant can keep
+                          this frame and swap the image: renderDefault({ logoSrc }). */}
+                      {({ logoSrc: src }) => (
+                        <img
+                          src={String(src)}
+                          alt="Valuz"
+                          className="h-5 w-5 object-contain"
+                        />
+                      )}
                     </SingleSlot>
                   </button>
                 </DropdownMenuTrigger>

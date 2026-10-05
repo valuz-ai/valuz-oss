@@ -214,6 +214,29 @@ describe("ConversationBody slots", () => {
       expect(screen.getByText(defaultTitle)).toBeTruthy();
     });
 
+    it("conversation.empty.hero can keep the stock hero through renderDefault", () => {
+      register("conversation.empty.hero", ({ renderDefault }) => (
+        <div data-testid="ext-hero">
+          {(renderDefault as () => ReactNode)()}
+          <span>below the hero</span>
+        </div>
+      ));
+      const { container } = renderBody(welcome);
+      const hero = screen.getByTestId("ext-hero");
+      // The stock mascot and title are still there, inside the plugin's tree.
+      expect(hero.contains(mascot(container))).toBe(true);
+      expect(hero.textContent).toMatch(defaultTitle);
+      expect(screen.getByText("below the hero")).toBeTruthy();
+    });
+
+    it("conversation.empty.brand-mark can frame the stock mascot through renderDefault", () => {
+      register("conversation.empty.brand-mark", ({ renderDefault }) => (
+        <div data-testid="ext-mark">{(renderDefault as () => ReactNode)()}</div>
+      ));
+      const { container } = renderBody(welcome);
+      expect(screen.getByTestId("ext-mark").contains(mascot(container))).toBe(true);
+    });
+
     it("conversation.empty.extra renders below the suggestions with context", () => {
       let ctx: Record<string, unknown> = {};
       register("conversation.empty.extra", (props) => {

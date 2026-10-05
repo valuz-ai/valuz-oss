@@ -1,4 +1,10 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Settings } from "lucide-react";
 import { sessionsApi, useTranslation } from "@valuz/core";
@@ -543,23 +549,33 @@ export function ConversationBody({
                 }
                 onEmptySuggestionClick={(text) => setDraft(text)}
                 hideEmptyMascot={emptyStateOverride?.hideMascot}
+                // Both slots get the turn list's own drawing as their default,
+                // so an occupant can keep or wrap it (``renderDefault``).
                 welcomeHero={
-                  hasEmptyHeroSlot && !emptyHeroOverridden ? (
-                    <SingleSlot
-                      name="conversation.empty.hero"
-                      context={{
-                        projectId,
-                        agentSlug,
-                        setDraft,
-                        variant,
-                      }}
-                    />
-                  ) : undefined
+                  hasEmptyHeroSlot && !emptyHeroOverridden
+                    ? (defaultHero: ReactNode) => (
+                        <SingleSlot
+                          name="conversation.empty.hero"
+                          context={{
+                            projectId,
+                            agentSlug,
+                            setDraft,
+                            variant,
+                          }}
+                        >
+                          {defaultHero}
+                        </SingleSlot>
+                      )
+                    : undefined
                 }
                 welcomeMascot={
-                  hasEmptyBrandMarkSlot ? (
-                    <SingleSlot name="conversation.empty.brand-mark" />
-                  ) : undefined
+                  hasEmptyBrandMarkSlot
+                    ? (defaultMascot: ReactNode) => (
+                        <SingleSlot name="conversation.empty.brand-mark">
+                          {defaultMascot}
+                        </SingleSlot>
+                      )
+                    : undefined
                 }
                 welcomeExtra={
                   hasEmptyExtraSlot ? (

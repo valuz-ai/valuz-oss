@@ -1721,14 +1721,16 @@ interface ConversationTurnListProps {
    * Host replacement for the welcome's mascot AND title. Absent → the default
    * mascot + ``emptyTitle``; the suggestions below are unaffected. Hosts that
    * also pass ``emptyTitle`` / ``hideEmptyMascot`` decide precedence themselves
-   * (this node is rendered whenever it is given).
+   * (this node is rendered whenever it is given). A function receives the
+   * default hero, so the host can keep or wrap it (a single slot's default).
    */
-  welcomeHero?: ReactNode;
+  welcomeHero?: ReactNode | ((defaultHero: ReactNode) => ReactNode);
   /**
    * Host replacement for ONLY the default mascot image. Ignored when
-   * ``hideEmptyMascot`` is set or ``welcomeHero`` replaces the whole hero.
+   * ``hideEmptyMascot`` is set or ``welcomeHero`` replaces the whole hero. A
+   * function receives the default mascot image.
    */
-  welcomeMascot?: ReactNode;
+  welcomeMascot?: ReactNode | ((defaultMascot: ReactNode) => ReactNode);
   /**
    * Host content below the suggestions on the welcome. Wrapped in the same
    * ``max-w-[750px]`` column as the suggestions, and only when given.
@@ -1748,6 +1750,24 @@ interface ConversationTurnListProps {
    * kernel's ``message.user`` echo lands; the value says WHERE the runtime is
    * coming up (OSS is single-target and always ``"local"``). */
   startingRuntime?: RuntimeStartLocation | null;
+}
+
+/** ``welcomeHero``: a node replaces the default hero; a function gets it. */
+function renderWelcomeHero(
+  welcomeHero: ReactNode | ((defaultHero: ReactNode) => ReactNode),
+  defaultHero: ReactNode,
+): ReactNode {
+  if (typeof welcomeHero === "function") return welcomeHero(defaultHero);
+  return welcomeHero ? welcomeHero : defaultHero;
+}
+
+/** ``welcomeMascot``: a node replaces the default image; a function gets it. */
+function renderWelcomeMascot(
+  welcomeMascot: ReactNode | ((defaultMascot: ReactNode) => ReactNode),
+  defaultMascot: ReactNode,
+): ReactNode {
+  if (typeof welcomeMascot === "function") return welcomeMascot(defaultMascot);
+  return welcomeMascot ?? defaultMascot;
 }
 
 export function ConversationTurnList({
@@ -2010,24 +2030,24 @@ export function ConversationTurnList({
                   empty new-chat page feels less bare. Gated on ``showWelcome``
                   so an existing conversation still fetching its transcript (no
                   turns yet) doesn't flash this new-chat state mid-load. */}
-              {welcomeHero ? (
-                welcomeHero
-              ) : (
+              {renderWelcomeHero(
+                welcomeHero,
                 <>
-                  {hideEmptyMascot ? null : (
-                    (welcomeMascot ?? (
-                      <img
-                        src={assetUrl("mascot.png")}
-                        alt=""
-                        aria-hidden="true"
-                        className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
-                      />
-                    ))
-                  )}
+                  {hideEmptyMascot
+                    ? null
+                    : renderWelcomeMascot(
+                        welcomeMascot,
+                        <img
+                          src={assetUrl("mascot.png")}
+                          alt=""
+                          aria-hidden="true"
+                          className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
+                        />,
+                      )}
                   <div className="text-center text-2xl font-medium leading-tight text-ink-heading">
                     {emptyTitle ?? t("conversation.startHere")}
                   </div>
-                </>
+                </>,
               )}
               {emptySuggestions && emptySuggestions.length > 0 ? (
                 <div className="mx-auto mt-5 max-w-[750px]">

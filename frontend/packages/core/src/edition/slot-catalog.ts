@@ -16,8 +16,11 @@ import { HOST_SLOTS } from "./host-slots";
  *
  * - ``list``   — every contribution renders, ordered by priority then
  *                registration (``SlotRenderer``).
- * - ``single`` — the first contribution by priority replaces the host's
- *                default; none renders the default (``SingleSlot``).
+ * - ``single`` — the first contribution by priority takes the region over
+ *                and gets ``renderDefault`` to keep, wrap or adjust what
+ *                would be there without it (the next contribution, then the
+ *                host's default) — Claude Code's ``next(e)`` at a render
+ *                site; none renders the default (``SingleSlot``).
  * - ``keyed``  — contributions carry a ``key`` (tab id, section id, approval
  *                subject…) and the host renders those matching what it is
  *                showing: one winner over a fallback (``KeyedSlot``), or all
