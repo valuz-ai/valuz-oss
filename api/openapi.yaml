@@ -3968,6 +3968,74 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /v1/projects/workspace-hooks/preview:
+    post:
+      summary: List the hook commands a folder would run on its own (before binding it)
+      operationId: previewWorkspaceHooks
+      tags: [projects]
+      description: |
+        Workspace trust (H0). Scans the folder for hook configuration the agent
+        CLIs execute without asking — `.claude/settings.json`,
+        `.claude/settings.local.json`, `.codex/hooks.json`, the `[hooks]` table
+        of `.codex/config.toml`. The bind dialog asks the user to trust the
+        folder only when this list is non-empty.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [root_path]
+              properties:
+                root_path: {type: string}
+      responses:
+        "200":
+          description: Detected hook commands
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hooks]
+                properties:
+                  hooks:
+                    type: array
+                    items: {$ref: "#/components/schemas/WorkspaceHook"}
+
+  /v1/projects/{project_id}/workspace-trust:
+    parameters:
+      - {name: project_id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: The project's workspace trust and the hook commands its folder carries
+      operationId: getWorkspaceTrust
+      tags: [projects]
+      responses:
+        "200":
+          description: Trust state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceTrustState"}
+        "404": {description: Unknown project}
+    put:
+      summary: Trust (or stop trusting) the folder's own hooks for sessions started afterwards
+      operationId: setWorkspaceTrust
+      tags: [projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trusted]
+              properties:
+                trusted: {type: boolean}
+      responses:
+        "200":
+          description: Updated trust state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceTrustState"}
+        "404": {description: Unknown project}
+
   /v1/projects/import-preview:
     post:
       summary: Upload a .valuzpack project and stage it for import (preview)
@@ -5123,6 +5191,24 @@ components:
         type: string
         examples: [zh-CN, en-US]
   schemas:
+    WorkspaceHook:
+      type: object
+      description: One hook command found in a workspace folder (workspace trust, H0).
+      required: [source, event, command]
+      properties:
+        source: {type: string, description: "Relative config file, e.g. .claude/settings.json"}
+        event: {type: string, description: "Hook event, e.g. PreToolUse"}
+        command: {type: string}
+        matcher: {type: string, nullable: true}
+    WorkspaceTrustState:
+      type: object
+      required: [project_id, workspace_trust, hooks]
+      properties:
+        project_id: {type: string}
+        workspace_trust: {type: string, enum: [trusted, untrusted]}
+        hooks:
+          type: array
+          items: {$ref: "#/components/schemas/WorkspaceHook"}
     PlaybookDefinition:
       type: object
       required: [id, name, status, origin, current_version, revision, created_at, updated_at]

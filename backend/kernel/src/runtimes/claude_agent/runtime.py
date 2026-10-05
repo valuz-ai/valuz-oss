@@ -115,6 +115,7 @@ from src.core.types import (
     Session,
     UserMessage,
     is_bare_completion,
+    is_workspace_untrusted,
     model_rejects_images,
 )
 from src.core.usage import diff_model_usage
@@ -1921,6 +1922,7 @@ class ClaudeAgentRuntime:
 
     def _build_options(self, session: Session) -> ClaudeAgentOptions:
         self._hook_session_ref = SessionRef.from_session(session)
+        self._workspace_untrusted = is_workspace_untrusted(session)
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()
         if sdk_tools:
@@ -2206,6 +2208,12 @@ class ClaudeAgentRuntime:
             settings.update(_WORKFLOW_SETTINGS)
         if _skip_webfetch_preflight_enabled() and "skipWebFetchPreflight" not in project:
             settings["skipWebFetchPreflight"] = True
+        if getattr(self, "_workspace_untrusted", False):
+            # Workspace trust (H0): the folder's own hooks
+            # (``.claude/settings.json``) must not run. Verified: the inline
+            # layer's ``disableAllHooks`` stops project hooks while Valuz's SDK
+            # hook callbacks keep firing.
+            settings["disableAllHooks"] = True
         return json.dumps(settings) if settings else None
 
     def _build_model_provider_env(self, session: Session | None = None) -> dict[str, str] | None:

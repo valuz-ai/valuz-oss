@@ -218,6 +218,13 @@ def mint_session_id() -> str:
     return uuid4().hex
 
 
+
+def _workspace_trust(project_row: object) -> str:
+    """The session's workspace trust, from its project (``NULL`` = trusted)."""
+    from valuz_agent.modules.projects.workspace_trust import effective_trust
+
+    return effective_trust(getattr(project_row, "workspace_trust", None))
+
 class SessionService:
     """Business façade over the V5 kernel session machinery.
 
@@ -998,6 +1005,9 @@ class SessionService:
             "name": title,
             "origin": origin,
             "project_id": project_id,
+            # Workspace trust (H0): runtimes switch the folder's own hooks
+            # off when ``untrusted`` (src.core.types.is_workspace_untrusted).
+            "workspace_trust": _workspace_trust(project_row),
             "trigger_meta": trigger_meta,
             "last_user_message_text": None,
             "locked_provider_id": provider_id,
@@ -1337,6 +1347,9 @@ class SessionService:
             "name": title,
             "origin": origin,
             "project_id": project_id,
+            # Workspace trust (H0): runtimes switch the folder's own hooks
+            # off when ``untrusted`` (src.core.types.is_workspace_untrusted).
+            "workspace_trust": _workspace_trust(project_row),
             "trigger_meta": trigger_meta,
             "last_user_message_text": None,
             "locked_provider_id": resolved_provider_id,

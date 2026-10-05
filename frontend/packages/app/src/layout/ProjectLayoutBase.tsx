@@ -1479,6 +1479,7 @@ export function ProjectLayoutBase({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {execLocation.trustDialog}
       <DeleteConfirmDialog
         open={!!removeTarget}
         onOpenChange={(open) => {

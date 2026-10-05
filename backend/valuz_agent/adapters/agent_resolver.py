@@ -1015,6 +1015,7 @@ async def build_member_session(
     brief: str,
     project_name: str = "",
     project_instructions_md: str | None = None,
+    workspace_trust: str | None = None,
     model_override: str | None = None,
     providers: object | None = None,
     lead_session_id: str | None = None,
@@ -1367,6 +1368,7 @@ async def build_member_session(
     )
     valuz_metadata: dict[str, object] = {
         "project_id": project_id,
+        "workspace_trust": workspace_trust or "trusted",
         "agent_slug": agent_slug,
         "task_id": task_id,
         # Snapshot the durable Task label into every lead/member execution

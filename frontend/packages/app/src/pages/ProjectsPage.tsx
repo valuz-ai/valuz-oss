@@ -403,6 +403,7 @@ export const ProjectsPage = ({
           />
         </FormField>
       </FormDialog>
+      {execLocation.trustDialog}
 
       {/* Delete Confirmation Dialog */}
       <DeleteConfirmDialog

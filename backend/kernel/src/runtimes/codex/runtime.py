@@ -99,6 +99,7 @@ from src.core.types import (
     StopReason,
     UserMessage,
     is_bare_completion,
+    is_workspace_untrusted,
     model_rejects_images,
 )
 
@@ -2136,6 +2137,11 @@ def _build_config_overrides(
         )
         if provider is None:
             overrides.append('web_search="disabled"')
+
+    # Workspace trust (H0): an untrusted workspace's own Codex hooks
+    # (``.codex/hooks.json`` / ``[hooks]``) must not run.
+    if is_workspace_untrusted(session):
+        overrides.append("features.hooks=false")
 
     # Model-capability image gate (docs/design/model-capability): a model
     # that explicitly declares no image input gets no ``view_image`` tool at

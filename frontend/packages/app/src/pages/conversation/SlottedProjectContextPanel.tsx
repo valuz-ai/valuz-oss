@@ -8,6 +8,11 @@ import {
   useTranslation,
 } from "@valuz/core";
 import { ProjectDetailContextPanel } from "@valuz/ui";
+import {
+  shouldShowWorkspaceTrust,
+  useWorkspaceTrust,
+  WorkspaceTrustSection,
+} from "../../components/WorkspaceTrust";
 
 type ProjectDetailContextPanelProps = ComponentProps<
   typeof ProjectDetailContextPanel
@@ -52,6 +57,10 @@ export function SlottedProjectContextPanel({
   const hasHeaderActions = useHasSlot("context-panel.header.actions");
   const hasSections = useHasSlot("context-panel.sections");
   const hasGeneratedFilesActions = useHasSlot("project.generatedFiles.actions");
+  // Workspace trust (H0): shown only when the folder runs its own hook
+  // commands or is not trusted — invisible for the common case.
+  const trust = useWorkspaceTrust(projectId);
+  const showTrust = shouldShowWorkspaceTrust(trust.state);
 
   const context = useMemo(
     () => ({ projectId, sessionId, surface }),
@@ -94,8 +103,18 @@ export function SlottedProjectContextPanel({
         ) : undefined
       }
       extraSections={
-        hasSections ? (
-          <SlotRenderer name="context-panel.sections" context={context} />
+        hasSections || showTrust ? (
+          <>
+            {showTrust && trust.state ? (
+              <WorkspaceTrustSection
+                state={trust.state}
+                onSetTrusted={(trusted) => void trust.setTrusted(trusted)}
+              />
+            ) : null}
+            {hasSections ? (
+              <SlotRenderer name="context-panel.sections" context={context} />
+            ) : null}
+          </>
         ) : undefined
       }
       generatedFilesAction={

@@ -346,6 +346,23 @@ class Session:
 BARE_COMPLETION_METADATA_KEY = "bare_completion"
 
 
+# Host-stamped workspace trust (H0): ``Session.metadata["valuz"]
+# ["workspace_trust"]`` is ``untrusted`` when the session's project folder may
+# not run its own hook configuration (``.claude/settings.json`` hooks, Codex
+# ``hooks.json``). Runtimes switch those off; Valuz's own hook bus is not
+# affected. Absent = trusted (sessions created before trust existed).
+WORKSPACE_TRUST_METADATA_KEY = "workspace_trust"
+
+
+def is_workspace_untrusted(session: Session) -> bool:
+    """True when the host marked *session*'s workspace untrusted."""
+    try:
+        valuz = session.metadata.get("valuz")
+        return isinstance(valuz, dict) and valuz.get(WORKSPACE_TRUST_METADATA_KEY) == "untrusted"
+    except Exception:  # noqa: BLE001 — malformed metadata never breaks dispatch
+        return False
+
+
 def is_bare_completion(session: Session) -> bool:
     """True when the host marked *session* as a bare one-shot completion."""
     try:

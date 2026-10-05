@@ -1440,7 +1440,20 @@
     "deleteChat": "Delete group",
     "deleteChatDone": "Group deleted",
     "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good.",
-    "nameSection": "Project name"
+    "nameSection": "Project name",
+    "trustDialogTitle": "This folder runs its own commands",
+    "trustDialogDesc": "Configuration in this folder makes Claude / Codex run the commands below during a session — without asking and without approval. Trust it only if you know where the folder comes from.",
+    "trustDialogTrust": "Trust and allow",
+    "trustDialogDistrust": "Don't trust (don't run them)",
+    "trustSectionTitle": "Workspace trust",
+    "trustTrusted": "Trusted",
+    "trustUntrusted": "Not trusted",
+    "trustTrustedHint": "The folder's own commands below run in new sessions.",
+    "trustUntrustedHint": "The folder's own commands below do not run.",
+    "trustMakeTrusted": "Trust this folder",
+    "trustMakeUntrusted": "Stop trusting",
+    "trustAppliesToNewSessions": "Applies to sessions started from now on.",
+    "trustUpdateFailed": "Couldn't update workspace trust: {error}"
   },
   "schedule": {
     "create": "Create Schedule",

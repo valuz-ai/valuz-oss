@@ -1440,7 +1440,20 @@
     "deleteChat": "解散群",
     "deleteChatDone": "群已解散",
     "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。",
-    "nameSection": "项目名称"
+    "nameSection": "项目名称",
+    "trustDialogTitle": "这个文件夹会自己运行命令",
+    "trustDialogDesc": "文件夹里的配置让 Claude / Codex 在会话中自动执行下面这些命令，不会提示，也不经过审批。只在你认识这个文件夹的来源时才信任它。",
+    "trustDialogTrust": "信任并允许运行",
+    "trustDialogDistrust": "不信任（不运行这些命令）",
+    "trustSectionTitle": "工作区信任",
+    "trustTrusted": "已信任",
+    "trustUntrusted": "未信任",
+    "trustTrustedHint": "文件夹自带的这些命令会在新会话中运行。",
+    "trustUntrustedHint": "文件夹自带的这些命令不会运行。",
+    "trustMakeTrusted": "信任这个文件夹",
+    "trustMakeUntrusted": "不再信任",
+    "trustAppliesToNewSessions": "对之后新开的会话生效。",
+    "trustUpdateFailed": "更新工作区信任失败：{error}"
   },
   "schedule": {
     "create": "创建定时任务",

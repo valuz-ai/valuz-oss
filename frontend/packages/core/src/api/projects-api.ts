@@ -23,6 +23,9 @@ export interface ProjectListItem {
    * Project projects: equals ``root_path``.
    * Chat projects: managed dir under ``data_dir/projects/{id}/``. */
   cwd: string | null;
+  /** Workspace trust (H0): whether the folder's own hook configuration may
+   * run in its sessions. Absent on older backends — treat as trusted. */
+  workspace_trust?: WorkspaceTrust;
   /** CLIENT-side tag on multi-target editions: which execution target
    * answered the list row (e.g. "local"/"cloud"). Never sent by the server;
    * absent on single-backend builds. */
@@ -254,6 +257,26 @@ export interface ProjectCreateRequest {
   name: string;
   /** Omit/empty to allocate a backend-managed cwd (cloud / headless). */
   root_path?: string;
+  /** The user's answer when the bound folder carries hook configuration:
+   * true lets it run, false keeps it off. Omit when not asked. */
+  trust_workspace?: boolean;
+}
+
+export type WorkspaceTrust = "trusted" | "untrusted";
+
+/** One hook command a workspace folder runs on its own (api/openapi.yaml
+ * ``WorkspaceHook``). */
+export interface WorkspaceHook {
+  source: string;
+  event: string;
+  command: string;
+  matcher?: string | null;
+}
+
+export interface WorkspaceTrustState {
+  project_id: string;
+  workspace_trust: WorkspaceTrust;
+  hooks: WorkspaceHook[];
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
@@ -368,6 +391,48 @@ export const projectsApi = {
       body: JSON.stringify(payload),
       baseUrl: opts?.baseUrl,
     });
+    invalidateProjects();
+    return result;
+  },
+
+  /** Hook commands a folder would run on its own, before binding it. */
+  async previewWorkspaceHooks(
+    rootPath: string,
+    opts?: { baseUrl?: string },
+  ): Promise<WorkspaceHook[]> {
+    const result = await fetchJson<{ hooks: WorkspaceHook[] }>(
+      "/v1/projects/workspace-hooks/preview",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root_path: rootPath }),
+        baseUrl: opts?.baseUrl,
+      },
+    );
+    return result.hooks ?? [];
+  },
+
+  async getWorkspaceTrust(projectId: string): Promise<WorkspaceTrustState> {
+    return fetchJson<WorkspaceTrustState>(
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-trust`,
+      { baseUrl: projectBase(projectId) },
+    );
+  },
+
+  /** Trust (or stop trusting) the folder's hooks — for sessions started after. */
+  async setWorkspaceTrust(
+    projectId: string,
+    trusted: boolean,
+  ): Promise<WorkspaceTrustState> {
+    const result = await fetchJson<WorkspaceTrustState>(
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-trust`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trusted }),
+        baseUrl: projectBase(projectId),
+      },
+    );
     invalidateProjects();
     return result;
   },
