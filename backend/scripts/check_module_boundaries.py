@@ -169,6 +169,10 @@ SRC_CORE_ALLOWLIST = {
     # Binds ``SandboxCredentialVerifierPort`` to the kernel's own token signer;
     # the signer's claim type is the verified identity the port hands back.
     "integrations/sandbox_credential_hmac.py",
+    # ``ctx.hooks`` / ``ctx.commands``: backend plugins register handlers on
+    # the kernel's hook bus (``src.core.hooks``) — the registry IS the
+    # contract; the bus has no wire form for in-process registration.
+    "plugin_host/hooks_api.py",
 }
 
 

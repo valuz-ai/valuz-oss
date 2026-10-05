@@ -46,8 +46,12 @@ class ClaudeMcpSourceProxy:
         config: McpServerConfig,
         *,
         session_context_factory: Callable[[], Any] | None = None,
+        hooks: Callable[[], Any] | None = None,
     ) -> None:
         self.config = config
+        # The session's hook bus (``SessionHooks`` factory): every call goes
+        # through ``tool.call`` before reaching the upstream.
+        self._hooks = hooks
         self.server = Server(config.name, version="1.0.0")
         self._session_context_factory = session_context_factory or (
             lambda: _open_upstream_session(config)
@@ -81,13 +85,23 @@ class ClaudeMcpSourceProxy:
         return cast(list[Any], result)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        return await self._submit(
-            _ProxyRequest(
-                operation="call_tool",
-                future=_future(),
-                tool_name=name,
-                arguments=arguments,
+        from src.runtimes.mcp_proxy.dispatch import dispatch_mcp_call
+
+        async def call(args: dict[str, Any]) -> Any:
+            return await self._submit(
+                _ProxyRequest(
+                    operation="call_tool",
+                    future=_future(),
+                    tool_name=name,
+                    arguments=args,
+                )
             )
+
+        hooks = self._hooks() if self._hooks is not None else None
+        result = await dispatch_mcp_call(hooks, self.config.name, name, arguments, call)
+        return wrap_mcp_result_metadata_in_content_for_transport(
+            result,
+            server_name=self.config.name,
         )
 
     async def close(self) -> None:
@@ -157,10 +171,6 @@ class ClaudeMcpSourceProxy:
                     request.tool_name,
                     request.arguments or {},
                     **kwargs,
-                )
-                result = wrap_mcp_result_metadata_in_content_for_transport(
-                    result,
-                    server_name=self.config.name,
                 )
         except BaseException as exc:
             if not request.future.done():

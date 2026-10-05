@@ -91,6 +91,7 @@ MANAGED_PROFILE_ENV = "VALUZ_DSH_MANAGED_PROFILE"
 DSH_PLUGINS_MCP_SERVER = "valuz-dsh-plugins"
 #: The kernel bridge row valuz-dsh-bundle declares; sessions override its config.
 KERNEL_BRIDGE_ROW = "valuz-kernel-bridge"
+HOOK_BRIDGE_ROW = "valuz-hook-bridge"
 #: Process-role switch read by the Valuz bundle's patch.
 ROLE_ENV = "VALUZ_DSH_ROLE"
 SESSION_ROLE = "session"
@@ -297,6 +298,18 @@ def user_questions_endpoint(token: str) -> str:
     return f"{base.rstrip('/')}/{token}"
 
 
+def hook_bridge_endpoint(token: str) -> str:
+    """The kernel's hook-bridge URL for one spawn (same host as user questions)."""
+    base = (
+        os.environ.get(USER_QUESTIONS_ENDPOINT_ENV, "").strip() or USER_QUESTIONS_ENDPOINT_DEFAULT
+    )
+    base = base.rstrip("/")
+    suffix = "/dsh/user-questions"
+    if base.endswith(suffix):
+        base = base[: -len(suffix)]
+    return f"{base}/hook-bridge/{token}"
+
+
 def build_session_patch(
     session: Session,
     *,
@@ -304,6 +317,7 @@ def build_session_patch(
     kernel_toolkit: bool = False,
     plan_capable: bool = True,
     user_questions_url: str | None = None,
+    hook_bridge: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The ``--patch`` layer for one kernel session (pure; unit-testable).
 
@@ -329,6 +343,12 @@ def build_session_patch(
         # The bridge row is declared by valuz-dsh-bundle (session role only);
         # overriding a Valuz-owned row's config never drifts from upstream.
         patch.append({"id": KERNEL_BRIDGE_ROW, "config": bridge_config})
+
+    if hook_bridge:
+        # Valuz hook bus for dsh's built-in tools (row declared by
+        # valuz-dsh-bundle, session role only); present only while a
+        # handler listens.
+        patch.append({"id": HOOK_BRIDGE_ROW, "config": dict(hook_bridge)})
 
     inserted: list[dict[str, Any]] = []
     inserted.extend(_mcp_rows(session))

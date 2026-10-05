@@ -160,6 +160,9 @@ class UpstreamPool:
 
     def __init__(self, servers: dict[str, McpServerConfig]) -> None:
         self._configs = dict(servers)
+        # The calling session's hook bus (``SessionHooks``): each forwarded
+        # call is a ``tool.call``, as on every other MCP path.
+        self._hooks: Any = None
         self._workers: dict[str, _ServerWorker] = {}
         self._lock = asyncio.Lock()
 
@@ -172,7 +175,17 @@ class UpstreamPool:
             if worker is None:
                 worker = _ServerWorker(config)
                 self._workers[server] = worker
-        return await worker.call(tool, arguments)
+        if self._hooks is None:
+            return await worker.call(tool, arguments)
+        from src.runtimes.mcp_proxy.dispatch import dispatch_mcp_call
+
+        async def call(args: dict[str, Any]) -> Any:
+            return await worker.call(tool, args)
+
+        return await dispatch_mcp_call(self._hooks, server, tool, arguments, call)
+
+    def set_hooks(self, hooks: Any) -> None:
+        self._hooks = hooks
 
     async def close(self) -> None:
         async with self._lock:
@@ -180,3 +193,10 @@ class UpstreamPool:
             self._workers.clear()
         for worker in workers:
             await worker.close()
+
+
+def attach_hooks(pool: Any, hooks: Any) -> None:
+    """Give *pool* the session's hook bus (pools without the seam are left as-is)."""
+    setter = getattr(pool, "set_hooks", None)
+    if hooks is not None and callable(setter):
+        setter(hooks)

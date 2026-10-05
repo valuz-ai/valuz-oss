@@ -32,7 +32,7 @@ from src.ptc.execution_registry import (
     revoke_execution,
 )
 from src.ptc.interpreter import interpreter_argv, interpreter_unavailable_reason
-from src.ptc.upstream import UpstreamPool
+from src.ptc.upstream import UpstreamPool, attach_hooks
 
 if TYPE_CHECKING:
     from src.core.store_port import StorePort
@@ -280,7 +280,11 @@ def build_execute_code_tool(store_getter: Callable[[], StorePort]) -> ToolDef:
             cwd=str(cwd),
             servers=servers,
         )
+        from src.core.hooks import SessionHooks, SessionRef, hook_registry
+
+        record.hooks = SessionHooks(hook_registry, SessionRef.from_session(session))
         record.upstream_pool = UpstreamPool(servers)
+        attach_hooks(record.upstream_pool, record.hooks)
         try:
             return await _run(record, cwd, code)
         finally:

@@ -415,6 +415,7 @@ def get_kernel_routers() -> list:
     presets, this decision is revisited in a new ADR.
     """
     from app.dsh_user_questions_router import router as dsh_uq_router
+    from app.hook_bridge_router import router as hook_bridge_router
     from app.ptc_router import router as ptc_router
     from app.routes.events import router as events_router
     from app.routes.messages import router as messages_router
@@ -430,6 +431,7 @@ def get_kernel_routers() -> list:
         usage_router,
         ptc_router,
         dsh_uq_router,
+        hook_bridge_router,
     ]
 
 

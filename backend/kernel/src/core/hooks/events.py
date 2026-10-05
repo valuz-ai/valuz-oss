@@ -223,9 +223,14 @@ class ToolOutcome:
 
 @dataclass(frozen=True)
 class ToolDecision:
-    """A permission decision. ``updated_input`` replaces the call's input."""
+    """A permission decision. ``updated_input`` replaces the call's input.
 
-    behavior: Literal["allow", "deny"]
+    ``ask`` only comes from a runtime whose core decides *before* asking the
+    user (DSH's pre-execute policy): the user is asked next, outside the
+    chain. A handler may return it to force that question.
+    """
+
+    behavior: Literal["allow", "deny", "ask"]
     reason: str | None = None
     updated_input: Mapping[str, Any] | None = None
 

@@ -295,3 +295,33 @@ def test_an_optional_after_app_failure_is_recorded_and_rolled_back() -> None:
     host.attach_app(FastAPI())
     assert host.get("p").status == "failed"
     assert ext.billing == "noop"
+
+
+# -- hook bus (ctx.hooks / ctx.commands) -------------------------------------------
+
+
+def test_hooks_and_commands_belong_to_the_plugin_and_unwind() -> None:
+    import valuz_agent.boot.kernel  # noqa: F401 — sys.path for ``src``
+    from src.core.hooks import TOOL_CALL, command_registry, hook_registry
+
+    async def handler(ctx: Any, event: Any, next_: Any) -> Any:
+        return await next_()
+
+    async def tally(session: Any, args: str) -> str:
+        return args
+
+    def apply(ctx: Any) -> None:
+        ctx.hooks.on(TOOL_CALL, handler, matcher={"tool.kind": "shell"})
+        ctx.commands.register("tally-plugin-test", tally, description="count")
+
+    host, _ = _host(_plugin("hooking-plugin", apply))
+    host.load_all()
+    try:
+        owners = {(h["owner"], h["event"]) for h in hook_registry.owners()}
+        assert ("hooking-plugin", TOOL_CALL) in owners
+        spec = command_registry.get("tally-plugin-test")
+        assert spec is not None and spec.owner == "hooking-plugin"
+    finally:
+        host.unload("hooking-plugin")
+    assert all(h["owner"] != "hooking-plugin" for h in hook_registry.owners())
+    assert command_registry.get("tally-plugin-test") is None

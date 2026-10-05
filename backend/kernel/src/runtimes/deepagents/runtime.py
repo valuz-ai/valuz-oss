@@ -1379,6 +1379,23 @@ class DeepAgentsRuntime:
             return []
         return [ValuzHooksMiddleware(self._hook_session, self._tool_dispatched_elsewhere)]
 
+    async def _mcp_hooks_interceptor(self, request: Any, handler: Any) -> Any:
+        """``tool.call`` for DeepAgents' MCP tools (langchain-mcp-adapters interceptor)."""
+        from src.runtimes.mcp_proxy.dispatch import dispatch_mcp_call
+
+        async def call(args: dict[str, Any]) -> Any:
+            if args == dict(request.args or {}):
+                return await handler(request)
+            return await handler(request.override(args=args))
+
+        return await dispatch_mcp_call(
+            self._hook_session(),
+            str(getattr(request, "server_name", "") or ""),
+            str(request.name),
+            dict(request.args or {}),
+            call,
+        )
+
     def _tool_dispatched_elsewhere(self, name: str) -> bool:
         """Kernel toolkit and MCP tools have their own ``tool.call`` dispatch point."""
         if name in getattr(self, "_mcp_tool_names", set()):
@@ -2242,7 +2259,13 @@ class DeepAgentsRuntime:
             return []
         client = MultiServerMCPClient(
             spec,  # type: ignore[arg-type]
-            tool_interceptors=[_preserve_mcp_source_metadata],
+            # First interceptor is outermost. The hook bus sits innermost so
+            # its handlers see the upstream result before Valuz's metadata
+            # wrapping — the same position the Claude source proxy gives them.
+            tool_interceptors=[
+                _preserve_mcp_source_metadata,
+                *([self._mcp_hooks_interceptor] if self._hook_session().wants(TOOL_CALL) else []),
+            ],
             # The MCP SDK only attaches ``_meta.progressToken`` when a progress
             # callback exists, so a client with none tells servers "do not
             # bother" and gets silence back. Registering one makes long tools

@@ -8,7 +8,6 @@ and SDK Messages → Harness Events.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import os
@@ -92,14 +91,13 @@ from src.core.hooks import (
     SessionHooks,
     SessionRef,
     ToolDecision,
-    hook_registry,
     thaw,
 )
-from src.core.hooks.runtime_support import runtime_session_hooks
-from src.core.hooks.toolkit import call_tooldef
 from src.core.hooks.builtin.image_gate import (
     IMAGE_READ_DENY_REASON as IMAGE_READ_DENY_REASON,
 )
+from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.toolkit import call_tooldef
 from src.core.mcp_source_metadata import (
     adapt_mcp_source_result,
     unwrap_mcp_source_content_transport,
@@ -1935,7 +1933,7 @@ class ClaudeAgentRuntime:
 
         proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
-            proxy = ClaudeMcpSourceProxy(cfg)
+            proxy = ClaudeMcpSourceProxy(cfg, hooks=self._hook_session)
             proxies.append(proxy)
             mcp[cfg.name] = proxy.sdk_config()
         self._mcp_source_proxies = proxies

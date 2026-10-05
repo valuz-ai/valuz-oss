@@ -1,9 +1,9 @@
 {
   "name": "valuz-dsh-bundle",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
-  "description": "The Valuz layer over the upstream DeepSeek Harness distribution, shipped as a standard dsh bundle (dsh.bundle.patch). It selects each process's role on one shared profile (VALUZ_DSH_ROLE=session: the SDK JSON-RPC child of a kernel session; manager: the resident web host that manages plugins the dsh way), switches off every row that ships data to the model vendor, and mounts the Valuz plugins: session-preset (joins SDK-created agents to the profile's agent preset), stream-forwarder (live model stream frames \u2192 kernel) and kernel-bridge (plan state, user questions, tool approvals, Valuz instructions). Its peer dependency pins the exact dsh release it was written against; scripts/dsh-upstream-sync.sh moves both together.",
+  "description": "The Valuz layer over the upstream DeepSeek Harness distribution, shipped as a standard dsh bundle (dsh.bundle.patch). It selects each process's role on one shared profile (VALUZ_DSH_ROLE=session: the SDK JSON-RPC child of a kernel session; manager: the resident web host that manages plugins the dsh way), switches off every row that ships data to the model vendor, and mounts the Valuz plugins: session-preset (joins SDK-created agents to the profile's agent preset), stream-forwarder (live model stream frames \u2192 kernel), kernel-bridge (plan state, user questions, tool approvals, Valuz instructions) and hook-bridge (dsh built-in tools on the Valuz hook bus, armed only while a handler listens). Its peer dependency pins the exact dsh release it was written against; scripts/dsh-upstream-sync.sh moves both together.",
   "files": [
     "bin",
     "lib",
@@ -14,6 +14,7 @@
     "./session-preset": "./lib/session-preset.js",
     "./stream-forwarder": "./lib/stream-forwarder.js",
     "./kernel-bridge": "./lib/kernel-bridge.js",
+    "./hook-bridge": "./lib/hook-bridge.js",
     "./package.json": "./package.json",
     "./bin/dsh.mjs": "./bin/dsh.mjs",
     "./managed-profile.json": "./managed-profile.json",

@@ -57,6 +57,12 @@
     - id: valuz-kernel-bridge
       name: ./lib/kernel-bridge.js
       disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # Valuz hook bus for dsh's built-in tools. Armed by an id-targeted
+    # override in the session patch only while a Valuz handler listens;
+    # without config it does nothing.
+    - id: valuz-hook-bridge
+      name: ./lib/hook-bridge.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
     # dsh plugin tools for Claude / Codex / DeepAgents sessions: the manager
     # host serves them to the Valuz backend's always-on MCP server.
     - id: valuz-tool-bridge

@@ -33,6 +33,7 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
@@ -74,6 +75,17 @@ from src.core.events import (
     Event,
     EventSink,
 )
+from src.core.hooks import (
+    TOOL_CALL,
+    TOOL_CHECK,
+    HookEvent,
+    SessionHooks,
+    SessionRef,
+    ToolDecision,
+    ToolRef,
+    native_tool_ref,
+)
+from src.core.hooks.runtime_support import runtime_session_hooks
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
@@ -207,6 +219,9 @@ class CodexRuntime:
         # Tracks whether this runtime registered a toolkit endpoint so
         # ``close()`` can revoke it without needing the session reference.
         self._registered_session_id: str | None = None
+        # Hook bus: the session reference and the MCP proxy registration.
+        self._hook_session_ref: SessionRef | None = None
+        self._mcp_proxy_session_id: str | None = None
         self._egress_runtime_key: str | None = None
         self._egress_turn_attempt_id: str | None = None
 
@@ -909,6 +924,32 @@ class CodexRuntime:
 
             unregister_session_toolkit(self._registered_session_id)
             self._registered_session_id = None
+        await self._release_mcp_proxy()
+
+    # -- Hook bus --
+
+    def _hook_session(self) -> SessionHooks:
+        """The hook bus bound to this runtime's session."""
+        return runtime_session_hooks(self, "codex")
+
+    async def _route_mcp_through_proxy(self, session: Session) -> Session:
+        if not session.mcp_servers or not self._hook_session().wants(TOOL_CALL):
+            return session
+        from src.runtimes.mcp_proxy import register_session_proxy
+
+        await self._release_mcp_proxy()
+        proxied = register_session_proxy(session.id, session.mcp_servers, self._hook_session())
+        self._mcp_proxy_session_id = session.id
+        return dataclasses.replace(session, mcp_servers=proxied)
+
+    async def _release_mcp_proxy(self) -> None:
+        proxy_session_id = getattr(self, "_mcp_proxy_session_id", None)
+        if proxy_session_id is None:
+            return
+        from src.runtimes.mcp_proxy import unregister_session_proxy
+
+        self._mcp_proxy_session_id = None
+        await unregister_session_proxy(proxy_session_id)
 
     # -- Lifecycle helpers --
 
@@ -937,12 +978,17 @@ class CodexRuntime:
             return
         t0 = time.monotonic()
         await self._emit_turn_phase("runtime_init_started")
+        self._hook_session_ref = SessionRef.from_session(session)
         expose_toolkit = self._register_toolkit_if_eligible(session)
         codex_bin = _resolve_codex_bin()
         if codex_bin is None:
             raise RuntimeError("Codex runtime binary is unavailable")
+        # While a ``tool.call`` handler is registered, codex reaches its MCP
+        # servers through the kernel's proxy so every MCP call goes through
+        # the hook bus; otherwise codex connects to them directly, as before.
+        config_session = await self._route_mcp_through_proxy(session)
         overrides = _build_config_overrides(
-            session,
+            config_session,
             self.model_provider,
             self.model,
             expose_toolkit=expose_toolkit,
@@ -950,7 +996,7 @@ class CodexRuntime:
                 self.egress_descriptor.base_url if self.egress_descriptor is not None else None
             ),
         )
-        safe_overrides, mcp_secret_env = _externalize_mcp_secrets(session, overrides)
+        safe_overrides, mcp_secret_env = _externalize_mcp_secrets(config_session, overrides)
         cfg = CodexConfig(
             codex_bin=codex_bin,
             config_overrides=safe_overrides,
@@ -1030,9 +1076,8 @@ class CodexRuntime:
         if not callable_tools:
             return False
 
-        from src.core.mcp_bridge import register_session_toolkit
-
         from src.core.hooks import SessionRef
+        from src.core.mcp_bridge import register_session_toolkit
 
         register_session_toolkit(
             session.id,
@@ -1218,6 +1263,21 @@ class CodexRuntime:
         # (codex decides internally via guardian notifications). For both,
         # auto-accept matches the policy contract — codex would have
         # already accepted internally; we just shouldn't fight it.
+        if not is_user_input and self._loop is not None and not self._loop.is_closed():
+            check_data = _approval_event_data(method, params)
+            if self._hook_session().wants(TOOL_CHECK, check_data):
+                try:
+                    cf = asyncio.run_coroutine_threadsafe(
+                        self._tool_check_coro(method, params, check_data), self._loop
+                    )
+                    return cast(
+                        dict[str, Any], cf.result(timeout=self.APPROVAL_TIMEOUT_SECONDS + 30.0)
+                    )
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException:
+                    logger.exception("codex tool.check dispatch crashed; auto-rejecting")
+                    return _build_approval_response(method, "reject", params)
         if not is_user_input and self._cached_permission_mode != "default":
             return _build_approval_response(method, "approve", params)
         if self._loop is None or self._loop.is_closed():
@@ -1280,6 +1340,26 @@ class CodexRuntime:
                 message,
             )
         return _build_approval_response(method, decision, params)
+
+    async def _tool_check_coro(
+        self,
+        method: str,
+        params: dict[str, Any],
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """``tool.check`` with Valuz's approval (auto-accept or the card) as core."""
+
+        async def core(_event: HookEvent) -> ToolDecision:
+            if self._cached_permission_mode != "default":
+                return ToolDecision(behavior="allow")
+            decision, message, _answers = await self._await_host_decision_coro(method, params)
+            if decision == "approve":
+                return ToolDecision(behavior="allow")
+            return ToolDecision(behavior="deny", reason=message)
+
+        decision = await self._hook_session().dispatch(TOOL_CHECK, data, core)
+        allowed = isinstance(decision, ToolDecision) and decision.behavior == "allow"
+        return _build_approval_response(method, "approve" if allowed else "reject", params)
 
     async def _await_host_decision_coro(
         self,
@@ -1913,6 +1993,21 @@ def _find_secret_residues(
                 + ", ".join(matched)
             )
     return residues
+
+
+def _approval_event_data(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """``tool.check`` payload for a codex approval request."""
+    ref: ToolRef
+    if method == "item/commandExecution/requestApproval":
+        ref = native_tool_ref("codex", "commandExecution", {"command": params.get("command")})
+    elif method == "item/fileChange/requestApproval":
+        ref = native_tool_ref("codex", "fileChange", {"path": params.get("path")})
+    elif method == "mcpServer/elicitation/request":
+        server = str(params.get("serverName") or params.get("server") or "") or None
+        ref = ToolRef(name="mcp", kind="mcp", source="mcp", server=server)
+    else:
+        ref = native_tool_ref("codex", method, params)
+    return {"tool": ref.to_dict(), "input": dict(params), "tool_use_id": params.get("itemId")}
 
 
 def _build_config_overrides(

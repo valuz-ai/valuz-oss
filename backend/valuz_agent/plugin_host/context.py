@@ -13,6 +13,7 @@ from contextlib import ExitStack
 from typing import TYPE_CHECKING, Any
 
 from valuz_agent.plugin_host.errors import UnknownPortError
+from valuz_agent.plugin_host.hooks_api import CommandsApi, HooksApi
 from valuz_agent.plugin_host.registry import (
     BootStep,
     HostRegistry,
@@ -331,6 +332,9 @@ class PluginContext:
         self.boot = BootApi(self, self.registry)
         self.internal_mounts = InternalMountsApi(self, self.registry)
         self.toolkit = ToolkitApi(self, self.registry)
+        #: The Valuz hook bus (kernel): handlers and ``/commands`` for every runtime.
+        self.hooks = HooksApi(self)
+        self.commands = CommandsApi(self)
 
     # -- plumbing ---------------------------------------------------------
 

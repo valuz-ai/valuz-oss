@@ -32,9 +32,9 @@ underlying handlers; the URL adds no privilege beyond that.
 from __future__ import annotations
 
 import threading
-from typing import Any
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from mcp.server import Server
 from mcp.types import TextContent, Tool

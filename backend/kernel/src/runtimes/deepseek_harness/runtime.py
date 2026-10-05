@@ -44,6 +44,7 @@ locks the model for the process lifetime, which matches the kernel's
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
@@ -64,6 +65,8 @@ from src.core.events import (
     Event,
     EventSink,
 )
+from src.core.hooks import TOOL_CALL, TOOL_CHECK, SessionHooks, SessionRef
+from src.core.hooks.runtime_support import runtime_session_hooks
 from src.core.tools import ToolDef, ToolKit
 from src.core.types import (
     EndTurn,
@@ -91,6 +94,7 @@ from src.runtimes.deepseek_harness.composition import (
     cleanup_session_patch,
     dsh_max_tokens,
     dsh_reasoning_effort,
+    hook_bridge_endpoint,
     launch_unavailable_reason,
     process_env,
     resolve_dsh_home,
@@ -190,6 +194,11 @@ class DeepSeekHarnessRuntime:
         # the bridge plugin; ``_uq_asks`` keeps every ask of the current
         # process (terminal states stay readable for poll idempotency).
         self._uq_token: str | None = None
+        # Hook bus: session reference, the kernel-side remote session for
+        # dsh's built-in tools, and the MCP proxy registration.
+        self._hook_session_ref: SessionRef | None = None
+        self._hook_bridge_token: str | None = None
+        self._mcp_proxy_session_id: str | None = None
         self._uq_asks: dict[str, _UserQuestionsAsk] = {}
         self._pending_futures: dict[
             str,
@@ -301,6 +310,57 @@ class DeepSeekHarnessRuntime:
             task.cancel()
             self._interrupt_cancels += 1
 
+    # -- Hook bus --
+
+    def _hook_session(self) -> SessionHooks:
+        """The hook bus bound to this runtime's session."""
+        return runtime_session_hooks(self, "deepseek_harness")
+
+    async def _prepare_hook_bus(self, session: Session) -> tuple[Session, dict[str, Any] | None]:
+        """Per spawn: proxy MCP and arm the dsh-side bridge while handlers listen.
+
+        Returns the session to compose the patch from (MCP servers swapped for
+        kernel-proxy entries when a ``tool.call`` handler is registered) and the
+        ``valuz-hook-bridge`` row config (``None`` when nothing listens — the
+        patch is then exactly what it was without the bus).
+        """
+        await self._release_hook_bus()
+        self._hook_session_ref = SessionRef.from_session(session)
+        hooks = self._hook_session()
+        patch_session = session
+        if session.mcp_servers and hooks.wants(TOOL_CALL):
+            from src.runtimes.mcp_proxy import register_session_proxy
+
+            proxied = register_session_proxy(session.id, session.mcp_servers, hooks)
+            self._mcp_proxy_session_id = session.id
+            patch_session = dataclasses.replace(session, mcp_servers=proxied)
+        events = [event for event in (TOOL_CALL, TOOL_CHECK) if hooks.wants(event)]
+        if not events:
+            return patch_session, None
+        from src.core.hooks.remote import RemoteHookSession, register_remote_hooks
+
+        self._hook_bridge_token = register_remote_hooks(
+            RemoteHookSession(hooks, "deepseek_harness")
+        )
+        return patch_session, {
+            "endpoint": hook_bridge_endpoint(self._hook_bridge_token),
+            "events": events,
+        }
+
+    async def _release_hook_bus(self) -> None:
+        token = getattr(self, "_hook_bridge_token", None)
+        if token is not None:
+            from src.core.hooks.remote import unregister_remote_hooks
+
+            self._hook_bridge_token = None
+            await unregister_remote_hooks(token)
+        proxy_session_id = getattr(self, "_mcp_proxy_session_id", None)
+        if proxy_session_id is not None:
+            from src.runtimes.mcp_proxy import unregister_session_proxy
+
+            self._mcp_proxy_session_id = None
+            await unregister_session_proxy(proxy_session_id)
+
     async def close(self) -> None:
         if self._registered_session_id is not None:
             from src.core.mcp_bridge import unregister_session_toolkit
@@ -310,6 +370,7 @@ class DeepSeekHarnessRuntime:
         if self._uq_token is not None:
             unregister_user_questions_bridge(self._uq_token)
             self._uq_token = None
+        await self._release_hook_bus()
         current = asyncio.current_task()
         ask_tasks = [t for t in self._ask_tasks if t is not current and not t.done()]
         for t in ask_tasks:
@@ -806,8 +867,9 @@ class DeepSeekHarnessRuntime:
         # never round-trip the session.
         model_settings = session.model_settings or self.model_settings
         home = resolve_dsh_home(self._state_dir)
+        patch_session, hook_bridge = await self._prepare_hook_bus(session)
         self._config_path = write_session_patch(
-            session,
+            patch_session,
             model_base_url=(
                 self.model_provider.base_url
                 if self.model_provider is not None and self.model_provider.base_url
@@ -816,6 +878,7 @@ class DeepSeekHarnessRuntime:
             kernel_toolkit=self._register_kernel_toolkit(session),
             plan_capable=launch.plan_capable,
             user_questions_url=user_questions_url,
+            hook_bridge=hook_bridge,
         )
         self._composition_fingerprint = _composition_fingerprint(session)
 

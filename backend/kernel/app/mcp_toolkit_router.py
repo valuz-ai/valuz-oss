@@ -122,9 +122,14 @@ def _ensure_router() -> StreamableHTTPSessionManager:
 
 @asynccontextmanager
 async def mcp_router_lifespan() -> AsyncIterator[None]:
-    """Start the shared MCP session manager. Mount inside the FastAPI lifespan."""
+    """Start the shared MCP session managers (toolkit + MCP proxy).
+
+    Mount inside the FastAPI lifespan.
+    """
+    from app.mcp_proxy_router import mcp_proxy_lifespan
+
     manager = _ensure_router()
-    async with manager.run():
+    async with manager.run(), mcp_proxy_lifespan():
         yield
 
 
@@ -212,6 +217,11 @@ def mount_mcp_router(app: FastAPI) -> None:
     # our handler uses the looser ``dict[str, Any]`` shape. The runtime
     # contract is identical.
     app.mount(MCP_ROUTER_MOUNT_PATH, mcp_toolkit_asgi)  # type: ignore[arg-type]
+    # The hook bus's MCP proxy for CLI runtimes lives beside the toolkit and
+    # shares its reachability (see app/mcp_proxy_router.py).
+    from app.mcp_proxy_router import MCP_PROXY_MOUNT_PATH, mcp_proxy_asgi
+
+    app.mount(MCP_PROXY_MOUNT_PATH, mcp_proxy_asgi)  # type: ignore[arg-type]
 
 
 def reset_for_tests() -> None:
