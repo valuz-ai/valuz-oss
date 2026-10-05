@@ -95,6 +95,8 @@ from src.core.hooks import (
     hook_registry,
     thaw,
 )
+from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.toolkit import call_tooldef
 from src.core.hooks.builtin.image_gate import (
     IMAGE_READ_DENY_REASON as IMAGE_READ_DENY_REASON,
 )
@@ -2407,7 +2409,9 @@ class ClaudeAgentRuntime:
 
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
             assert captured_handler is not None
-            result = await captured_handler(
+            result = await call_tooldef(
+                self._hook_session(),
+                tdef,
                 args,
                 ExecContext(
                     workspace=self.workspace_root,
@@ -2644,28 +2648,7 @@ class ClaudeAgentRuntime:
 
     def _hook_session(self) -> SessionHooks:
         """The hook bus bound to this runtime's session."""
-        ref = getattr(self, "_hook_session_ref", None)
-        if ref is None:
-            model_settings = getattr(self, "model_settings", None)
-            settings = (
-                {
-                    key: value
-                    for key, value in dataclasses.asdict(model_settings).items()
-                    if value is not None
-                }
-                if model_settings is not None and dataclasses.is_dataclass(model_settings)
-                else {}
-            )
-            ref = SessionRef(
-                session_id=getattr(self, "_cur_session_id", "") or "",
-                user_id=getattr(self, "_cur_user_id", "") or "",
-                runtime_provider="claude_agent",
-                cwd=getattr(self, "workspace_root", "") or "",
-                model=getattr(self, "model", "") or "",
-                permission_mode=getattr(self, "_cached_permission_mode", "full_access"),
-                model_settings=settings,
-            )
-        return SessionHooks(hook_registry, ref)
+        return runtime_session_hooks(self, "claude_agent")
 
     def _get_tool_relay(self) -> ClaudeToolRelay:
         relay = getattr(self, "_tool_relay", None)

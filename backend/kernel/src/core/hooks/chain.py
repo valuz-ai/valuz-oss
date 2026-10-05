@@ -137,6 +137,9 @@ class _CallState:
         self.next_calls = 0
         self.has_result = False
         self.last_result: Any = None
+        # An error raised below this handler (inner handlers / core): it
+        # propagates as-is instead of counting as this handler's failure.
+        self.downstream_error: BaseException | None = None
         self._depth = 0
         self._entered_at = 0.0
         self._time_in_next = 0.0
@@ -235,6 +238,9 @@ async def _invoke(
         state.enter_next()
         try:
             result = await downstream(target)
+        except BaseException as exc:
+            state.downstream_error = exc
+            raise
         finally:
             state.leave_next()
         state.has_result = True
@@ -275,6 +281,12 @@ async def _invoke(
     except asyncio.CancelledError:
         raise
     except BaseException as exc:  # noqa: BLE001 — every handler failure is contained
+        if state.downstream_error is not None and not state.has_result:
+            # The layer below failed and nothing succeeded since: that is
+            # not this handler's failure, and re-running the layer below
+            # would repeat its side effects (a second approval card, a
+            # second tool run). Propagate it.
+            raise state.downstream_error from None
         if isinstance(exc, _BudgetExceededError):
             reason = "ran past its budget"
         else:

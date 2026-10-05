@@ -32,6 +32,7 @@ underlying handlers; the URL adds no privilege beyond that.
 from __future__ import annotations
 
 import threading
+from typing import Any
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -57,6 +58,9 @@ class SessionToolkitRecord:
     toolkit: ToolKit
     exec_context: ExecContext
     tool_gate: ToolGate | None = None
+    # The session as the hook bus sees it — kernel toolkit calls from this
+    # session dispatch ``tool.call`` (src.core.hooks.toolkit.call_tooldef).
+    hook_session: Any = None
 
 
 _REGISTRY: dict[str, SessionToolkitRecord] = {}
@@ -68,11 +72,15 @@ def register_session_toolkit(
     toolkit: ToolKit,
     exec_context: ExecContext,
     tool_gate: ToolGate | None = None,
+    hook_session: Any = None,
 ) -> None:
     """Add (or replace) a session's toolkit + ExecContext entry."""
     with _REGISTRY_LOCK:
         _REGISTRY[session_id] = SessionToolkitRecord(
-            toolkit=toolkit, exec_context=exec_context, tool_gate=tool_gate
+            toolkit=toolkit,
+            exec_context=exec_context,
+            tool_gate=tool_gate,
+            hook_session=hook_session,
         )
 
 

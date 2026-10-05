@@ -56,6 +56,18 @@ from src.core.agent_config import AgentConfig, SubAgentDef
 from src.core.approval_rule_matcher import ExactArgsRuleMatcher, RuntimeApprovalRuleMatcher
 from src.core.citation import EvidenceRegistry
 from src.core.events import AVAILABLE_DECISIONS_EDITABLE_WITH_SESSION, Event, EventSink
+from src.core.hooks import (
+    AGENT_SPAWN,
+    TOOL_CALL,
+    TOOL_CHECK,
+    HookEvent,
+    SessionHooks,
+    SessionRef,
+    ToolDecision,
+    thaw,
+)
+from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.toolkit import call_tooldef
 from src.core.mcp_source_metadata import wrap_mcp_result_metadata_for_transport
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
@@ -81,6 +93,11 @@ from src.runtimes.deepagents._patches import (
 from src.runtimes.deepagents.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
+)
+from src.runtimes.deepagents.hook_adapter import (
+    ValuzHooksMiddleware,
+    decision_from_hitl,
+    hitl_from_decision,
 )
 from src.runtimes.deepagents.middleware import (
     CitationEvidenceCompactionMiddleware,
@@ -579,6 +596,10 @@ def _session_evidence_binding_enabled(session: Session) -> bool:
     )
 
 
+class _ApprovalAbandoned(Exception):  # noqa: N818 — control flow, not an error
+    """A per-action approval timed out or was cancelled: abandon the batch."""
+
+
 class DeepAgentsRuntime:
     """Wraps deepagents `create_deep_agent` as a RuntimePort implementation."""
 
@@ -692,6 +713,9 @@ class DeepAgentsRuntime:
         self._applied_effort: str | None = None
         self._applied_citation_mode: bool | None = None
         self._mcp_tool_names: set[str] = set()
+        # MCP tool name -> its server (hook events name MCP tools by server).
+        self._mcp_tool_servers: dict[str, str] = {}
+        self._hook_session_ref: SessionRef | None = None
         self._external_mcp_tool_names: set[str] = set()
         # Per-session callable injected by the orchestrator via
         # ``set_session_rule_finder``. Closes over (session_id, cache,
@@ -843,6 +867,7 @@ class DeepAgentsRuntime:
         self._cur_session_id = session.id
         # getattr: run() is exercised with synthetic session stubs in tests.
         self._cur_user_id = getattr(session, "user_id", "") or ""
+        self._hook_session_ref = SessionRef.from_session(session)
         self._egress_turn_attempt_id = uuid.uuid4().hex
         if not self._continuing_same_user_turn:
             self._turn_evidence_registry.reset()
@@ -1339,7 +1364,94 @@ class DeepAgentsRuntime:
 
     # -- Approval bridge --
 
+    def _hook_session(self) -> SessionHooks:
+        """The hook bus bound to this runtime's session."""
+        return runtime_session_hooks(self, "deepagents")
+
+    def _hooks_middlewares(self) -> list[ValuzHooksMiddleware]:
+        """The hook-bus middleware, while any handler listens to tool events.
+
+        Decided when the graph is built (like Claude's SDK hook list): with
+        nothing registered the graph is exactly what it was without the bus.
+        """
+        hooks = self._hook_session()
+        if not (hooks.wants(TOOL_CALL) or hooks.wants(AGENT_SPAWN)):
+            return []
+        return [ValuzHooksMiddleware(self._hook_session, self._tool_dispatched_elsewhere)]
+
+    def _tool_dispatched_elsewhere(self, name: str) -> bool:
+        """Kernel toolkit and MCP tools have their own ``tool.call`` dispatch point."""
+        if name in getattr(self, "_mcp_tool_names", set()):
+            return True
+        toolkit = getattr(self, "toolkit", None)
+        return toolkit is not None and toolkit.get(name) is not None
+
     async def _await_host_decisions(
+        self,
+        action_requests: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
+        """The ``tool.check`` event per action, with Valuz's approval as core.
+
+        Unchanged when nobody listens: the whole batch parks together in
+        :meth:`_await_host_decisions_batch`, as before.
+        """
+        hooks = self._hook_session()
+        if not hooks.wants(TOOL_CHECK):
+            return await self._await_host_decisions_batch(action_requests)
+
+        async def decide(action_request: dict[str, Any]) -> dict[str, Any]:
+            tool_name = str(action_request.get("name", ""))
+            args = (
+                action_request.get("args") if isinstance(action_request.get("args"), dict) else {}
+            )
+            data = {
+                "tool": self._approval_tool_ref(tool_name, args).to_dict(),
+                "input": dict(args),
+                "tool_use_id": action_request.get("id"),
+            }
+            core_results: list[tuple[ToolDecision, dict[str, Any]]] = []
+
+            async def core(event: HookEvent) -> ToolDecision:
+                event_args = thaw(event.get("input"))
+                single = {
+                    **action_request,
+                    "args": event_args if isinstance(event_args, dict) else args,
+                }
+                decisions = await self._await_host_decisions_batch([single])
+                if decisions is None:
+                    raise _ApprovalAbandoned
+                decision = decision_from_hitl(decisions[0], args)
+                core_results.append((decision, decisions[0]))
+                return decision
+
+            decision = await hooks.dispatch(TOOL_CHECK, data, core)
+            for core_decision, raw in reversed(core_results):
+                if decision is core_decision:
+                    return raw
+            if not isinstance(decision, ToolDecision):
+                return {"type": "reject", "message": f"{tool_name} denied by a hook"}
+            return hitl_from_decision(decision, tool_name, args)
+
+        try:
+            return list(await asyncio.gather(*(decide(ar) for ar in action_requests)))
+        except _ApprovalAbandoned:
+            return None
+
+    def _approval_tool_ref(self, tool_name: str, args: dict[str, Any]) -> Any:
+        from src.core.hooks import mcp_tool_ref, native_tool_ref, toolkit_tool_ref
+
+        if self.toolkit.get(tool_name) is not None:
+            return toolkit_tool_ref(tool_name)
+        if tool_name in getattr(self, "_mcp_tool_names", set()):
+            server = getattr(self, "_mcp_tool_servers", {}).get(tool_name, "")
+            return (
+                mcp_tool_ref(server, tool_name)
+                if server
+                else native_tool_ref("deepagents", tool_name, args)
+            )
+        return native_tool_ref("deepagents", tool_name, args)
+
+    async def _await_host_decisions_batch(
         self,
         action_requests: list[dict[str, Any]],
     ) -> list[dict[str, Any]] | None:
@@ -1644,6 +1756,7 @@ class DeepAgentsRuntime:
     async def _ensure_graph(self, session: Session) -> Any:
         if self._graph is not None:
             return self._graph
+        self._hook_session_ref = SessionRef.from_session(session)
 
         # Bare one-shot completion (``is_bare_completion``): skip the
         # deepagents graph entirely — no base agent prompt, no built-in
@@ -1722,6 +1835,9 @@ class DeepAgentsRuntime:
             "backend": backend,
             "checkpointer": self._checkpointer,
             "middleware": [
+                # Hook bus (outermost, only while handlers listen): they see
+                # what the model sees.
+                *self._hooks_middlewares(),
                 InvalidToolCallPairMiddleware(),
                 ToolErrorTolerantMiddleware(),
                 WindowsPathVirtualizerMiddleware(self.workspace_root),
@@ -2147,6 +2263,7 @@ class DeepAgentsRuntime:
         )
         tools: list[Any] = []
         external_tool_names: set[str] = set()
+        tool_servers: dict[str, str] = {}
         for name, result in zip(names, results, strict=True):
             if isinstance(result, asyncio.CancelledError):
                 raise result
@@ -2154,11 +2271,15 @@ class DeepAgentsRuntime:
                 logger.warning("mcp server %r unavailable — skipping its tools: %s", name, result)
                 continue
             tools.extend(result)
+            for tool in result:
+                if isinstance(getattr(tool, "name", None), str):
+                    tool_servers[tool.name] = name
             if name not in {"harness", "harness_toolkit"}:
                 external_tool_names.update(
                     tool.name for tool in result if isinstance(getattr(tool, "name", None), str)
                 )
         self._external_mcp_tool_names = external_tool_names
+        self._mcp_tool_servers = tool_servers
         return tools
 
     # -- Tool conversion --
@@ -2174,16 +2295,12 @@ class DeepAgentsRuntime:
     def _to_structured_tool(self, tdef: ToolDef) -> StructuredTool:
         captured_handler = tdef.handler
         captured_workspace = self.workspace_root
-        captured_hooks = self.config.hooks
-        tool_name = tdef.name
 
         async def _coroutine(**kwargs: Any) -> str:
             assert captured_handler is not None
-            if captured_hooks and captured_hooks._handlers.get("before_tool"):
-                hr = await captured_hooks.fire("before_tool", tool_name=tool_name, input=kwargs)
-                if hr.action == "block":
-                    raise RuntimeError(hr.reason or f"Tool {tool_name} blocked by hook")
-            result: ToolResult = await captured_handler(
+            result: ToolResult = await call_tooldef(
+                self._hook_session(),
+                tdef,
                 kwargs,
                 ExecContext(
                     workspace=captured_workspace,
@@ -2191,10 +2308,6 @@ class DeepAgentsRuntime:
                     user_id=self._cur_user_id,
                 ),
             )
-            if captured_hooks and captured_hooks._handlers.get("after_tool"):
-                await captured_hooks.fire(
-                    "after_tool", tool_name=tool_name, input=kwargs, result=result
-                )
             return result.content
 
         return StructuredTool.from_function(
@@ -2222,7 +2335,7 @@ class DeepAgentsRuntime:
                     citation_protocol=citation_protocol,
                 )
             )
-        if citation_protocol and not any(
+        if (citation_protocol or self._hooks_middlewares()) and not any(
             subagent["name"] == GENERAL_PURPOSE_SUBAGENT["name"] for subagent in subagents
         ):
             # DeepAgents auto-creates ``general-purpose`` with a private
@@ -2231,20 +2344,29 @@ class DeepAgentsRuntime:
             # tools expose the same handles and the nested assistant knows the
             # same minimal protocol. Parent task instructions, Host plans, and
             # other session text are intentionally not copied.
+            # Also mirrored (without the protocol) while the hook bus listens to
+            # tool calls, so a sub-agent's tool calls reach the same handlers.
             general_purpose: SubAgent = {
                 "name": GENERAL_PURPOSE_SUBAGENT["name"],
                 "description": GENERAL_PURPOSE_SUBAGENT["description"],
                 "system_prompt": (
                     f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n{citation_protocol}"
+                    if citation_protocol
+                    else GENERAL_PURPOSE_SUBAGENT["system_prompt"]
                 ),
-                "middleware": [
-                    InvalidToolCallPairMiddleware(),
-                    WindowsPathVirtualizerMiddleware(self.workspace_root),
-                    CitationEvidenceCompactionMiddleware(
-                        evidence_registry=self._turn_evidence_registry,
-                        citation_artifact_emitter=self._emit_citation_evidence,
-                    ),
-                ],
+                "middleware": self._hooks_middlewares()
+                + (
+                    [
+                        InvalidToolCallPairMiddleware(),
+                        WindowsPathVirtualizerMiddleware(self.workspace_root),
+                        CitationEvidenceCompactionMiddleware(
+                            evidence_registry=self._turn_evidence_registry,
+                            citation_artifact_emitter=self._emit_citation_evidence,
+                        ),
+                    ]
+                    if citation_protocol
+                    else [WindowsPathVirtualizerMiddleware(self.workspace_root)]
+                ),
             }
             if skill_roots:
                 general_purpose["skills"] = list(skill_roots)
@@ -2276,7 +2398,10 @@ class DeepAgentsRuntime:
         # Subagent ``middleware`` is additive (appended to deepagents' default
         # stack), so always carry the Windows-path normalizer; the citation
         # pair stays gated on the protocol as before.
-        entry["middleware"] = [WindowsPathVirtualizerMiddleware(self.workspace_root)]
+        entry["middleware"] = [
+            *self._hooks_middlewares(),
+            WindowsPathVirtualizerMiddleware(self.workspace_root),
+        ]
         if citation_protocol:
             entry["middleware"] += [
                 InvalidToolCallPairMiddleware(),

@@ -1032,6 +1032,8 @@ class CodexRuntime:
 
         from src.core.mcp_bridge import register_session_toolkit
 
+        from src.core.hooks import SessionRef
+
         register_session_toolkit(
             session.id,
             self.toolkit,
@@ -1040,6 +1042,7 @@ class CodexRuntime:
                 session_id=session.id,
                 user_id=getattr(session, "user_id", "") or "",
             ),
+            hook_session=SessionRef.from_session(session),
         )
         self._registered_session_id = session.id
         return True

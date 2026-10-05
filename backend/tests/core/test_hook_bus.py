@@ -569,3 +569,21 @@ async def test_image_gate_applies_to_claude_sessions_on_image_less_models() -> N
         assert (
             await registry.dispatch(TOOL_CALL, session, read_png, core)
         ).content == "image bytes"
+
+
+async def test_errors_from_below_propagate_instead_of_rerunning() -> None:
+    registry = HookRegistry()
+    runs = 0
+
+    async def watcher(ctx, event, next_):
+        return await next_()
+
+    async def failing_core(event: HookEvent) -> ToolOutcome:
+        nonlocal runs
+        runs += 1
+        raise LookupError("core broke")
+
+    registry.register(TOOL_CALL, watcher, owner="u")
+    with pytest.raises(LookupError):
+        await registry.dispatch(TOOL_CALL, SESSION, _tool_data(command="x"), failing_core)
+    assert runs == 1

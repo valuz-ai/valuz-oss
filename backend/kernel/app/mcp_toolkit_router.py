@@ -38,6 +38,8 @@ from fastapi import FastAPI
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
+from src.core.hooks import SessionHooks, hook_registry
+from src.core.hooks.toolkit import call_tooldef
 from src.core.mcp_bridge import get_session_record
 
 logger = logging.getLogger(__name__)
@@ -93,7 +95,10 @@ def _build_router_server() -> Server:
                 # correct course — a wire-level failure would render as an
                 # opaque transport error instead.
                 return [TextContent(type="text", text=f"[error] {denial}")]
-        result = await tdef.handler(dict(arguments), rec.exec_context)
+        hooks = (
+            SessionHooks(hook_registry, rec.hook_session) if rec.hook_session is not None else None
+        )
+        result = await call_tooldef(hooks, tdef, dict(arguments), rec.exec_context)
         # is_error is content-side metadata, not a wire-level failure;
         # surface it as a prefix the way mcp_bridge does.
         prefix = "[error] " if result.is_error else ""

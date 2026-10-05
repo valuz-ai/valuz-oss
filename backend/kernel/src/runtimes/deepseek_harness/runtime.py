@@ -555,6 +555,7 @@ class DeepSeekHarnessRuntime:
         ]
         if not callable_tools:
             return False
+        from src.core.hooks import SessionRef
         from src.core.mcp_bridge import register_session_toolkit
         from src.core.tools import ExecContext
 
@@ -567,6 +568,7 @@ class DeepSeekHarnessRuntime:
                 user_id=getattr(session, "user_id", "") or "",
             ),
             tool_gate=self._plan_toolkit_gate,
+            hook_session=SessionRef.from_session(session),
         )
         self._registered_session_id = session.id
         return True
