@@ -307,6 +307,30 @@ export const HOST_SLOTS: readonly SlotSpec[] = [
     ],
   },
   {
+    name: "conversation.tool-call",
+    kind: "single",
+    region: "tool-card",
+    description:
+      "Around every tool card (generic or overridden); renderDefault() is the card.",
+    context: ["tool", "toolUseId", "toolName", "status", "sessionId"],
+  },
+  {
+    name: "conversation.message.user",
+    kind: "single",
+    region: "conversation",
+    description:
+      "Around the user's message bubble; renderDefault() is the bubble.",
+    context: ["turn", "turnId", "text", "sessionId"],
+  },
+  {
+    name: "conversation.message.assistant",
+    kind: "single",
+    region: "conversation",
+    description:
+      "Around each assistant message (one segment's text); renderDefault() is the text.",
+    context: ["turn", "turnId", "messageId", "sessionId"],
+  },
+  {
     name: "genui.artifact-binding",
     kind: "list",
     region: "tool-card",

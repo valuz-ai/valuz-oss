@@ -225,6 +225,11 @@ export function ConversationBody({
   const hasPlanActionsSlot = useHasSlot("conversation.plan.actions");
   const hasUserActionsSlot = useHasSlot("conversation.user-message.actions");
   const hasTurnTailSlot = useHasSlot("conversation.turn.tail");
+  // The single slots around each tool card and message. Unoccupied, the
+  // wrappers are not passed at all and every card / message renders as is.
+  const hasToolCallSlot = useHasSlot("conversation.tool-call");
+  const hasUserMessageSlot = useHasSlot("conversation.message.user");
+  const hasAssistantMessageSlot = useHasSlot("conversation.message.assistant");
   const hasEmptyHeroSlot = useHasSlot("conversation.empty.hero");
   const hasEmptyBrandMarkSlot = useHasSlot("conversation.empty.brand-mark");
   const hasEmptyExtraSlot = useHasSlot("conversation.empty.extra");
@@ -367,7 +372,11 @@ export function ConversationBody({
                     hasPlanActionsSlot
                       ? `plan-slot:${lastPlanTurnId ?? ""}:${selectedSessionId ?? ""}:${selectedSessionMode ?? ""}`
                       : "",
-                    hasUserActionsSlot || hasTurnTailSlot
+                    hasUserActionsSlot ||
+                    hasTurnTailSlot ||
+                    hasToolCallSlot ||
+                    hasUserMessageSlot ||
+                    hasAssistantMessageSlot
                       ? `row-slot:${selectedSessionId ?? ""}`
                       : "",
                   ]
@@ -492,6 +501,58 @@ export function ConversationBody({
                     }}
                   />
                 )}
+                wrapToolCall={
+                  hasToolCallSlot
+                    ? (tool, card) => (
+                        <SingleSlot
+                          name="conversation.tool-call"
+                          context={{
+                            tool,
+                            toolUseId: tool.id,
+                            toolName: tool.title,
+                            status: tool.status ?? "success",
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {card}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                wrapUserMessage={
+                  hasUserMessageSlot
+                    ? (turn, message) => (
+                        <SingleSlot
+                          name="conversation.message.user"
+                          context={{
+                            turn,
+                            turnId: turn.id,
+                            text: turn.userText,
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {message}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                wrapAssistantMessage={
+                  hasAssistantMessageSlot
+                    ? (turn, messageId, message) => (
+                        <SingleSlot
+                          name="conversation.message.assistant"
+                          context={{
+                            turn,
+                            turnId: turn.id,
+                            messageId,
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {message}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
                 // Remount on true session switches so the virtualizer's
                 // internal state starts fresh. The /conversation/new → real-id
                 // promotion keeps this key stable so the first sent turn

@@ -5,6 +5,12 @@ import {
   SESSION_TODOS_UPDATE_EVENT,
   type SessionEventDTO,
 } from "./sessions-api";
+import {
+  _resetUiBusForTests,
+  uiBus,
+  useUiBusStore,
+  type UiPushEvent,
+} from "../ui-bus";
 
 function makeFrame(
   eventType: string,
@@ -131,5 +137,39 @@ describe("sessionsApi.subscribeEvents — SSE wire parsing (two seq spaces)", ()
 
     expect(events).toHaveLength(1);
     expect(events[0]!.event_uid).toBeNull();
+  });
+
+  it("should hand ui.* pushes to the UI bus instead of the transcript", async () => {
+    _resetUiBusForTests();
+    const pushes: UiPushEvent[] = [];
+    const unsubscribe = uiBus.subscribe((push) => pushes.push(push));
+    const statusFrame =
+      'data: {"seq": 0, "event_type": "ui.status", "payload": {"owner": "p", "text": "indexing", "push_id": "x1"}, "timestamp": 7, "event_uid": null}\n\n';
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        statusFrame,
+        'data: {"seq": 4, "event_type": "message.user", "payload": {"text": "hi"}}\n\n',
+        // The same push from a second stream of the session: dropped.
+        statusFrame,
+      ]),
+    );
+
+    const events: SessionEventDTO[] = [];
+    await sessionsApi.subscribeEvents("s1", (event) => events.push(event));
+    unsubscribe();
+
+    expect(events.map((e) => e.event.event_type)).toEqual(["message.user"]);
+    expect(pushes).toEqual([
+      {
+        kind: "status",
+        sessionId: "s1",
+        payload: { owner: "p", text: "indexing" },
+        pushId: "x1",
+        timestamp: 7,
+      },
+    ]);
+    expect(useUiBusStore.getState().status).toEqual({
+      s1: { p: "indexing" },
+    });
   });
 });

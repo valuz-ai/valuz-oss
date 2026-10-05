@@ -3968,6 +3968,97 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /v1/ui/sites:
+    get:
+      summary: UI slots plugins draw into (the UI bus)
+      operationId: listUiSites
+      tags: [plugin-ui]
+      description: |
+        The frontend mounts a plugin surface only at these sites. `kind` follows
+        the UI slot's composition: `list` (items side by side), `single` (one
+        chain; `Default` stands for the host's own drawing), `keyed` (one tab
+        per `key`).
+      responses:
+        "200":
+          description: Active sites
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sites]
+                properties:
+                  sites:
+                    type: array
+                    items:
+                      type: object
+                      required: [site, kind]
+                      properties:
+                        site: {type: string}
+                        kind: {type: string, enum: [list, single, keyed]}
+                        key: {type: string}
+                        label: {type: string}
+
+  /v1/ui/render:
+    post:
+      summary: Element trees plugins draw at one UI slot instance
+      operationId: renderUiSite
+      tags: [plugin-ui]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UiRenderRequest"}
+      responses:
+        "200":
+          description: What to draw
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [site, items]
+                properties:
+                  site: {type: string}
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/UiItem"}
+
+  /v1/ui/action:
+    post:
+      summary: Deliver a button click / input change to the plugin that drew it
+      operationId: actOnUiSite
+      tags: [plugin-ui]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/UiRenderRequest"
+                - type: object
+                  required: [owner, action]
+                  properties:
+                    owner: {type: string}
+                    action: {type: string}
+                    value: {}
+                    generation: {type: integer}
+      responses:
+        "200":
+          description: |
+            `ok: false, stale: true` when the plugin redrew since the clicked
+            element was drawn — `items` then carries the fresh drawing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, items]
+                properties:
+                  ok: {type: boolean}
+                  stale: {type: boolean}
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/UiItem"}
+        "404": {description: No action handler for that owner at that site}
+
   /v1/projects/workspace-hooks/preview:
     post:
       summary: List the hook commands a folder would run on its own (before binding it)
@@ -5191,6 +5282,26 @@ components:
         type: string
         examples: [zh-CN, en-US]
   schemas:
+    UiRenderRequest:
+      type: object
+      required: [site]
+      properties:
+        site: {type: string, description: "A UI slot name, e.g. conversation.composer.dock"}
+        instance: {type: string, description: "Which occurrence (e.g. session:toolUseId)"}
+        session_id: {type: string, nullable: true}
+        context: {type: object, additionalProperties: true}
+    UiItem:
+      type: object
+      required: [owner, tree, generation]
+      properties:
+        owner: {type: string, description: "Plugin id that drew it"}
+        key: {type: string}
+        generation: {type: integer}
+        tree:
+          description: |
+            Element tree — a string, or {type, props?, children?} with type one of
+            Box, Text, Badge, Button, Input, Select, Link, Code, Markdown, Image,
+            Default (backend/valuz_agent/modules/plugin_ui/elements.py).
     WorkspaceHook:
       type: object
       description: One hook command found in a workspace folder (workspace trust, H0).

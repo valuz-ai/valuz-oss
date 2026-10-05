@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useEffect,
   useLayoutEffect,
@@ -525,8 +526,11 @@ type DisplayBlock =
 const SegmentDetails = ({
   items,
   inProgress = false,
+  wrapToolCall,
 }: {
   items: ProcessingItem[];
+  /** See ``TurnRowProps.wrapToolCall``. */
+  wrapToolCall?: TurnRowProps["wrapToolCall"];
   /** ``true`` when this is the turn's currently-running segment (the
    * agent is still firing tools inside it). Drives the shimmer sweep on
    * the summary phrase so the user sees the count is "still updating",
@@ -614,6 +618,10 @@ const SegmentDetails = ({
               >
                 {item.text}
               </div>
+            ) : wrapToolCall ? (
+              <Fragment key={`tool-${item.tool.id}`}>
+                {wrapToolCall(item.tool, <ToolCallCard tc={item.tool} />)}
+              </Fragment>
             ) : (
               <ToolCallCard key={`tool-${item.tool.id}`} tc={item.tool} />
             ),
@@ -1078,6 +1086,26 @@ interface TurnRowProps {
   onOpenAttachment?: (path: string) => void;
   /** See ``ConversationTurnListProps.startingRuntime``. */
   startingRuntime?: RuntimeStartLocation | null;
+  /**
+   * Wrap every tool card — the generic one and a ``renderToolCall`` override
+   * alike — e.g. in a host slot whose contributions may adjust or extend it.
+   * Omitted → each card renders as is. External state it depends on must be
+   * folded into ``turnActionsKey`` — same memo contract as
+   * ``renderTurnActions``.
+   */
+  wrapToolCall?: (tool: PrototypeToolCall, card: ReactNode) => ReactNode;
+  /** Wrap the user's message bubble. Same contract as ``wrapToolCall``. */
+  wrapUserMessage?: (turn: ConversationTurn, message: ReactNode) => ReactNode;
+  /**
+   * Wrap an assistant message (the text of one segment; ``messageId`` is the
+   * kernel message it belongs to, when known). Same contract as
+   * ``wrapToolCall``.
+   */
+  wrapAssistantMessage?: (
+    turn: ConversationTurn,
+    messageId: string | undefined,
+    message: ReactNode,
+  ) => ReactNode;
 }
 
 const TurnRow = memo(
@@ -1106,6 +1134,9 @@ const TurnRow = memo(
     onCitationClick,
     onOpenAttachment,
     startingRuntime,
+    wrapToolCall,
+    wrapUserMessage,
+    wrapAssistantMessage,
   }: TurnRowProps) {
     const { t } = useI18n();
     const inFlight = sending && isLatest;
@@ -1312,6 +1343,17 @@ const TurnRow = memo(
       : isStartingUp
         ? formatRuntimeStarting(startingRuntime, startupElapsedMs)
         : formatTurnElapsed(processedElapsedMs);
+    // Host wrappers (``wrapUserMessage`` / ``wrapAssistantMessage``); absent,
+    // the message element is returned untouched.
+    const wrapUser = (message: ReactNode): ReactNode =>
+      wrapUserMessage ? wrapUserMessage(turn, message) : message;
+    const wrapAssistant = (
+      messageId: string | undefined,
+      message: ReactNode,
+    ): ReactNode =>
+      wrapAssistantMessage
+        ? wrapAssistantMessage(turn, messageId, message)
+        : message;
     return (
       <div data-conversation-turn className="space-y-[26px]">
         {/* Host control rendered BEFORE the messages — a selection checkbox
@@ -1321,16 +1363,18 @@ const TurnRow = memo(
           <div className="flex items-start gap-2">
             {renderTurnLeading?.(turn, "user")}
             <div className="group flex min-w-0 flex-1 flex-col items-end gap-1">
-              {turn.userText ? (
-                <div className="max-w-[78%]">
-                  <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
-                    <UserMessageBody
-                      text={turn.userText}
-                      skillsBySlug={skillsBySlug}
-                    />
-                  </div>
-                </div>
-              ) : null}
+              {turn.userText
+                ? wrapUser(
+                    <div className="max-w-[78%]">
+                      <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
+                        <UserMessageBody
+                          text={turn.userText}
+                          skillsBySlug={skillsBySlug}
+                        />
+                      </div>
+                    </div>,
+                  )
+                : null}
               {turn.attachments?.map((att, i) => (
                 <FileUploadMessage
                   key={`att-${turn.id}-${i}`}
@@ -1443,7 +1487,13 @@ const TurnRow = memo(
                 // its original position after the turn ends — render BEFORE the
                 // fold check (like the compaction divider) so the auto-fold never
                 // hides it.
-                return <div key={`tool-${block.tool.id}`}>{block.node}</div>;
+                return (
+                  <div key={`tool-${block.tool.id}`}>
+                    {wrapToolCall
+                      ? wrapToolCall(block.tool, block.node)
+                      : block.node}
+                  </div>
+                );
               }
               // When the turn-level header is folded, hide every block
               // before ``trailingContentStart`` — that's the process work
@@ -1457,7 +1507,13 @@ const TurnRow = memo(
                 // the fold check, so it collapses away with the process trail
                 // once the turn ends; visible while running or when the user
                 // expands the turn.
-                return <div key={`tool-${block.tool.id}`}>{block.node}</div>;
+                return (
+                  <div key={`tool-${block.tool.id}`}>
+                    {wrapToolCall
+                      ? wrapToolCall(block.tool, block.node)
+                      : block.node}
+                  </div>
+                );
               }
               if (block.kind === "turn-diff-summary") {
                 return (
@@ -1490,36 +1546,40 @@ const TurnRow = memo(
                   // belongs to — the same identity the citation system uses.
                   data-assistant-message-id={block.messageId ?? undefined}
                 >
-                  {block.header !== null ? (
-                    <MarkdownContent
-                      content={block.header}
-                      isAnimating={animateHeader}
-                      isLocalFileHref={isLocalFileHref}
-                      onLocalFileLinkClick={onLocalFileLinkClick}
-                      citationBundle={block.citationBundle}
-                      messageId={block.messageId}
-                      onCitationClick={onCitationClick}
-                      citationDisplayOrderOverride={
-                        isTrailingAnswer
-                          ? trailingCitationContext.displayOrder
-                          : undefined
-                      }
-                      citationLookupBundleOverride={
-                        isTrailingAnswer
-                          ? trailingCitationContext.bundle
-                          : undefined
-                      }
-                      citationMessageIdByCitationIdOverride={
-                        isTrailingAnswer
-                          ? trailingCitationContext.messageIdByCitationId
-                          : undefined
-                      }
-                      showCitationSources={!isTrailingAnswer}
-                    />
-                  ) : null}
+                  {block.header !== null
+                    ? wrapAssistant(
+                        block.messageId,
+                        <MarkdownContent
+                          content={block.header}
+                          isAnimating={animateHeader}
+                          isLocalFileHref={isLocalFileHref}
+                          onLocalFileLinkClick={onLocalFileLinkClick}
+                          citationBundle={block.citationBundle}
+                          messageId={block.messageId}
+                          onCitationClick={onCitationClick}
+                          citationDisplayOrderOverride={
+                            isTrailingAnswer
+                              ? trailingCitationContext.displayOrder
+                              : undefined
+                          }
+                          citationLookupBundleOverride={
+                            isTrailingAnswer
+                              ? trailingCitationContext.bundle
+                              : undefined
+                          }
+                          citationMessageIdByCitationIdOverride={
+                            isTrailingAnswer
+                              ? trailingCitationContext.messageIdByCitationId
+                              : undefined
+                          }
+                          showCitationSources={!isTrailingAnswer}
+                        />,
+                      )
+                    : null}
                   {block.items.length > 0 ? (
                     <SegmentDetails
                       items={block.items}
+                      wrapToolCall={wrapToolCall}
                       // The agent is still firing tools inside the LAST
                       // segment of an in-flight turn. Earlier segments
                       // are already "closed" because the agent moved on
@@ -1694,6 +1754,12 @@ interface ConversationTurnListProps {
   renderTurnTail?: TurnRowProps["renderTurnTail"];
   /** See ``TurnRowProps.isToolCardFoldable``. */
   isToolCardFoldable?: (tool: PrototypeToolCall) => boolean;
+  /** See ``TurnRowProps.wrapToolCall``. */
+  wrapToolCall?: TurnRowProps["wrapToolCall"];
+  /** See ``TurnRowProps.wrapUserMessage``. */
+  wrapUserMessage?: TurnRowProps["wrapUserMessage"];
+  /** See ``TurnRowProps.wrapAssistantMessage``. */
+  wrapAssistantMessage?: TurnRowProps["wrapAssistantMessage"];
   /** See ``TurnRowProps.onRevealFile``. */
   onRevealFile?: (filePath: string) => void;
   /** See ``TurnRowProps.isLocalFileHref``. */
@@ -1794,6 +1860,9 @@ export function ConversationTurnList({
   renderUserMessageActions,
   renderTurnTail,
   isToolCardFoldable,
+  wrapToolCall,
+  wrapUserMessage,
+  wrapAssistantMessage,
   onRevealFile,
   isLocalFileHref,
   onLocalFileLinkClick,
@@ -1985,6 +2054,9 @@ export function ConversationTurnList({
                     onCitationClick={onCitationClick}
                     onOpenAttachment={onOpenAttachment}
                     startingRuntime={startingRuntime}
+                    wrapToolCall={wrapToolCall}
+                    wrapUserMessage={wrapUserMessage}
+                    wrapAssistantMessage={wrapAssistantMessage}
                   />
                 </div>
               </div>

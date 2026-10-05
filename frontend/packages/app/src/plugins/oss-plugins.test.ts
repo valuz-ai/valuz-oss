@@ -66,6 +66,7 @@ describe("the OSS plugin set", () => {
       "oss-marketplace",
       "oss-agent-plugins",
       "oss-dsh-plugins",
+      "oss-plugin-ui",
     ]);
     expect(
       ossPluginSpecs.filter((spec) => spec.required).map((s) => s.plugin.id),
@@ -125,6 +126,12 @@ describe("the OSS plugin set", () => {
   });
 });
 
+/**
+ * Optional plugins that register nothing at load: ``oss-plugin-ui`` mounts UI
+ * bus surfaces only once the backend announces plugin UI.
+ */
+const ON_DEMAND_IDS: ReadonlySet<string> = new Set(["oss-plugin-ui"]);
+
 describe.each(OPTIONAL_IDS)("optional plugin %s", (id) => {
   it("unloads cleanly: its pages go and the registry equals one that never loaded it", async () => {
     const host = await composeOss();
@@ -135,11 +142,14 @@ describe.each(OPTIONAL_IDS)("optional plugin %s", (id) => {
     const unloaded = captureOssComposition();
     const afterUnload = { ...lists(), blocks: blockKeys() };
 
-    // It contributed something that is gone now.
+    // It contributed something that is gone now — except a plugin that only
+    // mounts on demand, which must leave the registry untouched.
     const contributed =
       JSON.stringify(afterUnload) !==
       JSON.stringify({ ...full, blocks: fullBlocks });
-    expect(contributed, `${id} registered nothing`).toBe(true);
+    expect(contributed, `${id} registered nothing`).toBe(
+      !ON_DEMAND_IDS.has(id),
+    );
     expect(host.get(id)?.status).toBe("disposed");
 
     // …and what remains is exactly the composition without it.

@@ -12,11 +12,12 @@
  * See docs/design/event-delivery-unification.md §4 (control plane).
  */
 
+import { uiBus, uiPushFromFrame } from "../ui-bus";
 import { fetchEventSource } from "./fetch-event-source";
 
 let _apiBase =
-  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-    ?.VITE_API_BASE_URL || "http://localhost:8000";
+  (import.meta as unknown as Record<string, Record<string, string> | undefined>)
+    .env?.VITE_API_BASE_URL || "http://localhost:8000";
 
 /** Test/override hook — mirrors the other api modules' base setters. */
 export const setUserStreamApiBase = (url: string): void => {
@@ -75,7 +76,19 @@ const _onFrame = (frame: { event: string; data: string }): void => {
   } catch {
     return;
   }
-  if (typeof decoded.seq === "number" && decoded.seq > _cursor) _cursor = decoded.seq;
+  // UI bus pushes ride this stream live-only (seq 0): route them to the bus.
+  const push = uiPushFromFrame(
+    decoded.event_type ?? frame.event,
+    decoded.payload,
+    decoded.session_id ?? null,
+    decoded.timestamp,
+  );
+  if (push) {
+    uiBus.emit(push);
+    return;
+  }
+  if (typeof decoded.seq === "number" && decoded.seq > _cursor)
+    _cursor = decoded.seq;
   const control: ControlFrame = {
     seq: typeof decoded.seq === "number" ? decoded.seq : 0,
     eventType: decoded.event_type ?? frame.event,

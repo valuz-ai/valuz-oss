@@ -12,6 +12,7 @@ import { ossDshPluginsPlugin } from "./dsh-plugins";
 import { ossKnowledgePlugin } from "./knowledge";
 import { ossMarketplacePlugin } from "./marketplace";
 import { ossMemoryPlugin } from "./memory";
+import { ossPluginUiPlugin } from "./plugin-ui";
 import { ossSkillsPlugin } from "./skills";
 import { ossTasksPlugin } from "./tasks";
 
@@ -54,6 +55,7 @@ export const ossPluginSpecs: readonly OssPluginSpec[] = [
   { plugin: ossMarketplacePlugin, required: false },
   { plugin: ossAgentPluginsPlugin, required: false },
   { plugin: ossDshPluginsPlugin, required: false },
+  { plugin: ossPluginUiPlugin, required: false },
 ];
 
 /** The OSS plugins in canonical order — see {@link ossPluginSpecs}. */

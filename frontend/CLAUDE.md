@@ -71,6 +71,7 @@ Every OSS route, settings section, sidebar item and project panel is registered 
 | `oss-marketplace` | marketplace page |
 | `oss-agent-plugins` | the `/plugins` page + nav item |
 | `oss-dsh-plugins` | the DSH block of Settings → 扩展 |
+| `oss-plugin-ui` | nothing up front: mounts backend plugins' UI-bus surfaces (`/v1/ui`) in the slots the backend announces, plus toast / status / log / notice pushes |
 
 The **id of a frontend plugin is the id of its backend counterpart** (`oss-automations` here is `oss-automations` there). That is the whole pairing: at boot `loadOssPlugins()` reads `GET /v1/extensions/backend/state` (`{"inactive": [ids]}`, public) and does not load an optional plugin whose backend namesake is inactive; the extensions list shows it as 后端已停用. A read that fails (older backend, offline, 401) loads everything. On the desktop the backend usually is not up yet at that point, so `settleOssPlugins()` keeps asking and applies the state when it answers. Embedded surfaces with no registry entry of their own (notifications, citations, feedback, the IM-channel bindings in the agent page) stay in `oss-core`.
 

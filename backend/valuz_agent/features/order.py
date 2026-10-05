@@ -41,6 +41,9 @@ ROUTE_REFS: dict[str, str] = {
     # session exists and is bound by the turn that ships it.
     "attachments": f"{_ROUTES}.sessions:attachments_router",
     "stream": f"{_ROUTES}.stream:router",
+    # The UI bus (plugins draw element trees into UI slots) — system-level,
+    # owned by ``oss-core`` like the event stream it pushes on.
+    "plugin_ui": f"{_ROUTES}.plugin_ui:router",
     "skills": f"{_ROUTES}.skills:router",
     "docs": f"{_ROUTES}.docs:router",
     "automations": f"{_ROUTES}.automations:router",

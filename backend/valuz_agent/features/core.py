@@ -71,6 +71,7 @@ class CorePlugin(OssPlugin):
             "sessions",
             "attachments",
             "stream",
+            "plugin_ui",
             "extensions",
             "analytics",
             "resources",

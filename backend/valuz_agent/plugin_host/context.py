@@ -21,6 +21,7 @@ from valuz_agent.plugin_host.registry import (
     Ref,
     ToolGroup,
 )
+from valuz_agent.plugin_host.ui_api import UiApi
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -335,6 +336,8 @@ class PluginContext:
         #: The Valuz hook bus (kernel): handlers and ``/commands`` for every runtime.
         self.hooks = HooksApi(self)
         self.commands = CommandsApi(self)
+        #: The UI bus: draw element trees into UI slots, push toasts / status.
+        self.ui = UiApi(self)
 
     # -- plumbing ---------------------------------------------------------
 

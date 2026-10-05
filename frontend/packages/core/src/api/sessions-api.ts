@@ -252,6 +252,7 @@ import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { recordEntityOrigins } from "../edition/entity-origin";
 import { createFetchJson, ApiError } from "./fetch-json";
 import { invalidateRequestCache, requestRaw } from "./request";
+import { uiBus, uiPushFromFrame } from "../ui-bus";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -774,6 +775,20 @@ export const sessionsApi = {
                       if (typeof parsed.seq === "number") {
                         onHistoryCursor?.(parsed.seq);
                       }
+                      continue;
+                    }
+                    // UI bus pushes (``ui.*``) are for plugin surfaces, not
+                    // the transcript: route them to the bus.
+                    const push = uiPushFromFrame(
+                      parsed.event_type,
+                      parsed.payload,
+                      sessionId,
+                      typeof parsed.timestamp === "number"
+                        ? parsed.timestamp
+                        : undefined,
+                    );
+                    if (push) {
+                      uiBus.emit(push);
                       continue;
                     }
                     onEvent({

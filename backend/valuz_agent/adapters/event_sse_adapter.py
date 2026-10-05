@@ -33,6 +33,8 @@ from typing import Any
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.sse import shielded
+from valuz_agent.modules.plugin_ui.push import UiPush, ui_push_hub
+from valuz_agent.modules.plugin_ui.registry import ui_registry
 
 logger = logging.getLogger(__name__)
 
@@ -865,6 +867,12 @@ async def _follow_session_kernel(user_id: str, session_id: str, queue: asyncio.Q
         await asyncio.gather(drain, watch, return_exceptions=True)
 
 
+async def _pump_ui_pushes(user_id: str, session_id: str | None, queue: asyncio.Queue[Any]) -> None:
+    """Move UI bus pushes for this stream into its merge queue."""
+    async for push in ui_push_hub.subscribe(user_id, session_id):
+        await queue.put(push)
+
+
 async def iter_events_sse(
     session_id: str,
     user_id: str,
@@ -940,6 +948,9 @@ async def iter_events_sse(
             await asyncio.sleep(DB_BACKFILL_INTERVAL_SECONDS)
 
     pump_task = asyncio.create_task(_pump(), name=f"sse-pump-{session_id}")
+    ui_task = asyncio.create_task(
+        _pump_ui_pushes(owner_id, session_id, queue), name=f"sse-ui-{session_id}"
+    )
     # 0.0 → 连接后的第一个空闲 tick 立即回读一次(订阅竞态窗口)。
     last_db_poll = 0.0
     try:
@@ -989,6 +1000,20 @@ async def iter_events_sse(
                     last_emit = asyncio.get_event_loop().time()
                 continue
 
+            if isinstance(event, UiPush):
+                # UI bus push: live-only, seq 0 and no uid, so it never moves
+                # the client's resume cursor (see ``modules/plugin_ui/push``).
+                ui_frame = SessionEventFrame(
+                    seq=0,
+                    event_type=event.event_type,
+                    payload=event.wire_payload(),
+                    timestamp=event.timestamp,
+                    event_uid=None,
+                )
+                yield {"event": ui_frame.event_type, "data": ui_frame.to_sse_data()}
+                last_emit = asyncio.get_event_loop().time()
+                continue
+
             # Live event from the subscription — translate and yield.
             # Live ``seq`` is the KERNEL-LOCAL counter (LOCAL-authority store)
             # and is NEVER compared against — or written into — the durable
@@ -1014,10 +1039,12 @@ async def iter_events_sse(
                 last_emit = asyncio.get_event_loop().time()
     finally:
         pump_task.cancel()
-        try:
-            await pump_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        ui_task.cancel()
+        for task in (pump_task, ui_task):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1247,6 +1274,16 @@ async def iter_user_events_sse(
             await asyncio.sleep(CONTROL_BACKFILL_INTERVAL_SECONDS)
 
     pump_task = asyncio.create_task(_pump(), name=f"user-sse-pump-{user_id}")
+    ui_task = asyncio.create_task(
+        _pump_ui_pushes(user_id, None, queue), name=f"user-sse-ui-{user_id}"
+    )
+    if ui_registry.sites():
+        # Plugins draw UI: tell the client to load where (``/v1/ui/sites``).
+        # The frontend asks only when told, so a backend without plugin UI
+        # costs it nothing; every (re)connect repeats it.
+        queue.put_nowait(
+            UiPush(kind="invalidate", user_id=user_id, session_id=None, payload={"site": "*"})
+        )
     last_backfill = asyncio.get_event_loop().time()
     try:
         while True:
@@ -1289,6 +1326,18 @@ async def iter_user_events_sse(
             # shared seen-set, in both directions (a uid delivered live is
             # skipped when the backfill floor re-reads it, and vice versa).
             # Uid-less live frames (legacy kernels) always pass through.
+            if isinstance(event, UiPush):
+                # Global UI bus push (no session): live-only, seq 0.
+                ui_frame = UserEventFrame(
+                    seq=0,
+                    event_type=event.event_type,
+                    session_id="",
+                    payload=event.wire_payload(),
+                    timestamp=event.timestamp,
+                )
+                yield {"event": ui_frame.event_type, "data": ui_frame.to_sse_data()}
+                last_emit = asyncio.get_event_loop().time()
+                continue
             live_frame = _control_frame_from_live(event)
             if live_frame is None:
                 continue
@@ -1298,10 +1347,12 @@ async def iter_user_events_sse(
             last_emit = asyncio.get_event_loop().time()
     finally:
         pump_task.cancel()
-        try:
-            await pump_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        ui_task.cancel()
+        for task in (pump_task, ui_task):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
 
 __all__ = [

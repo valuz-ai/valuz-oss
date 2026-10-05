@@ -882,3 +882,107 @@ describe("ConversationTurnList host extension props", () => {
     });
   });
 });
+
+describe("ConversationTurnList — host wrappers around tool cards and messages", () => {
+  const turn: ConversationTurn = {
+    id: "turn-wrap",
+    userMessageSeq: 9,
+    userText: "please check",
+    failedMessage: null,
+    blocks: [
+      { kind: "thinking", text: "thinking first", elapsedMs: 1000 },
+      {
+        kind: "tool",
+        tool: {
+          id: "tool-generic",
+          kind: "bash",
+          title: "generic-tool",
+          status: "success",
+          output: "ok",
+        },
+      },
+      {
+        kind: "tool",
+        tool: {
+          id: "tool-custom",
+          kind: "other",
+          title: "custom-tool",
+          status: "success",
+        },
+      },
+      { kind: "assistant", text: "final answer", messageId: "m1" },
+    ],
+  };
+
+  const renderWith = (
+    props: Partial<Parameters<typeof ConversationTurnList>[0]> = {},
+  ) => {
+    virtualState.start = 0;
+    const scrollContainerRef = createRef<HTMLDivElement>();
+    return render(
+      <div ref={scrollContainerRef}>
+        <ConversationTurnList
+          turns={[turn]}
+          scrollContainerRef={scrollContainerRef}
+          sending={false}
+          loading={false}
+          error={null}
+          renderToolCall={(tool) =>
+            tool.id === "tool-custom" ? <div>custom card</div> : null
+          }
+          {...props}
+        />
+      </div>,
+    );
+  };
+
+  const expandProcess = () => {
+    fireEvent.click(
+      screen.getAllByRole("button", { name: processedElapsedName })[0]!,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /调用了 1 次工具/ }));
+  };
+
+  it("wraps every tool card, the user bubble and each assistant message", () => {
+    renderWith({
+      wrapToolCall: (tool, card) => (
+        <div data-testid={`wrap-tool-${tool.id}`}>{card}</div>
+      ),
+      wrapUserMessage: (wrapped, message) => (
+        <div data-testid={`wrap-user-${wrapped.id}`}>{message}</div>
+      ),
+      wrapAssistantMessage: (_turn, messageId, message) => (
+        <div data-testid={`wrap-assistant-${messageId}`}>{message}</div>
+      ),
+    });
+    expandProcess();
+
+    expect(screen.getByTestId("wrap-user-turn-wrap").textContent).toContain(
+      "please check",
+    );
+    expect(screen.getByTestId("wrap-assistant-m1").textContent).toContain(
+      "final answer",
+    );
+    expect(screen.getByTestId("wrap-tool-tool-custom").textContent).toBe(
+      "custom card",
+    );
+    expect(
+      screen.getByTestId("wrap-tool-tool-generic").textContent,
+    ).toContain("generic-tool");
+  });
+
+  it("renders exactly as without wrappers when they pass the content through", () => {
+    const bare = renderWith();
+    expandProcess();
+    const bareHtml = bare.container.innerHTML;
+    bare.unmount();
+
+    const passthrough = renderWith({
+      wrapToolCall: (_tool, card) => card,
+      wrapUserMessage: (_turn, message) => message,
+      wrapAssistantMessage: (_turn, _id, message) => message,
+    });
+    expandProcess();
+    expect(passthrough.container.innerHTML).toBe(bareHtml);
+  });
+});
