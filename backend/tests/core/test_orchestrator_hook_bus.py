@@ -70,6 +70,7 @@ class _FakeRuntime:
         self.log = log
         self.sink = sink
         self.prompts: list[str] = []
+        self.contexts: list[str] = []
         self.has_live_background_tasks = False
 
     @property
@@ -82,6 +83,7 @@ class _FakeRuntime:
     async def run(self, session: Session, user_message: UserMessage) -> None:
         self.log.append("runtime.run")
         self.prompts.append(user_message.text)
+        self.contexts.append(user_message.additional_context)
         await self.sink.emit(Event(type="assistant_message", data={"text": "model answer"}))
         session.status = "idle"
 
@@ -171,8 +173,15 @@ async def test_prompt_submit_rewrites_and_adds_context(tmp_path, monkeypatch) ->
         return PromptDecision(text=event.get("text").upper(), context=("(be brief)",))
 
     hook_registry.register(PROMPT_SUBMIT, rewrite, owner=OWNER)
-    await orch.run_turn("owner-1", session.id, UserMessage(text="hello"))
-    assert runtimes[0].prompts == ["HELLO\n\n(be brief)"]
+    await orch.run_turn(
+        "owner-1", session.id, UserMessage(text="hello", additional_context="(host note)")
+    )
+    # The context reaches the model as additional context, never as words the
+    # user typed: the transcript shows the prompt alone.
+    assert runtimes[0].prompts == ["HELLO"]
+    assert runtimes[0].contexts == ["(host note)\n\n(be brief)"]
+    shown = [e.data.get("text") for e in _store.appended if e.type == "user_message"]
+    assert shown and all("(be brief)" not in str(text) for text in shown)
 
 
 async def test_prompt_submit_drop_never_reaches_the_runtime(tmp_path, monkeypatch) -> None:

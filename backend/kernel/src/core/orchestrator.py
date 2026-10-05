@@ -1494,11 +1494,19 @@ async def _dispatch_prompt_submit(
         return user_message, None
     if decision.drop:
         return user_message, decision.drop
-    text = decision.text
+    changes: dict[str, str] = {}
+    if decision.text != user_message.text:
+        changes["text"] = decision.text
     if decision.context:
-        text = "\n\n".join([text, *decision.context])
-    if text != user_message.text:
-        user_message = dataclasses.replace(user_message, text=text)
+        # Context is for the model, not words the user typed: it rides the
+        # message's ``additional_context`` block (every runtime renders it
+        # through ``build_user_prompt``), so the transcript shows the prompt
+        # alone — Claude Code's ``additionalContext`` behaves the same way.
+        changes["additional_context"] = "\n\n".join(
+            part for part in (user_message.additional_context, *decision.context) if part
+        )
+    if changes:
+        user_message = dataclasses.replace(user_message, **changes)
     return user_message, None
 
 
