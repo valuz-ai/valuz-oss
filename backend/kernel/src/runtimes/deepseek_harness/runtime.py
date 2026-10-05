@@ -811,6 +811,18 @@ class DeepSeekHarnessRuntime:
             )
 
     async def _ensure_process(self, session: Session) -> None:
+        # One spawn at a time: opening an idle session warms the runtime
+        # (``prepare``) while the user may already be sending. Without the
+        # lock the second caller saw the half-started process (client set,
+        # native session not yet — the MCP grace sits between the two) and
+        # the turn failed. Now it waits for the spawn and reuses it.
+        lock = getattr(self, "_process_lock", None)
+        if lock is None:
+            lock = self._process_lock = asyncio.Lock()
+        async with lock:
+            await self._ensure_process_locked(session)
+
+    async def _ensure_process_locked(self, session: Session) -> None:
         if self._client is not None and self._client.is_running:
             return
         t_init = time.monotonic()

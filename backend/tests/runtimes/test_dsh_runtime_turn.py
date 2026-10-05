@@ -107,6 +107,44 @@ async def test_mcp_sessions_get_a_cold_start_grace(tmp_path: Path, monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_a_turn_sent_while_the_runtime_warms_up_waits_for_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Opening an idle session warms its runtime (``prepare``); a message sent
+    before that spawn finishes must wait for it, not find a half-started
+    process (client set, native session not yet) and fail the turn."""
+    from src.core.types import McpHttpServerConfig
+    from src.runtimes.deepseek_harness import runtime as runtime_mod
+
+    starts: list[int] = []
+    real_start = runtime_mod.DshRuntimeClient.start
+
+    async def counting_start(self) -> None:  # noqa: ANN001
+        starts.append(1)
+        await real_start(self)
+
+    monkeypatch.setattr(runtime_mod.DshRuntimeClient, "start", counting_start)
+    # The MCP readiness grace is the window the race used to fall into.
+    monkeypatch.setenv("VALUZ_DSH_MCP_READY_GRACE_SEC", "0.3")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    session.mcp_servers = (McpHttpServerConfig(name="harness", url="http://x/mcp"),)
+    try:
+        warming = asyncio.create_task(runtime.prepare(session))
+        await asyncio.sleep(0.15)  # spawned, inside the grace
+        await runtime.run(session, UserMessage(text="what is 6*7?"))
+        await warming
+    finally:
+        await runtime.close()
+
+    assert isinstance(session.stop_reason, EndTurn)
+    assert "error" not in sink.types()
+    assert len(starts) == 1
+
+
+@pytest.mark.asyncio
 async def test_completed_turn_maps_events_and_stop_reason(tmp_path: Path) -> None:
     (tmp_path / "ws").mkdir()
     sink = _CollectSink()
