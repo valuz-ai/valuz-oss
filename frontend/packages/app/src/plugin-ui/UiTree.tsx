@@ -106,6 +106,7 @@ function UiInput({
   if (props.multiline === true) {
     return (
       <Textarea
+        name={action}
         value={value}
         placeholder={str(props.placeholder)}
         disabled={handlers.busy}
@@ -116,6 +117,7 @@ function UiInput({
   }
   return (
     <Input
+      name={action}
       value={value}
       placeholder={str(props.placeholder)}
       disabled={handlers.busy}
@@ -214,6 +216,7 @@ function renderElement(
       return (
         <NativeSelect
           key={key}
+          name={action}
           defaultValue={str(props.value) ?? ""}
           disabled={handlers.busy || !action}
           onChange={(event) => {
