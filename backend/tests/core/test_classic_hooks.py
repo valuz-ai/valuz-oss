@@ -438,3 +438,56 @@ def test_local_workstations_only(
 
     monkeypatch.setenv("VALUZ_CLASSIC_HOOKS_ENABLED", "1")
     assert hook_registry.wants(TOOL_CALL, _ref(tmp_path))
+
+
+# -- Codex: native, once Valuz passes on the workspace trust ----------------------
+
+
+def _codex_session(root: Path, *, trust: str | None = None) -> Session:
+    return Session(
+        id="codex-1",
+        agent_config=AgentConfig(id="a", name="t"),
+        cwd=str(root),
+        runtime_provider="codex",
+        metadata={"valuz": {WORKSPACE_TRUST_METADATA_KEY: trust}} if trust else {},
+    )
+
+
+def _codex_trust(session: Session) -> tuple[list[str], dict[str, Any] | None]:
+    from src.runtimes.codex.runtime import CodexRuntime, _build_config_overrides
+
+    overrides = [o for o in _build_config_overrides(session, None, "m") if "trust_level" in o]
+    runtime = CodexRuntime.__new__(CodexRuntime)
+    runtime.model = "m"
+    runtime.workspace_root = session.cwd
+    return overrides, runtime._build_thread_kwargs(session).get("config")
+
+
+def test_codex_runs_a_trusted_workspaces_own_hooks(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    project = tmp_path / "app"
+    _settings(project, {"PreToolUse": _group("echo pre", matcher="Bash")}, ".codex/hooks.json")
+
+    overrides, config = _codex_trust(_codex_session(project))
+    # Codex reads a project's .codex/ only when the project (keyed by its git
+    # root) is trusted, and runs only hooks reviewed in its own TUI.
+    assert overrides == [
+        f'projects."{project}".trust_level="trusted"',
+        f'projects."{tmp_path}".trust_level="trusted"',
+    ]
+    assert config == {"bypass_hook_trust": True}
+
+
+def test_codex_trust_is_not_widened_without_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No Codex-format hooks (Claude-format ones are Claude's business).
+    _settings(tmp_path, {"PreToolUse": _group("echo pre")})
+    assert _codex_trust(_codex_session(tmp_path)) == ([], None)
+
+    _settings(tmp_path, {"PreToolUse": _group("echo pre")}, ".codex/hooks.json")
+    # Untrusted workspace (H0).
+    assert _codex_trust(_codex_session(tmp_path, trust="untrusted")) == ([], None)
+    # Not a local workstation.
+    monkeypatch.setenv("IS_SANDBOX", "1")
+    assert _codex_trust(_codex_session(tmp_path)) == ([], None)

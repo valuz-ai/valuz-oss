@@ -43,6 +43,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import quote_plus
 
@@ -85,6 +86,7 @@ from src.core.hooks import (
     ToolRef,
     native_tool_ref,
 )
+from src.core.hooks.classic.config import classic_hooks_allowed, has_dialect_hooks
 from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
@@ -1165,6 +1167,10 @@ class CodexRuntime:
             kwargs["cwd"] = self.workspace_root
         if session.instructions:
             kwargs["developer_instructions"] = session.instructions
+        if _hook_trust_roots(session):
+            # The workspace's hooks were reviewed in Valuz (H0); see
+            # ``_build_config_overrides``.
+            kwargs["config"] = {"bypass_hook_trust": True}
         return kwargs
 
     @staticmethod
@@ -2146,6 +2152,14 @@ def _build_config_overrides(
     # (``.codex/hooks.json`` / ``[hooks]``) must not run.
     if is_workspace_untrusted(session):
         overrides.append("features.hooks=false")
+    # ... and a trusted one's do. Codex reads a project's ``.codex/`` only
+    # for a project trusted in ITS config, and then runs only hooks the user
+    # reviewed in its own TUI, which Valuz never shows — so neither happened
+    # and the hooks silently never ran. The H0 confirmation (it lists every
+    # hook command) stands in for both: the project is trusted here and the
+    # thread starts with ``bypass_hook_trust`` (``_build_thread_kwargs``).
+    for root in _hook_trust_roots(session):
+        overrides.append(f'projects.{_toml_key(root)}.trust_level="trusted"')
 
     # Model-capability image gate (docs/design/model-capability): a model
     # that explicitly declares no image input gets no ``view_image`` tool at
@@ -2386,6 +2400,30 @@ def _toml_array(values: tuple[str, ...] | list[str]) -> str:
 
 
 _BARE_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+
+
+def _hook_trust_roots(session: Session) -> tuple[str, ...]:
+    """The paths Codex must treat as trusted projects so it runs the
+    workspace's own Codex hooks: none unless the workspace is trusted (H0),
+    this is a local workstation, and it has Codex-format hooks. Codex keys
+    project trust by the git root when there is one, so that is trusted too.
+    """
+    cwd = session.cwd
+    if (
+        not cwd
+        or is_workspace_untrusted(session)
+        or is_bare_completion(session)
+        or not classic_hooks_allowed()
+        or not has_dialect_hooks(cwd, "codex")
+    ):
+        return ()
+    roots = [cwd]
+    for parent in (Path(cwd), *Path(cwd).parents):
+        if (parent / ".git").exists():
+            if str(parent) != cwd:
+                roots.append(str(parent))
+            break
+    return tuple(roots)
 
 
 def _toml_key(key: str) -> str:

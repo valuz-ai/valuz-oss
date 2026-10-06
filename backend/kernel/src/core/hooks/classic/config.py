@@ -254,6 +254,14 @@ def workspace_hooks_signature(cwd: str) -> tuple[tuple[str, int, int], ...]:
     return _signature(Path(cwd)) if cwd else ()
 
 
+def has_dialect_hooks(cwd: str, dialect: Dialect) -> bool:
+    """Whether the workspace has runnable hooks in *dialect*'s own files."""
+    if not cwd:
+        return False
+    sources = CLAUDE_SOURCES if dialect == "claude" else CODEX_SOURCES
+    return _load_set(Path(cwd), sources, dialect) is not None
+
+
 def load_workspace_hooks(cwd: str) -> WorkspaceHooks | None:
     """The workspace's classic hooks, or ``None`` when it has none.
 
@@ -284,6 +292,7 @@ __all__ = [
     "MatcherGroup",
     "WorkspaceHooks",
     "classic_hooks_allowed",
+    "has_dialect_hooks",
     "load_workspace_hooks",
     "matches",
     "workspace_hooks_signature",
