@@ -122,7 +122,8 @@ const COMMANDS = {
       for (const file of result.files) out(`  ${path.relative(result.dir, file)}`);
       out("");
       out("next:");
-      out(`  cd ${path.relative(process.cwd(), result.dir) || "."}`);
+      const rel = path.relative(process.cwd(), result.dir);
+      out(`  cd ${!rel ? "." : rel.startsWith("../..") ? result.dir : rel}`);
       out("  valuz-plugin build && valuz-plugin test && valuz-plugin validate");
       out("  valuz-plugin dev          # link into the running Valuz");
       return 0;

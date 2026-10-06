@@ -30,7 +30,7 @@ export default definePlugin({
 | 方法 | 做什么 |
 |---|---|
 | `ctx.registry.slot(name, { id, component, priority?, key?, label? })` | 往公开插槽贡献组件。`id` 是本地 id（宿主加 `x:<插件 id>:` 前缀）；`priority` 小的先渲染；**keyed 插槽**（`context-panel.tabs`、`project.detail.tabs`）必须给 `key`，`label` 是标签标题（locales 的键或纯文本，默认插件名） |
-| `pageRoute(ctx, { id, path, title, description?, icon? }, Component, { nav? })` | 新页面。`path` 必须是 `/x/<插件 id>` 或其子路径；`nav: true` 同时加侧栏入口；`title` 是 locales 的键或纯文本；`icon` 是侧栏图标 id（如 `puzzle`、`star`） |
+| `pageRoute(ctx, { id, path, title, description?, icon? }, Component, { nav? })` | 新页面。`path` 必须是 `/x/<插件 id>` 或其子路径；`nav: true` 同时加侧栏入口；`title` 是 locales 的键或纯文本；`icon` 是侧栏图标 id，可用：assistant、knowledge、skills、scheduled、playbooks、activity、settings、agents、connectors、plugins、marketplace、projectTasks、star、compass、watchlist、portfolio、dashboard、globe（未知 id 显示齿轮，默认 plugins） |
 | `settingsPage(ctx, { id, title, description?, icon? }, Component)` | 新设置分区，放在「扩展」分组下 |
 | `sidebarItem(ctx, { id, label, icon?, path })` | 单独加一个侧栏入口，`path` 必须指向插件自己的页面 |
 | `slotComponent(Component)` | 把普通组件当插槽组件用（只是类型适配） |

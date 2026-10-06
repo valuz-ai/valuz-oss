@@ -284,7 +284,9 @@ export function adaptThirdPartyPlugin(
           id,
           path: route.path,
           label: text(route.title),
-          description: route.description ?? "",
+          // The host translates ``description`` unconditionally: never hand
+          // it an empty key.
+          description: text(route.description || route.title),
           layout: "project",
           showInNav: false,
           component: wrap(component, `page ${route.id}`),
@@ -302,7 +304,7 @@ export function adaptThirdPartyPlugin(
         host.registry.settingsSection({
           id,
           label: text(section.title),
-          description: text(section.description),
+          description: text(section.description || section.title),
           icon: section.icon ?? "puzzle",
           group: { ...EXTENSIONS_SETTINGS_GROUP },
           component: wrap(component, `settings ${section.id}`),
@@ -319,7 +321,7 @@ export function adaptThirdPartyPlugin(
           href: navItem.path,
           position: "top",
           navGroup: "library",
-          icon: navItem.icon ?? "puzzle",
+          icon: navItem.icon ?? "plugins",
           edition: "personal",
         });
       },

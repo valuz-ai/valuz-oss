@@ -471,6 +471,11 @@ class ThirdPartyService:
                 return {"generation": generation}
             await self._store.wait_for_change(min(DEV_POLL_SECONDS, remaining))
 
+    async def bump_generation(self) -> int:
+        """Tell every renderer to re-list: something the statuses depend on
+        changed without touching the installed list (an overlay's policy sync)."""
+        return await self._store.bump_generation()
+
     async def set_safe_mode(self, enabled: bool, reason: str | None = None) -> dict[str, Any]:
         self._require_local()
         return {"safe_mode": await self._store.set_safe_mode(enabled, reason)}

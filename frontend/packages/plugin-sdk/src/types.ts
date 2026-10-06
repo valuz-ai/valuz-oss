@@ -88,8 +88,17 @@ export interface ToolCardSlotProps {
   tool: PublicToolCall;
   toolUseId: string;
   status: string;
+  /** The call's arguments; a JSON string from the runtime arrives parsed. */
   input: unknown;
+  /** The result as the runtime reported it (a string, MCP content blocks …). */
   output: unknown;
+  /** The result's text: MCP ``text`` blocks joined by newlines, or the string itself. */
+  outputText: string;
+  /**
+   * The result as data: MCP ``structuredContent`` when present, else the first
+   * text block parsed as JSON; ``null`` while running or when it isn't JSON.
+   */
+  outputJson: unknown;
   thinking: unknown;
   hostRef: Record<string, unknown> | null;
 }
@@ -216,7 +225,10 @@ export interface RouteSpec {
   /** A key of the plugin's ``locales``, or plain text. */
   title: string;
   description?: string;
-  /** A sidebar icon id (``puzzle``, ``star``, …). */
+  /**
+   * Sidebar icon id (with ``nav: true``): assistant, knowledge, skills, scheduled, playbooks, activity, settings, agents, connectors, plugins, marketplace, projectTasks, star, compass, watchlist, portfolio, dashboard, globe.
+   * Unknown ids show a gear; the default is ``plugins``.
+   */
   icon?: string;
 }
 
@@ -230,6 +242,7 @@ export interface SettingsSectionSpec {
 export interface NavItemSpec {
   id: string;
   label: string;
+  /** Sidebar icon id — same set as ``RouteSpec.icon``; default ``plugins``. */
   icon?: string;
   /** Must point at one of the plugin's own pages (``/x/<plugin id>…``). */
   path: string;

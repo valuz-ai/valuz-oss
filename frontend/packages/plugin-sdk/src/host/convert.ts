@@ -96,13 +96,55 @@ export function toResource(type: string, raw: unknown): PublicResource {
   };
 }
 
+/** A JSON object/array arriving as text (runtimes hand tool I/O over as strings). */
+export function parseJsonText(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text || (text[0] !== "{" && text[0] !== "[")) return value;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+/** ``outputText`` / ``outputJson`` of a tool card (see ``ToolCardSlotProps``). */
+export function toolOutputViews(raw: unknown): { outputText: string; outputJson: unknown } {
+  const parsed = parseJsonText(raw);
+  const record =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Json)
+      : null;
+  const blocks = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(record?.content)
+      ? (record?.content as unknown[])
+      : null;
+  const texts = blocks
+    ? blocks.flatMap((block) => {
+        const b = rec(block);
+        return b.type === "text" && typeof b.text === "string" ? [b.text] : [];
+      })
+    : typeof parsed === "string"
+      ? [parsed]
+      : [];
+  let outputJson: unknown =
+    record?.structuredContent ?? record?.structured_content ?? null;
+  if (outputJson === null && texts.length > 0) {
+    const first = parseJsonText(texts[0]);
+    if (first !== texts[0]) outputJson = first;
+  }
+  if (outputJson === null && record && !blocks) outputJson = record;
+  return { outputText: texts.join("\n"), outputJson };
+}
+
 export function toToolCall(raw: unknown): PublicToolCall {
   const t = rec(raw);
   return {
     id: String(t.id ?? ""),
     name: String(t.name ?? ""),
     status: String(t.status ?? ""),
-    input: t.input ?? null,
+    input: parseJsonText(t.input ?? null),
     output: t.output ?? null,
   };
 }
@@ -128,8 +170,9 @@ export function adaptSlotProps(
       tool: toToolCall(host.tool),
       toolUseId: String(host.toolUseId ?? ""),
       status: String(host.status ?? ""),
-      input: host.input ?? null,
+      input: parseJsonText(host.input ?? null),
       output: host.output ?? null,
+      ...toolOutputViews(host.output ?? null),
       thinking: host.thinking ?? null,
       hostRef:
         host.hostRef && typeof host.hostRef === "object"

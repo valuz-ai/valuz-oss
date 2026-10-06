@@ -36,7 +36,7 @@ describe("createTestHost", () => {
         id: "x:acme.dashboard:home",
         path: "/x/acme.dashboard",
         label: "ext.acme.dashboard.title",
-        description: "",
+        description: "ext.acme.dashboard.title",
         layout: "project",
         showInNav: false,
         component: "[fn]",
@@ -44,7 +44,7 @@ describe("createTestHost", () => {
       },
     ]);
     expect(capture.settings[0]).toMatchObject({ id: "x:acme.dashboard:prefs", group: { id: "extensions" } });
-    expect(capture.nav[0]).toMatchObject({ id: "x:acme.dashboard:home", href: "/x/acme.dashboard", icon: "puzzle" });
+    expect(capture.nav[0]).toMatchObject({ id: "x:acme.dashboard:home", href: "/x/acme.dashboard", icon: "plugins" });
   });
 
   it("renders slots, pages and settings to static markup", async () => {

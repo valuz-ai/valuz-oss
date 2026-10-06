@@ -67,11 +67,14 @@ passing is not "done": the developer confirms the UI inside Valuz.
 
 ```tsx
 ctx.registry.slot("project.detail.tabs", { id: "board", key: "board", label: "board.title", component: slotComponent(Board) });
-pageRoute(ctx, { id: "home", path: "/x/__PLUGIN_ID__", title: "home.title", icon: "puzzle" }, HomePage, { nav: true });
+pageRoute(ctx, { id: "home", path: "/x/__PLUGIN_ID__", title: "home.title", icon: "plugins" }, HomePage, { nav: true });
 settingsPage(ctx, { id: "settings", title: "settings.title" }, SettingsSection);
-sidebarItem(ctx, { id: "home-link", label: "home.title", icon: "puzzle", path: "/x/__PLUGIN_ID__" });
+sidebarItem(ctx, { id: "home-link", label: "home.title", icon: "plugins", path: "/x/__PLUGIN_ID__" });
 ctx.effect(() => { const timer = setInterval(tick, 60_000); return () => clearInterval(timer); });
 ```
+
+Sidebar icon ids: assistant, knowledge, skills, scheduled, playbooks, activity, settings, agents, connectors, plugins, marketplace, projectTasks, star, compass, watchlist, portfolio, dashboard, globe (unknown ids show a gear).
+
 
 `title` / `label` are keys of your locales (or plain text). Slot components get
 the slot's props: type them as `SlotProps<"slot.name">`.
@@ -158,6 +161,18 @@ Errors are `ValuzApiError { status, code, message }`.
 
   Trigger it with `valuz.automations.run("daily-summary", { projectId })` and read
   the result with `waitRun` / `latestRun` (needs `automations:run`).
+
+  A `python` script defines `run(ctx)`: `ctx["input"]` is the run input (matching
+  `input`), `ctx["trigger"]["type"]` says how it started; it returns
+  `{"artifact": {...}}` — that object is the run's output (`run.output`).
+  Valuz runs it with the bundled `valuz-python` (standard library plus the
+  bundled skills' packages; no `pip install`):
+
+  ```python
+  def run(ctx):
+      project_id = (ctx.get("input") or {}).get("projectId")
+      return {"artifact": {"projectId": project_id, "summary": "…"}}
+  ```
 
 ## Testing
 
