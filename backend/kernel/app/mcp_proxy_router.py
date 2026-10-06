@@ -68,7 +68,16 @@ def _build_server() -> Server:
         async def call(args: dict[str, Any]) -> Any:
             return await upstream.call_tool(name, args)
 
-        return await dispatch_mcp_call(proxied.hooks, upstream.name, name, arguments or {}, call)
+        return await dispatch_mcp_call(
+            proxied.hooks,
+            upstream.name,
+            name,
+            arguments or {},
+            call,
+            # Codex and DSH only ever see the content; the citation
+            # projection needs the source metadata alongside it.
+            carry_source_metadata=True,
+        )
 
     @server.list_resources()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_resources() -> list[Resource]:

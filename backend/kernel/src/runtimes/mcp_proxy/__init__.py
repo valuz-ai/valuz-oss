@@ -11,6 +11,7 @@ from src.runtimes.mcp_proxy.dispatch import (
 from src.runtimes.mcp_proxy.registry import (
     MCP_PROXY_MOUNT_PATH,
     get_session_proxy,
+    proxy_session_mcp,
     proxy_url,
     register_session_proxy,
     unregister_session_proxy,
@@ -24,6 +25,7 @@ __all__ = [
     "get_session_proxy",
     "mcp_event_data",
     "outcome_from_result",
+    "proxy_session_mcp",
     "proxy_url",
     "register_session_proxy",
     "result_from_outcome",

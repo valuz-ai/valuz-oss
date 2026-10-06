@@ -33,6 +33,8 @@ from src.core.citation import (
     compact_citation_tool_content,
     private_citation_tool_content,
 )
+from src.core.citation_mcp_projection import forget_session as forget_citation_projections
+from src.core.citation_mcp_projection import take_projection
 from src.core.claim_evidence_resolution import SemanticVerifierPort
 from src.core.claim_normalization import ClaimNormalizerPort
 from src.core.events import Event, EventSink, GlobalEventTap
@@ -643,9 +645,11 @@ class _MessageObserverSink:
         task_coverage_enabled: bool = False,
         private_tool_patterns: tuple[str, ...] = (),
         mode_persist: Callable[[str], Awaitable[None]] | None = None,
+        session_id: str = "",
     ) -> None:
         self._inner = inner
         self._message_id = message_id
+        self._session_id = session_id
         self._private_tool_patterns = private_tool_patterns
         self._private_tool_ids: set[str] = set()
         self._user_prompt = user_prompt
@@ -923,6 +927,13 @@ class _MessageObserverSink:
         citation_content = event.data.get("_citation_content")
         citation_model_content = event.data.get("_citation_model_content")
         visible_content = event.data.get("content")
+        if not isinstance(citation_content, str):
+            # Runtimes whose MCP results are projected on the hook bus (Codex,
+            # DSH) cannot carry the private side on their own event; it waits
+            # in the side channel, keyed by the handles the model saw.
+            stashed = take_projection(self._session_id, visible_content)
+            if stashed is not None:
+                citation_content, citation_model_content = stashed
         compacted_content = compact_citation_tool_content(visible_content)
         private_projection = (
             citation_content
@@ -2029,6 +2040,7 @@ class SessionOrchestrator:
         observer = _MessageObserverSink(
             coalesced,
             message_id=message.id,
+            session_id=session.id,
             user_prompt=current_task_prompt,
             citation_policy_available=any(Path(path).name == "citation" for path in session.skills),
             citation_quality_policy=citation_policy_snapshot,
@@ -2497,6 +2509,7 @@ class SessionOrchestrator:
 
     async def cleanup(self, session_id: str) -> None:
         self._active.pop(session_id, None)
+        forget_citation_projections(session_id)
         self._buses.pop(session_id, None)
         # Session-scoped approval rules are tied to the runtime's lifecycle —
         # clearing here means a cold-reload (PATCH that drops the cache,

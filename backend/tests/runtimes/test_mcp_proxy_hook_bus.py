@@ -225,22 +225,39 @@ async def test_codex_routes_mcp_through_the_proxy_only_with_a_handler() -> None:
     from src.runtimes.codex.runtime import CodexRuntime, _build_config_overrides
 
     runtime = CodexRuntime.__new__(CodexRuntime)
-    runtime._hook_session_ref = SessionRef(session_id="s-route", runtime_provider="codex")
     runtime._mcp_proxy_session_id = None
     session = _session()
 
+    # A bare completion has no handler at all: codex connects directly.
+    runtime._hook_session_ref = SessionRef(
+        session_id="s-route", runtime_provider="codex", bare=True
+    )
     assert await runtime._route_mcp_through_proxy(session) is session
 
+    # Every other codex session has one — the citation projection
+    # (core/hooks/builtin/citation_projection.py). It only needs the remote
+    # servers (Valuz's source-metadata connectors); stdio ones stay direct.
+    runtime._hook_session_ref = SessionRef(session_id="s-route", runtime_provider="codex")
+    routed = await runtime._route_mcp_through_proxy(session)
+    try:
+        joined = "\n".join(
+            _build_config_overrides(routed, None, "gpt", expose_toolkit=False, egress_base_url=None)
+        )
+        assert "/mcp/proxy/s-route/remote/" in joined and "example.com" not in joined
+        assert "mcp_servers.upstream.command" in joined
+    finally:
+        await runtime._release_mcp_proxy()
+
+    # Any other tool.call handler sees every MCP call: everything is proxied.
     async def watch(ctx, event, next_):  # noqa: ANN001
         return await next_()
 
     hook_registry.register(TOOL_CALL, watch, owner=OWNER)
     routed = await runtime._route_mcp_through_proxy(session)
     try:
-        overrides = _build_config_overrides(
-            routed, None, "gpt", expose_toolkit=False, egress_base_url=None
+        joined = "\n".join(
+            _build_config_overrides(routed, None, "gpt", expose_toolkit=False, egress_base_url=None)
         )
-        joined = "\n".join(overrides)
         assert "/mcp/proxy/s-route/remote/" in joined and "/mcp/proxy/s-route/upstream/" in joined
         assert "example.com" not in joined and "secret" not in joined
         assert "mcp_servers.upstream.command" not in joined
@@ -258,9 +275,17 @@ async def test_dsh_patch_arms_the_bridge_and_proxies_only_with_a_handler() -> No
     runtime._mcp_proxy_session_id = None
     session = _session()
 
+    # Only the MCP-only citation projection listens: MCP goes through the
+    # proxy, but the bridge for dsh's own tools stays off (no round trip per
+    # bash / read).
     patch_session, bridge = await runtime._prepare_hook_bus(session)
-    assert patch_session is session and bridge is None
-    assert not any(row.get("id") == "valuz-hook-bridge" for row in build_session_patch(session))
+    try:
+        assert patch_session is not session and bridge is None
+        assert not any(
+            row.get("id") == "valuz-hook-bridge" for row in build_session_patch(patch_session)
+        )
+    finally:
+        await runtime._release_hook_bus()
 
     async def watch(ctx, event, next_):  # noqa: ANN001
         return await next_()

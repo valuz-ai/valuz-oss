@@ -24,7 +24,8 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from app.routes.sessions import set_session_mode
 from app.schemas import SetSessionModeRequest
 from src.core.agent_config import AgentConfig
-from src.core.hooks import TOOL_CALL, SessionHooks, SessionRef, hook_registry
+from src.core.hooks import TOOL_CALL, SessionRef, hook_registry
+from src.core.hooks.builtin.plan_gate import OWNER as PLAN_GATE_OWNER
 from src.core.hooks.builtin.plan_gate import PLAN_MODE_DENY_REASON
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
 from src.core.types import Session, UserMessage
@@ -129,7 +130,8 @@ def test_the_gate_is_off_outside_deepagents_plan_mode(tmp_path) -> None:  # noqa
     # Runtimes with a native plan mode keep it.
     for runtime in ("claude_agent", "codex", "deepseek_harness"):
         ref = SessionRef(session_id="s", runtime_provider=runtime, mode="plan")
-        assert not SessionHooks(hook_registry, ref).wants(TOOL_CALL)
+        owners = {spec.owner for spec in hook_registry.specs_for(TOOL_CALL, ref)}
+        assert PLAN_GATE_OWNER not in owners
 
 
 # -- toolkit gate and approvals ----------------------------------------------

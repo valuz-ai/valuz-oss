@@ -335,13 +335,24 @@ class DeepSeekHarnessRuntime:
         self._hook_session_ref = SessionRef.from_session(session)
         hooks = self._hook_session()
         patch_session = session
-        if session.mcp_servers and hooks.wants(TOOL_CALL):
-            from src.runtimes.mcp_proxy import register_session_proxy
+        if session.mcp_servers and hooks.wants_tool_source(TOOL_CALL, "mcp"):
+            from src.runtimes.mcp_proxy import proxy_session_mcp
 
-            proxied = register_session_proxy(session.id, session.mcp_servers, hooks)
-            self._mcp_proxy_session_id = session.id
-            patch_session = dataclasses.replace(session, mcp_servers=proxied)
-        events = [event for event in (TOOL_CALL, TOOL_CHECK) if hooks.wants(event)]
+            proxied = proxy_session_mcp(session.id, session.mcp_servers, hooks)
+            if proxied is not None:
+                self._mcp_proxy_session_id = session.id
+                patch_session = dataclasses.replace(session, mcp_servers=proxied)
+        # The bridge's tool.call covers dsh's own tools only (MCP calls go
+        # through the proxy above), so only a handler that could match one
+        # arms it — the MCP-only citation projection does not.
+        events = [
+            event
+            for event, wanted in (
+                (TOOL_CALL, hooks.wants_tool_source(TOOL_CALL, "native")),
+                (TOOL_CHECK, hooks.wants(TOOL_CHECK)),
+            )
+            if wanted
+        ]
         if not events:
             return patch_session, None
         from src.core.hooks.remote import RemoteHookSession, register_remote_hooks

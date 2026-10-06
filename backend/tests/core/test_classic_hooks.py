@@ -303,7 +303,8 @@ async def test_nothing_runs_outside_trusted_deepagents_workspaces(tmp_path: Path
         _ref(tmp_path, "codex"),
         _ref(tmp_path, "deepseek_harness"),  # DSH's own bridge plugins
     ):
-        assert not hook_registry.wants(TOOL_CALL, ref)
+        owners = {spec.owner for spec in hook_registry.specs_for(TOOL_CALL, ref)}
+        assert executor.OWNER not in owners
         outcome, ran = await _call(ref, "execute", {"command": "ls"})
         assert ran and outcome.content == "ran execute"
     assert not marker.exists()

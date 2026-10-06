@@ -940,12 +940,14 @@ class CodexRuntime:
         return runtime_session_hooks(self, "codex")
 
     async def _route_mcp_through_proxy(self, session: Session) -> Session:
-        if not session.mcp_servers or not self._hook_session().wants(TOOL_CALL):
+        if not session.mcp_servers or not self._hook_session().wants_tool_source(TOOL_CALL, "mcp"):
             return session
-        from src.runtimes.mcp_proxy import register_session_proxy
+        from src.runtimes.mcp_proxy import proxy_session_mcp
 
         await self._release_mcp_proxy()
-        proxied = register_session_proxy(session.id, session.mcp_servers, self._hook_session())
+        proxied = proxy_session_mcp(session.id, session.mcp_servers, self._hook_session())
+        if proxied is None:
+            return session
         self._mcp_proxy_session_id = session.id
         return dataclasses.replace(session, mcp_servers=proxied)
 

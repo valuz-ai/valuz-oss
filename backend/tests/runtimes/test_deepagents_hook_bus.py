@@ -29,7 +29,6 @@ from src.core.hooks import (
     hook_registry,
 )
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
-from src.runtimes.deepagents.hook_adapter import ValuzHooksMiddleware
 from src.runtimes.deepagents.runtime import DeepAgentsRuntime
 
 OWNER = "test.deepagents-hook-bus"

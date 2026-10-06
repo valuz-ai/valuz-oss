@@ -27,7 +27,7 @@ from src.core.hooks.chain import (
     run_chain,
 )
 from src.core.hooks.events import EVENT_NAMES, HookEvent, SessionRef
-from src.core.hooks.matcher import Matcher, matches, validate
+from src.core.hooks.matcher import Matcher, matches, pattern_matches, validate
 
 
 class HookRegistry:
@@ -127,6 +127,31 @@ class HookRegistry:
         probe = HookEvent(name=event, session=session, data=sample)
         return any(matches(spec.matcher, probe) for spec in specs)
 
+    def tool_source_owners(self, event: str, session: SessionRef, source: str) -> list[str]:
+        """Owners of the handlers of *event* that could match a tool from *source*.
+
+        Only the matcher's ``tool.source`` constraint is consulted (a handler
+        matching on ``tool.kind`` still counts): adapters decide with it which
+        dispatch points to arm — the MCP proxy for ``mcp``, a runtime's own
+        tools for ``native``.
+        """
+        owners: list[str] = []
+        for spec in self.specs_for(event, session):
+            constraint = (spec.matcher or {}).get("tool.source")
+            patterns = (
+                []
+                if constraint is None
+                else [constraint]
+                if isinstance(constraint, str)
+                else list(constraint)
+            )
+            if constraint is None or any(pattern_matches(p, source) for p in patterns):
+                owners.append(spec.owner)
+        return owners
+
+    def wants_tool_source(self, event: str, session: SessionRef, source: str) -> bool:
+        return bool(self.tool_source_owners(event, session, source))
+
     def owners(self) -> list[dict[str, Any]]:
         """Diagnostics: who registered what."""
         with self._lock:
@@ -172,6 +197,12 @@ class SessionHooks:
 
     def wants(self, event: str, sample: Mapping[str, Any] | None = None) -> bool:
         return self.registry.wants(event, self.session, sample)
+
+    def wants_tool_source(self, event: str, source: str) -> bool:
+        return self.registry.wants_tool_source(event, self.session, source)
+
+    def tool_source_owners(self, event: str, source: str) -> list[str]:
+        return self.registry.tool_source_owners(event, self.session, source)
 
     async def dispatch(self, event: str, data: Mapping[str, Any], core: Core) -> Any:
         return await self.registry.dispatch(event, self.session, data, core)

@@ -15,6 +15,7 @@ untouched (``structuredContent`` / ``_meta`` included).
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from mcp.types import CallToolResult
@@ -25,6 +26,10 @@ from src.core.hooks import (
     ToolOutcome,
     mcp_tool_ref,
     thaw,
+)
+from src.core.mcp_source_metadata import (
+    unwrap_mcp_source_content_transport,
+    wrap_mcp_result_metadata_in_content_for_transport,
 )
 
 UpstreamCall = Callable[[dict[str, Any]], Awaitable[Any]]
@@ -74,8 +79,18 @@ async def dispatch_mcp_call(
     tool: str,
     arguments: dict[str, Any],
     call: UpstreamCall,
+    *,
+    carry_source_metadata: bool = False,
 ) -> Any:
-    """Run one MCP tool call through ``tool.call``; *call* runs it upstream."""
+    """Run one MCP tool call through ``tool.call``; *call* runs it upstream.
+
+    ``carry_source_metadata`` packs the result's ``_meta`` source descriptor
+    into the content the handlers see (Claude's in-process proxy does the
+    same), for the citation projection of runtimes that only ever see the
+    content (``core/hooks/builtin/citation_projection.py``). The marker never
+    reaches the runtime: an untouched outcome returns the upstream result,
+    and a leftover marker is removed from a rewritten one.
+    """
     if hooks is None:
         return await call(arguments)
     data = mcp_event_data(server, tool, arguments)
@@ -87,7 +102,12 @@ async def dispatch_mcp_call(
     async def core(event: HookEvent) -> ToolOutcome:
         args = thaw(event.get("input"))
         result = await call(args if isinstance(args, dict) else {})
-        outcome = outcome_from_result(result)
+        seen = (
+            wrap_mcp_result_metadata_in_content_for_transport(result, server_name=server)
+            if carry_source_metadata
+            else result
+        )
+        outcome = outcome_from_result(seen)
         produced.append((outcome, result))
         return outcome
 
@@ -97,6 +117,12 @@ async def dispatch_mcp_call(
             return raw
     if not isinstance(outcome, ToolOutcome):
         return produced[-1][1] if produced else await call(arguments)
+    if carry_source_metadata:
+        _descriptor, _structured, restored = unwrap_mcp_source_content_transport(
+            thaw(outcome.content)
+        )
+        if restored is not None:
+            outcome = replace(outcome, content=restored)
     return result_from_outcome(outcome, produced[-1][1] if produced else None)
 
 

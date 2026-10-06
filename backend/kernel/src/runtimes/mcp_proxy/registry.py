@@ -82,6 +82,36 @@ def register_session_proxy(
     )
 
 
+def proxy_session_mcp(
+    session_id: str,
+    servers: tuple[McpServerConfig, ...] | list[McpServerConfig],
+    hooks: SessionHooks,
+) -> tuple[McpServerConfig, ...] | None:
+    """The session's MCP servers with the ones its handlers need proxied, or
+    ``None`` when no ``tool.call`` handler can see an MCP call.
+
+    When the only listener is the citation projection (Codex / DSH), only
+    remote servers are proxied — Valuz's source-metadata providers are remote
+    connectors — and stdio servers keep running as the CLI's own children.
+    Any other handler gets every MCP call, so every server is proxied.
+    """
+    from src.core.hooks import TOOL_CALL
+    from src.core.hooks.builtin.citation_projection import OWNER as CITATION_PROJECTION
+
+    owners = hooks.tool_source_owners(TOOL_CALL, "mcp")
+    if not owners:
+        return None
+    selected = (
+        [cfg for cfg in servers if isinstance(cfg, McpHttpServerConfig)]
+        if all(owner == CITATION_PROJECTION for owner in owners)
+        else list(servers)
+    )
+    if not selected:
+        return None
+    proxied = {cfg.name: cfg for cfg in register_session_proxy(session_id, selected, hooks)}
+    return tuple(proxied.get(cfg.name, cfg) for cfg in servers)
+
+
 def get_session_proxy(session_id: str) -> ProxiedSession | None:
     with _LOCK:
         return _SESSIONS.get(session_id)

@@ -53,6 +53,19 @@ def _runtime() -> codex_runtime.CodexRuntime:
     return runtime
 
 
+@pytest.fixture
+def _no_citation_projection() -> Any:
+    """These tests pin how codex receives MCP secrets directly; the citation
+    projection would route the remote server through the kernel proxy."""
+    from src.core.hooks import hook_registry
+    from src.core.hooks.builtin import citation_projection
+
+    hook_registry.unregister_owner(citation_projection.OWNER)
+    yield
+    citation_projection.install(hook_registry)
+
+
+@pytest.mark.usefixtures("_no_citation_projection")
 def test_secret_values_use_environment_references_not_argv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,10 +113,7 @@ def test_secret_values_use_environment_references_not_argv(
     assert set(secret_env.values()) == {"Bearer remote-secret", "stdio-secret"}
     assert all(name not in serialized_argv for name in secret_env.values())
     for env_name in secret_env:
-        assert (
-            f'shell_environment_policy.filters.{env_name}="exclude"'
-            in config.config_overrides
-        )
+        assert f'shell_environment_policy.filters.{env_name}="exclude"' in config.config_overrides
 
 
 def test_conflicting_stdio_secret_names_fail_closed() -> None:
