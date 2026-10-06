@@ -81,8 +81,8 @@ export type ConversationBlock =
       elapsedMs?: number;
       parentToolUseId?: string;
     }
-  // Context-compaction marker (``/compact`` or autocompact), for either
-  // runtime. Label-only — the kernel ``compaction`` event's raw data is
+  // Context-compaction marker (``/compact`` or autocompact), for any of the
+  // four runtimes. Label-only — the kernel ``compaction`` event's raw data is
   // intentionally not parsed for display; it just marks where the context
   // window was summarized within the turn.
   | { kind: "compaction"; messageId?: string }

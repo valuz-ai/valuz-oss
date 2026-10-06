@@ -89,9 +89,10 @@ type ConversationBodyProps = {
     hideMascot?: boolean;
   };
   /** Message-granularity fork (docs/design/session-fork.md): fork the
-   *  session through the hovered turn, inclusive. Rendered only when the
-   *  session's runtime has a wired native fork (codex today); a stale
-   *  turn without a stored anchor is caught server-side (409 → toast).
+   *  session through the hovered turn, inclusive. Rendered only when
+   *  ``canForkSession`` allows it — a non-task session on a runtime with a
+   *  wired native fork (codex, claude_agent, deepagents); a stale turn
+   *  without a stored anchor is caught server-side (409 → toast).
    *  Absent (embedded hosts) → no fork affordance. */
   canForkFromTurn?: boolean;
   forkInFlight?: boolean;

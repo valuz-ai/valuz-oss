@@ -277,9 +277,10 @@ async def fork_session(
                 runtime_context=body.runtime_context,
             )
         except NotImplementedError as exc:
-            # Rollout gate expressed by the runtime itself: codex is wired
-            # up; claude_agent / deepagents raise until design doc P1/P2
-            # land — at which point this route needs no change.
+            # Rollout gate expressed by the runtime itself: codex,
+            # claude_agent and deepagents are wired; deepseek_harness (and
+            # deepagents on a non-sqlite checkpoint backend) raise — wiring
+            # one later needs no change here.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(

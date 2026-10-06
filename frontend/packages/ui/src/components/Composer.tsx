@@ -859,10 +859,11 @@ export const Composer = ({
   // Skills matching the live ``/`` query. Empty means the user is typing a
   // slash *command* (e.g. ``/compact``) — not a skill name — so we let it pass
   // through: the picker closes and Enter sends the command verbatim, rather
-  // than dead-ending on "no matching skill" while the runtime would happily
-  // run it. ``skillMenuOpen`` is the single gate for both the popup's
-  // visibility and the Enter-capture below, using the same predicate the menu
-  // renders with so the two can't drift apart.
+  // than dead-ending on "no matching skill". Only Claude and Codex act on
+  // ``/compact``; DeepAgents and DSH receive it as plain text — the composer
+  // doesn't special-case either way. ``skillMenuOpen`` is the single gate for
+  // both the popup's visibility and the Enter-capture below, using the same
+  // predicate the menu renders with so the two can't drift apart.
   const skillMatches =
     slashEnabled && skillSearch.active
       ? filterSkillItems(skills, skillSearch.query)

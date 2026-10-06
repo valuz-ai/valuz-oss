@@ -27,6 +27,9 @@ export interface ActivityItem {
   project_name: string | null;
   /** Conversation executing a PlaybookRun, when one exists. */
   linked_session_id: string | null;
+  /** Kernel runtime provider of a chat row (gates its Fork entry — not every
+   *  runtime can fork); null/absent for tasks and playbooks. */
+  runtime?: string | null;
   /** Unix epoch ms — interleave key + the value inside the keyset cursor. */
   sort_at: number;
   /** CLIENT-side tag on multi-target editions: which execution target

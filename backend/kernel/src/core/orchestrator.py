@@ -2263,8 +2263,11 @@ class SessionOrchestrator:
             await observer.finalize_sidecars()
             await observer.release_session_idle()
             # Native per-turn fork anchor (codex turn id / Claude transcript
-            # uuid / deepagents checkpoint id), captured by the runtime during
-            # ``run()``. Consumed AFTER the optional coverage continuation so
+            # uuid / deepagents checkpoint id / deepseek_harness event seq),
+            # captured by the runtime during ``run()``. deepseek_harness
+            # stamps one although it cannot fork yet, so its turns still
+            # signal ``fork_anchor: true`` — the frontend runtime gate keeps
+            # "Fork from here" off for it. Consumed AFTER the optional coverage continuation so
             # the anchor reflects the LAST native turn this Message drove.
             # ``getattr`` keeps runtimes (and test fakes) without the hook
             # working unchanged. Persisted under

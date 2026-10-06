@@ -633,7 +633,7 @@ const SegmentDetails = ({
 };
 
 /** Single unified marker for a context compaction (``/compact`` or
- *  autocompact), for either runtime. Intentionally label-only — the kernel
+ *  autocompact), for any of the four runtimes. Intentionally label-only — the kernel
  *  ``compaction`` event's raw data is not parsed for display here. */
 const CompactionDivider = () => {
   const { t } = useI18n();

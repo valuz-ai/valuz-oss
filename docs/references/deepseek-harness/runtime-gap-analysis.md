@@ -46,7 +46,7 @@ One **runtime subprocess per kernel session**, owned by a new
 | `interrupt()` | **no wire method** — only subprocess kill (loses the turn tail; JSONL persistence keeps checkpointed events) | ❌ gap #1 |
 | `submit_action(...)` / `requires_action` | **no approval flow on the wire**; tools execute unattended. In-core approval seam + transport server→client requests both exist but are unused | ❌ gap #3 |
 | `fork_session(...)` | `ctx.sessions.fork(source, boundary?)` exists in-core; not on the wire | ❌ gap #4 (`NotImplementedError` initially — the port explicitly allows this) |
-| `consume_turn_anchor()` | event `seq` is a natural anchor (fork-by-boundary in-core takes one); nothing consumable on the wire yet | ⚠️ follows gap #4 |
+| `consume_turn_anchor()` | event `seq` is a natural anchor (fork-by-boundary in-core takes one); the adapter stamps `{provider, native_session_id, seq}` (last event seq of the turn) and the kernel persists it under `messages.metadata.runtime_native` | ✅ anchor persisted; fork itself still blocked on gap #4 |
 | `run_task_coverage(no_op_tool)` | needs per-turn tool injection; dsh tools are cordis-composed, not per-request | ⚠️ needs design (an MCP-exposed no-op tool scoped to the coverage turn is the likely route) |
 | `approval_rule_matcher` | exact-args fallback until approvals exist | ✅ default |
 

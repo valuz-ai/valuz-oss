@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { BUCKET_KEY, groupByTimeBucket } from "../lib/time-buckets";
+import { canForkSession } from "../pages/conversation/useTitleActions";
 import { RenameInput } from "./RenameInput";
 import { RowActionsMenu } from "./RowActionsMenu";
 import { formatCreatedAt } from "./format-created-at";
@@ -80,8 +81,10 @@ export interface ActivityFeedListProps {
   onRenameConfirm: (id: string, value: string) => void;
   onDeleteSession: (id: string, title: string) => void;
   /** Whole-session fork (docs/design/session-fork.md). Rendered on chat
-   * rows that are not running; origin gating (automation/task chats) is
-   * server-side — a 422 surfaces as the caller's failure toast. */
+   * rows that are not running, not automation-fired, and whose runtime
+   * passes ``canForkSession`` (the header's rule: codex / claude_agent /
+   * deepagents — DSH cannot fork). Chat rows never include task sessions;
+   * any remaining refusal (422) surfaces as the caller's failure toast. */
   onForkSession?: (id: string) => void;
   /** Session whose fork request is in flight (#879) — that row shows a
    * spinner and every Fork entry is disabled until the request settles. */
@@ -248,7 +251,10 @@ export const ActivityFeedList = ({
                 onRename={() => setRenamingId(item.id)}
                 onDelete={() => onDeleteSession(item.id, item.title)}
                 onFork={
-                  onForkSession && item.status !== "running"
+                  onForkSession &&
+                  item.status !== "running" &&
+                  !item.is_automation &&
+                  canForkSession({ runtime_provider: item.runtime ?? undefined })
                     ? () => onForkSession(item.id)
                     : undefined
                 }

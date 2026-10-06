@@ -1,8 +1,9 @@
 """Session-fork domain mechanics (docs/design/session-fork.md).
 
-The fork route composes these pieces; they carry no HTTP concerns so any
-server-side copy flow (future claude_agent / deepagents forks, archival
-exports) can reuse them. All reads and writes go through the owner-scoped
+The fork route composes these pieces; they are provider-agnostic (codex,
+claude_agent and deepagents forks all run through them) and carry no HTTP
+concerns, so any other server-side copy flow (archival exports) can reuse
+them. All reads and writes go through the owner-scoped
 ``StorePort`` — writes therefore ride the store composition's durable
 mirror like every other kernel write.
 """
