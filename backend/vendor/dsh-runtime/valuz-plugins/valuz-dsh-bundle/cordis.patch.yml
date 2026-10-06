@@ -48,6 +48,11 @@
     - id: valuz-session-preset
       name: ./lib/session-preset.js
       disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # Inert stand-ins for tools the shipped subagent filters name but the
+    # session role never registers (schedule_*), hidden from every agent.
+    - id: valuz-session-tool-stubs
+      name: ./lib/session-tool-stubs.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
     - id: valuz-stream-forwarder
       name: ./lib/stream-forwarder.js
       disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"

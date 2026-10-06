@@ -85,6 +85,12 @@ CORE_TOOLS = {
     "exit_plan_mode",
 }
 
+_STUBS_SOURCE = (BUNDLE_SRC / "lib" / "session-tool-stubs.js").read_text(encoding="utf-8")
+#: Names valuz-session-tool-stubs stands in for (read from the plugin itself).
+STUBBED_TOOLS = set(
+    re.findall(r'"([a-z_]+)"', re.search(r"STUBBED_TOOLS = \[([^\]]*)\]", _STUBS_SOURCE)[1])
+)
+
 
 def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -198,8 +204,18 @@ def test_launcher_keeps_user_bundles_and_restores_managed_ones(tmp_path: Path) -
     assert (directory / "cordis.patch.yml").read_text() == "- id: hmr\n  disabled: true\n"
 
 
+SPAWN_MARKER = "SPAWN-SUBAGENT"
+
+
+def _spawn_request(request: dict[str, Any]) -> bool:
+    """The root's first request in a subagent turn: no tool result yet."""
+    messages = json.dumps(request.get("messages", []))
+    return SPAWN_MARKER in messages and "tool_result" not in messages
+
+
 class _FakeModel(BaseHTTPRequestHandler):
-    """Anthropic Messages SSE fake: one short streamed text reply."""
+    """Anthropic Messages SSE fake: one short streamed text reply, or — for a
+    prompt carrying ``SPAWN_MARKER`` — one ``subagent`` call first."""
 
     requests: list[dict[str, Any]] = []
 
@@ -233,6 +249,40 @@ class _FakeModel(BaseHTTPRequestHandler):
                 },
             },
         )
+        if _spawn_request(request):
+            emit(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_fake_subagent",
+                        "name": "subagent",
+                        "input": {},
+                    },
+                },
+            )
+            child = {"description": "child check", "prompt": "Reply with ok."}
+            emit(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": json.dumps(child)},
+                },
+            )
+            emit("content_block_stop", {"type": "content_block_stop", "index": 0})
+            emit(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 5},
+                },
+            )
+            emit("message_stop", {"type": "message_stop"})
+            return
         emit(
             "content_block_start",
             {
@@ -289,6 +339,8 @@ def _run_session_turn(
     patch_path: Path,
     *,
     extra_env: dict[str, str] | None = None,
+    prompt: str = "say hi",
+    model_requests: int = 0,
 ) -> list[dict[str, Any]]:
     """Boot one session child on the managed profile and run one prompt."""
     patch_path.write_text(json.dumps(build_session_patch(session, model_base_url=model_url)))
@@ -359,7 +411,7 @@ def _run_session_turn(
                 "method": "session/prompt",
                 "params": {
                     "sessionId": session.id,
-                    "contentBlocks": [{"type": "text", "text": "say hi"}],
+                    "contentBlocks": [{"type": "text", "text": prompt}],
                 },
             }
         )
@@ -372,6 +424,11 @@ def _run_session_turn(
             return turn_ended["done"] and message.get("method") == "session.status"
 
         messages = read_until(finished)
+        # Background work (a spawned subagent) may call the model after the
+        # root's turn ended; keep the child alive until it has.
+        deadline = time.monotonic() + 60
+        while len(_FakeModel.requests) < model_requests and time.monotonic() < deadline:
+            time.sleep(0.2)
         send({"id": "3", "method": "shutdown"})
     finally:
         try:
@@ -422,6 +479,83 @@ def test_one_real_session_turn(tmp_path: Path, fake_model: str) -> None:
         else " ".join(block.get("text", "") for block in (system or []))
     )
     assert "VALUZ-INSTRUCTIONS-MARKER" in system_text
+
+
+def test_a_subagent_spawns_in_a_session(tmp_path: Path, fake_model: str) -> None:
+    """The shipped subagent rows deny ``schedule_*``, which the session role
+    never registers; without the Valuz stand-ins every spawn failed with
+    ``tools.restrict() names unknown global tools``."""
+    home = tmp_path / "dsh-home"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    session = Session(
+        id="s-subagent",
+        agent_config=AgentConfig(id="a", name="a"),
+        cwd=str(workspace),
+    )
+    messages = _run_session_turn(
+        home,
+        workspace,
+        session,
+        fake_model,
+        tmp_path / "session.patch.json",
+        prompt=f"{SPAWN_MARKER}: delegate a check.",
+        model_requests=3,
+    )
+
+    events = [m["params"]["event"] for m in messages if m.get("method") == "session.event"]
+    result = next(
+        e["data"]["message"]
+        for e in events
+        if e["type"] == "tool/result"
+        and e["data"]["message"].get("toolCallId") == "toolu_fake_subagent"
+    )
+    text = json.dumps(result["content"])
+    # The child composed (its toolFilter applied) and runs in the background.
+    assert result["isError"] is False, text
+    assert "started subagent" in text, text
+    end = next(e for e in events if e["type"] == "turn/end")
+    assert end["data"]["reason"]["kind"] == "completed"
+
+    assert "subagent" in _request_tools(_FakeModel.requests[0])
+    # The child itself reached the model, with the shipped filter applied.
+    child = next(
+        (r for r in _FakeModel.requests if "Reply with ok." in json.dumps(r.get("messages"))),
+        None,
+    )
+    assert child is not None, f"the child never called the model ({len(_FakeModel.requests)})"
+    assert {"bash", "read"} <= _request_tools(child), sorted(_request_tools(child))
+    # The stand-ins never reach a model.
+    for request in _FakeModel.requests:
+        assert not _request_tools(request) & STUBBED_TOOLS, sorted(_request_tools(request))
+
+
+def _preset_filter_names() -> set[str]:
+    names: set[str] = set()
+    for preset in (NODE_MODULES / "@deepseek-ai" / "dsh-web-app" / "presets").glob("*.yml"):
+        lines = preset.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() != "toolFilter:":
+                continue
+            depth = len(line) - len(line.lstrip())
+            for entry in lines[index + 1 :]:
+                if entry.strip() and len(entry) - len(entry.lstrip()) <= depth:
+                    break
+                item = re.match(r"\s*-\s*([A-Za-z0-9_]+)\s*$", entry)
+                if item:
+                    names.add(item.group(1))
+    return names
+
+
+def test_every_shipped_tool_filter_name_resolves_in_sessions() -> None:
+    """``tools.restrict()`` rejects unknown names, so every name a shipped
+    preset filters must be a tool a session registers. Those the session role
+    never registers are stubbed by valuz-session-tool-stubs; a new one upstream
+    has to be added there (or the role must start registering it)."""
+    names = _preset_filter_names()
+    assert names, "no toolFilter found in the shipped presets"
+    unresolved = names - CORE_TOOLS - STUBBED_TOOLS
+    assert not unresolved, sorted(unresolved)
 
 
 def _write_skill(root: Path, name: str) -> Path:
