@@ -1008,8 +1008,14 @@ def _build_projection_anchors_and_regions(
     auto_bound_claim_handles: Mapping[str, tuple[str, ...]],
     equivalent_claim_handles: Mapping[str, tuple[str, ...]],
     handle_to_citation_id: Mapping[str, str],
+    rebound_claim_handles: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Project post-publish bindings without rewriting assistant Markdown.
+
+    A rebound claim is projected like an auto-bound one: the Runtime-authored
+    link it carried pointed at the wrong (or an unknown) handle, so the raw
+    Markdown has nothing the renderer can resolve and the corrected Citation
+    needs its own anchor.
 
     Narrative/list claims become direct anchors. Table cells are compressed
     into rectangular provenance regions according to their actual Citation
@@ -1024,6 +1030,9 @@ def _build_projection_anchors_and_regions(
     for claim in claims:
         handles = auto_bound_claim_handles.get(claim.claim_id)
         origin = "auto-bound"
+        if not handles and rebound_claim_handles:
+            rebound = rebound_claim_handles.get(claim.claim_id)
+            handles = (rebound,) if rebound else None
         if not handles:
             handles = equivalent_claim_handles.get(claim.claim_id)
             origin = "equivalent-claim"
@@ -1756,6 +1765,7 @@ class CitationGuard:
             auto_bound_claim_handles=binding_result.auto_bound_claim_handles,
             equivalent_claim_handles=propagated_bind_result.claim_handles,
             handle_to_citation_id=handle_to_citation_id,
+            rebound_claim_handles=binding_result.rebound_claim_handles,
         )
         # These offsets are measured against the normalised text, but the client
         # replays them against the text the model streamed. Materializing a
