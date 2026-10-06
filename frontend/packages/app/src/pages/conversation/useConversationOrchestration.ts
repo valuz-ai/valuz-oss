@@ -1674,6 +1674,17 @@ export function useConversationOrchestration({
     // finance panel's starter UX needs that too.
   }, [prefillDraft, onPrefillConsumed]);
 
+  // A draft handed over by navigation: ``navigate("/conversation/new", { state:
+  // { draft } })`` — e.g. a third-party plugin's ``host.draftConversation``.
+  // Seeds the composer of a fresh conversation once per history entry; the
+  // user reviews and sends it.
+  const navigationDraft = (location.state as { draft?: unknown } | null)?.draft;
+  const navigationDraftKey = location.key;
+  useEffect(() => {
+    if (id !== NEW_SESSION_ID || typeof navigationDraft !== "string") return;
+    setDraft(navigationDraft);
+  }, [id, navigationDraft, navigationDraftKey]);
+
   return {
     // identity / routing
     id,

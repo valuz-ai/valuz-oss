@@ -85,6 +85,10 @@ export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
         ),
         "@valuz/ui": path.resolve(options.configDir, "../../packages/ui/src"),
         "@valuz/app": path.resolve(options.configDir, "../../packages/app/src"),
+        "@valuz/plugin-sdk": path.resolve(
+          options.configDir,
+          "../../packages/plugin-sdk/src",
+        ),
       },
     },
   };

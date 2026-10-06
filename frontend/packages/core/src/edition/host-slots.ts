@@ -557,6 +557,22 @@ export const HOST_SLOTS: readonly SlotSpec[] = [
     description: "Actions on a model channel row.",
     context: ["provider", "isSystem", "isConfigured"],
   },
+  {
+    name: "settings.extensions.third-party.tabs",
+    kind: "keyed",
+    region: "settings",
+    description:
+      "Extra tabs in Settings → Extensions → Third-party plugins, after Installed (key = tab id; label via the registration).",
+    context: ["refresh"],
+  },
+  {
+    name: "settings.extensions.third-party.item.actions",
+    kind: "list",
+    region: "settings",
+    description:
+      "Actions on an installed third-party plugin row, before Uninstall.",
+    context: ["plugin", "refresh"],
+  },
 
   // ── Notifications ────────────────────────────────────────────────────────
   {

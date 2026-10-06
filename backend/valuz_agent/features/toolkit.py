@@ -40,6 +40,7 @@ TOOL_GROUPS: dict[str, ToolGroup] = {
         ToolGroup("shared", "citation-calculation", f"{_ME}:citation_calculation_tool_defs"),
         ToolGroup("shared", "genui", f"{_ME}:genui_tool_defs"),
         ToolGroup("shared", "browser", f"{_ME}:browser_tool_defs"),
+        ToolGroup("shared", "extension-manager", f"{_ME}:extension_manager_tool_defs"),
     )
 }
 assert tuple(TOOL_GROUPS) == TOOL_SLOTS, "TOOL_GROUPS must follow features.order.TOOL_SLOTS"
@@ -172,3 +173,11 @@ def browser_tool_defs() -> tuple[Any, ...]:
     else:
         ext.browser_engine.bootstrap()
     return defs
+
+
+def extension_manager_tool_defs() -> tuple[Any, ...]:
+    from valuz_agent.integrations.tools_extension_manager import (
+        build_extension_manager_tool_defs,
+    )
+
+    return tuple(build_extension_manager_tool_defs())

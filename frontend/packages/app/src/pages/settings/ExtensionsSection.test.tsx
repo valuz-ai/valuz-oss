@@ -23,6 +23,7 @@ import {
   dshPluginsApi,
   extensionsApi,
   pluginHost,
+  thirdPartyApi,
 } from "@valuz/core";
 import type {
   DshBundleInfo,
@@ -117,6 +118,11 @@ beforeEach(() => {
     plugins: [],
     config_schemas: {},
   });
+  // …and one without the third-party feature: that block stays hidden (it has
+  // its own tests).
+  vi.spyOn(thirdPartyApi, "list").mockRejectedValue(
+    new ApiError("not found", 404),
+  );
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.warning).mockClear();

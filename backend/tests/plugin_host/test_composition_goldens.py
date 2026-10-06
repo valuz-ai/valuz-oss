@@ -64,6 +64,7 @@ ADDED_AFTER_REFACTOR: frozenset[str] = frozenset(
         "start_ui_push_transport()",  # UI bus pushes from other backend processes
         "stop_ui_push_transport()",
         "warn_unreachable_plugin_hooks()",  # plugin hooks a remote kernel can't see
+        "cleanup_superseded_extension_versions()",  # third-party plugin dirs (ADR-034)
     }
 )
 

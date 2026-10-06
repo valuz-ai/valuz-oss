@@ -376,6 +376,10 @@ class AutomationItemResponse(BaseModel):
     # subscribed to anything — the common case while OSS ships no source.
     event_source: str | None = None
     event_refs: list[str] | None = None
+    # Set when a third-party plugin declared this automation in its manifest
+    # (created on install, deleted on uninstall); ``None`` otherwise.
+    extension_id: str | None = None
+    extension_name: str | None = None
 
     status: str
     next_run_at: int | None

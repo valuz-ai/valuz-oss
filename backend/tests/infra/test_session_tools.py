@@ -1,4 +1,4 @@
-"""Session command wrappers: ``valuz-python`` and ``dsoffice`` on the agent PATH."""
+"""Session command wrappers: ``valuz-python``, ``dsoffice``, ``valuz-plugin`` on the agent PATH."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ import pytest
 from valuz_agent.infra import session_tools
 from valuz_agent.infra.session_tools import (
     OFFICE_COMMAND,
+    PLUGIN_COMMAND,
     PYTHON_COMMAND,
     ensure_session_tools_on_path,
     office_kit_cli,
+    plugin_sdk_cli,
     python_executable,
     wrapper_body,
 )
@@ -27,12 +29,14 @@ def _isolated(monkeypatch, tmp_path: Path):
     for env in (
         session_tools.PYTHON_RUNTIME_ENV,
         session_tools.DSH_RUNTIME_ENTRY_ENV,
+        session_tools.PLUGIN_SDK_ENTRY_ENV,
         session_tools.NODE_PATH_ENV,
         session_tools.NODE_IS_ELECTRON_ENV,
     ):
         monkeypatch.delenv(env, raising=False)
     monkeypatch.setattr(session_tools, "_VENDORED_PYTHON_RUNTIME", tmp_path / "no-python")
     monkeypatch.setattr(session_tools, "_VENDORED_DSH_NODE_MODULES", tmp_path / "no-dsh")
+    monkeypatch.setattr(session_tools, "_SOURCE_PLUGIN_SDK_ENTRY", tmp_path / "no-sdk.mjs")
     monkeypatch.setattr(session_tools.shutil, "which", lambda name: None)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
 
@@ -86,6 +90,41 @@ class TestResolution:
         assert office_kit_cli() is None
 
 
+class TestPluginSdkResolution:
+    def test_env_entry_wins(self, monkeypatch, tmp_path: Path) -> None:
+        packaged = tmp_path / "libexec" / "plugin-sdk" / "valuz-plugin.mjs"
+        packaged.parent.mkdir(parents=True)
+        packaged.write_text("")
+        source = tmp_path / "no-sdk.mjs"
+        source.write_text("")  # the source checkout is ignored while the env points at a file
+        monkeypatch.setenv(session_tools.PLUGIN_SDK_ENTRY_ENV, str(packaged))
+        assert plugin_sdk_cli() == packaged
+
+    def test_source_checkout_fallback(self, tmp_path: Path) -> None:
+        source = tmp_path / "no-sdk.mjs"
+        source.write_text("")
+        assert plugin_sdk_cli() == source
+
+    def test_env_pointing_nowhere_falls_back_to_the_checkout(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "no-sdk.mjs"
+        source.write_text("")
+        monkeypatch.setenv(session_tools.PLUGIN_SDK_ENTRY_ENV, str(tmp_path / "missing.mjs"))
+        assert plugin_sdk_cli() == source
+
+    def test_nothing_found(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setenv(session_tools.PLUGIN_SDK_ENTRY_ENV, str(tmp_path / "missing.mjs"))
+        assert plugin_sdk_cli() is None
+
+    def test_the_source_checkout_path_exists_in_this_repo(self) -> None:
+        """Guards the relative path the fallback is built from."""
+        oss_root = Path(session_tools.__file__).resolve().parents[3]
+        assert session_tools._BACKEND_DIR.parent == oss_root
+        sdk_bin = oss_root / "frontend" / "packages" / "plugin-sdk" / "bin" / "valuz-plugin.mjs"
+        assert sdk_bin.is_file()
+
+
 class TestWrapperBody:
     def test_forwards_arguments(self) -> None:
         body = wrapper_body(["/opt/py/bin/python3"])
@@ -122,14 +161,59 @@ class TestInstall:
         ensure_session_tools_on_path(bin_dir)
         assert os.environ["PATH"].split(os.pathsep).count(str(bin_dir)) == 1
 
+    def test_installs_valuz_plugin_on_node(self, monkeypatch, tmp_path: Path) -> None:
+        sdk = tmp_path / "sdk" / "valuz-plugin.mjs"
+        sdk.parent.mkdir()
+        sdk.write_text("")
+        monkeypatch.setenv(session_tools.PLUGIN_SDK_ENTRY_ENV, str(sdk))
+        monkeypatch.setenv(session_tools.NODE_PATH_ENV, "/Apps/Valuz.app/MacOS/Valuz")
+        monkeypatch.setenv(session_tools.NODE_IS_ELECTRON_ENV, "1")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        assert ensure_session_tools_on_path(bin_dir) == [PLUGIN_COMMAND]
+        body = (bin_dir / PLUGIN_COMMAND).read_text()
+        assert "export ELECTRON_RUN_AS_NODE=1\n" in body
+        assert body.endswith(f'exec /Apps/Valuz.app/MacOS/Valuz {sdk} "$@"\n')
+        assert os.access(bin_dir / PLUGIN_COMMAND, os.X_OK)
+
+    def test_valuz_plugin_falls_back_to_node_on_path(self, monkeypatch, tmp_path: Path) -> None:
+        source = tmp_path / "no-sdk.mjs"
+        source.write_text("")
+        monkeypatch.setattr(
+            session_tools.shutil, "which", lambda name: "/usr/bin/node" if name == "node" else None
+        )
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        assert ensure_session_tools_on_path(bin_dir) == [PLUGIN_COMMAND]
+        body = (bin_dir / PLUGIN_COMMAND).read_text()
+        assert "ELECTRON_RUN_AS_NODE" not in body
+        assert body.endswith(f'exec /usr/bin/node {source} "$@"\n')
+
+    def test_valuz_plugin_needs_node_and_the_sdk(self, monkeypatch, tmp_path: Path) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / PLUGIN_COMMAND).write_text('#!/bin/sh\nexec /gone "$@"\n')
+        sdk = tmp_path / "no-sdk.mjs"
+        sdk.write_text("")
+        # SDK present, Node missing → the stale wrapper goes.
+        assert ensure_session_tools_on_path(bin_dir) == []
+        assert not (bin_dir / PLUGIN_COMMAND).exists()
+        # Node present, SDK missing → still no wrapper.
+        sdk.unlink()
+        monkeypatch.setenv(session_tools.NODE_PATH_ENV, "/usr/bin/node")
+        assert ensure_session_tools_on_path(bin_dir) == []
+        assert not (bin_dir / PLUGIN_COMMAND).exists()
+
     def test_missing_tools_remove_stale_wrappers(self, tmp_path: Path) -> None:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        for name in (PYTHON_COMMAND, OFFICE_COMMAND):
+        for name in (PYTHON_COMMAND, OFFICE_COMMAND, PLUGIN_COMMAND):
             (bin_dir / name).write_text('#!/bin/sh\nexec /gone "$@"\n')
         assert ensure_session_tools_on_path(bin_dir) == []
         assert not (bin_dir / PYTHON_COMMAND).exists()
         assert not (bin_dir / OFFICE_COMMAND).exists()
+        assert not (bin_dir / PLUGIN_COMMAND).exists()
 
     def test_office_needs_node(self, monkeypatch, tmp_path: Path) -> None:
         entry, _ = _dsh_closure(tmp_path / "dsh")

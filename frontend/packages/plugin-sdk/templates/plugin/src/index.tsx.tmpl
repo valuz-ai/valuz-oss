@@ -1,0 +1,95 @@
+import { useEffect, useState } from "react";
+import {
+  definePlugin,
+  host,
+  pageRoute,
+  slotComponent,
+  useTranslation,
+  useValuz,
+  type PublicProject,
+  type SlotProps,
+} from "@valuz/plugin-sdk";
+import { Button, EmptyState, LoadingState } from "@valuz/plugin-sdk/ui";
+
+import "./styles.css";
+
+/** Must equal "id" in valuz-plugin.json. */
+export const PLUGIN_ID = "__PLUGIN_ID__";
+/** Plugin pages live under /x/<plugin id>/. */
+export const PROJECTS_PATH = `/x/${PLUGIN_ID}/projects`;
+
+/** A button in the conversation title bar. */
+function HelloButton({ turns }: SlotProps<"conversation.title.actions">) {
+  const { t } = useTranslation();
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => host.toast({ title: t("hello.toast", { count: turns.length }) })}
+    >
+      {t("hello.button")}
+    </Button>
+  );
+}
+
+/** A page listing the user's projects (needs the "projects:read" permission). */
+function ProjectsPage() {
+  const { t } = useTranslation();
+  const valuz = useValuz();
+  const [projects, setProjects] = useState<PublicProject[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    valuz.projects.list().then(
+      (list) => {
+        if (!cancelled) setProjects(list);
+      },
+      (reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [valuz]);
+
+  return (
+    <div className="plugin-page">
+      <h1 className="plugin-page__title">{t("projects.title")}</h1>
+      {error ? (
+        <p>{t("projects.error", { error })}</p>
+      ) : projects === null ? (
+        <LoadingState variant="page" />
+      ) : projects.length === 0 ? (
+        <EmptyState message={t("projects.empty")} />
+      ) : (
+        <ul className="plugin-page__list">
+          {projects.map((project) => (
+            <li key={project.id}>
+              <Button variant="link" onClick={() => host.openProject(project.id)}>
+                {project.name}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export default definePlugin({
+  id: PLUGIN_ID,
+  apply(ctx) {
+    ctx.registry.slot("conversation.title.actions", {
+      id: "hello",
+      component: slotComponent(HelloButton),
+    });
+    pageRoute(
+      ctx,
+      { id: "projects", path: PROJECTS_PATH, title: "projects.title", icon: "puzzle" },
+      ProjectsPage,
+      { nav: true },
+    );
+  },
+});

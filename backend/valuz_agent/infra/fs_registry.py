@@ -764,6 +764,57 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ---- FS-17 — third-party plugins (ADR-034; docs task card 04 §A) ----
+    #
+    #   extensions/installed.json        the install registry (one per device)
+    #   extensions/<id>/<version>/       an unpacked package, immutable once installed
+    #   extensions-data/<id>/            the plugin's writable data (kept on uninstall)
+    #   logs/extensions/<id>.log         JSON lines written for / by the plugin
+    #
+    # Shared (device-wide) roots, like ``plugins`` models: the packages are stored
+    # once per device, which of them LOAD is decided per account. ``plugin_id`` is
+    # ``<publisher>.<name>`` and a version is SemVer, so both are single safe path
+    # segments; the guards below are defensive.
+
+    @staticmethod
+    def _extension_segment(value: str, what: str) -> str:
+        if (
+            not value
+            or "/" in value
+            or "\\" in value
+            or value in (".", "..")
+            or ".." in value
+            or "\x00" in value
+        ):
+            raise ValueError(f"invalid extension {what}: {value!r}")
+        return value
+
+    def extensions_root(self) -> Path:
+        path = self._shared_root() / "extensions"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def extension_version_dir(self, plugin_id: str, version: str) -> Path:
+        """Where one installed version is unpacked (NOT created — the installer
+        moves a finished tree into place atomically)."""
+        return (
+            self.extensions_root()
+            / self._extension_segment(plugin_id, "id")
+            / self._extension_segment(version, "version")
+        )
+
+    def extensions_data_dir(self, plugin_id: str) -> Path:
+        """The plugin's writable data directory (created)."""
+        path = self._shared_root() / "extensions-data" / self._extension_segment(plugin_id, "id")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def extension_log_path(self, plugin_id: str) -> Path:
+        """``logs/extensions/<id>.log`` (the parent is created, the file is not)."""
+        parent = self._shared_root() / "logs" / "extensions"
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent / f"{self._extension_segment(plugin_id, 'id')}.log"
+
     # ---- FS-16 — skill version snapshots ----
     #
     # Where the skill library keeps the per-version archives of a saved skill

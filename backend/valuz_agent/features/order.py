@@ -57,6 +57,10 @@ ROUTE_REFS: dict[str, str] = {
     "plugins": f"{_ROUTES}.plugins:router",
     "dsh_plugins": f"{_ROUTES}.dsh_plugins:router",
     "extensions": f"{_ROUTES}.extensions:router",
+    # Third-party plugins: after ``extensions`` so ``/v1/extensions/backend*``
+    # keeps precedence over ``/v1/extensions/third-party/{id}`` patterns.
+    "third_party": f"{_ROUTES}.third_party:router",
+    "ext_assets": f"{_ROUTES}.third_party:assets_router",
     "tasks": f"{_ROUTES}.tasks:router",
     "analytics": f"{_ROUTES}.analytics:router",
     "resources": f"{_ROUTES}.resources:router",
@@ -101,4 +105,5 @@ TOOL_SLOTS: tuple[str, ...] = (
     "citation-calculation",
     "genui",
     "browser",
+    "extension-manager",
 )

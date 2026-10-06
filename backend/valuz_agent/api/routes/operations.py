@@ -24,6 +24,7 @@ from valuz_agent.modules.operations.schemas import (
 from valuz_agent.modules.operations.service import OperationService
 from valuz_agent.modules.playbooks import operations as _playbook_operations  # noqa: F401
 from valuz_agent.modules.skills import operations as _skill_operations  # noqa: F401
+from valuz_agent.modules.third_party import operations as _third_party_operations  # noqa: F401
 
 router = APIRouter(prefix="/v1/operations", tags=["operations"])
 

@@ -67,6 +67,7 @@ describe("the OSS plugin set", () => {
       "oss-agent-plugins",
       "oss-dsh-plugins",
       "oss-plugin-ui",
+      "oss-third-party",
     ]);
     expect(
       ossPluginSpecs.filter((spec) => spec.required).map((s) => s.plugin.id),
@@ -128,9 +129,14 @@ describe("the OSS plugin set", () => {
 
 /**
  * Optional plugins that register nothing at load: ``oss-plugin-ui`` mounts UI
- * bus surfaces only once the backend announces plugin UI.
+ * bus surfaces only once the backend announces plugin UI, and
+ * ``oss-third-party`` loads third-party plugins only after the first-party boot
+ * settled and the backend lists some.
  */
-const ON_DEMAND_IDS: ReadonlySet<string> = new Set(["oss-plugin-ui"]);
+const ON_DEMAND_IDS: ReadonlySet<string> = new Set([
+  "oss-plugin-ui",
+  "oss-third-party",
+]);
 
 describe.each(OPTIONAL_IDS)("optional plugin %s", (id) => {
   it("unloads cleanly: its pages go and the registry equals one that never loaded it", async () => {

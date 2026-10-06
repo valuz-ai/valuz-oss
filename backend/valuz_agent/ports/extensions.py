@@ -112,6 +112,11 @@ from valuz_agent.ports.skill_runtime import (
     DiscoverAndExecuteExternalSkills,
     ExternalSkillDiscoveryPolicy,
 )
+from valuz_agent.ports.third_party import (
+    AllowAllThirdPartyPolicy,
+    ExtensionPublisherPort,
+    ThirdPartyPolicyPort,
+)
 from valuz_agent.ports.ui_artifact import UiArtifactSinkPort
 from valuz_agent.ports.ui_push_transport import LocalUiPushTransport, UiPushTransport
 from valuz_agent.ports.workspace_sync import NoopWorkspaceSync, WorkspaceSyncPort
@@ -168,6 +173,9 @@ class Extensions:
         # a push reaches whichever process holds the user's stream. OSS is
         # one process; a multi-replica overlay binds a pub/sub transport.
         self.ui_push_transport: UiPushTransport = LocalUiPushTransport()
+        # Third-party plugins (ADR-034): org policy gate and catalog publisher.
+        self.third_party_policy: ThirdPartyPolicyPort = AllowAllThirdPartyPolicy()
+        self.extension_publisher: ExtensionPublisherPort | None = None
         # One opaque credential authenticates an untrusted sandbox to every
         # trusted host surface (built-in MCP + Data Service). OSS preserves the
         # existing per-owner HMAC tokens; managed editions may bind an async

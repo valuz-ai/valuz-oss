@@ -53,6 +53,7 @@ OPTIONAL = [
     "oss-citations",
     "oss-notifications",
     "oss-feedback",
+    "oss-third-party",
 ]
 
 
@@ -77,7 +78,7 @@ def test_the_plugin_ids_are_the_agreed_ones() -> None:
     plugins = oss_plugins()
     assert [p.id for p in plugins if p.required] == ["oss-core", "oss-agents"]
     assert {p.id for p in plugins} == REQUIRED | set(OPTIONAL)
-    assert len(plugins) == len({p.id for p in plugins}) == 18
+    assert len(plugins) == len({p.id for p in plugins}) == 19
 
 
 def test_every_plugin_provides_its_capability_and_needs_the_shell() -> None:

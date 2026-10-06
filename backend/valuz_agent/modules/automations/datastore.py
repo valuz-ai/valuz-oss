@@ -39,6 +39,15 @@ class AutomationDatastore:
         stmt = stmt.order_by(AutomationRow.created_at)
         return list((await self._db.execute(stmt)).scalars().all())
 
+    async def list_by_extension(self, user_id: str, extension_id: str) -> list[AutomationRow]:
+        """The automations a third-party plugin declared for this owner."""
+        stmt = (
+            select(AutomationRow)
+            .where(AutomationRow.user_id == user_id, AutomationRow.extension_id == extension_id)
+            .order_by(AutomationRow.created_at)
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
     async def get_automation(self, user_id: str, automation_id: str) -> AutomationRow | None:
         return (
             (

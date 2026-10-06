@@ -49,7 +49,7 @@ Everything edition-specific flows through **`packages/core/src/edition/`**:
 - `registries/{layers,slots}.ts` — the layered-list algebra (placement, removal) and the slot types. The pages themselves are registered by the OSS plugins (see below).
 - `resolve.ts` — `resolveEdition()` / `getActiveProfile()` (build-time).
 - `registry-store.ts` — **runtime** mutable store (Zustand) seeded from the active profile.
-- `plugin.ts` — `PluginManifest` + `registerPlugin()` + `loadPluginFromUrl()`.
+- `plugin.ts` — `PluginManifest` + `registerPlugin()` (the pre-plugin-host manifest model, kept for in-process use; third-party plugins load through `@valuz/plugin-sdk` and the `oss-third-party` plugin, not by URL).
 
 ### The OSS app is itself a set of plugins
 
@@ -113,7 +113,7 @@ await registerPlugin({
 })
 ```
 
-`loadPluginFromUrl(url)` is the ESM-import entry point. Security (signing, origin allowlist) is **not** provided here — it belongs at the delivery layer, not the loader. Plugins run in the host React root; trust is full.
+There is no load-by-URL entry point any more: third-party plugins are installed on the backend and loaded by the `oss-third-party` plugin through a restricted context (see `packages/plugin-sdk`).
 
 ### Edition hot-swap
 

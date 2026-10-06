@@ -46,6 +46,7 @@ def oss_plugins() -> list[BackendPlugin]:
     from valuz_agent.features.notifications import NotificationsPlugin
     from valuz_agent.features.skills import SkillsPlugin
     from valuz_agent.features.tasks import TasksPlugin
+    from valuz_agent.features.third_party import ThirdPartyPlugin
 
     return [
         CorePlugin(),
@@ -66,6 +67,7 @@ def oss_plugins() -> list[BackendPlugin]:
         NotificationsPlugin(),
         FeedbackPlugin(),
         CitationsPlugin(),  # needs oss.knowledge + oss.feedback: after both
+        ThirdPartyPlugin(),
     ]
 
 

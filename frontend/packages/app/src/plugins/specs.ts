@@ -15,6 +15,7 @@ import { ossMemoryPlugin } from "./memory";
 import { ossPluginUiPlugin } from "./plugin-ui";
 import { ossSkillsPlugin } from "./skills";
 import { ossTasksPlugin } from "./tasks";
+import { ossThirdPartyPlugin } from "./third-party";
 
 export interface OssPluginSpec {
   plugin: ValuzPlugin;
@@ -56,6 +57,7 @@ export const ossPluginSpecs: readonly OssPluginSpec[] = [
   { plugin: ossAgentPluginsPlugin, required: false },
   { plugin: ossDshPluginsPlugin, required: false },
   { plugin: ossPluginUiPlugin, required: false },
+  { plugin: ossThirdPartyPlugin, required: false },
 ];
 
 /** The OSS plugins in canonical order — see {@link ossPluginSpecs}. */

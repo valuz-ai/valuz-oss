@@ -6,9 +6,11 @@ import { initParserPlugins } from "@valuz/parser-plugins";
 import { hydrateOverlayIfPresent, hydrateTheme } from "@valuz/core";
 import {
   loadOssPlugins,
+  markThirdPartyBootSettled,
   renderOssBootFailure,
   settleOssPlugins,
 } from "@valuz/app/plugins";
+import { installSharedModules } from "@valuz/plugin-sdk/host";
 import { setMenuLocale } from "./lib/desktop-ipc";
 // Serif display faces — used only for onboarding hero headlines (editorial
 // moment). Bundled via @fontsource so the desktop build stays offline-safe;
@@ -64,6 +66,11 @@ initParserPlugins();
 // a hydration failure must NOT block the mount (a bare ``.then`` here
 // meant any rejection left a permanently white window, since ``render``
 // was never called and nothing logged the cause).
+// Third-party plugins import react, react-dom and the plugin SDK from this
+// table instead of bundling their own copies; it must exist before any plugin
+// loads.
+installSharedModules();
+
 const rootElement = document.getElementById("root") as HTMLElement;
 loadOssPlugins()
   .then(({ stateKnown }) => {
@@ -84,6 +91,9 @@ loadOssPlugins()
           <App />
         </React.StrictMode>,
       );
+      // First-party plugins and the overlay are in and the app has rendered:
+      // third-party plugins may start loading now.
+      markThirdPartyBootSettled();
     },
     (error: unknown) => renderOssBootFailure(rootElement, error),
   );

@@ -1,0 +1,34 @@
+{
+  "name": "@valuz/plugin-sdk",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SDK for third-party Valuz plugins: definePlugin, public slots, host bridge, Valuz client, build preset, test host",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ui": "./src/ui/index.ts",
+    "./build": "./src/build/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./host": "./src/host/index.ts",
+    "./valuz-plugin.schema.json": "./valuz-plugin.schema.json"
+  },
+  "bin": {
+    "valuz-plugin": "./bin/valuz-plugin.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test": "cd ../.. && vitest run --config vitest.config.ts packages/plugin-sdk/src"
+  },
+  "dependencies": {
+    "esbuild": "^0.27.0"
+  },
+  "devDependencies": {
+    "@valuz/core": "workspace:*",
+    "@valuz/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  }
+}

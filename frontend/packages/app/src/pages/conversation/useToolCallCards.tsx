@@ -41,6 +41,7 @@ import {
   renderChatplanStatusPill,
   resolveGenUiHost,
 } from "./tool-card-helpers";
+import { ExtensionOperationCard } from "./ExtensionOperationCard";
 import { skillSubmissionView } from "./skill-submission-view";
 import { useToolCallCardActions } from "./useToolCallCardActions";
 
@@ -397,6 +398,28 @@ export function useToolCallCards({
         // Read-only queries and run lifecycle actions do not create an
         // OperationRecord. Let them reach the generic tool renderer so the
         // user can still inspect the Agent's Playbook call and result.
+      }
+
+      // ``extension_manager`` (third-party plugins): ``dev_link`` / ``install`` /
+      // ``uninstall`` / ``publish`` return an operation record the user
+      // confirms on this card. The read-only actions (list, status, logs,
+      // reload, enable, disable, submissions) carry no operation and fall
+      // through to the generic tool renderer.
+      if (isToolNamed(name, "extension_manager")) {
+        const result = parseOperationToolOutput(tool.output);
+        const snapshot = result?.operation;
+        if (snapshot) {
+          const operation = operationStates[snapshot.id] ?? snapshot;
+          return (
+            <ExtensionOperationCard
+              operation={operation}
+              action={result?.action}
+              busy={operationBusy[operation.id] ?? null}
+              onConfirm={() => void handleConfirmOperation(operation)}
+              onCancel={() => void handleCancelOperation(operation)}
+            />
+          );
+        }
       }
 
       // ADR-021: automation tool result → AutomationToolCard. The MCP

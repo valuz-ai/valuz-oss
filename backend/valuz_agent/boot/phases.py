@@ -122,6 +122,9 @@ STARTUP_ORDER: Mapping[str, tuple[str, ...]] = {
     BootPhase.READY: ("mark_boot_complete",),  # LAST blocking startup step
     BootPhase.POST_BOOT: (
         "start_post_boot_agent_channels",
+        # Third-party plugin dirs: drop the version an update superseded (kept
+        # until now so a running renderer could still load it) and dead scratch trees.
+        "cleanup_superseded_extension_versions",
         "start_dsh_manager_if_plugins_installed",  # background, non-blocking
     ),
 }

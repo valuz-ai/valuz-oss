@@ -48,6 +48,7 @@ export default defineConfig({
       "@valuz/ui": resolvePath("./packages/ui/src"),
       "@valuz/a2ui": resolvePath("./packages/a2ui/src"),
       "@valuz/app": resolvePath("./packages/app/src"),
+      "@valuz/plugin-sdk": resolvePath("./packages/plugin-sdk/src"),
     },
   },
   test: {

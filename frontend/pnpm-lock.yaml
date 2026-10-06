@@ -89,6 +89,9 @@ importers:
       '@valuz/parser-plugins':
         specifier: workspace:*
         version: link:../../packages/parser-plugins
+      '@valuz/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
       '@valuz/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -158,6 +161,9 @@ importers:
       '@valuz/parser-plugins':
         specifier: workspace:*
         version: link:../../packages/parser-plugins
+      '@valuz/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
       '@valuz/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -219,6 +225,9 @@ importers:
       '@valuz/desktop-network-egress':
         specifier: workspace:*
         version: link:../desktop-network-egress
+      '@valuz/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@valuz/shared':
         specifier: workspace:*
         version: link:../shared
@@ -276,6 +285,25 @@ importers:
       '@valuz/shared':
         specifier: workspace:*
         version: link:../shared
+
+  packages/plugin-sdk:
+    dependencies:
+      esbuild:
+        specifier: ^0.27.0
+        version: 0.27.7
+      react:
+        specifier: '>=19.0.0'
+        version: 19.2.8
+      react-dom:
+        specifier: '>=19.0.0'
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@valuz/core':
+        specifier: workspace:*
+        version: link:../core
+      '@valuz/ui':
+        specifier: workspace:*
+        version: link:../ui
 
   packages/shared: {}
 

@@ -60,6 +60,7 @@ import valuz_agent.modules.sessions.models  # noqa: F401,E402
 import valuz_agent.modules.settings.models  # noqa: F401,E402
 import valuz_agent.modules.skills.models  # noqa: F401,E402
 import valuz_agent.modules.tasks.models  # noqa: F401,E402
+import valuz_agent.modules.third_party.models  # noqa: F401,E402
 from alembic import context  # noqa: E402
 
 # Importing the database module registers every ``Base``-derived model

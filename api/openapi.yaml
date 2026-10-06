@@ -4676,6 +4676,125 @@ paths:
             application/zip:
               schema: {type: string, format: binary}
 
+  /v1/connectors/{id_or_slug}/tools:
+    get:
+      summary: List an MCP connector's tools (full input schemas + annotations)
+      description: |
+        Opens a session to the caller's own connector (stdio connectors only on a
+        local deployment) and returns every tool with its complete input schema
+        and MCP annotations. `read_only` is `annotations.readOnlyHint === true`
+        (fail-closed: no annotation means not read-only) — the same rule the code
+        face (PTC) uses. Used by third-party plugins (`ctx.valuz.connectors.listTools`);
+        a plugin's `connectors:read` permission is enforced by the plugin-request
+        middleware. 30 s budget.
+      operationId: listConnectorTools
+      tags: [connectors]
+      parameters:
+        - name: id_or_slug
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The connector's tools
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsResponse"
+        "403":
+          description: "`detail.code` = `stdio_unavailable` (stdio connector on a non-local deployment)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "404":
+          description: "`detail.code` = `connector_not_found` (also another user's connector)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "409":
+          description: "`detail.code` = `connector_disabled` | `connector_misconfigured`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "502":
+          description: "`detail.code` = `connector_unreachable` | `connector_unauthorized`; `message` never contains the connector URL"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "504":
+          description: "`detail.code` = `connector_timeout`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+  /v1/connectors/{id_or_slug}/tools/{tool_name}/call:
+    post:
+      summary: Call one tool of an MCP connector
+      description: |
+        Calls `tool_name` with `arguments`. A tool that is not declared read-only
+        is refused with 403 `write_tool_requires_confirmation` unless
+        `allow_write` is true — and it is refused BEFORE anything reaches the
+        server. A tool that runs and fails is a 200 with `is_error: true`.
+        Plugin permissions: `connectors:call`, plus `connectors:write` when
+        `allow_write` is true (enforced by the plugin-request middleware). 30 s budget.
+      operationId: callConnectorTool
+      tags: [connectors]
+      parameters:
+        - name: id_or_slug
+          in: path
+          required: true
+          schema: {type: string}
+        - name: tool_name
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallConnectorToolRequest"
+      responses:
+        "200":
+          description: The tool's result (MCP content blocks as JSON)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallConnectorToolResponse"
+        "403":
+          description: "`detail.code` = `write_tool_requires_confirmation` | `stdio_unavailable`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "404":
+          description: "`detail.code` = `connector_not_found` | `tool_not_found`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "409":
+          description: "`detail.code` = `connector_disabled` | `connector_misconfigured`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "502":
+          description: "`detail.code` = `connector_unreachable` | `connector_unauthorized`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
+        "504":
+          description: "`detail.code` = `connector_timeout`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectorToolsError"
   /v1/notifications:
     get:
       summary: Open notifications + unread count (the unified attention ledger)
@@ -4692,6 +4811,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationListResponse"
+    post:
+      summary: Post a notification into the caller's ledger
+      description: |
+        Writes one entry into the caller's own notification ledger. A request that
+        carries `X-Valuz-Plugin-Id` (a third-party plugin, `ctx.valuz.notifications.post`)
+        creates `kind: extension` with the plugin id in `payload.plugin_id`; every
+        post is a separate entry. `link` becomes the entry's `route` only when it
+        is an in-app path (`/…`); anything else stays in `payload.link`. The plugin's
+        `notifications` permission is enforced by the plugin-request middleware.
+      operationId: createNotification
+      tags: [notifications]
+      parameters:
+        - name: X-Valuz-Plugin-Id
+          in: header
+          required: false
+          schema: {type: string}
+          description: "`<publisher>.<name>` of the calling third-party plugin."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationRequest"
+      responses:
+        "200":
+          description: The created entry's id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateNotificationResponse"
+        "400":
+          description: "`detail.code` = `invalid_plugin_id`"
+        "503":
+          description: "`detail.code` = `notification_unavailable` (the ledger could not be written)"
   /v1/notifications/history:
     get:
       summary: Resolved (dismissed / handled) notifications, newest first
@@ -5266,7 +5419,571 @@ paths:
                     type: object
                     additionalProperties: {$ref: "#/components/schemas/Operation"}
 
+  # ── Third-party plugins (ADR-034; local deployments only) ────────────────────
+  # Every /v1/extensions/third-party* and /v1/ext-assets route answers
+  # 403 {detail: {code: third_party_unavailable}} on a cloud deployment. Errors are
+  # {detail: ThirdPartyError}. Requests a plugin makes carry X-Valuz-Plugin-Id and are
+  # held to its manifest permissions by the plugin-request middleware.
+  /v1/extensions/third-party:
+    get:
+      summary: Installed third-party plugins
+      operationId: listThirdPartyPlugins
+      tags: [extensions]
+      responses:
+        "200":
+          description: The install registry as the renderer loads it
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ThirdPartyList"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/watch:
+    get:
+      summary: Long-poll for a change of the install registry
+      description: |
+        Returns as soon as `generation` differs from `since` (install, enable /
+        disable, uninstall, dev-directory rebuild, config edit), else after `timeout`
+        seconds with the current generation.
+      operationId: watchThirdPartyPlugins
+      tags: [extensions]
+      parameters:
+        - {name: since, in: query, required: false, schema: {type: integer, default: 0}}
+        - {name: timeout, in: query, required: false, schema: {type: number, default: 25, maximum: 60}}
+      responses:
+        "200":
+          description: Current generation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation]
+                properties: {generation: {type: integer}}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/safe-mode:
+    post:
+      summary: Switch plugin safe mode (the renderer then loads no third-party plugin)
+      operationId: setThirdPartySafeMode
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+                reason: {type: string, nullable: true}
+      responses:
+        "200":
+          description: Resulting state (VALUZ_EXTENSIONS_SAFE_MODE=1 keeps it on)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [safe_mode]
+                properties: {safe_mode: {type: boolean}}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/inspect:
+    post:
+      summary: What installing this package would do (manifest, sha256, permissions, problems)
+      operationId: inspectThirdPartyPlugin
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ThirdPartySource"}
+      responses:
+        "200":
+          description: Install confirmation data
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ThirdPartyInspection"}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/install:
+    post:
+      summary: Install (or update) a plugin from a zip, a directory or an https URL
+      description: |
+        Same id: installs only when the version is higher (409 `version_not_newer`).
+        The package must satisfy the manifest schema (400 `invalid_manifest` with
+        `errors`) and `expected_sha256` when given (422 `sha256_mismatch`).
+        Plugin-declared automations are created for the calling user.
+      operationId: installThirdPartyPlugin
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: "#/components/schemas/ThirdPartySource"}
+                - type: object
+                  properties:
+                    expected_sha256: {type: string, nullable: true}
+                    enable: {type: boolean, default: true}
+      responses:
+        "200":
+          description: The installed plugin and the version it replaced
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plugin, updated_from]
+                properties:
+                  plugin: {$ref: "#/components/schemas/ThirdPartyPlugin"}
+                  updated_from: {type: string, nullable: true}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "409": {$ref: "#/components/responses/ThirdPartyError"}
+        "413": {$ref: "#/components/responses/ThirdPartyError"}
+        "422": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/dev-link:
+    post:
+      summary: Link a plugin source directory for development (read in place, reloaded on change)
+      operationId: devLinkThirdPartyPlugin
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties: {path: {type: string}}
+      responses:
+        "200":
+          description: The linked plugin
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plugin]
+                properties: {plugin: {$ref: "#/components/schemas/ThirdPartyPlugin"}}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/validate:
+    post:
+      summary: Validate a plugin source directory
+      operationId: validateThirdPartyPlugin
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties: {path: {type: string}}
+      responses:
+        "200":
+          description: Validation report (`ok` is false when `errors` is not empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, errors, warnings, manifest]
+                properties:
+                  ok: {type: boolean}
+                  errors: {type: array, items: {type: string}}
+                  warnings: {type: array, items: {type: string}}
+                  manifest: {type: object, additionalProperties: true, nullable: true}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/pack:
+    post:
+      summary: Pack a plugin source directory into its deterministic zip
+      description: |
+        Writes `<out_dir>/<id>-<version>.zip` (default `<path>/dist`): sorted entries,
+        fixed timestamps, mode 0644; only valuz-plugin.json, frontend/, the locales
+        directory, automations/, the icon, README.md and LICENSE* are packed.
+      operationId: packThirdPartyPlugin
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: {type: string}
+                out_dir: {type: string, nullable: true}
+      responses:
+        "200":
+          description: The written package
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [path, sha256, size]
+                properties:
+                  path: {type: string}
+                  sha256: {type: string}
+                  size: {type: integer}
+                  id: {type: string}
+                  version: {type: string}
+                  files: {type: array, items: {type: string}}
+                  warnings: {type: array, items: {type: string}}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}:
+    delete:
+      summary: Uninstall a plugin (deletes the automations it created)
+      operationId: uninstallThirdPartyPlugin
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - name: purge_data
+          in: query
+          required: false
+          description: Also delete the plugin's storage, config, data directory and log.
+          schema: {type: boolean, default: false}
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed, automations_deleted]
+                properties:
+                  removed: {type: boolean}
+                  automations_deleted: {type: integer}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/reload:
+    post:
+      summary: Reload a dev-linked plugin (revision + 1)
+      operationId: reloadThirdPartyPlugin
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/ThirdPartyPluginResult"}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/enable:
+    post:
+      summary: Enable a plugin
+      operationId: enableThirdPartyPlugin
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/ThirdPartyPluginResult"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/disable:
+    post:
+      summary: Disable a plugin
+      operationId: disableThirdPartyPlugin
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/ThirdPartyPluginResult"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/logs:
+    get:
+      summary: The plugin's log, newest last
+      operationId: getThirdPartyPluginLogs
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - {name: limit, in: query, required: false, schema: {type: integer, default: 200, minimum: 1, maximum: 1000}}
+      responses:
+        "200":
+          description: JSON-line entries (`source` is frontend, backend or audit)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [ts, level, message, source]
+                      properties:
+                        ts: {type: integer, description: Epoch milliseconds}
+                        level: {type: string, enum: [debug, info, warn, error]}
+                        message: {type: string}
+                        source: {type: string, enum: [frontend, backend, audit]}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+    post:
+      summary: Write a line to the plugin's log (ctx.log; source frontend)
+      operationId: writeThirdPartyPluginLog
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                level: {type: string, default: info}
+                message: {type: string}
+      responses:
+        "204": {description: Written}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/config:
+    get:
+      summary: The plugin's settings for the calling user (schema defaults filled in)
+      operationId: getThirdPartyPluginConfig
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/ThirdPartyConfig"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+    put:
+      summary: Save the plugin's settings (validated against the manifest `config` schema)
+      operationId: putThirdPartyPluginConfig
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties: {values: {type: object, additionalProperties: true}}
+      responses:
+        "200": {$ref: "#/components/responses/ThirdPartyConfig"}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/storage:
+    get:
+      summary: Keys of the plugin's key-value store (per user and plugin)
+      operationId: listThirdPartyPluginStorage
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - {name: prefix, in: query, required: false, schema: {type: string, default: ""}}
+      responses:
+        "200":
+          description: Keys with their encoded size
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [key, size, updated_at]
+                      properties:
+                        key: {type: string}
+                        size: {type: integer}
+                        updated_at: {type: integer}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/storage/{key}:
+    parameters:
+      - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      - {name: key, in: path, required: true, description: "1-200 characters; may contain /", schema: {type: string}}
+    get:
+      summary: Read one stored value
+      operationId: getThirdPartyPluginStorage
+      tags: [extensions]
+      responses:
+        "200":
+          description: The value
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, value]
+                properties:
+                  key: {type: string}
+                  value: {}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+    put:
+      summary: Store a JSON value (<= 256 KiB; <= 10 MiB per plugin and user)
+      operationId: putThirdPartyPluginStorage
+      tags: [extensions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties: {value: {}}
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, size]
+                properties:
+                  key: {type: string}
+                  size: {type: integer}
+        "400": {$ref: "#/components/responses/ThirdPartyError"}
+        "413": {$ref: "#/components/responses/ThirdPartyError"}
+    delete:
+      summary: Delete a stored value
+      operationId: deleteThirdPartyPluginStorage
+      tags: [extensions]
+      responses:
+        "204": {description: Deleted}
+  /v1/extensions/third-party/{plugin_id}/automations:
+    get:
+      summary: The automations the manifest declares, with the calling user's rows and latest runs
+      operationId: listThirdPartyPluginAutomations
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: One entry per declared automation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [automations]
+                properties:
+                  automations:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, automation_id, runtime, trigger, status, latest_run]
+                      properties:
+                        name: {type: string}
+                        automation_id: {type: string, nullable: true}
+                        runtime: {type: string, enum: [python, shell]}
+                        trigger: {description: "'manual', {cron, timezone?} or {intervalSec}"}
+                        status: {type: string, nullable: true}
+                        latest_run: {type: object, additionalProperties: true, nullable: true}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/automations/{name}/run:
+    post:
+      summary: Run one of the plugin's declared automations by name
+      description: 409 `automation_already_running` while a run is queued or running.
+      operationId: runThirdPartyPluginAutomation
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - {name: name, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input: {description: "Per the automation's input contract"}
+                wait_seconds: {type: integer, minimum: 0, maximum: 60, default: 0}
+      responses:
+        "200":
+          description: Accepted (`run` is present when `wait_seconds` > 0)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [automation_id, run_id, status]
+                properties:
+                  automation_id: {type: string}
+                  run_id: {type: string}
+                  status: {type: string}
+                  run: {type: object, additionalProperties: true}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+        "409": {$ref: "#/components/responses/ThirdPartyError"}
+        "422": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/automations/{name}/runs/latest:
+    get:
+      summary: The latest run of a declared automation (same shape as /v1/automations/{id}/runs/{run_id})
+      operationId: getThirdPartyPluginLatestRun
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - {name: name, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Run detail
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/extensions/third-party/{plugin_id}/automation-runs/{run_id}:
+    get:
+      summary: One run of one of this plugin's automations
+      operationId: getThirdPartyPluginAutomationRun
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - {name: run_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Run detail
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+  /v1/ext-assets/{plugin_id}/{revision}/{path}:
+    get:
+      summary: A file of a plugin's current version (or its dev directory)
+      description: |
+        Only the current `revision` resolves (404 otherwise); the path is confined to the
+        plugin's own directory. `.js` / `.mjs` are `text/javascript`. Cache-Control is
+        `no-cache` for a dev-linked plugin, `public, max-age=31536000, immutable` otherwise.
+      operationId: getThirdPartyPluginAsset
+      tags: [extensions]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+        - {name: revision, in: path, required: true, schema: {type: integer}}
+        - {name: path, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: The file
+          content:
+            "*/*":
+              schema: {type: string, format: binary}
+        "403": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/ThirdPartyError"}
+
 components:
+  responses:
+    ThirdPartyError:
+      description: Error (`detail.code` is the stable code)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ThirdPartyError"}
+    ThirdPartyPluginResult:
+      description: The plugin after the change
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [plugin]
+            properties: {plugin: {$ref: "#/components/schemas/ThirdPartyPlugin"}}
+    ThirdPartyConfig:
+      description: The plugin's settings and the schema they follow
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [values, schema]
+            properties:
+              values: {type: object, additionalProperties: true}
+              schema: {type: object, additionalProperties: true, nullable: true}
   parameters:
     AcceptLanguage:
       name: Accept-Language
@@ -5282,6 +5999,102 @@ components:
         type: string
         examples: [zh-CN, en-US]
   schemas:
+    ThirdPartyError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: |
+                invalid_manifest, invalid_source, source_too_large, not_a_dev_plugin,
+                invalid_config, invalid_storage_key, version_not_newer,
+                automation_already_running, sha256_mismatch, not_found,
+                automation_not_found, run_not_found, storage_quota_exceeded,
+                invalid_input, third_party_unavailable (and, from the permission
+                middleware, plugin_permission_denied with `permission`)
+            message: {type: string}
+            errors: {type: array, items: {type: string}}
+            permission: {type: string, nullable: true}
+    ThirdPartySource:
+      type: object
+      description: Exactly one of `source_path` (a zip file or a directory) or `url` (https zip).
+      properties:
+        source_path: {type: string}
+        url: {type: string}
+    ThirdPartyPlugin:
+      type: object
+      required: [id, version, name, status, enabled, permissions, requires, unmet_requires, entry_url, style_urls, locales, revision]
+      properties:
+        id: {type: string}
+        version: {type: string}
+        name: {description: "string or {lang: text}, as in the manifest"}
+        description: {nullable: true}
+        publisher: {type: object, additionalProperties: true}
+        source:
+          type: object
+          required: [kind]
+          properties:
+            kind: {type: string, enum: [file, url, dev, catalog]}
+            path: {type: string}
+            url: {type: string}
+            scope: {type: string}
+            item_id: {type: string}
+        status: {type: string, enum: [enabled, disabled, incompatible, broken, requires-unmet, blocked]}
+        status_reason: {type: string, nullable: true}
+        enabled: {type: boolean}
+        permissions: {type: array, items: {type: string}}
+        requires: {type: array, items: {type: string}}
+        unmet_requires: {type: array, items: {type: string}}
+        engines: {type: object, additionalProperties: {type: string}}
+        entry_url: {type: string, nullable: true, description: "/v1/ext-assets/<id>/<revision>/<path>"}
+        style_urls: {type: array, items: {type: string}}
+        locales: {type: object, additionalProperties: {type: object, additionalProperties: true}}
+        config_schema: {type: object, additionalProperties: true, nullable: true}
+        automations:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              title: {nullable: true}
+              runtime: {type: string}
+              trigger: {}
+              automation_id: {type: string, nullable: true}
+        revision: {type: integer}
+        dev_path: {type: string, nullable: true}
+        sha256: {type: string, nullable: true}
+        installed_at: {type: integer, nullable: true, description: Epoch milliseconds}
+    ThirdPartyList:
+      type: object
+      required: [api_version, safe_mode, generation, plugins]
+      properties:
+        api_version: {type: string, example: "1.0.0"}
+        safe_mode: {type: boolean}
+        safe_mode_reason: {type: string, nullable: true}
+        generation: {type: integer}
+        plugins: {type: array, items: {$ref: "#/components/schemas/ThirdPartyPlugin"}}
+    ThirdPartyInspection:
+      type: object
+      required: [manifest, sha256, size, permissions, requires, unmet_requires, errors, warnings, has_backend, existing, added_permissions]
+      properties:
+        manifest: {type: object, additionalProperties: true, nullable: true}
+        sha256: {type: string}
+        size: {type: integer}
+        permissions: {type: array, items: {type: string}}
+        requires: {type: array, items: {type: string}}
+        unmet_requires: {type: array, items: {type: string}}
+        errors: {type: array, items: {type: string}}
+        warnings: {type: array, items: {type: string}}
+        has_backend: {type: boolean}
+        existing:
+          type: object
+          nullable: true
+          properties: {version: {type: string}}
+        added_permissions: {type: array, items: {type: string}}
     UiRenderRequest:
       type: object
       required: [site]
@@ -7042,6 +7855,67 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TaskRunTokenUsage"
+    ConnectorToolItem:
+      type: object
+      required: [name, input_schema, annotations, read_only]
+      properties:
+        name: {type: string}
+        description: {type: string, nullable: true}
+        input_schema: {type: object, additionalProperties: true, description: "The tool's JSON Schema, complete."}
+        annotations: {type: object, additionalProperties: true, description: "MCP tool annotations (readOnlyHint, destructiveHint, …)."}
+        read_only:
+          type: boolean
+          description: "`annotations.readOnlyHint === true`; absent / false = not read-only."
+    ConnectorToolsResponse:
+      type: object
+      required: [connector_id, tools]
+      properties:
+        connector_id: {type: string}
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorToolItem"
+    CallConnectorToolRequest:
+      type: object
+      properties:
+        arguments: {type: object, additionalProperties: true, default: {}}
+        allow_write:
+          type: boolean
+          default: false
+          description: "Required for a tool that is not declared read-only."
+    CallConnectorToolResponse:
+      type: object
+      required: [content, is_error]
+      properties:
+        content:
+          type: array
+          description: "MCP content blocks as JSON (`{type: text, text: …}`, images, resources)."
+          items: {type: object, additionalProperties: true}
+        structured_content: {type: object, additionalProperties: true, nullable: true}
+        is_error: {type: boolean}
+    ConnectorToolsError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code]
+          properties:
+            code: {type: string}
+            message: {type: string}
+    CreateNotificationRequest:
+      type: object
+      required: [title]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 256}
+        body: {type: string, maxLength: 2048, default: ""}
+        link: {type: string, maxLength: 512, nullable: true}
+        urgency: {type: string, enum: [info, actionable], default: info}
+    CreateNotificationResponse:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
     NotificationEntry:
       type: object
       required: [id, kind, title, body, action, urgency, payload, created_at]

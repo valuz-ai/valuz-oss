@@ -1,0 +1,60 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { createTestHost, mockValuz } from "@valuz/plugin-sdk/testing";
+
+import enUS from "../locales/en-US.json";
+import zhCN from "../locales/zh-CN.json";
+import manifest from "../valuz-plugin.json";
+import plugin, { PROJECTS_PATH } from "../src/index";
+
+const locales = { "en-US": enUS, "zh-CN": zhCN };
+
+async function loadPlugin() {
+  const host = createTestHost({
+    locales,
+    valuz: mockValuz({ projects: [{ id: "p1", name: "Demo", kind: null, rootPath: null, icon: null }] }),
+  });
+  await host.load(plugin, { permissions: manifest.permissions, locales });
+  return host;
+}
+
+test("the plugin id matches valuz-plugin.json", () => {
+  assert.equal(plugin.id, manifest.id);
+});
+
+test("registers the title button and the projects page", async () => {
+  const host = await loadPlugin();
+  const snapshot = host.capture();
+  assert.ok(snapshot.slots["conversation.title.actions"]?.includes(`x:${manifest.id}:hello`));
+  assert.ok(snapshot.routes.some((route) => route.path === PROJECTS_PATH));
+  assert.ok(snapshot.nav.some((item) => item.id === `x:${manifest.id}:projects`));
+  await host.unload();
+});
+
+test("renders the title button with the plugin's own text", async () => {
+  const host = await loadPlugin();
+  const html = host.renderSlot("conversation.title.actions", {
+    sessionId: "s1",
+    session: null,
+    scrollToTop: () => {},
+    turns: [],
+  });
+  assert.match(html, new RegExp(enUS.hello.button));
+  host.setLocale("zh-CN");
+  assert.match(
+    host.renderSlot("conversation.title.actions", { sessionId: "s1", session: null, scrollToTop: () => {}, turns: [] }),
+    new RegExp(zhCN.hello.button),
+  );
+  await host.unload();
+});
+
+test("renders the projects page", async () => {
+  const host = await loadPlugin();
+  assert.match(host.renderRoute(PROJECTS_PATH), new RegExp(enUS.projects.title));
+  assert.deepEqual(
+    (await host.valuz.projects.list()).map((project) => project.name),
+    ["Demo"],
+  );
+  await host.unload();
+});

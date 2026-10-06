@@ -50,6 +50,14 @@
       "display_order": 5
     },
     {
+      "type": "skill",
+      "slug": "valuz-plugin-dev",
+      "version": "1.0.0",
+      "provisioning": "provisioned",
+      "asset": "official_skills/valuz-plugin-dev",
+      "display_order": 6
+    },
+    {
       "type": "plugin",
       "slug": "office",
       "version": "2.0.0",

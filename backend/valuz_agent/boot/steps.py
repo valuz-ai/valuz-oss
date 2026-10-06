@@ -1268,3 +1268,19 @@ async def start_dsh_manager_if_plugins_installed() -> None:
             logger.warning("dsh manager host autostart failed", exc_info=True)
 
     asyncio.get_running_loop().create_task(_start())
+
+
+async def cleanup_superseded_extension_versions() -> None:
+    """Remove third-party plugin version directories an update superseded.
+
+    Runs after boot (``POST_BOOT``): the previous version stays on disk while the
+    process that updated it is alive, then goes at the next start. Never fails boot.
+    """
+    import asyncio
+
+    from valuz_agent.modules.third_party.maintenance import cleanup_superseded_versions
+
+    try:
+        await asyncio.to_thread(cleanup_superseded_versions)
+    except Exception:  # noqa: BLE001 — housekeeping must not break startup
+        logger.warning("third-party plugin cleanup failed", exc_info=True)

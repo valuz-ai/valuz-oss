@@ -26,6 +26,10 @@ export default defineConfig({
       "@valuz/core": path.resolve(workspaceRoot, "packages/core/src"),
       "@valuz/ui": path.resolve(workspaceRoot, "packages/ui/src"),
       "@valuz/app": path.resolve(workspaceRoot, "packages/app/src"),
+      "@valuz/plugin-sdk": path.resolve(
+        workspaceRoot,
+        "packages/plugin-sdk/src",
+      ),
     },
   },
   test: {

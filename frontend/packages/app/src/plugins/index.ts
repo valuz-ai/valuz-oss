@@ -20,3 +20,13 @@ export {
   type OssRouteId,
   type OssSettingsSectionId,
 } from "./layout";
+export {
+  getThirdPartyRuntime,
+  markThirdPartyBootSettled,
+  setThirdPartyOrgIdProvider,
+  useThirdPartyRuntime,
+  type ThirdPartyPluginPhase,
+  type ThirdPartyPluginState,
+  type ThirdPartyRuntimeSnapshot,
+  type ThirdPartyRuntimeStatus,
+} from "./third-party-runtime";

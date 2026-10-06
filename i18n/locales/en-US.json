@@ -2395,7 +2395,61 @@
     "complete": "Complete",
     "executing": "Executing",
     "failed": "Failed",
-    "running": "Running"
+    "running": "Running",
+    "extensionManager": {
+      "title": {
+        "install": "Install third-party plugin",
+        "dev_link": "Link a plugin dev folder",
+        "uninstall": "Uninstall plugin",
+        "publish": "Publish plugin",
+        "generic": "Plugin action"
+      },
+      "field": {
+        "id": "Plugin id",
+        "version": "Version",
+        "publisher": "Publisher",
+        "source": "Source",
+        "path": "Folder",
+        "sha256": "sha256",
+        "permissions": "Permissions",
+        "requires": "Requires",
+        "scope": "Scope",
+        "targets": "Publish to",
+        "notes": "Notes"
+      },
+      "updatesFrom": "Updates from v{version}",
+      "newPermission": "New",
+      "unmet": "Unmet",
+      "noPermissions": "No permissions declared",
+      "hasBackend": "Includes a backend service",
+      "scope": {
+        "personal": "Personal",
+        "org": "Organization",
+        "global": "Global marketplace"
+      },
+      "purgeData": "Also delete the plugin's data",
+      "keepData": "Keep the plugin's data",
+      "devHint": "You are confirming the code in this folder: every later rebuild reloads directly without asking again.",
+      "risk": "Once confirmed, this plugin runs third-party code on this computer with your permissions.",
+      "publishHint": "Once confirmed, the package is uploaded and goes through the automatic checks and review.",
+      "confirm": {
+        "install": "Install",
+        "dev_link": "Link",
+        "uninstall": "Uninstall",
+        "publish": "Publish",
+        "generic": "Confirm"
+      },
+      "state": {
+        "succeeded": "Done",
+        "cancelled": "Cancelled, nothing was changed.",
+        "expired": "The proposal expired and nothing was changed. Ask again.",
+        "superseded": "Replaced by a newer proposal, nothing was changed.",
+        "stale": "The proposal is out of date. Ask again.",
+        "failed": "The plugin action failed"
+      },
+      "succeeded": "Plugin action completed",
+      "details": "Details"
+    }
   },
   "menu": {
     "about": "About Valuz",
@@ -3640,6 +3694,158 @@
         "provides": "Provides: {list}",
         "needs": "Needs: {list}",
         "entitlement": "Entitlement: {key}"
+      }
+    },
+    "thirdParty": {
+      "title": "Third-party plugins",
+      "desc": "Install and manage Valuz plugins built by third parties. A plugin runs on this computer with your permissions, so only install sources you trust.",
+      "loadFailed": "Could not read the third-party plugins",
+      "tabsLabel": "Third-party plugin tabs",
+      "tabs": {
+        "installed": "Installed"
+      },
+      "empty": "No third-party plugins installed yet",
+      "safeMode": {
+        "title": "Safe mode",
+        "desc": "Third-party plugins kept failing to load, so loading them is paused.",
+        "reason": "Reason: {reason}",
+        "exit": "Exit safe mode",
+        "exitFailed": "Could not exit safe mode: {error}"
+      },
+      "install": {
+        "title": "Install",
+        "file": "Install from file",
+        "url": "Install from URL",
+        "folder": "Link a dev folder"
+      },
+      "source": {
+        "file": "Local file",
+        "url": "URL",
+        "dev": "Dev folder",
+        "catalog": "Catalog",
+        "scope": {
+          "personal": "Mine",
+          "org": "Organization",
+          "global": "Marketplace"
+        }
+      },
+      "status": {
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "incompatible": "Incompatible",
+        "broken": "Broken",
+        "requires-unmet": "Requirements unmet",
+        "blocked": "Blocked by policy"
+      },
+      "load": {
+        "active": "UI loaded",
+        "loading": "UI loading",
+        "failed": "UI failed to load",
+        "disposed": "UI unloaded",
+        "error": "Failed to load: {error}"
+      },
+      "meta": {
+        "publisher": "Publisher: {name}",
+        "source": "Source: {source}",
+        "devPath": "Dev folder: {path}",
+        "unmet": "Unmet requirements: {list}",
+        "permissions": "Permissions: {list}",
+        "noPermissions": "No permissions declared",
+        "reason": "Reason: {reason}"
+      },
+      "actions": {
+        "toggle": "Enable or disable {name}",
+        "reload": "Reload",
+        "reloaded": "Reloaded {name}",
+        "reloadFailed": "Could not reload {name}: {error}",
+        "toggleFailed": "Could not change {name}: {error}",
+        "uninstall": "Uninstall",
+        "logs": "Logs",
+        "config": "Settings"
+      },
+      "uninstall": {
+        "title": "Uninstall {name}",
+        "desc": "This removes the plugin and the automations it created.",
+        "purge": "Also delete its data",
+        "purgeHint": "Deletes the settings and data the plugin saved. Leave unchecked to keep them for a later reinstall.",
+        "confirm": "Uninstall",
+        "done": "Uninstalled {name}",
+        "failed": "Could not uninstall {name}: {error}"
+      },
+      "logs": {
+        "title": "Logs of {name}",
+        "desc": "Recent entries from the UI, the backend and the audit trail.",
+        "empty": "No log entries yet",
+        "refresh": "Refresh",
+        "loadFailed": "Could not read the logs: {error}",
+        "source": {
+          "frontend": "UI",
+          "backend": "Backend",
+          "audit": "Audit"
+        }
+      },
+      "config": {
+        "title": "Settings of {name}",
+        "desc": "Options declared by the plugin.",
+        "noSchema": "This plugin has no settings.",
+        "loadFailed": "Could not read the settings: {error}",
+        "save": "Save",
+        "saved": "Settings saved",
+        "saveFailed": "Could not save the settings: {error}",
+        "required": "{field} is required",
+        "invalidNumber": "{field} must be a number",
+        "invalidInteger": "{field} must be an integer",
+        "listHint": "One item per line",
+        "unset": "Not set",
+        "serverErrors": "The server rejected the settings:"
+      },
+      "form": {
+        "fileLabel": "Package path (.zip or folder)",
+        "filePlaceholder": "/path/to/plugin.zip",
+        "urlLabel": "Package URL",
+        "urlPlaceholder": "https://example.com/plugin.zip",
+        "devLabel": "Plugin folder",
+        "devPlaceholder": "/path/to/my-plugin",
+        "devHint": "Dev mode reads this folder in place without copying it; after a rebuild, press Reload.",
+        "browse": "Browse…",
+        "inspect": "Inspect",
+        "inspecting": "Inspecting…",
+        "inspectFailed": "Could not inspect: {error}",
+        "required": "Enter a source first"
+      },
+      "confirm": {
+        "title": "Install plugin",
+        "titleDev": "Link a dev folder",
+        "desc": "Review the details below before installing.",
+        "field": {
+          "id": "Plugin id",
+          "version": "Version",
+          "publisher": "Publisher",
+          "source": "Source",
+          "sha256": "sha256",
+          "size": "Size",
+          "permissions": "Permissions",
+          "requires": "Requires"
+        },
+        "updatesFrom": "Updates from v{version}",
+        "newPermission": "New",
+        "unmet": "Unmet",
+        "noPermissions": "No permissions declared",
+        "noRequires": "None",
+        "hasBackend": "Includes a backend service",
+        "errors": "Errors found, installation is blocked:",
+        "warnings": "Notes:",
+        "risk": "I understand this plugin runs third-party code on this computer with my permissions",
+        "install": "Install",
+        "link": "Link",
+        "update": "Update",
+        "back": "Back",
+        "working": "Working…",
+        "installed": "Installed {name}",
+        "updated": "Updated {name} from v{from} to v{to}",
+        "linked": "Linked {name}",
+        "failed": "Could not install: {error}",
+        "unknownName": "(unnamed)"
       }
     }
   }

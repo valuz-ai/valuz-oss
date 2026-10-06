@@ -6,9 +6,11 @@ import { initParserPlugins } from "@valuz/parser-plugins";
 import { hydrateOverlayIfPresent, hydrateTheme } from "@valuz/core";
 import {
   loadOssPlugins,
+  markThirdPartyBootSettled,
   renderOssBootFailure,
   settleOssPlugins,
 } from "@valuz/app/plugins";
+import { installSharedModules } from "@valuz/plugin-sdk/host";
 // Serif display faces — used only for onboarding hero headlines (editorial
 // moment). Bundled via @fontsource so the desktop build stays offline-safe;
 // CJK subsets are unicode-range split, so the browser only fetches the glyph
@@ -40,6 +42,11 @@ initParserPlugins();
 // The overlay is optional — a hydration failure must NOT block the mount
 // (a bare ``.then`` here meant any rejection left a permanently white
 // page, since ``render`` was never called and nothing logged the cause).
+// Third-party plugins import react, react-dom and the plugin SDK from this
+// table instead of bundling their own copies; it must exist before any plugin
+// loads.
+installSharedModules();
+
 const rootElement = document.getElementById("root")!;
 loadOssPlugins()
   .then(({ stateKnown }) => {
@@ -60,6 +67,7 @@ loadOssPlugins()
           <App />
         </StrictMode>,
       );
+      markThirdPartyBootSettled();
     },
     (error: unknown) => renderOssBootFailure(rootElement, error),
   );

@@ -193,6 +193,13 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     # show "already added" instead of a fresh Confirm button.
     origin_tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
+    # ── Plugin ownership ──────────────────────────────────────────────
+    # Set on the code automations a third-party plugin declares in its manifest
+    # (created on install, deleted on uninstall — modules/third_party). NULL for
+    # every automation a user or an agent made.
+    extension_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    extension_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
     # ── Schedule state ────────────────────────────────────────────────
     status: Mapped[str] = mapped_column(String(32), default="enabled")
     # Cron / interval write a concrete next-fire instant; manual leaves it

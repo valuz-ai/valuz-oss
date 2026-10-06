@@ -1,6 +1,6 @@
 """Command wrappers every agent session can call by name.
 
-Two bundled tools, installed at boot as small wrappers in the session bin dir
+Three bundled tools, installed at boot as small wrappers in the session bin dir
 (``FsRegistry.session_bin_dir``) and prepended to this process's PATH, so every
 runtime subprocess spawned afterwards — Claude, Codex, DeepAgents, DeepSeek
 Harness — resolves them the same way (the ``chrome-devtools`` wrapper pattern):
@@ -16,8 +16,14 @@ Harness — resolves them the same way (the ``chrome-devtools`` wrapper pattern)
   through ``VALUZ_DSH_RUNTIME_ENTRY``, run under the app's Electron binary as
   Node; a dev checkout uses ``backend/vendor/dsh-runtime``.
 
+* ``valuz-plugin`` — the plugin SDK CLI (``@valuz/plugin-sdk``'s ``bin/valuz-plugin.mjs``:
+  ``create`` / ``build`` / ``test`` / ``validate`` / ``pack``), run on Node, so an agent
+  can build a third-party Valuz plugin in a session (docs plugin-development/05).
+  Packaged desktop: the sidecar points ``VALUZ_PLUGIN_SDK_ENTRY`` at the staged,
+  self-contained CLI bundle; a source checkout uses the package's own ``bin``.
+
 Cloud sandboxes do not go through this module: the kernel image ships the same
-two commands in ``/usr/local/bin``.
+commands in ``/usr/local/bin``.
 
 A missing tool is skipped (logged at INFO), never raised: the skills that use
 these commands report the missing tool instead of failing a boot.
@@ -35,11 +41,14 @@ logger = logging.getLogger(__name__)
 
 PYTHON_COMMAND = "valuz-python"
 OFFICE_COMMAND = "dsoffice"
+PLUGIN_COMMAND = "valuz-plugin"
 
 #: Root of the staged python runtime (packaged desktop; set by the sidecar).
 PYTHON_RUNTIME_ENV = "VALUZ_PYTHON_RUNTIME"
 #: The dsh closure's launcher (packaged desktop; set by the sidecar).
 DSH_RUNTIME_ENTRY_ENV = "VALUZ_DSH_RUNTIME_ENTRY"
+#: The plugin SDK CLI entry (packaged desktop; set by the sidecar).
+PLUGIN_SDK_ENTRY_ENV = "VALUZ_PLUGIN_SDK_ENTRY"
 NODE_PATH_ENV = "VALUZ_NODE_PATH"
 NODE_IS_ELECTRON_ENV = "VALUZ_NODE_IS_ELECTRON"
 
@@ -47,6 +56,10 @@ _BACKEND_DIR = Path(__file__).resolve().parents[2]
 _VENDORED_PYTHON_RUNTIME = _BACKEND_DIR / "vendor" / "python-runtime" / "dist"
 _VENDORED_DSH_NODE_MODULES = _BACKEND_DIR / "vendor" / "dsh-runtime" / "node_modules"
 _KIT_CLI_REL = Path("@deepseek-ai") / "libreoffice-kit" / "lib" / "cli.js"
+# <repo>/backend -> <repo>/frontend/packages/plugin-sdk/bin/valuz-plugin.mjs
+_SOURCE_PLUGIN_SDK_ENTRY = (
+    _BACKEND_DIR.parent / "frontend" / "packages" / "plugin-sdk" / "bin" / "valuz-plugin.mjs"
+)
 
 
 def _is_windows() -> bool:
@@ -70,6 +83,19 @@ def office_kit_cli() -> Path | None:
     node_modules = Path(entry).parents[2] if entry else _VENDORED_DSH_NODE_MODULES
     cli = node_modules / _KIT_CLI_REL
     return cli if cli.is_file() else None
+
+
+def plugin_sdk_cli() -> Path | None:
+    """The plugin SDK CLI entry, or ``None`` when none is installed.
+
+    ``VALUZ_PLUGIN_SDK_ENTRY`` wins (packaged desktop / kernel image); a source
+    checkout falls back to the package's own ``bin``.
+    """
+    configured = os.environ.get(PLUGIN_SDK_ENTRY_ENV, "").strip()
+    for candidate in (Path(configured) if configured else None, _SOURCE_PLUGIN_SDK_ENTRY):
+        if candidate is not None and candidate.is_file():
+            return candidate
+    return None
 
 
 def _node() -> tuple[str, bool] | None:
@@ -145,6 +171,16 @@ def ensure_session_tools_on_path(bin_dir: Path) -> list[str]:
     else:
         _remove_wrapper(bin_dir, OFFICE_COMMAND)
         logger.info("LibreOffice Kit or Node not found; %s unavailable", OFFICE_COMMAND)
+
+    sdk = plugin_sdk_cli()
+    if sdk is not None and node is not None:
+        node_bin, is_electron = node
+        body = wrapper_body([node_bin, str(sdk)], electron_as_node=is_electron)
+        _write_wrapper(bin_dir, PLUGIN_COMMAND, body)
+        installed.append(PLUGIN_COMMAND)
+    else:
+        _remove_wrapper(bin_dir, PLUGIN_COMMAND)
+        logger.info("plugin SDK CLI or Node not found; %s unavailable", PLUGIN_COMMAND)
 
     _prepend_path(str(bin_dir))
     return installed

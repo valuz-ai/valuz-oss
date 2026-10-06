@@ -18,6 +18,7 @@
     "@valuz/app": "workspace:*",
     "@valuz/core": "workspace:*",
     "@valuz/parser-plugins": "workspace:*",
+    "@valuz/plugin-sdk": "workspace:*",
     "@valuz/shared": "workspace:*",
     "@valuz/ui": "workspace:*",
     "lucide-react": "^1.8.0",

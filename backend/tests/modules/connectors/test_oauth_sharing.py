@@ -214,9 +214,7 @@ async def test_propagate_hands_the_full_identity_to_a_pending_sibling() -> None:
 @pytest.mark.asyncio
 async def test_cloud_managed_credentials_do_not_widen_distribution_policy() -> None:
     source = _authorized("valuz-search")
-    source.oauth_client_info_json = (
-        '{"client_id":"valuz-team","managed_provider":"valuz"}'
-    )
+    source.oauth_client_info_json = '{"client_id":"valuz-team","managed_provider":"valuz"}'
     target = _FakeRow(slug="valuz-data", id="c2")
     ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
 
