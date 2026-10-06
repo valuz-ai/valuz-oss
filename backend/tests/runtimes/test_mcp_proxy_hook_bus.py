@@ -304,16 +304,32 @@ async def test_dsh_patch_arms_the_bridge_and_proxies_only_with_a_handler() -> No
         await runtime._release_hook_bus()
 
 
-async def test_the_citation_projection_alone_does_not_proxy_in_the_cloud_sandbox(
+async def test_the_cloud_sandbox_proxies_through_its_own_kernel_on_loopback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """There the proxy base is the host's callback URL, which cannot serve a
-    session registered in the sandbox kernel; connectors must stay direct."""
-    from src.runtimes.codex.runtime import CodexRuntime
+    """There ``CODEX_TOOLKIT_BASE_URL`` is the host's callback URL, which
+    cannot serve a session registered in the sandbox kernel; the CLI must
+    reach the sandbox kernel itself."""
+    from src.runtimes.codex.runtime import CodexRuntime, _build_config_overrides
 
     monkeypatch.setenv("IS_SANDBOX", "1")
+    monkeypatch.setenv("CODEX_TOOLKIT_BASE_URL", "https://host.example/valuz-backend/agent")
+    monkeypatch.delenv("KERNEL_PORT", raising=False)
     runtime = CodexRuntime.__new__(CodexRuntime)
     runtime._mcp_proxy_session_id = None
     runtime._hook_session_ref = SessionRef(session_id="s-route", runtime_provider="codex")
     session = _session()
-    assert await runtime._route_mcp_through_proxy(session) is session
+    routed = await runtime._route_mcp_through_proxy(session)
+    try:
+        joined = "\n".join(
+            _build_config_overrides(routed, None, "gpt", expose_toolkit=False, egress_base_url=None)
+        )
+        assert "http://127.0.0.1:8000/mcp/proxy/s-route/remote/" in joined
+        assert "host.example" not in joined and "example.com" not in joined
+    finally:
+        await runtime._release_mcp_proxy()
+
+    monkeypatch.setenv("KERNEL_PORT", "18080")
+    from src.runtimes.mcp_proxy.registry import proxy_url
+
+    assert proxy_url("s", "srv").startswith("http://127.0.0.1:18080/mcp/proxy/s/srv/")

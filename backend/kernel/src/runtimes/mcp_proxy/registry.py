@@ -49,6 +49,16 @@ def _in_sandbox() -> bool:
 
 
 def proxy_base_url() -> str:
+    """Where a CLI subprocess reaches the kernel that owns its proxied session.
+
+    Locally the kernel runs inside the host process, so the toolkit callback
+    base (``CODEX_TOOLKIT_BASE_URL``) is this kernel. In the cloud sandbox that
+    variable is the HOST's external callback URL, while proxied sessions are
+    registered in the sandbox kernel; the CLIs run beside it and reach it on
+    loopback, like the DSH user-question and hook bridges do.
+    """
+    if _in_sandbox():
+        return f"http://127.0.0.1:{os.getenv('KERNEL_PORT', '').strip() or '8000'}"
     return (os.getenv(_BASE_URL_ENV) or _BASE_URL_DEFAULT).rstrip("/")
 
 
@@ -107,14 +117,6 @@ def proxy_session_mcp(
     if not owners:
         return None
     citation_only = all(owner == CITATION_PROJECTION for owner in owners)
-    if citation_only and _in_sandbox():
-        # In the cloud sandbox the proxy base (``CODEX_TOOLKIT_BASE_URL``) is
-        # the HOST's callback URL, while the proxied session is registered in
-        # this sandbox kernel — the CLI would reach a host that knows nothing
-        # of it and every connector would show as disconnected. Until the
-        # proxy has an address the sandbox can serve, the citation projection
-        # alone does not reroute anything there (connectors stay direct).
-        return None
     selected = (
         [cfg for cfg in servers if isinstance(cfg, McpHttpServerConfig)]
         if citation_only
