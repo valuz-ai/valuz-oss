@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import tomllib
 from collections.abc import Mapping
@@ -227,6 +228,26 @@ def _signature(root: Path) -> tuple[tuple[str, int, int], ...]:
 
 _cache: dict[str, tuple[tuple[tuple[str, int, int], ...], WorkspaceHooks | None]] = {}
 
+CLASSIC_HOOKS_ENABLED_ENV = "VALUZ_CLASSIC_HOOKS_ENABLED"
+
+
+def classic_hooks_allowed() -> bool:
+    """Whether this kernel may run workspace hooks for a runtime.
+
+    Local workstations only (hooks-and-plugin-ui.md §6): off inside the
+    cloud sandbox image (``IS_SANDBOX``), in a ``cloud`` deployment and on a
+    shared / remote kernel store, like the DSH manager host.
+    ``VALUZ_CLASSIC_HOOKS_ENABLED`` (``1``/``0``) wins.
+    """
+    explicit = os.environ.get(CLASSIC_HOOKS_ENABLED_ENV, "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on"}
+    if os.environ.get("IS_SANDBOX", "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    if os.environ.get("VALUZ_DEPLOYMENT_TYPE", "local").strip().lower() not in {"", "local"}:
+        return False
+    return os.environ.get("KERNEL_STORE", "local").strip().lower() in {"", "local"}
+
 
 def workspace_hooks_signature(cwd: str) -> tuple[tuple[str, int, int], ...]:
     """What a change to the workspace's hook files changes (for respawn digests)."""
@@ -254,6 +275,7 @@ def load_workspace_hooks(cwd: str) -> WorkspaceHooks | None:
 
 
 __all__ = [
+    "CLASSIC_HOOKS_ENABLED_ENV",
     "CLAUDE_SOURCES",
     "CODEX_SOURCES",
     "SUPPORTED_EVENTS",
@@ -261,6 +283,7 @@ __all__ = [
     "Dialect",
     "MatcherGroup",
     "WorkspaceHooks",
+    "classic_hooks_allowed",
     "load_workspace_hooks",
     "matches",
     "workspace_hooks_signature",

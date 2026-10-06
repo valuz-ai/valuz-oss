@@ -21,8 +21,9 @@ SubagentStart       agent.spawn          observe
 ==================  ===================  ===========================================
 
 Hooks see Claude Code's tool names (``Bash``, ``Write`` …), so one config
-matches the same calls everywhere. They run only in a trusted workspace (H0),
-in the user tier, one after another in config order.
+matches the same calls everywhere. They run only in a trusted workspace (H0)
+on a local workstation (``classic_hooks_allowed``), in the user tier, one
+after another in config order.
 """
 
 from __future__ import annotations
@@ -34,7 +35,11 @@ from pathlib import Path
 from typing import Any
 
 from src.core.hooks.chain import HookContext, Next
-from src.core.hooks.classic.config import WorkspaceHooks, load_workspace_hooks
+from src.core.hooks.classic.config import (
+    WorkspaceHooks,
+    classic_hooks_allowed,
+    load_workspace_hooks,
+)
 from src.core.hooks.classic.runner import Merged, run_hooks
 from src.core.hooks.events import (
     AGENT_SPAWN,
@@ -84,6 +89,8 @@ _started: set[str] = set()
 
 def _hooks_for(ref: SessionRef) -> WorkspaceHooks | None:
     if ref.runtime_provider not in BUS_RUNTIMES or not ref.trusted or ref.bare or not ref.cwd:
+        return None
+    if not classic_hooks_allowed():
         return None
     return load_workspace_hooks(ref.cwd)
 

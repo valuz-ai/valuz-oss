@@ -42,8 +42,15 @@ from src.runtimes.deepseek_harness.runtime import _composition_fingerprint
 
 
 @pytest.fixture(autouse=True)
-def _fresh_sessions() -> None:
+def _fresh_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
     executor._started.clear()
+    for name in (
+        "VALUZ_CLASSIC_HOOKS_ENABLED",
+        "VALUZ_DEPLOYMENT_TYPE",
+        "KERNEL_STORE",
+        "IS_SANDBOX",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _script(root: Path, name: str, body: str) -> str:
@@ -412,3 +419,22 @@ async def test_deepagents_runs_them_through_its_tool_middleware(tmp_path: Path) 
     result = await middleware.awrap_tool_call(request, run)
     assert isinstance(result, ToolMessage)
     assert result.content == "Error: shell is off here" and result.status == "error"
+
+
+@pytest.mark.parametrize(
+    ("env", "value"),
+    [("IS_SANDBOX", "1"), ("KERNEL_STORE", "remote"), ("VALUZ_DEPLOYMENT_TYPE", "cloud")],
+)
+def test_local_workstations_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: str, value: str
+) -> None:
+    _settings(tmp_path, {"PreToolUse": _group("echo pre")})
+    assert hook_registry.wants(TOOL_CALL, _ref(tmp_path))
+    assert write_classic_hooks(_dsh_session(tmp_path), tmp_path) is not None
+
+    monkeypatch.setenv(env, value)
+    assert not hook_registry.wants(TOOL_CALL, _ref(tmp_path))
+    assert write_classic_hooks(_dsh_session(tmp_path), tmp_path) is None
+
+    monkeypatch.setenv("VALUZ_CLASSIC_HOOKS_ENABLED", "1")
+    assert hook_registry.wants(TOOL_CALL, _ref(tmp_path))

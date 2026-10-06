@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.core.hooks.classic.config import load_workspace_hooks
+from src.core.hooks.classic.config import classic_hooks_allowed, load_workspace_hooks
 from src.core.types import (
     McpHttpServerConfig,
     McpStdioServerConfig,
@@ -350,8 +350,11 @@ def dsh_matcher(matcher: str | None) -> str | None:
 
 def write_classic_hooks(session: Session, config_dir: Path) -> dict[str, Any] | None:
     """The bridge row for the workspace's classic hooks (its config written to
-    *config_dir*), or ``None`` — untrusted workspace (H0) or no hooks."""
+    *config_dir*), or ``None`` — untrusted workspace (H0), not a local
+    workstation (``classic_hooks_allowed``), or no hooks."""
     if not session.cwd or is_workspace_untrusted(session) or is_bare_completion(session):
+        return None
+    if not classic_hooks_allowed():
         return None
     hooks = load_workspace_hooks(session.cwd)
     if hooks is None:
