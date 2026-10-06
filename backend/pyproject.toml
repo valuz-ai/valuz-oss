@@ -218,6 +218,11 @@ dev = [
     # from Python, so openpyxl belongs here and must NOT return to the runtime
     # dependency list.
     "openpyxl>=3.1",
+    # tests/resources/office_skills/test_office_pptx_skill.py inspects the
+    # decks the bundled pptx skill builds. The skill itself runs in the bundled
+    # session python, so these stay test-only.
+    "lxml>=5.0",
+    "python-pptx>=1.0",
 ]
 # PostgreSQL async driver for the remote data-service deployment (SaaS / B-real).
 # Opt-in: OSS local-first runs on SQLite (aiosqlite) and never needs this, so the
