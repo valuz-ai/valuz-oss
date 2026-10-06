@@ -62,6 +62,8 @@ os.environ["KERNEL_STORE"] = "local"
 #     overrides whose ``None`` default already resolves under the sandboxed
 #     data dir / OS temp; deleting an ambient value restores that safe default
 #     (unlike PINNING them, which would flip the legacy-staging branch).
+#   * VALUZ_CODEX_HOME — the codex runtime creates and writes it; boot
+#     re-derives it under the sandboxed data dir.
 # A dev shell or CI env exporting any of these would re-leak into a real DB or
 # real home that the filesystem tripwire below cannot see. Case-insensitive:
 # pydantic-settings matches env vars without regard to case, so any spelling
@@ -73,6 +75,7 @@ _SANDBOX_ESCAPE_HATCHES = frozenset(
         "VALUZ_DURABLE_DATABASE_URL",
         "VALUZ_USER_SKILL_STAGING_DIR",
         "VALUZ_USER_TEMP_DIR",
+        "VALUZ_CODEX_HOME",
     }
 )
 for _escape_key in [

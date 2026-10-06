@@ -123,6 +123,11 @@ def _set_kernel_env() -> None:
         # distribution's bundles + valuz-dsh-bundle + whatever the user
         # installs the dsh way). Separate from the user's own ~/.dsh.
         os.environ.setdefault("VALUZ_DSH_HOME", str(kernel_db_path.parent / "dsh-home"))
+        # The Valuz-owned CODEX_HOME for Codex sessions whose credentials come
+        # from the env, so the user's ~/.codex (plugins, MCP servers,
+        # AGENTS.md, history) stays out of them. ChatGPT-subscription sessions
+        # keep ~/.codex for auth.json (codex runtime ``_select_codex_home``).
+        os.environ.setdefault("VALUZ_CODEX_HOME", str(kernel_db_path.parent / "codex-home"))
     # OSS default (KERNEL_STORE local/unset): the DataService backend is the host
     # sqlite (valuz.db). Inject it as the durable so the kernel dual-writes
     # kernel.db -> valuz.db and reads are served from the DataService.

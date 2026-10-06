@@ -40,6 +40,7 @@ import logging
 import os
 import shutil
 import time
+import tomllib
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
@@ -389,7 +390,8 @@ class CodexRuntime:
         async with self._prepare_lock:
             self._loop = asyncio.get_running_loop()
             self._materialize_skills(session)
-            await self._ensure_codex(session)
+            # The fork reads the source rollout, so run where it lives.
+            await self._ensure_codex(session, thread_id=source_native_session_id)
         assert self._codex is not None
         common = self._build_thread_kwargs(session)
         t0 = time.monotonic()
@@ -982,7 +984,10 @@ class CodexRuntime:
             phase,
         )
 
-    async def _ensure_codex(self, session: Session) -> None:
+    async def _ensure_codex(self, session: Session, *, thread_id: str | None = None) -> None:
+        """Spawn this session's app-server. ``thread_id`` names the thread it
+        will resume or fork (default: the session's own), which decides the
+        CODEX_HOME it runs in (:func:`_select_codex_home`)."""
         if self._codex is not None:
             return
         t0 = time.monotonic()
@@ -996,26 +1001,46 @@ class CodexRuntime:
         # servers through the kernel's proxy so every MCP call goes through
         # the hook bus; otherwise codex connects to them directly, as before.
         config_session = await self._route_mcp_through_proxy(session)
+        egress_base_url = (
+            self.egress_descriptor.base_url if self.egress_descriptor is not None else None
+        )
         overrides = _build_config_overrides(
             config_session,
             self.model_provider,
             self.model,
             expose_toolkit=expose_toolkit,
-            egress_base_url=(
-                self.egress_descriptor.base_url if self.egress_descriptor is not None else None
-            ),
+            egress_base_url=egress_base_url,
         )
         safe_overrides, mcp_secret_env = _externalize_mcp_secrets(config_session, overrides)
+        env = _build_codex_env(
+            self.model_provider,
+            egress_base_url=egress_base_url,
+            mcp_secret_env=mcp_secret_env,
+        )
+        codex_home = _select_codex_home(
+            self.model_provider,
+            egress_base_url=egress_base_url,
+            thread_id=thread_id or session.runtime_session_id,
+        )
+        if codex_home is not None:
+            try:
+                codex_home.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                # e.g. a Seatbelt-sandboxed kernel that may not write beside
+                # kernel.db: run as before rather than not at all.
+                logger.warning("codex: cannot create %s; using the user's home", codex_home)
+                codex_home = None
+        if codex_home is None:
+            safe_overrides = (
+                *safe_overrides,
+                *_user_home_isolation_overrides(_mcp_override_names(overrides)),
+            )
+        else:
+            env = {**(env if env is not None else os.environ), "CODEX_HOME": str(codex_home)}
         cfg = CodexConfig(
             codex_bin=codex_bin,
             config_overrides=safe_overrides,
-            env=_build_codex_env(
-                self.model_provider,
-                egress_base_url=(
-                    self.egress_descriptor.base_url if self.egress_descriptor is not None else None
-                ),
-                mcp_secret_env=mcp_secret_env,
-            ),
+            env=env,
         )
         self._codex = AsyncCodex(config=cfg)
         try:
@@ -2299,6 +2324,95 @@ def _build_config_overrides(
     return tuple(overrides)
 
 
+#: The Valuz-owned CODEX_HOME (the host pins it beside kernel.db). Unset —
+#: the cloud sandbox, tests — leaves codex on its own default, as before.
+VALUZ_CODEX_HOME_ENV = "VALUZ_CODEX_HOME"
+
+
+def _user_codex_home() -> Path:
+    """The CODEX_HOME codex resolves by itself: the user's own."""
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def _thread_rollout_in(home: Path, thread_id: str) -> bool:
+    """Whether *home* keeps *thread_id*'s rollout (``sessions/YYYY/MM/DD``)."""
+    sessions = home / "sessions"
+    return sessions.is_dir() and any(sessions.glob(f"*/*/*/rollout-*-{thread_id}.jsonl*"))
+
+
+def _select_codex_home(
+    provider: ModelProvider | None,
+    *,
+    egress_base_url: str | None,
+    thread_id: str | None,
+) -> Path | None:
+    """The CODEX_HOME for one session's app-server; ``None`` = the user's own.
+
+    In the user's home the app-server loads their plugins (which carry MCP
+    servers such as ``cua_repl``), MCP servers, ``AGENTS.md``, rules and
+    skills, and Valuz threads land in their history (B5,
+    docs/design/plugin-architecture/runtime-capabilities.md). A session whose
+    credentials come from the env — the ``harness`` provider, i.e. a gateway
+    ``base_url`` or the desktop egress — runs in the Valuz-owned home instead.
+    The ChatGPT subscription authenticates from ``auth.json`` there, and the
+    built-in ``openai`` provider's env-key handling on the app-server is
+    unverified, so both stay in the user's home, trimmed by
+    :func:`_user_home_isolation_overrides`.
+
+    A thread stays where its rollout is: a session started before the Valuz
+    home existed — or forked from one — resumes and forks in the user's home.
+    """
+    private = os.environ.get(VALUZ_CODEX_HOME_ENV, "").strip()
+    if not private or provider is None:
+        return None
+    if egress_base_url is None and provider.base_url is None:
+        return None
+    home = Path(private)
+    if (
+        thread_id
+        and not _thread_rollout_in(home, thread_id)
+        and _thread_rollout_in(_user_codex_home(), thread_id)
+    ):
+        return None
+    return home
+
+
+def _mcp_override_names(overrides: tuple[str, ...] | list[str]) -> set[str]:
+    """The MCP server names Valuz itself configures in *overrides*."""
+    return {
+        entry.split(".", 2)[1]
+        for entry in overrides
+        if entry.startswith("mcp_servers.") and entry.count(".") >= 2
+    }
+
+
+def _user_home_isolation_overrides(own_mcp_names: set[str]) -> tuple[str, ...]:
+    """Trim what the user's own CODEX_HOME loads into a Valuz session (B5).
+
+    The app-server has no switch to skip the user config and ``-c`` only
+    layers over it, so plugins are switched off and every MCP server the user
+    configured is disabled by name — except a name Valuz configures itself,
+    which is Valuz's. ``AGENTS.md``, rules and skills there still load: only a
+    separate home avoids them (:func:`_select_codex_home`).
+    """
+    overrides = ["features.plugins=false"]
+    config = _user_codex_home() / "config.toml"
+    try:
+        servers = tomllib.loads(config.read_text(encoding="utf-8")).get("mcp_servers")
+    except FileNotFoundError:
+        servers = None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        logger.warning("codex: cannot read %s; its MCP servers stay enabled", config)
+        servers = None
+    if isinstance(servers, dict):
+        overrides.extend(
+            f"mcp_servers.{_toml_key(name)}.enabled=false"
+            for name in sorted(servers)
+            if name not in own_mcp_names
+        )
+    return tuple(overrides)
+
+
 def _build_codex_env(
     provider: ModelProvider | None,
     *,
@@ -2307,8 +2421,8 @@ def _build_codex_env(
 ) -> dict[str, str] | None:
     """Subprocess env passed to ``codex app-server``.
 
-    Inherits the parent process env so the codex CLI keeps its existing
-    ``~/.codex/config.toml`` lookups, ``AZURE_OPENAI_API_KEY`` etc., and
+    Inherits the parent process env (``AZURE_OPENAI_API_KEY`` etc.; which
+    CODEX_HOME the CLI reads is :func:`_select_codex_home`'s call), and
     publishes the per-session API key on **one of two** channels
     depending on whether the user wired a gateway:
 
