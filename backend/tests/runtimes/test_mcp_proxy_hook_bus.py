@@ -302,3 +302,18 @@ async def test_dsh_patch_arms_the_bridge_and_proxies_only_with_a_handler() -> No
         assert all("/mcp/proxy/s-route/" in url for url in urls)
     finally:
         await runtime._release_hook_bus()
+
+
+async def test_the_citation_projection_alone_does_not_proxy_in_the_cloud_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There the proxy base is the host's callback URL, which cannot serve a
+    session registered in the sandbox kernel; connectors must stay direct."""
+    from src.runtimes.codex.runtime import CodexRuntime
+
+    monkeypatch.setenv("IS_SANDBOX", "1")
+    runtime = CodexRuntime.__new__(CodexRuntime)
+    runtime._mcp_proxy_session_id = None
+    runtime._hook_session_ref = SessionRef(session_id="s-route", runtime_provider="codex")
+    session = _session()
+    assert await runtime._route_mcp_through_proxy(session) is session

@@ -43,6 +43,11 @@ _SESSIONS: dict[str, ProxiedSession] = {}
 _LOCK = threading.Lock()
 
 
+def _in_sandbox() -> bool:
+    """True inside the cloud sandbox kernel image (it sets ``IS_SANDBOX``)."""
+    return os.getenv("IS_SANDBOX", "").strip().lower() in {"1", "true", "yes"}
+
+
 def proxy_base_url() -> str:
     return (os.getenv(_BASE_URL_ENV) or _BASE_URL_DEFAULT).rstrip("/")
 
@@ -101,9 +106,18 @@ def proxy_session_mcp(
     owners = hooks.tool_source_owners(TOOL_CALL, "mcp")
     if not owners:
         return None
+    citation_only = all(owner == CITATION_PROJECTION for owner in owners)
+    if citation_only and _in_sandbox():
+        # In the cloud sandbox the proxy base (``CODEX_TOOLKIT_BASE_URL``) is
+        # the HOST's callback URL, while the proxied session is registered in
+        # this sandbox kernel — the CLI would reach a host that knows nothing
+        # of it and every connector would show as disconnected. Until the
+        # proxy has an address the sandbox can serve, the citation projection
+        # alone does not reroute anything there (connectors stay direct).
+        return None
     selected = (
         [cfg for cfg in servers if isinstance(cfg, McpHttpServerConfig)]
-        if all(owner == CITATION_PROJECTION for owner in owners)
+        if citation_only
         else list(servers)
     )
     if not selected:
