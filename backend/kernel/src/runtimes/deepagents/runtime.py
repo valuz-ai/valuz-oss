@@ -1819,6 +1819,7 @@ class DeepAgentsRuntime:
 
         skill_roots = self._materialize_skills(session)
         subagents = self._build_subagents(
+            session=session,
             citation_protocol=(
                 _citation_system_policy_block(session.instructions)
                 if _session_evidence_binding_enabled(session)
@@ -1921,7 +1922,7 @@ class DeepAgentsRuntime:
         allowed: list[str] = ["approve", "edit", "reject"]
         return {t.name: {"allowed_decisions": allowed} for t in tools if hasattr(t, "name")}
 
-    def _build_model_client(self, session: Session) -> Any:
+    def _build_model_client(self, session: Session, model: str | None = None) -> Any:
         """Build a langchain chat model bound to the per-session gateway.
 
         DeepAgents requires an explicit model client (the factory enforces
@@ -1937,6 +1938,9 @@ class DeepAgentsRuntime:
         native parameter name — see ``_map_effort_for_*`` helpers for
         the cross-runtime mapping table.
         """
+        # A sub-agent may name its own model; everything else (gateway, egress,
+        # session header, effort, max_tokens) is built exactly as for the session.
+        model_name = model or self.model
         if self.model_provider is None:
             # Defensive: factory should have rejected this already.
             raise RuntimeError(
@@ -1990,7 +1994,7 @@ class DeepAgentsRuntime:
             # ChatAnthropic use its baked-in ``api.anthropic.com``.
             kwargs: dict[str, Any] = dict(
                 api_key=SecretStr(self.model_provider.api_key),
-                model_name=self.model,
+                model_name=model_name,
                 timeout=None,
                 stop=None,
                 default_headers=_session_gateway_headers(session),
@@ -2021,7 +2025,7 @@ class DeepAgentsRuntime:
             # Gemini's ``thinking_level`` accepts ``minimal|low|medium|
             # high``; ``xhigh`` and ``max`` both map down to ``high``.
             gemini_kwargs: dict[str, Any] = dict(
-                model=self.model,
+                model=model_name,
                 google_api_key=SecretStr(self.model_provider.api_key),
             )
             if self.model_provider.base_url:
@@ -2054,7 +2058,7 @@ class DeepAgentsRuntime:
         # catch aggregator-style aliases like ``volcengine/deepseek-r1``
         # or ``together/deepseek-v3``.
         extra_body = (
-            {"thinking": {"type": "disabled"}} if "deepseek" in self.model.lower() else None
+            {"thinking": {"type": "disabled"}} if "deepseek" in model_name.lower() else None
         )
 
         # ``base_url`` is only forwarded when the operator supplied one;
@@ -2063,7 +2067,7 @@ class DeepAgentsRuntime:
         # the first-party-vs-gateway branch obvious at the call site.
         openai_kwargs: dict[str, Any] = dict(
             api_key=SecretStr(self.model_provider.api_key),
-            model=self.model,
+            model=model_name,
             # OpenAI-compatible streams omit usage by default; opt in so
             # `usage_metadata` lands on the final AIMessageChunk and our
             # `usage_update` event has real numbers.
@@ -2107,7 +2111,7 @@ class DeepAgentsRuntime:
         openai_kwargs["max_tokens"] = _resolve_max_tokens(session.model_settings)
         client_cls = (
             ChatOpenAI
-            if _is_openai_family(self.model, self.model_provider.base_url)
+            if _is_openai_family(model_name, self.model_provider.base_url)
             else BaseChatOpenAI
         )
         return client_cls(**openai_kwargs)
@@ -2347,6 +2351,7 @@ class DeepAgentsRuntime:
     def _build_subagents(
         self,
         *,
+        session: Session | None = None,
         citation_protocol: str = "",
         skill_roots: list[str] | None = None,
     ) -> list[SubAgent]:
@@ -2355,6 +2360,7 @@ class DeepAgentsRuntime:
             subagents.append(
                 self._to_subagent(
                     sub_def,
+                    session=session,
                     citation_protocol=citation_protocol,
                 )
             )
@@ -2400,6 +2406,7 @@ class DeepAgentsRuntime:
         self,
         sub_def: SubAgentDef,
         *,
+        session: Session | None = None,
         citation_protocol: str = "",
     ) -> SubAgent:
         sub_tools: list[StructuredTool] = []
@@ -2436,7 +2443,14 @@ class DeepAgentsRuntime:
         if sub_tools:
             entry["tools"] = sub_tools
         if sub_def.model:
-            entry["model"] = sub_def.model
+            # Built like the session's model (gateway, egress proxy, session
+            # header, effort, max_tokens); a bare string would let deepagents
+            # resolve it on its own, outside all of that.
+            entry["model"] = (
+                self._build_model_client(session, model=sub_def.model)
+                if session is not None and self.model_provider is not None
+                else sub_def.model
+            )
         if sub_def.skills:
             entry["skills"] = list(sub_def.skills)
         return entry
