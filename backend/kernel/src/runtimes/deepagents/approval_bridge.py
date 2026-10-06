@@ -7,11 +7,9 @@ stay stateless and trivially unit-testable.
 Responsibilities (parallels ``claude_agent/approval_bridge.py``):
 
 * ``_classify_subject``: HITL ``ActionRequest`` tool name → approval-card
-  subject (``file_change`` / ``mcp_tool_call`` / ``tool_input``). DeepAgents
-  has no built-in ``Bash``-style shell tool, so ``shell_command`` is never
-  produced from this path; if a user wires a shell-shaped custom tool it
-  falls through to ``tool_input`` and the front-end's generic card renders
-  it. Heuristic — falls back to ``tool_input`` for anything not recognised.
+  subject (``shell_command`` for the built-in ``execute``, ``file_change``,
+  ``mcp_tool_call``, ``tool_input``). Heuristic — falls back to
+  ``tool_input`` for anything not recognised.
 * ``_build_pending_payload``: subject-specific payload extracted from an
   ``ActionRequest.args`` dict. Per-tool field names track the DeepAgents
   built-in tool contract (``file_path`` / ``content`` for ``write_file``,
@@ -51,6 +49,8 @@ from typing import Any, Literal
 # worse UX than rendering a file-change card with possibly-missing
 # fields.
 _FILE_CHANGE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
+# DeepAgents' built-in shell (``LocalShellBackend.execute``).
+_SHELL_TOOLS: frozenset[str] = frozenset({"execute"})
 
 
 def _classify_subject(
@@ -63,6 +63,8 @@ def _classify_subject(
     membership is the only signal we have for MCP origin since
     langchain-mcp doesn't carry server prefixes in tool names.
     """
+    if tool_name in _SHELL_TOOLS:
+        return "shell_command"
     if tool_name in _FILE_CHANGE_TOOLS:
         return "file_change"
     if tool_name in mcp_tool_names:
@@ -86,6 +88,13 @@ def _build_pending_payload(
     front-end can seed a JSON editor for the ``approve_with_changes``
     verb (matches the Claude bridge convention).
     """
+    if subject == "shell_command":
+        return {
+            "command": str(args.get("command", "")),
+            "cwd": workspace_root or "",
+            "reason": None,
+            "original_input": dict(args),
+        }
     if subject == "file_change":
         change_kind = "create" if tool_name == "write_file" else "edit"
         return {

@@ -596,6 +596,11 @@ def _session_evidence_binding_enabled(session: Session) -> bool:
     )
 
 
+# Built-in tools that park for approval in ``default`` mode (see
+# ``_build_interrupt_on``).
+_BUILTIN_APPROVAL_TOOLS: tuple[str, ...] = ("execute", "write_file", "edit_file")
+
+
 class _ApprovalAbandoned(Exception):  # noqa: N818 — control flow, not an error
     """A per-action approval timed out or was cancelled: abandon the batch."""
 
@@ -1920,7 +1925,14 @@ class DeepAgentsRuntime:
         # ``_await_host_decisions`` when building the resume payload —
         # this list is the inverse mapping for the SDK boundary.
         allowed: list[str] = ["approve", "edit", "reject"]
-        return {t.name: {"allowed_decisions": allowed} for t in tools if hasattr(t, "name")}
+        gated = {t.name: {"allowed_decisions": allowed} for t in tools if hasattr(t, "name")}
+        # DeepAgents' own built-ins that change the workspace or run
+        # commands park too, as Bash / Write / Edit do on Claude. Read-only
+        # built-ins (ls, read_file, glob, grep) and sub-agent delegation
+        # (``task``) stay unapproved, also as on Claude.
+        for name in _BUILTIN_APPROVAL_TOOLS:
+            gated.setdefault(name, {"allowed_decisions": list(allowed)})
+        return gated
 
     def _build_model_client(self, session: Session, model: str | None = None) -> Any:
         """Build a langchain chat model bound to the per-session gateway.
