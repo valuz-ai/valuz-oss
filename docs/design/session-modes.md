@@ -35,8 +35,8 @@ mode: Literal["default", "plan", "goal"] = "default"
 ### Kernel API
 
 - `POST {KERNEL_API_PREFIX}/v1/sessions/{id}/mode` — validates (400 for
-  `deepagents` on any non-default mode, and for `deepseek_harness` on
-  `goal` — dsh has plan since slice 3), writes, and
+  `goal` on `deepagents` / `deepseek_harness`; plan is accepted on every
+  runtime — dsh since slice 3, deepagents through the hook bus), writes, and
   emits `mode_changed{mode, by: "user"}` on a real transition
   (idempotent on same-mode re-set). Direct `plan ↔ goal` transitions are
   allowed — runtime reconcile composes independent exit + entry branches
@@ -73,7 +73,8 @@ in-memory value wins; otherwise the disk value wins (honors a concurrent
 | Codex + goal | Wrap `/goal <text>`; codex-core auto-continues the thread goal. | `thread/goal/clear` via the SDK's raw JSON-RPC escape hatch (camelCase params); auto-exit via the `thread/goal/cleared` notification. |
 | dsh + plan | Composition mounts the plan plugin set; the `valuz-dsh-kernel-bridge` plugin converges dsh plan state to `session.mode` at the first pre-step (§7). Respawn-on-drift covers between-turn toggles. | (a) user: chip off → PATCH → respawn with `planActive: false`; (b) model: `exit_plan_mode {plan}` → `ctx.userQuestions` → HTTP bridge → approval subject `exit_plan_mode` (always parks, V1 verbs) → approve resolves the review with the intent's approve label, the tool returns `{approved: true}`, dsh flips `plan/mode` → `mode_changed{by:"runtime"}`, and execution continues the same turn. |
 | dsh + goal | 400 at the kernel route (no goal lowering). | n/a |
-| deepagents | 400 at the kernel route; `wrap_for_mode` skips it; UI hides the toggle. | n/a |
+| deepagents + plan | No native primitive, so the hook bus fills it (ADR-033 §9): the builtin `valuz.plan-gate` (`kernel/src/core/hooks/builtin/plan_gate.py`) refuses the built-in shell / file writers on `tool.call`, toolkit tools that are not `read_only` are refused in the runtime, and none of them park for approval. Plan instructions ride each plan turn's prompt; the graph is rebuilt on entry. | The answer's `<proposed_plan>` block becomes `plan_proposed` (the codex card), approved client-side the same way (PATCH `default` + an execution turn). |
+| deepagents + goal | 400 at the kernel route. | n/a |
 
 `wrap_for_mode(text, mode, runtime_provider)`
 (`kernel/src/core/prompt_builder.py`) is the single wrap point: no wrap
@@ -261,8 +262,8 @@ method, and a wire-level userQuestions channel.
 
 ## 8. Explicit non-goals
 
-- deepagents plan/goal polyfill (prompt-level emulation) — only on real
-  user demand.
+- deepagents goal polyfill — goal is an engine-level loop the bus cannot
+  fill (plan is filled, §2).
 - Goal-mode UI in the composer — the task subsystem drives goal today;
   the `+` menu is designed to host a Goal entry later.
 - Exposing `permission_mode="plan"` as a standalone permission tier.
