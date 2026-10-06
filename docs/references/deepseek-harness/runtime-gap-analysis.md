@@ -123,6 +123,16 @@ in event metadata.
   Point the custom roots at our per-session materialized skills dir
   (`skills_materialize.py` output), disable user-root discovery to avoid
   leaking `~/.claude/skills` (verified leak in the default composition).
+
+  > **As built (dsh 0.2, managed profile)**: the custom-roots route is not
+  > available — the `skill-filesystem` a session uses is nested in the agent
+  > preset's `config.plugins`, which a root `--patch` cannot address. Session
+  > skills are materialized into `<cwd>/.agents/skills` (a default project
+  > root, re-materialized on every spawn so switched-off skills are cleared),
+  > and `DSH_AGENTS_HOME` points the user root at a Valuz-owned directory
+  > under the managed home, keeping `~/.agents/skills` out
+  > (`deepseek_harness/composition.py::process_env`). Still discoverable:
+  > `$DSH_HOME/skills` and the git root's `.dsh/skills` / `.agents/skills`.
 - **System prompt**: agent-spine `persona` config (env `DSH_SYSTEM_PROMPT` in
   the examples composition) ← `system_prompt_builder`.
 - **max_input_tokens / compaction**: dsh `compaction-basic`

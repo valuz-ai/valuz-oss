@@ -1,0 +1,12 @@
+# Libraries every agent session can import through `valuz-python`.
+# Direct dependencies only; requirements.txt is compiled from this file for
+# every platform (scripts/vendor-python-runtime.sh --update).
+#
+# Office documents (bundled `office` plugin: docx / xlsx / pptx skills)
+python-docx
+python-pptx
+openpyxl
+XlsxWriter
+pandas
+pillow
+lxml

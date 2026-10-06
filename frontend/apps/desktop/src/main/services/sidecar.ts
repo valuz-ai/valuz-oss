@@ -402,6 +402,25 @@ function resolveDshRuntimeEntry(): string | null {
 }
 
 /**
+ * Locate the bundled session Python (staged at libexec/python-runtime by
+ * scripts/build-desktop.sh Phase A6): CPython plus the libraries the bundled
+ * skills import. The backend exposes it to every agent session as
+ * ``valuz-python`` (backend/valuz_agent/infra/session_tools.py).
+ *
+ * Returns null when not bundled (dev), so the backend falls back to the
+ * dev-checkout vendor tree (backend/vendor/python-runtime/dist).
+ */
+function resolvePythonRuntime(): string | null {
+  const bundled = path.join(process.resourcesPath, "libexec", "python-runtime");
+  if (fs.existsSync(bundled)) return bundled;
+
+  const devRuntime = path.join(__dirname, "..", "..", "resources", "libexec", "python-runtime");
+  if (fs.existsSync(devRuntime)) return devRuntime;
+
+  return null;
+}
+
+/**
  * Build spawn arguments for dev-mode fallback (uv run python -m valuz_agent).
  */
 function buildDevSpawnArgs(port: number): {
@@ -521,6 +540,13 @@ export const startSidecar = async (
     env.VALUZ_NODE_PATH = process.execPath;
     env.VALUZ_NODE_IS_ELECTRON = "1";
     env.VALUZ_DSH_RUNTIME_ENTRY = dshEntry;
+  }
+
+  // Bundled session Python → `valuz-python` on every session's PATH. Absent
+  // (dev) → the backend falls back to backend/vendor/python-runtime/dist.
+  const pythonRuntime = resolvePythonRuntime();
+  if (pythonRuntime) {
+    env.VALUZ_PYTHON_RUNTIME = pythonRuntime;
   }
 
   if (serverBinary) {

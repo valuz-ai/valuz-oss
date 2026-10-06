@@ -228,6 +228,9 @@ class DshManagerHost:
                 **os.environ,
                 **node_env,
                 "DSH_HOME": str(home),
+                # Same as the session launch (composition.process_env): skills
+                # come from the Valuz library, not the user's ~/.agents/skills.
+                "DSH_AGENTS_HOME": str(home / "agents"),
                 "VALUZ_DSH_MANAGED_PROFILE": PROFILE_NAME,
                 "VALUZ_DSH_ROLE": "manager",
                 "DSH_TELEMETRY_DISABLED": "1",

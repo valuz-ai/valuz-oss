@@ -55,6 +55,15 @@ SPLIT_GROUPS: dict[str, tuple[str, ...]] = {
     "init_kernel(app)": ("init_kernel(app)", "wire_memory_triggers()"),
 }
 
+#: Steps added after the refactor — new behaviour, not a reordering of the frozen
+#: lifespan — are dropped before comparing with ``boot.pre-refactor.json``. Each
+#: one still appears in ``boot.json``, whose golden pins its exact position.
+ADDED_AFTER_REFACTOR: frozenset[str] = frozenset(
+    {
+        "install_session_tools()",  # bundled session commands on the agent PATH
+    }
+)
+
 
 def collect(kind: str, prefix: str | None = None) -> dict[str, Any]:
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(BACKEND_ROOT)}
@@ -148,13 +157,15 @@ def test_boot_sequence_matches_its_golden(built: dict[str, dict[str, Any]]) -> N
 def test_boot_order_is_the_pre_refactor_order(built: dict[str, dict[str, Any]]) -> None:
     """The hard-coded lifespan's order, recorded before the refactor, still holds.
 
-    ``boot.pre-refactor.json`` is frozen. The only difference allowed is the
-    deliberate split of aggregate steps into per-feature steps (``SPLIT_GROUPS``).
+    ``boot.pre-refactor.json`` is frozen. The only differences allowed are the
+    deliberate split of aggregate steps into per-feature steps (``SPLIT_GROUPS``)
+    and steps added since (``ADDED_AFTER_REFACTOR``).
     """
     frozen = json.loads((SNAPSHOTS / "boot.pre-refactor.json").read_text(encoding="utf-8"))
     actual = built["boot"]
-    assert collapse_boot(actual["startup"]) == frozen["startup"]
-    assert collapse_boot(actual["shutdown"]) == frozen["shutdown"]
+    for phase in ("startup", "shutdown"):
+        steps = [s for s in actual[phase] if s not in ADDED_AFTER_REFACTOR]
+        assert collapse_boot(steps) == frozen[phase]
 
 
 def test_always_on_mcp_is_unchanged(built: dict[str, dict[str, Any]]) -> None:

@@ -69,6 +69,10 @@ STARTUP_ORDER: Mapping[str, tuple[str, ...]] = {
         # files (it replaces them at file level).
         "apply_backup_restore",
         "ensure_local_identity",  # seed owner ctx before any insert
+        # Session command wrappers (valuz-python, dsoffice) go on PATH before
+        # anything spawns an agent subprocess, which inherits PATH at spawn.
+        # After the data-dir cutover: the wrappers live under the data root.
+        "install_session_tools",
     ),
     BootPhase.SCHEMA: (
         "bootstrap_schema",

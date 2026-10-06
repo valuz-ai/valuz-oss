@@ -190,14 +190,20 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def browser_bin_dir(self) -> Path:
-        """Host bin dir prepended to the agent shell's PATH so a friendly
-        ``chrome-devtools`` wrapper resolves (vs. the raw ``node <entry>`` /
-        ``npx`` invocation). See docs/design/browser-feature.md §8.
-        """
+    def session_bin_dir(self) -> Path:
+        """Host bin dir prepended to the agent shell's PATH, holding the
+        friendly command wrappers sessions call by name (``chrome-devtools``,
+        ``valuz-python``, ``dsoffice``)."""
         path = self._shared_root() / "bin"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def browser_bin_dir(self) -> Path:
+        """Where the ``chrome-devtools`` wrapper lives (vs. the raw
+        ``node <entry>`` / ``npx`` invocation): the session bin dir. See
+        docs/design/browser-feature.md §8.
+        """
+        return self.session_bin_dir()
 
     # ---- FS-3 — project cwd (project.cwd in V5 kernel terms) ----
 
