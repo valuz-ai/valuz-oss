@@ -20,8 +20,10 @@
  * tool.check — wraps dsh's own pre-execute decision (`next()`); a handler
  *   can deny, or (Valuz's own tier) allow without asking.
  *
- * MCP tools (`mcp__*`, which includes the kernel toolkit) are dispatched by
- * the kernel's MCP proxy / toolkit endpoint, so they are skipped here.
+ * MCP tools (`mcp__*`, which includes the kernel toolkit): their tool.call is
+ * dispatched by the kernel's MCP proxy / toolkit endpoint, so it is skipped
+ * here; their tool.check still wraps dsh's own decision (nothing else sees
+ * the approval step for them).
  *
  * Any bridge failure lets dsh proceed as if the bridge were absent
  * (fail-open, the bus's default policy).
@@ -57,12 +59,12 @@ export function apply(ctx, config = {}) {
   // execution key -> dispatch id of a tool.call chain waiting for the result
   const waiting = new Map();
   const keyOf = (exec) => String(exec.token ?? exec.callId ?? "");
-  const skip = (exec) => typeof exec.name !== "string" || exec.name.startsWith("mcp__");
+  const isMcp = (exec) => exec.name.startsWith("mcp__");
 
   ctx.on("tools/pre-execute", async (exec, next) => {
-    if (skip(exec)) return next();
+    if (typeof exec.name !== "string") return next();
     const input = plain(exec.arguments);
-    if (wantsCall) {
+    if (wantsCall && !isMcp(exec)) {
       let step;
       try {
         step = await post(`${base}/dispatch`, {

@@ -88,6 +88,7 @@ from src.runtimes.deepseek_harness.approval_bridge import (
     classify_dsh_subject,
 )
 from src.runtimes.deepseek_harness.composition import (
+    KERNEL_TOOLKIT_SERVER_NAME,
     PROFILE_NAME,
     SESSION_ROLE,
     DshLaunchSpec,
@@ -344,7 +345,9 @@ class DeepSeekHarnessRuntime:
         from src.core.hooks.remote import RemoteHookSession, register_remote_hooks
 
         self._hook_bridge_token = register_remote_hooks(
-            RemoteHookSession(hooks, "deepseek_harness")
+            RemoteHookSession(
+                hooks, "deepseek_harness", toolkit_servers=(KERNEL_TOOLKIT_SERVER_NAME,)
+            )
         )
         return patch_session, {
             "endpoint": hook_bridge_endpoint(self._hook_bridge_token),

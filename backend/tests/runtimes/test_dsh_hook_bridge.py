@@ -67,6 +67,11 @@ def _clean() -> Iterator[None]:
 
 class _ToolCallingModel(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
+    # The tool the first response calls, and its input.
+    tool: tuple[str, dict[str, Any]] = (
+        "bash",
+        {"command": "echo bridge-ran", "description": "Print a marker"},
+    )
 
     def log_message(self, *args: Any) -> None:
         pass
@@ -107,7 +112,7 @@ class _ToolCallingModel(BaseHTTPRequestHandler):
                     "content_block": {
                         "type": "tool_use",
                         "id": "toolu_bridge",
-                        "name": "bash",
+                        "name": type(self).tool[0],
                         "input": {},
                     },
                 },
@@ -119,9 +124,7 @@ class _ToolCallingModel(BaseHTTPRequestHandler):
                     "index": 0,
                     "delta": {
                         "type": "input_json_delta",
-                        "partial_json": json.dumps(
-                            {"command": "echo bridge-ran", "description": "Print a marker"}
-                        ),
+                        "partial_json": json.dumps(type(self).tool[1]),
                     },
                 },
             )
@@ -160,6 +163,10 @@ class _ToolCallingModel(BaseHTTPRequestHandler):
 @pytest.fixture
 def model_url() -> Iterator[str]:
     _ToolCallingModel.requests = []
+    _ToolCallingModel.tool = (
+        "bash",
+        {"command": "echo bridge-ran", "description": "Print a marker"},
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ToolCallingModel)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -219,12 +226,22 @@ def _result_text(result: dict[str, Any]) -> str:
     return " ".join(block.get("text", "") for block in content or [] if isinstance(block, dict))
 
 
-def _run_turn(tmp_path: Path, model_url: str, bridge_base: str) -> list[dict[str, Any]]:
+def _run_turn(
+    tmp_path: Path,
+    model_url: str,
+    bridge_base: str,
+    *,
+    events: tuple[str, ...] = ("tool.call",),
+    mcp_servers: tuple[Any, ...] = (),
+) -> list[dict[str, Any]]:
     home = tmp_path / "dsh-home"
     workspace = tmp_path / "ws"
     workspace.mkdir()
     session = Session(
-        id="s-hook-bridge", agent_config=AgentConfig(id="a", name="a"), cwd=str(workspace)
+        id="s-hook-bridge",
+        agent_config=AgentConfig(id="a", name="a"),
+        cwd=str(workspace),
+        mcp_servers=mcp_servers,
     )
     ref = SessionRef.from_session(session)
     token = register_remote_hooks(
@@ -236,7 +253,7 @@ def _run_turn(tmp_path: Path, model_url: str, bridge_base: str) -> list[dict[str
             build_session_patch(
                 session,
                 model_base_url=model_url,
-                hook_bridge={"endpoint": f"{bridge_base}/{token}", "events": ["tool.call"]},
+                hook_bridge={"endpoint": f"{bridge_base}/{token}", "events": list(events)},
             )
         )
     )
@@ -307,6 +324,8 @@ def _run_turn(tmp_path: Path, model_url: str, bridge_base: str) -> list[dict[str
             }
         )
         read_until(lambda m: m.get("id") == "1")
+        if mcp_servers:
+            time.sleep(4)  # MCP client connects and registers its tools
         send(
             {
                 "id": "2",
@@ -373,3 +392,39 @@ def test_a_handler_answer_replaces_the_call(
     text = _result_text(results[-1])
     assert "shell is off today (Valuz hook)" in text
     assert "bridge-ran" not in text
+
+
+def test_tool_check_sees_and_can_deny_a_dsh_mcp_tool(
+    tmp_path: Path, model_url: str, bridge_base: str
+) -> None:
+    """MCP tools skip the bridge's tool.call (the kernel MCP proxy owns that),
+    but their approval step is the bus's tool.check like any other tool's."""
+    import sys
+
+    from src.core.hooks import TOOL_CHECK, ToolDecision
+    from src.core.types import McpStdioServerConfig
+
+    seen: list[tuple[str, str | None, str]] = []
+
+    async def no_mcp(ctx, event, next_):  # noqa: ANN001
+        seen.append((event.get("tool.source"), event.get("tool.server"), event.get("tool.name")))
+        return ToolDecision(behavior="deny", reason="mcp is off today (Valuz hook)")
+
+    hook_registry.register(TOOL_CHECK, no_mcp, owner=OWNER, matcher={"tool.source": "mcp"})
+    _ToolCallingModel.tool = ("mcp__upstream__echo", {"text": "hi"})
+    fixture = Path(__file__).parent / "fixtures" / "hook_bus_mcp_server.py"
+    _run_turn(
+        tmp_path,
+        model_url,
+        bridge_base,
+        events=("tool.call", "tool.check"),
+        mcp_servers=(
+            McpStdioServerConfig(name="upstream", command=sys.executable, args=[str(fixture)]),
+        ),
+    )
+
+    assert seen == [("mcp", "upstream", "mcp__upstream__echo")]
+    results = _tool_results(_ToolCallingModel.requests[1])
+    text = _result_text(results[-1])
+    assert "mcp is off today (Valuz hook)" in text
+    assert "upstream:hi" not in text

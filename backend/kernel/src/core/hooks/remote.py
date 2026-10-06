@@ -38,7 +38,7 @@ from src.core.hooks.events import (
 )
 from src.core.hooks.freeze import thaw
 from src.core.hooks.registry import SessionHooks
-from src.core.hooks.tool_identity import native_tool_ref
+from src.core.hooks.tool_identity import mcp_tool_ref, native_tool_ref, toolkit_tool_ref
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +93,19 @@ class _Dispatch:
 class RemoteHookSession:
     """One remote runtime session's side of the conversation."""
 
-    def __init__(self, hooks: SessionHooks, runtime_provider: str) -> None:
+    def __init__(
+        self,
+        hooks: SessionHooks,
+        runtime_provider: str,
+        *,
+        toolkit_servers: tuple[str, ...] = (),
+    ) -> None:
         self.hooks = hooks
         self.runtime_provider = runtime_provider
+        # MCP server names under which the runtime sees the kernel toolkit
+        # (dsh: ``harness_toolkit``): their tools are toolkit tools, as on
+        # every other runtime.
+        self.toolkit_servers = toolkit_servers
         self._dispatches: dict[str, _Dispatch] = {}
 
     def wants(self) -> list[str]:
@@ -103,6 +113,14 @@ class RemoteHookSession:
         return sorted(event for event in REMOTE_EVENTS if self.hooks.wants(event))
 
     def tool_ref(self, name: str, arguments: Mapping[str, Any]) -> ToolRef:
+        """``mcp__<server>__<tool>`` is an MCP (or kernel toolkit) tool; any
+        other name is one of the runtime's own."""
+        if name.startswith("mcp__"):
+            server, _, tool = name[len("mcp__") :].partition("__")
+            if server and tool:
+                if server in self.toolkit_servers:
+                    return toolkit_tool_ref(tool)
+                return mcp_tool_ref(server, tool)
         return native_tool_ref(self.runtime_provider, name, arguments)
 
     async def start(self, event: str, payload: Mapping[str, Any]) -> dict[str, Any]:
