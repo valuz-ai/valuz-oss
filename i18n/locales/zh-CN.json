@@ -1442,7 +1442,7 @@
     "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。",
     "nameSection": "项目名称",
     "trustDialogTitle": "这个文件夹会自己运行命令",
-    "trustDialogDesc": "文件夹里的配置让 Claude / Codex 在会话中自动执行下面这些命令，不会提示，也不经过审批。只在你认识这个文件夹的来源时才信任它。",
+    "trustDialogDesc": "文件夹里的配置会让智能体在会话中自动执行下面这些命令（所有运行时都会执行），不会提示，也不经过审批。只在你认识这个文件夹的来源时才信任它。",
     "trustDialogTrust": "信任并允许运行",
     "trustDialogDistrust": "不信任（不运行这些命令）",
     "trustSectionTitle": "工作区信任",

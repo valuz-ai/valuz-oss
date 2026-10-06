@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -52,10 +53,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.core.hooks.classic.config import load_workspace_hooks
 from src.core.types import (
     McpHttpServerConfig,
     McpStdioServerConfig,
     Session,
+    is_bare_completion,
+    is_workspace_untrusted,
 )
 from src.runtimes.mcp_env import resolve_stdio_env
 
@@ -310,6 +314,68 @@ def hook_bridge_endpoint(token: str) -> str:
     return f"{base}/hook-bridge/{token}"
 
 
+#: DSH's own classic-hook bridges, by dialect. Native-first (ADR-033 §9): DSH
+#: runs a trusted workspace's ``hooks`` config itself; DeepAgents gets the bus
+#: executor (``core/hooks/classic``); Claude and Codex read the files directly.
+CLASSIC_HOOK_PLUGINS = {
+    "claude": "@deepseek-ai/dsh-hooks-claude-code",
+    "codex": "@deepseek-ai/dsh-hooks-codex",
+}
+CLASSIC_HOOKS_ROW = "valuz-classic-hooks"
+#: Claude Code tool names → DSH's own. The bridges match on the tool's real
+#: name, so a ``"Bash"`` matcher would never select DSH's ``bash``.
+_DSH_TOOL_ALIASES: dict[str, tuple[str, ...]] = {
+    "Bash": ("bash", "pwsh"),
+    "Read": ("read", "read_image"),
+    "Write": ("write",),
+    "Edit": ("edit", "str_replace_editor"),
+    "MultiEdit": ("edit", "str_replace_editor"),
+    "Glob": ("glob",),
+    "Grep": ("grep",),
+    "WebFetch": ("web_fetch",),
+    "WebSearch": ("web_search",),
+    "TodoWrite": ("todo_write",),
+}
+_WORD_ALTERNATIVES = re.compile(r"^[A-Za-z0-9_|]+$")
+
+
+def dsh_matcher(matcher: str | None) -> str | None:
+    """A word-and-pipe matcher widened with DSH's names for the same tools."""
+    if matcher is None or not _WORD_ALTERNATIVES.match(matcher):
+        return matcher
+    names = matcher.split("|")
+    extra = [alias for name in names for alias in _DSH_TOOL_ALIASES.get(name, ())]
+    return "|".join(dict.fromkeys([*names, *extra]))
+
+
+def write_classic_hooks(session: Session, config_dir: Path) -> dict[str, Any] | None:
+    """The bridge row for the workspace's classic hooks (its config written to
+    *config_dir*), or ``None`` — untrusted workspace (H0) or no hooks."""
+    if not session.cwd or is_workspace_untrusted(session) or is_bare_completion(session):
+        return None
+    hooks = load_workspace_hooks(session.cwd)
+    if hooks is None:
+        return None
+    config = hooks.to_config()
+    for groups in config["hooks"].values():
+        for group in groups:
+            if "matcher" in group:
+                group["matcher"] = dsh_matcher(group["matcher"])
+    path = config_dir / "classic-hooks.json"
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=1))
+    path.chmod(0o600)
+    row_config: dict[str, Any] = {"configPath": str(path)}
+    if hooks.dialect == "claude":
+        row_config["projectDir"] = session.cwd
+    else:
+        row_config["model"] = session.model or ""
+    return {
+        "id": CLASSIC_HOOKS_ROW,
+        "name": CLASSIC_HOOK_PLUGINS[hooks.dialect],
+        "config": row_config,
+    }
+
+
 def build_session_patch(
     session: Session,
     *,
@@ -318,6 +384,7 @@ def build_session_patch(
     plan_capable: bool = True,
     user_questions_url: str | None = None,
     hook_bridge: dict[str, Any] | None = None,
+    classic_hooks: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The ``--patch`` layer for one kernel session (pure; unit-testable).
 
@@ -366,6 +433,8 @@ def build_session_patch(
                 },
             }
         )
+    if classic_hooks:
+        inserted.append(classic_hooks)
     if inserted:
         patch.append({"insert": inserted})
     return patch
@@ -381,7 +450,9 @@ def write_session_patch(session: Session, **kwargs: Any) -> str:
     config_dir = Path(tempfile.gettempdir()) / f"valuz-dsh-{session.id}-{uuid.uuid4().hex[:8]}"
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "session.patch.json"
-    patch = build_session_patch(session, **kwargs)
+    patch = build_session_patch(
+        session, classic_hooks=write_classic_hooks(session, config_dir), **kwargs
+    )
     path.write_text(json.dumps(patch, ensure_ascii=False, indent=1))
     path.chmod(0o600)
     return str(path)

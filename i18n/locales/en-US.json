@@ -1442,7 +1442,7 @@
     "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good.",
     "nameSection": "Project name",
     "trustDialogTitle": "This folder runs its own commands",
-    "trustDialogDesc": "Configuration in this folder makes Claude / Codex run the commands below during a session — without asking and without approval. Trust it only if you know where the folder comes from.",
+    "trustDialogDesc": "Configuration in this folder makes the agent run the commands below during a session — on every runtime, without asking and without approval. Trust it only if you know where the folder comes from.",
     "trustDialogTrust": "Trust and allow",
     "trustDialogDistrust": "Don't trust (don't run them)",
     "trustSectionTitle": "Workspace trust",

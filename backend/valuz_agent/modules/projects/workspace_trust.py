@@ -13,8 +13,9 @@ in the session with no prompt and no approval. Trust decides whether they run:
 
 An untrusted workspace's sessions are stamped ``workspace_trust="untrusted"``
 and the runtimes switch the folder's hooks off (Claude: inline
-``disableAllHooks``; Codex: ``features.hooks=false``). Valuz's own hook bus
-is unaffected.
+``disableAllHooks``; Codex: ``features.hooks=false``; DSH and DeepAgents,
+which Valuz runs the hooks for, simply do not get them —
+``kernel/src/core/hooks/classic``). Valuz's own hook bus is unaffected.
 """
 
 from __future__ import annotations

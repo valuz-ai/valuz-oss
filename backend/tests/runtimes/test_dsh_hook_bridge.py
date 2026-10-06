@@ -39,6 +39,7 @@ from src.runtimes.deepseek_harness.composition import (
     SESSION_ROLE,
     build_session_patch,
     process_env,
+    write_classic_hooks,
 )
 
 from tests.runtimes.test_dsh_upstream_compat import (
@@ -233,10 +234,14 @@ def _run_turn(
     *,
     events: tuple[str, ...] = ("tool.call",),
     mcp_servers: tuple[Any, ...] = (),
+    workspace_files: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     home = tmp_path / "dsh-home"
     workspace = tmp_path / "ws"
     workspace.mkdir()
+    for rel, text in (workspace_files or {}).items():
+        (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / rel).write_text(text)
     session = Session(
         id="s-hook-bridge",
         agent_config=AgentConfig(id="a", name="a"),
@@ -253,7 +258,10 @@ def _run_turn(
             build_session_patch(
                 session,
                 model_base_url=model_url,
-                hook_bridge={"endpoint": f"{bridge_base}/{token}", "events": list(events)},
+                hook_bridge={"endpoint": f"{bridge_base}/{token}", "events": list(events)}
+                if events
+                else None,
+                classic_hooks=write_classic_hooks(session, tmp_path),
             )
         )
     )
@@ -428,3 +436,38 @@ def test_tool_check_sees_and_can_deny_a_dsh_mcp_tool(
     text = _result_text(results[-1])
     assert "mcp is off today (Valuz hook)" in text
     assert "upstream:hi" not in text
+
+
+def test_dsh_runs_the_workspace_claude_hooks_with_its_own_bridge(
+    tmp_path: Path, model_url: str, bridge_base: str
+) -> None:
+    """A trusted workspace's ``.claude/settings.json`` hooks run in DSH through
+    DSH's own ``dsh-hooks-claude-code`` plugin; the ``Bash`` matcher selects
+    DSH's ``bash`` tool."""
+    settings = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "echo 'no shell here (workspace hook)' >&2; exit 2",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    _run_turn(
+        tmp_path,
+        model_url,
+        bridge_base,
+        events=(),
+        workspace_files={".claude/settings.json": json.dumps(settings)},
+    )
+
+    results = _tool_results(_ToolCallingModel.requests[1])
+    text = _result_text(results[-1])
+    assert "no shell here (workspace hook)" in text
+    assert "bridge-ran" not in text

@@ -66,6 +66,7 @@ from src.core.events import (
     EventSink,
 )
 from src.core.hooks import AGENT_SPAWN, TOOL_CALL, TOOL_CHECK, SessionHooks, SessionRef
+from src.core.hooks.classic.config import workspace_hooks_signature
 from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.tools import ToolDef, ToolKit
 from src.core.types import (
@@ -76,6 +77,7 @@ from src.core.types import (
     Session,
     StopReason,
     UserMessage,
+    is_workspace_untrusted,
 )
 from src.core.user_questions_bridge import (
     UserQuestionsBridgeRecord,
@@ -1107,10 +1109,16 @@ def _composition_fingerprint(session: Session) -> str:
     including headers — a changed credential must change the digest — and
     ``model_settings`` (effort lands in the llm adapter row, max_tokens in
     ``initialize``), so a live-reconciled PATCH ``/effort`` reaches the
-    runtime on the next turn instead of staying baked forever.
+    runtime on the next turn instead of staying baked forever. The
+    workspace's classic hooks are read once at spawn, so their files and the
+    workspace trust count too.
     """
     payload = json.dumps(
         {
+            "classic_hooks": [
+                is_workspace_untrusted(session),
+                workspace_hooks_signature(session.cwd),
+            ],
             "instructions": session.instructions,
             "skills": list(session.skills),
             "mcp": [asdict(server) for server in session.mcp_servers],
