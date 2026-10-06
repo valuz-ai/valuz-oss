@@ -42,10 +42,10 @@ OutboundEventType = Literal[
     "action_resolved",
     # Session-modes contract (see docs/design/session-modes.md):
     # ``mode_changed`` fires on every transition (user or runtime initiated)
-    # carrying ``{mode, by: "user" | "runtime"}``. ``plan_update`` carries
-    # the codex runtime's structured ``TurnPlanStep[]`` snapshot during
-    # plan mode (Claude plan reuses ``requires_action(clarifying_questions)``
-    # for its interactive surface; codex plan emits ``plan_update``).
+    # carrying ``{mode, by: "user" | "runtime"}``. ``plan_update`` is
+    # legacy: codex's ``update_plan`` checklist used to arrive as it and
+    # now maps to the shared ``todo_update`` like every other runtime's
+    # todos; the type stays readable for events already persisted.
     "mode_changed",
     "plan_update",
     # ``plan_proposed`` carries a plan-mode PROPOSAL awaiting the user's

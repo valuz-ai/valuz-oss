@@ -198,3 +198,36 @@ def test_context_compaction_completed_emits_compaction_marker() -> None:
     # Same empty payload as the runtime's synthetic ``/compact`` marker —
     # codex exposes no compaction metadata (the item is bare ``{id}``).
     assert events[0].data == {}
+
+
+def test_update_plan_snapshots_become_the_shared_todo_update() -> None:
+    """Codex's checklist tool (``update_plan`` → ``turn/plan/updated``) feeds the
+    todo panel and ``session.todos`` like every other runtime's: one
+    ``todo_update`` carrying ``{content, status}`` items (statuses snake_case)."""
+    from openai_codex.generated.v2_all import TurnPlanUpdatedNotification
+
+    events = map_notification(
+        Notification(
+            method="turn/plan/updated",
+            payload=TurnPlanUpdatedNotification.model_validate(
+                {
+                    "threadId": "th_1",
+                    "turnId": "tu_1",
+                    "explanation": "first pass",
+                    "plan": [
+                        {"step": "read the spec", "status": "completed"},
+                        {"step": "write the code", "status": "inProgress"},
+                        {"step": "run the tests", "status": "pending"},
+                    ],
+                }
+            ),
+        )
+    )
+    assert [e.type for e in events] == ["todo_update"]
+    assert events[0].data == {
+        "todos": [
+            {"content": "read the spec", "status": "completed"},
+            {"content": "write the code", "status": "in_progress"},
+            {"content": "run the tests", "status": "pending"},
+        ]
+    }
