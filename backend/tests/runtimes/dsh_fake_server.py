@@ -11,6 +11,10 @@ every scenario:
 * ``FAKE_DSH_MODE=bigframe`` — like ``ok`` but the committed assistant message
   is a single ~1 MiB NDJSON line (regression: asyncio's default 64 KiB
   readline limit killed the reader on real dsh ``request/header`` frames)
+* ``FAKE_DSH_MODE=subagent`` — like ``ok`` but mid-turn the agent spawns a
+  child (``subagent.started``), the child runs one step of its own in its own
+  session (7 in / 5 out tokens) and finishes (``subagent.finished``) — the
+  real SDK server's notifications for an in-process subagent
 """
 
 from __future__ import annotations
@@ -67,6 +71,33 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
         )
         notify("session.status", {"sessionId": session_id, "status": "idle"})
         return
+    if mode == "subagent":
+        child = f"{session_id}-child"
+        notify("subagent.started", {"parentSessionId": session_id, "childSessionId": child})
+        session_event(
+            child,
+            {
+                "type": "assistant/message",
+                "seq": 0,
+                "data": {
+                    "turn": 1,
+                    "step": 1,
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "x"}]},
+                    "usage": {"inputTokens": 7, "outputTokens": 5, "cacheReadTokens": 0},
+                },
+            },
+        )
+        notify(
+            "subagent.finished",
+            {
+                "parentSessionId": session_id,
+                "childSessionId": child,
+                "agentId": child,
+                "provider": "spawn",
+                "status": "completed",
+                "stopReason": "completed",
+            },
+        )
     answer = "42" if mode != "bigframe" else ("4" + "2" * 1_000_000)
     # dsh >= 0.2 (session-log v4) streams tokens as live frames, forwarded by
     # valuz-dsh-bundle's stream-forwarder as ``valuz.assistant-stream``.

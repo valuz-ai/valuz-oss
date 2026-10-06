@@ -145,6 +145,40 @@ async def test_a_turn_sent_while_the_runtime_warms_up_waits_for_it(
 
 
 @pytest.mark.asyncio
+async def test_a_subagents_usage_counts_toward_the_turn_and_announces_the_spawn(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """dsh runs a subagent as a child agent in its own session. Its steps are
+    billed to the turn (they were dropped with the other sessions' frames),
+    its transcript stays its own, and its start is the bus's ``agent.spawn``."""
+    from src.core.hooks import AGENT_SPAWN, hook_registry
+
+    monkeypatch.setenv("FAKE_DSH_MODE", "subagent")
+    spawned: list[str] = []
+
+    async def on_spawn(ctx, event, next_):  # noqa: ANN001, ANN202
+        spawned.append(str(event.get("agent_type")))
+        return await next_()
+
+    remove = hook_registry.register(AGENT_SPAWN, on_spawn, owner="test-dsh-spawn")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    try:
+        await runtime.run(session, UserMessage(text="delegate"))
+    finally:
+        remove()
+        await runtime.close()
+
+    usage = next(e for e in sink.events if e.type == "usage_update")
+    assert usage.data["input_tokens"] == 10 + 7
+    assert usage.data["output_tokens"] == 2 + 5
+    assert [e.data.get("text") for e in sink.events if e.type == "assistant_message"] == ["42"]
+    assert spawned == ["subagent"]
+
+
+@pytest.mark.asyncio
 async def test_completed_turn_maps_events_and_stop_reason(tmp_path: Path) -> None:
     (tmp_path / "ws").mkdir()
     sink = _CollectSink()

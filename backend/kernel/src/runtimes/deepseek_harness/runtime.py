@@ -65,7 +65,7 @@ from src.core.events import (
     Event,
     EventSink,
 )
-from src.core.hooks import TOOL_CALL, TOOL_CHECK, SessionHooks, SessionRef
+from src.core.hooks import AGENT_SPAWN, TOOL_CALL, TOOL_CHECK, SessionHooks, SessionRef
 from src.core.hooks.runtime_support import runtime_session_hooks
 from src.core.tools import ToolDef, ToolKit
 from src.core.types import (
@@ -197,6 +197,10 @@ class DeepSeekHarnessRuntime:
         # Hook bus: session reference, the kernel-side remote session for
         # dsh's built-in tools, and the MCP proxy registration.
         self._hook_session_ref: SessionRef | None = None
+        # Sessions of this process's subagents (dsh runs each child agent in
+        # its own session; nested children included) — their steps bill to
+        # the turn that runs them.
+        self._child_sessions: set[str] = set()
         self._hook_bridge_token: str | None = None
         self._mcp_proxy_session_id: str | None = None
         self._uq_asks: dict[str, _UserQuestionsAsk] = {}
@@ -564,6 +568,25 @@ class DeepSeekHarnessRuntime:
                 raise self._client._closed_error("dsh runtime exited mid-turn")
             assert isinstance(item, DshNotification)
             payload = item.payload
+            children = self._subagent_sessions()
+            if item.method == "subagent.started":
+                parent = str(payload.get("parentSessionId") or "")
+                child = str(payload.get("childSessionId") or "")
+                if child and (parent == self._native_session_id or parent in children):
+                    children.add(child)
+                    await self._announce_spawn()
+                continue
+            if item.method == "subagent.finished":
+                continue
+            if payload.get("sessionId") in children:
+                # A subagent's own session: its transcript stays its own (the
+                # parent shows the subagent tool call and result), but every
+                # step it takes is billed to this turn.
+                if item.method == "session.event" and isinstance(payload.get("event"), dict):
+                    usage = extract_step_usage(payload["event"])
+                    if usage is not None:
+                        outcome.add_usage(usage)
+                continue
             if payload.get("sessionId") != self._native_session_id:
                 continue
             if item.method == "session.event":
@@ -602,6 +625,26 @@ class DeepSeekHarnessRuntime:
             elif item.method == "session.status":
                 if received and payload.get("status") == "idle":
                     return outcome
+
+    def _subagent_sessions(self) -> set[str]:
+        children = getattr(self, "_child_sessions", None)
+        if children is None:
+            children = self._child_sessions = set()
+        return children
+
+    async def _announce_spawn(self) -> None:
+        """``agent.spawn`` for a subagent dsh just started (observe-only)."""
+        hooks = self._hook_session()
+        if not hooks.wants(AGENT_SPAWN):
+            return
+
+        async def core(_event: Any) -> None:
+            return None
+
+        try:
+            await hooks.dispatch(AGENT_SPAWN, {"agent_type": "subagent", "description": ""}, core)
+        except Exception:  # noqa: BLE001 — an observer never breaks the turn
+            logger.warning("deepseek_harness: agent.spawn dispatch failed", exc_info=True)
 
     def _register_kernel_toolkit(self, session: Session) -> bool:
         """Publish this session's kernel ToolDefs on the mcp_bridge registry.
@@ -937,6 +980,7 @@ class DeepSeekHarnessRuntime:
             if grace > 0:
                 await asyncio.sleep(grace)
         self._process_turns = 0
+        self._subagent_sessions().clear()
         # Fresh native session per process: the SDK server cannot rehydrate a
         # persisted id ("id collision"), so each process gets a new thread and
         # the transcript sidecar carries the history across.
