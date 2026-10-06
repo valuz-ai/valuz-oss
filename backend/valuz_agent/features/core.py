@@ -125,6 +125,8 @@ class CorePlugin(OssPlugin):
             _start_mcp_session_managers(ctx.registry),
             step("warm_token_estimator"),
             step("start_decision_aggregator", app=True),
+            step("start_ui_push_transport"),
+            step("warn_unreachable_plugin_hooks"),
         )
         startup(ctx, BootPhase.READY, step("mark_boot_complete"))
 
@@ -138,6 +140,7 @@ class CorePlugin(OssPlugin):
             BootPhase.STOP_RUNNERS,
             step("stop_decision_aggregator", app=True),
             step("stop_mcp_session_managers", app=True),
+            step("stop_ui_push_transport"),
         )
         shutdown(
             ctx,

@@ -749,6 +749,48 @@ async def resolve_informational_notification_backlog() -> None:
         logging.getLogger(__name__).exception("informational notification sweep failed")
 
 
+async def start_ui_push_transport() -> None:
+    """Receive UI bus pushes made by other backend processes (OSS: no-op)."""
+    from valuz_agent.modules.plugin_ui.push import ui_push_hub
+    from valuz_agent.ports.extensions import ext
+
+    await ext.ui_push_transport.start(ui_push_hub.deliver_remote)
+
+
+async def stop_ui_push_transport() -> None:
+    from valuz_agent.ports.extensions import ext
+
+    await ext.ui_push_transport.stop()
+
+
+def warn_unreachable_plugin_hooks() -> None:
+    """Name the plugins whose ``ctx.hooks`` / ``ctx.commands`` sessions won't see.
+
+    They register in this process; a session runs in a separate kernel when the
+    sandbox allocator is not the in-process one, or with ``VALUZ_KERNEL_MODE=
+    http``. Such handlers belong in the kernel image (``VALUZ_KERNEL_HOOK_MODULES``).
+    """
+    import os
+
+    from valuz_agent.plugin_host.hooks_api import plugin_hook_owners
+    from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.sandbox_allocator import BootSingletonAllocator
+
+    remote_mode = os.environ.get("VALUZ_KERNEL_MODE", "inprocess").strip().lower() == "http"
+    sandboxed = not isinstance(ext.sandbox_allocator, BootSingletonAllocator)
+    if not (remote_mode or sandboxed):
+        return
+    owners = plugin_hook_owners()
+    if owners:
+        logging.getLogger(__name__).warning(
+            "plugins %s registered hook handlers/commands in the host process, but sessions "
+            "run in %s; they will not apply there — ship them in the kernel image "
+            "(VALUZ_KERNEL_HOOK_MODULES) instead",
+            ", ".join(owners),
+            "a sandboxed kernel" if sandboxed else "a remote kernel (VALUZ_KERNEL_MODE=http)",
+        )
+
+
 async def start_mcp_session_managers(app: FastAPI, managers: Sequence[Any] | None = None) -> None:
     """Bring the in-process MCP session managers online.
 

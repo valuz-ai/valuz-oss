@@ -15,7 +15,10 @@ keys the frontend reads (all strings; ``owner`` is stamped by ``ctx.ui``):
 
 In-process fan-out to the SSE generators of this process; frames are
 live-only (never persisted, ``seq`` 0, no ``event_uid``), so they never
-disturb the streams' resume cursors. Every push carries ``push_id`` in its
+disturb the streams' resume cursors. Every push is also handed to the bound
+``ui_push_transport`` (OSS: none), which carries it to the other backend
+processes; a push that comes back from the transport is delivered here only
+if another process made it. Every push carries ``push_id`` in its
 payload (a reserved key): a client with two streams open on one session
 receives the push twice and drops the second copy by it.
 """
@@ -23,10 +26,12 @@ receives the push twice and drops the second copy by it.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 KINDS = frozenset({"invalidate", "toast", "status", "log", "notice"})
 
@@ -47,10 +52,39 @@ class UiPush:
     def wire_payload(self) -> dict[str, str]:
         return {**self.payload, "push_id": self.push_id}
 
+    def to_wire(self, origin: str) -> dict[str, Any]:
+        return {
+            "origin": origin,
+            "kind": self.kind,
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "payload": dict(self.payload),
+            "timestamp": self.timestamp,
+            "push_id": self.push_id,
+        }
+
+    @classmethod
+    def from_wire(cls, data: Mapping[str, Any]) -> UiPush:
+        payload = data.get("payload")
+        return cls(
+            kind=str(data["kind"]),
+            user_id=str(data["user_id"]),
+            session_id=None if data.get("session_id") is None else str(data["session_id"]),
+            payload={str(k): str(v) for k, v in dict(payload or {}).items()},
+            timestamp=int(data.get("timestamp") or 0),
+            push_id=str(data["push_id"]),
+        )
+
+
+logger = logging.getLogger(__name__)
+
 
 class UiPushHub:
     def __init__(self) -> None:
         self._subscribers: dict[tuple[str, str | None], set[asyncio.Queue[UiPush]]] = {}
+        #: This process, so a push the transport echoes back is not delivered twice.
+        self.origin = uuid.uuid4().hex
+        self._publishing: set[asyncio.Task[None]] = set()
 
     def push(
         self,
@@ -69,14 +103,53 @@ class UiPushHub:
             session_id=session_id,
             payload={str(k): "" if v is None else str(v) for k, v in (payload or {}).items()},
         )
+        delivered = self._fan_out(message)
+        self._publish(message)
+        return delivered
+
+    def deliver_remote(self, data: Mapping[str, Any]) -> int:
+        """A push from the transport: deliver it here unless this process made it."""
+        if data.get("origin") == self.origin:
+            return 0
+        try:
+            message = UiPush.from_wire(data)
+        except (KeyError, TypeError, ValueError):
+            logger.warning("dropping a malformed UI push from the transport")
+            return 0
+        if message.kind not in KINDS:
+            return 0
+        return self._fan_out(message)
+
+    def _fan_out(self, message: UiPush) -> int:
         delivered = 0
-        for queue in list(self._subscribers.get((user_id, session_id), ())):
+        for queue in list(self._subscribers.get((message.user_id, message.session_id), ())):
             try:
                 queue.put_nowait(message)
                 delivered += 1
             except asyncio.QueueFull:
                 pass
         return delivered
+
+    def _publish(self, message: UiPush) -> None:
+        from valuz_agent.ports.extensions import ext
+        from valuz_agent.ports.ui_push_transport import is_local
+
+        transport = ext.ui_push_transport
+        if is_local(transport):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._send(transport, message.to_wire(self.origin)))
+        self._publishing.add(task)
+        task.add_done_callback(self._publishing.discard)
+
+    async def _send(self, transport: Any, wire: dict[str, Any]) -> None:
+        try:
+            await transport.publish(wire)
+        except Exception:  # noqa: BLE001 — a lost push is a missed toast, never correctness
+            logger.warning("UI push transport publish failed", exc_info=True)
 
     async def subscribe(self, user_id: str, session_id: str | None) -> AsyncIterator[UiPush]:
         queue: asyncio.Queue[UiPush] = asyncio.Queue(maxsize=256)

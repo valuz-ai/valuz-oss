@@ -113,6 +113,8 @@ STARTUP_ORDER: Mapping[str, tuple[str, ...]] = {
         "resolve_marketplace_index",
         "start_skills",
         "start_decision_aggregator",
+        "start_ui_push_transport",  # UI bus pushes from other backend processes
+        "warn_unreachable_plugin_hooks",  # plugin hooks a remote kernel can't see
     ),
     # Registered last so every other startup step gets a chance to push a
     # ``record_warning(...)`` first -- anything that landed in the warnings buffer
@@ -145,6 +147,7 @@ SHUTDOWN_ORDER: Mapping[str, tuple[str, ...]] = {
         "shutdown_parse_pool",
         "stop_polling_scheduler",
         "stop_mcp_session_managers",
+        "stop_ui_push_transport",
     ),
     BootPhase.STOP_KERNEL: (
         "dispose_data_service",

@@ -59,6 +59,10 @@ from src.core.hooks.tool_identity import (
 
 install_builtins(hook_registry)
 
+from src.core.hooks.overlays import install_overlay_modules  # noqa: E402
+
+install_overlay_modules(hook_registry)
+
 __all__ = [
     "AGENT_SPAWN",
     "COMMAND_RUN",

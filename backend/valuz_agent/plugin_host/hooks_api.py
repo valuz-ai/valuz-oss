@@ -3,9 +3,12 @@
 The bus lives in the kernel (``src.core.hooks``, docs/design/plugin-
 architecture/hooks-and-plugin-ui.md §3); a plugin's handlers run in the
 kernel process for every runtime. Each registration is undone when the plugin
-is disposed. A kernel running as a separate process (``VALUZ_KERNEL_MODE=
-http``) cannot reach handlers registered here — they then apply only to an
-in-process kernel; the composition logs that once.
+is disposed. A kernel running as a separate process (a sandbox per owner, or
+``VALUZ_KERNEL_MODE=http``) cannot reach handlers registered here — they then
+apply only to an in-process kernel. The boot step
+``warn_unreachable_plugin_hooks`` names such plugins; an overlay that needs its
+handlers in a remote kernel ships them in the kernel image instead
+(``src.core.hooks.overlays``, ``VALUZ_KERNEL_HOOK_MODULES``).
 
 Handler signature (the same as the bus's)::
 
@@ -64,7 +67,7 @@ class HooksApi:
             priority=priority,
             applies=applies,
         )
-        _warn_if_kernel_is_remote()
+        _plugin_owners.add(self._ctx.plugin_id)
         return self._ctx._on_stack(remove)
 
 
@@ -92,24 +95,21 @@ class CommandsApi:
             description=description,
             args_hint=args_hint,
         )
-        _warn_if_kernel_is_remote()
+        _plugin_owners.add(self._ctx.plugin_id)
         return self._ctx._on_stack(remove)
 
 
-_warned = {"remote": False}
+#: Plugin ids that ever registered through ``ctx.hooks`` / ``ctx.commands``.
+_plugin_owners: set[str] = set()
 
 
-def _warn_if_kernel_is_remote() -> None:
-    import os
+def plugin_hook_owners() -> list[str]:
+    """Plugins whose hook handlers or commands are registered right now."""
+    from src.core.hooks import command_registry, hook_registry
 
-    if _warned["remote"]:
-        return
-    if os.environ.get("VALUZ_KERNEL_MODE", "inprocess").strip().lower() == "http":
-        _warned["remote"] = True
-        logger.warning(
-            "plugin hooks/commands are registered in this process but the kernel runs "
-            "remotely (VALUZ_KERNEL_MODE=http); they apply only to an in-process kernel"
-        )
+    live = {row["owner"] for row in hook_registry.owners()}
+    live |= {spec.owner for spec in command_registry.list()}
+    return sorted(_plugin_owners & live)
 
 
-__all__ = ["CommandsApi", "HooksApi"]
+__all__ = ["CommandsApi", "HooksApi", "plugin_hook_owners"]

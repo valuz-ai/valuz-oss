@@ -14,6 +14,7 @@
   "shutdown_parse_pool()",
   "stop_polling_scheduler()",
   "stop_mcp_session_managers(app)",
+  "stop_ui_push_transport()",
   "dispose_data_service(app)",
   "shutdown_kernel()",
   "shutdown_tracing()",
@@ -55,6 +56,8 @@
   "resolve_marketplace_index()",
   "start_skills(app)",
   "start_decision_aggregator(app)",
+  "start_ui_push_transport()",
+  "warn_unreachable_plugin_hooks()",
   "mark_boot_complete()",
   "start_post_boot_agent_channels(app)",
   "start_dsh_manager_if_plugins_installed()"

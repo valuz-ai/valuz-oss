@@ -301,8 +301,9 @@ def test_an_optional_after_app_failure_is_recorded_and_rolled_back() -> None:
 
 
 def test_hooks_and_commands_belong_to_the_plugin_and_unwind() -> None:
-    import valuz_agent.boot.kernel  # noqa: F401 — sys.path for ``src``
     from src.core.hooks import TOOL_CALL, command_registry, hook_registry
+
+    import valuz_agent.boot.kernel  # noqa: F401 — sys.path for ``src``
 
     async def handler(ctx: Any, event: Any, next_: Any) -> Any:
         return await next_()
@@ -325,3 +326,41 @@ def test_hooks_and_commands_belong_to_the_plugin_and_unwind() -> None:
         host.unload("hooking-plugin")
     assert all(h["owner"] != "hooking-plugin" for h in hook_registry.owners())
     assert command_registry.get("tally-plugin-test") is None
+
+
+def test_hook_plugins_are_named_when_sessions_run_in_a_sandboxed_kernel(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from src.core.hooks import TOOL_CHECK
+
+    import valuz_agent.boot.kernel  # noqa: F401 — sys.path for ``src``
+    from valuz_agent.boot.steps import warn_unreachable_plugin_hooks
+    from valuz_agent.plugin_host.hooks_api import plugin_hook_owners
+    from valuz_agent.ports.extensions import ext as global_ext
+
+    async def handler(ctx: Any, event: Any, next_: Any) -> Any:
+        return await next_()
+
+    def apply(ctx: Any) -> None:
+        ctx.hooks.on(TOOL_CHECK, handler)
+
+    host, _ = _host(_plugin("remote-hooks-plugin", apply))
+    host.load_all()
+    previous = global_ext.sandbox_allocator
+    try:
+        assert "remote-hooks-plugin" in plugin_hook_owners()
+        with caplog.at_level(logging.WARNING):
+            warn_unreachable_plugin_hooks()  # in-process allocator: quiet
+        assert "remote-hooks-plugin" not in caplog.text
+
+        global_ext.sandbox_allocator = object()  # type: ignore[assignment]
+        with caplog.at_level(logging.WARNING):
+            warn_unreachable_plugin_hooks()
+        assert "remote-hooks-plugin" in caplog.text
+        assert "VALUZ_KERNEL_HOOK_MODULES" in caplog.text
+    finally:
+        global_ext.sandbox_allocator = previous
+        host.unload("remote-hooks-plugin")
+    assert "remote-hooks-plugin" not in plugin_hook_owners()
