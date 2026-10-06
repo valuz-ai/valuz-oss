@@ -1,0 +1,10 @@
+{
+  "name": "valuz-vendored-plugin-sdk-cli",
+  "private": true,
+  "description": "Runtime dependencies of the self-contained valuz-plugin CLI distribution (the plugin SDK CLI shipped in the desktop app's libexec/plugin-sdk and the kernel image's /app/vendor/plugin-sdk): esbuild for build/test and the React the pre-bundled runtime/*.mjs import. Only package.json + package-lock.json are committed; scripts/build-plugin-sdk-dist.mjs --install runs npm ci from them at packaging time (--ignore-scripts, --os/--cpu of the target, so esbuild's native binary matches the app, not the build host). The pins must equal the versions the frontend workspace resolves for @valuz/plugin-sdk — the runtime is bundled against them, and the build script refuses to run when they drift. Refresh: node scripts/build-plugin-sdk-dist.mjs --update-pins.",
+  "dependencies": {
+    "esbuild": "0.27.7",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

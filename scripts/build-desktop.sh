@@ -10,6 +10,7 @@
 #       ├── valuz-server           # backend entrypoint binary
 #       ├── _internal/             # PyInstaller runtime (sibling of binary)
 #       ├── rg                     # ripgrep helper, used by backend
+#       ├── plugin-sdk/            # valuz-plugin CLI distribution (Phase B1)
 #       └── valuz-tui/             # (later)
 #
 # Usage:
@@ -20,6 +21,7 @@
 #   ./scripts/build-desktop.sh --skip-backend        # frontend + CLI only
 #   ./scripts/build-desktop.sh --skip-frontend       # backend + CLI only
 #   ./scripts/build-desktop.sh --skip-cli            # backend + frontend only
+#   ./scripts/build-desktop.sh --skip-plugin-sdk     # no valuz-plugin CLI in libexec
 #   ./scripts/build-desktop.sh --verbose             # verbose output
 #
 # Editions (per docs/STRUCTURE.md §"Distribution Model"):
@@ -60,6 +62,7 @@ SKIP_FRONTEND=false
 SKIP_CLI=false
 SKIP_RG=false
 SKIP_NODE=false
+SKIP_PLUGIN_SDK=false
 SKIP_NOTICES=false
 SIGNED=false
 VERBOSE=false
@@ -73,6 +76,7 @@ for arg in "$@"; do
     --skip-cli)      SKIP_CLI=true ;;
     --skip-rg)       SKIP_RG=true ;;
     --skip-node)     SKIP_NODE=true ;;
+    --skip-plugin-sdk) SKIP_PLUGIN_SDK=true ;;
     --skip-notices)  SKIP_NOTICES=true ;;
     --signed)        SIGNED=true ;;
     --verbose)       VERBOSE=true ;;
@@ -80,7 +84,7 @@ for arg in "$@"; do
     --publish)       PUBLISH="always" ;;
     --edition=*)     EDITION="${arg#--edition=}" ;;
     --help|-h)
-      echo "Usage: $0 [--edition=oss|enterprise|finance] [--signed] [--skip-backend] [--skip-frontend] [--skip-cli] [--skip-rg] [--skip-node] [--skip-notices] [--verbose] [--publish[=always|never|onTag]]"
+      echo "Usage: $0 [--edition=oss|enterprise|finance] [--signed] [--skip-backend] [--skip-frontend] [--skip-cli] [--skip-rg] [--skip-node] [--skip-plugin-sdk] [--skip-notices] [--verbose] [--publish[=always|never|onTag]]"
       exit 0
       ;;
     *)
@@ -440,6 +444,33 @@ if ! $SKIP_FRONTEND; then
       "$RESOURCES_DIR/THIRD-PARTY-NOTICES.txt"
   else
     log "Skipping third-party notices generation (--skip-notices)"
+  fi
+
+  # --------------------------------------------------------------
+  # Phase B1: Stage the plugin SDK CLI (valuz-plugin) into libexec/
+  # --------------------------------------------------------------
+  # Agent sessions call `valuz-plugin` (create / build / test / validate /
+  # pack a third-party plugin; backend/valuz_agent/infra/session_tools.py).
+  # The packaged app has no monorepo, so it ships the self-contained
+  # distribution: the CLI + build core + templates + the SDK runtime
+  # pre-bundled from the workspace just installed above, plus the pinned
+  # esbuild/React from backend/vendor/plugin-sdk-cli (npm ci). Runs under the
+  # app's own Electron as Node like the other closures (sidecar.ts sets
+  # VALUZ_PLUGIN_SDK_ENTRY). esbuild's native binary is a per-platform optional
+  # dependency: --target installs the one for THIS build's dist tag (npm
+  # --os/--cpu, scripts skipped), not the build host's — the script fails if
+  # the expected @esbuild/<os>-<cpu> did not land.
+  if ! $SKIP_NODE && ! $SKIP_PLUGIN_SDK; then
+    log "=== Phase B1: Staging plugin SDK CLI (valuz-plugin) ==="
+    command -v npm >/dev/null 2>&1 || die "npm is required for the plugin SDK CLI (Phase B1)."
+    PLUGIN_SDK_TARGET="$RESOURCES_LIBEXEC/plugin-sdk"
+    node "$SCRIPT_DIR/build-plugin-sdk-dist.mjs" \
+      --out "$PLUGIN_SDK_TARGET" --install --target "$PLATFORM_TAG-$ARCH_TAG" || \
+      die "plugin SDK CLI distribution failed (scripts/build-plugin-sdk-dist.mjs)"
+    [ -f "$PLUGIN_SDK_TARGET/bin/valuz-plugin.mjs" ] || die "plugin SDK CLI entry missing after staging"
+    log "plugin SDK CLI staged at: $PLUGIN_SDK_TARGET ($(du -sh "$PLUGIN_SDK_TARGET" | cut -f1))"
+  else
+    log "=== Phase B1: Skipping plugin SDK CLI (--skip-node / --skip-plugin-sdk) ==="
   fi
 
   # Build workspace packages + desktop app

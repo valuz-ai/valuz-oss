@@ -442,12 +442,18 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   LibreOffice Kit CLI from the dsh closure (convert / render / recalculate), run on
   `VALUZ_NODE_PATH` (Electron-as-node when packaged) — and `valuz-plugin`, the
   third-party plugin SDK CLI (`create` / `build` / `dev` / `test` / `validate` /
-  `pack`; `VALUZ_PLUGIN_SDK_ENTRY`, falling back to the source checkout's
-  `frontend/packages/plugin-sdk/bin/valuz-plugin.mjs`; skipped when neither Node nor
-  the SDK is found). The runtime keeps its
+  `pack`). Packaged, it is the self-contained distribution
+  `scripts/build-plugin-sdk-dist.mjs` builds (CLI + SDK runtime pre-bundled into
+  `runtime/*.mjs` + esbuild/React pinned in `backend/vendor/plugin-sdk-cli`, npm ci'd
+  for the target platform), staged by `build-desktop.sh` Phase B1 into
+  `libexec/plugin-sdk` (sidecar sets `VALUZ_PLUGIN_SDK_ENTRY`, run on Electron-as-node);
+  a source checkout falls back to `frontend/packages/plugin-sdk/bin/valuz-plugin.mjs`
+  (SDK from its TypeScript sources); skipped when neither Node nor the SDK is found.
+  The session Python keeps its
   EXTERNALLY-MANAGED marker (read-only in the app bundle); a task that needs more
   packages uses `valuz-python -m venv --system-site-packages .venv`. Cloud sandboxes
-  get `valuz-python` and `dsoffice` from the kernel image (`/usr/local/bin`).
+  get `valuz-python`, `dsoffice` and `valuz-plugin` (the same distribution, built
+  in-image) from the kernel image (`/usr/local/bin`).
 - **Browser engine** (`modules/browser`) runs the `chrome-devtools-mcp` CLI
   under Node. Packaged desktop can't see the user's Node (stripped GUI PATH), so
   the sidecar sets `VALUZ_NODE_PATH` = the app's own Electron binary (run as

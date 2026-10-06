@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnSyncMock } = vi.hoisted(() => ({ spawnSyncMock: vi.fn() }));
@@ -16,10 +19,40 @@ vi.mock("node:child_process", () => {
 });
 
 const {
+  PLUGIN_SDK_ENTRY_REL,
   configureSidecarEgressEnvironment,
   killWindowsProcessTree,
+  resolvePluginSdkEntry,
   resolveSidecarDataDir,
 } = await import("./sidecar");
+
+describe("resolvePluginSdkEntry", () => {
+  it("finds the staged valuz-plugin CLI in the first libexec that has it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "sidecar-plugin-sdk-"));
+    try {
+      const packaged = path.join(root, "packaged", "libexec");
+      const dev = path.join(root, "dev", "libexec");
+      const devEntry = path.join(dev, PLUGIN_SDK_ENTRY_REL);
+      mkdirSync(path.dirname(devEntry), { recursive: true });
+      writeFileSync(devEntry, "");
+      expect(PLUGIN_SDK_ENTRY_REL).toBe(
+        path.join("plugin-sdk", "bin", "valuz-plugin.mjs"),
+      );
+      expect(resolvePluginSdkEntry([packaged, dev])).toBe(devEntry);
+
+      const packagedEntry = path.join(packaged, PLUGIN_SDK_ENTRY_REL);
+      mkdirSync(path.dirname(packagedEntry), { recursive: true });
+      writeFileSync(packagedEntry, "");
+      expect(resolvePluginSdkEntry([packaged, dev])).toBe(packagedEntry);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when nothing is staged (dev uses the source checkout)", () => {
+    expect(resolvePluginSdkEntry([path.join(tmpdir(), "no-such-libexec")])).toBeNull();
+  });
+});
 
 describe("resolveSidecarDataDir", () => {
   it("keeps managed source backends isolated from packaged app data", () => {

@@ -19,8 +19,12 @@ Harness — resolves them the same way (the ``chrome-devtools`` wrapper pattern)
 * ``valuz-plugin`` — the plugin SDK CLI (``@valuz/plugin-sdk``'s ``bin/valuz-plugin.mjs``:
   ``create`` / ``build`` / ``test`` / ``validate`` / ``pack``), run on Node, so an agent
   can build a third-party Valuz plugin in a session (docs plugin-development/05).
-  Packaged desktop: the sidecar points ``VALUZ_PLUGIN_SDK_ENTRY`` at the staged,
-  self-contained CLI bundle; a source checkout uses the package's own ``bin``.
+  Packaged desktop: the self-contained distribution
+  (``scripts/build-plugin-sdk-dist.mjs``: the CLI, the SDK runtime pre-bundled into
+  ``runtime/*.mjs``, the pinned esbuild + React) staged at ``libexec/plugin-sdk``;
+  the sidecar points ``VALUZ_PLUGIN_SDK_ENTRY`` at its ``bin/valuz-plugin.mjs``,
+  run under the app's Electron as Node. A source checkout uses the package's own
+  ``bin`` (the SDK from its TypeScript sources).
 
 Cloud sandboxes do not go through this module: the kernel image ships the same
 commands in ``/usr/local/bin``.
@@ -88,8 +92,9 @@ def office_kit_cli() -> Path | None:
 def plugin_sdk_cli() -> Path | None:
     """The plugin SDK CLI entry, or ``None`` when none is installed.
 
-    ``VALUZ_PLUGIN_SDK_ENTRY`` wins (packaged desktop / kernel image); a source
-    checkout falls back to the package's own ``bin``.
+    ``VALUZ_PLUGIN_SDK_ENTRY`` wins (packaged desktop:
+    ``libexec/plugin-sdk/bin/valuz-plugin.mjs``); a source checkout falls back to
+    the package's own ``bin``.
     """
     configured = os.environ.get(PLUGIN_SDK_ENTRY_ENV, "").strip()
     for candidate in (Path(configured) if configured else None, _SOURCE_PLUGIN_SDK_ENTRY):

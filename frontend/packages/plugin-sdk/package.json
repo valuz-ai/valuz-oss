@@ -18,7 +18,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --ext .ts,.tsx",
-    "test": "cd ../.. && vitest run --config vitest.config.ts packages/plugin-sdk/src"
+    "test": "cd ../.. && vitest run --config vitest.config.ts packages/plugin-sdk/src",
+    "build:dist": "node ../../../scripts/build-plugin-sdk-dist.mjs"
   },
   "dependencies": {
     "esbuild": "^0.27.0"

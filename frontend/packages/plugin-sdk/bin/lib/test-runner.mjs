@@ -2,25 +2,28 @@
 // plugin with esbuild for Node and run the bundles with ``node --test``.
 //
 // No node_modules are needed in the plugin directory:
-//   - ``@valuz/plugin-sdk`` and its subpaths are bundled from the SDK's own
-//     sources (its package.json ``exports``), so the plugin, the SDK hooks and
-//     the test host share one module instance;
+//   - ``@valuz/plugin-sdk`` and its subpaths are bundled into the tests from
+//     the SDK itself (see layout.mjs): in the monorepo from its TypeScript
+//     sources (package.json ``exports``), in the shipped distribution from the
+//     pre-bundled runtime/*.mjs — either way the plugin, the SDK hooks and the
+//     test host share one module instance;
 //   - react / react-dom / scheduler stay external and are imported from the
 //     SDK's node_modules by absolute file URL (realpath), so every importer —
 //     the plugin, the SDK, react-dom/server — gets the same React;
 //   - CSS imports load as empty modules, assets as data URLs.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { loadEsbuild } from "../../src/build/esbuild.mjs";
+import { SDK_ROOT, sdkLayout } from "./layout.mjs";
 
-const SDK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const sdkRequire = createRequire(path.join(SDK_ROOT, "package.json"));
+const SDK_PACKAGE_JSON = path.join(SDK_ROOT, "package.json");
+const sdkRequire = createRequire(SDK_PACKAGE_JSON);
 
 const TEST_FILE = /\.test\.(?:ts|tsx|js|jsx|mjs)$/;
 const SKIP_DIRS = new Set(["node_modules", "dist", "frontend"]);
@@ -46,29 +49,26 @@ export function findTestFiles(root) {
   return out.sort();
 }
 
-/** ``@valuz/plugin-sdk[/sub]`` → the SDK source file its package.json exports. */
-function sdkExportsMap() {
-  const pkg = JSON.parse(readFileSync(path.join(SDK_ROOT, "package.json"), "utf8"));
-  const map = new Map();
-  for (const [subpath, target] of Object.entries(pkg.exports ?? {})) {
-    const file = typeof target === "string" ? target : (target?.import ?? target?.default);
-    if (typeof file !== "string") continue;
-    const id = subpath === "." ? pkg.name : `${pkg.name}/${subpath.replace(/^\.\//, "")}`;
-    map.set(id, path.join(SDK_ROOT, file));
-  }
-  return map;
-}
-
-function testResolvePlugin() {
-  const sdkExports = sdkExportsMap();
+/**
+ * The esbuild plugin of ``valuz-plugin test``: ``@valuz/plugin-sdk[/sub]`` →
+ * the SDK layout's file (``layout`` defaults to this SDK's), React family →
+ * external, bundler-only asset imports → placeholders.
+ */
+export function testResolvePlugin(layout = sdkLayout()) {
   const reactCache = new Map();
   return {
     name: "valuz-plugin-test",
     setup(build) {
       build.onResolve({ filter: /^@valuz\/plugin-sdk(?:\/.*)?$/ }, (args) => {
-        const file = sdkExports.get(args.path);
+        const file = layout.modules.get(args.path);
         if (!file) {
-          return { errors: [{ text: `"${args.path}" is not an export of @valuz/plugin-sdk` }] };
+          const where = layout.kind === "dist" ? "the packaged @valuz/plugin-sdk" : "@valuz/plugin-sdk";
+          return { errors: [{ text: `"${args.path}" is not an export of ${where}` }] };
+        }
+        if (!existsSync(file)) {
+          return {
+            errors: [{ text: `"${args.path}" is missing from the SDK at ${layout.root} (${file}); rebuild it` }],
+          };
         }
         return { path: file };
       });
@@ -141,8 +141,11 @@ export async function bundleTests(dir, testFiles) {
       logLevel: "silent",
       loader: ASSET_LOADERS,
       // CommonJS dependencies bundled into an ES module still call require().
+      // Resolve from the SDK, where React lives: the pre-bundled runtime of a
+      // distribution keeps CommonJS ``require("react")`` calls bare (this
+      // build resolves the ones it sees itself to absolute paths).
       banner: {
-        js: 'import { createRequire as __valuzCreateRequire } from "node:module"; const require = __valuzCreateRequire(import.meta.url);',
+        js: `import { createRequire as __valuzCreateRequire } from "node:module"; const require = __valuzCreateRequire(${JSON.stringify(pathToFileURL(SDK_PACKAGE_JSON).href)});`,
       },
       plugins: [testResolvePlugin()],
       absWorkingDir: root,

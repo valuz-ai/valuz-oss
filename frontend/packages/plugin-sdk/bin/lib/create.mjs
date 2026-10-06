@@ -46,15 +46,23 @@ function tryResolve(request) {
   }
 }
 
-/** tsconfig.json for editors / agents: the SDK and React types by absolute path. */
-function tsconfigFor() {
+/**
+ * tsconfig.json for editors / agents: the SDK and React types by absolute
+ * path — those that exist. The monorepo package has its TypeScript sources;
+ * the shipped CLI distribution (bin/lib/layout.mjs) carries none, so its
+ * scaffolds get no SDK paths (build and test never type-check).
+ */
+export function tsconfigFor() {
   const src = path.join(SDK_ROOT, "src");
-  const paths = {
-    "@valuz/plugin-sdk": [path.join(src, "index.ts")],
-    "@valuz/plugin-sdk/ui": [path.join(src, "ui", "index.ts")],
-    "@valuz/plugin-sdk/testing": [path.join(src, "testing", "index.ts")],
-    "@valuz/plugin-sdk/build": [path.join(src, "build", "index.ts")],
-  };
+  const paths = {};
+  for (const [id, file] of [
+    ["@valuz/plugin-sdk", path.join(src, "index.ts")],
+    ["@valuz/plugin-sdk/ui", path.join(src, "ui", "index.ts")],
+    ["@valuz/plugin-sdk/testing", path.join(src, "testing", "index.ts")],
+    ["@valuz/plugin-sdk/build", path.join(src, "build", "index.ts")],
+  ]) {
+    if (existsSync(file)) paths[id] = [file];
+  }
   const reactTypes = tryResolve("@types/react/package.json");
   if (reactTypes) {
     const dir = path.dirname(reactTypes);

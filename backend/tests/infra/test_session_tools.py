@@ -92,7 +92,7 @@ class TestResolution:
 
 class TestPluginSdkResolution:
     def test_env_entry_wins(self, monkeypatch, tmp_path: Path) -> None:
-        packaged = tmp_path / "libexec" / "plugin-sdk" / "valuz-plugin.mjs"
+        packaged = tmp_path / "libexec" / "plugin-sdk" / "bin" / "valuz-plugin.mjs"
         packaged.parent.mkdir(parents=True)
         packaged.write_text("")
         source = tmp_path / "no-sdk.mjs"

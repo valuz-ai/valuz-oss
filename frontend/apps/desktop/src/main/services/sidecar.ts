@@ -420,6 +420,38 @@ function resolvePythonRuntime(): string | null {
   return null;
 }
 
+/** libexec-relative entry of the staged plugin SDK CLI distribution. */
+export const PLUGIN_SDK_ENTRY_REL = path.join(
+  "plugin-sdk",
+  "bin",
+  "valuz-plugin.mjs",
+);
+
+/**
+ * Locate the staged plugin SDK CLI (``valuz-plugin``: the self-contained
+ * distribution scripts/build-desktop.sh Phase B1 stages at
+ * libexec/plugin-sdk — CLI, pre-bundled SDK runtime, pinned esbuild/React).
+ * Same Electron-as-node contract as chrome-devtools-mcp: the backend's
+ * session wrapper runs ``node <entry>`` where "node" is this Electron binary
+ * under ELECTRON_RUN_AS_NODE=1 (backend/valuz_agent/infra/session_tools.py).
+ *
+ * ``libexecDirs`` defaults to the packaged libexec, then the dev resources
+ * one. Returns null when not staged (dev), so the backend falls back to the
+ * source checkout's frontend/packages/plugin-sdk/bin.
+ */
+export function resolvePluginSdkEntry(
+  libexecDirs: string[] = [
+    path.join(process.resourcesPath, "libexec"),
+    path.join(__dirname, "..", "..", "resources", "libexec"),
+  ],
+): string | null {
+  for (const dir of libexecDirs) {
+    const entry = path.join(dir, PLUGIN_SDK_ENTRY_REL);
+    if (fs.existsSync(entry)) return entry;
+  }
+  return null;
+}
+
 /**
  * Build spawn arguments for dev-mode fallback (uv run python -m valuz_agent).
  */
@@ -547,6 +579,17 @@ export const startSidecar = async (
   const pythonRuntime = resolvePythonRuntime();
   if (pythonRuntime) {
     env.VALUZ_PYTHON_RUNTIME = pythonRuntime;
+  }
+
+  // Staged plugin SDK CLI → `valuz-plugin` on every session's PATH, run under
+  // this Electron as Node (sets VALUZ_NODE_PATH/IS_ELECTRON itself so it works
+  // without the browser / dsh closures). Absent (dev) → the backend falls back
+  // to the source checkout's frontend/packages/plugin-sdk/bin.
+  const pluginSdkEntry = resolvePluginSdkEntry();
+  if (pluginSdkEntry) {
+    env.VALUZ_NODE_PATH = process.execPath;
+    env.VALUZ_NODE_IS_ELECTRON = "1";
+    env.VALUZ_PLUGIN_SDK_ENTRY = pluginSdkEntry;
   }
 
   if (serverBinary) {
