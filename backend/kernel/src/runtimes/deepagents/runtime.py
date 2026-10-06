@@ -66,7 +66,7 @@ from src.core.hooks import (
     ToolDecision,
     thaw,
 )
-from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.hooks.toolkit import call_tooldef
 from src.core.mcp_source_metadata import wrap_mcp_result_metadata_for_transport
 from src.core.rule_canonicalize import reduce_args_for_subject
@@ -1018,6 +1018,12 @@ class DeepAgentsRuntime:
                     elif event_name == "on_chat_model_end":
                         output = data.get("output")
                         internal_summarization = _is_internal_summarization_event(chunk)
+                        if internal_summarization:
+                            # The summarizer just replaced older history: the
+                            # same compaction marker (and observe-only
+                            # ``session.compact``) the other runtimes emit.
+                            await notify_compaction(self._hook_session())
+                            await self.event_sink.emit(Event(type="compaction", data={}))
                         full_text = _extract_full_text(output)
                         if full_text and not internal_summarization:
                             await self.event_sink.emit(

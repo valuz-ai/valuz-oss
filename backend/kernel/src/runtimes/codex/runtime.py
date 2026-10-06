@@ -85,7 +85,7 @@ from src.core.hooks import (
     ToolRef,
     native_tool_ref,
 )
-from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
@@ -574,6 +574,9 @@ class CodexRuntime:
                             continue
                         if event.type == "compaction":
                             saw_compaction = True
+                            await notify_compaction(
+                                self._hook_session(), "manual" if is_compact else "auto"
+                            )
                         if not saw_model_event and event.type in {
                             "text_delta",
                             "thinking_delta",
@@ -698,6 +701,7 @@ class CodexRuntime:
             # turn — this synthetic one is only the fallback for binaries
             # that don't emit that item.
             if is_compact and completed is not None and not saw_compaction:
+                await notify_compaction(self._hook_session(), "manual")
                 await self.event_sink.emit(Event(type="compaction", data={}))
 
             # A turn that reached ``turn/completed`` reports its spend even

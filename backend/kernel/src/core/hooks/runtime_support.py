@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import Any
 
-from src.core.hooks.events import SessionRef
+from src.core.hooks.events import SESSION_COMPACT, CompactDecision, HookEvent, SessionRef
 from src.core.hooks.registry import SessionHooks, hook_registry
+
+logger = logging.getLogger(__name__)
 
 
 def runtime_session_hooks(runtime: Any, runtime_provider: str) -> SessionHooks:
@@ -40,4 +43,20 @@ def runtime_session_hooks(runtime: Any, runtime_provider: str) -> SessionHooks:
     return SessionHooks(hook_registry, ref)
 
 
-__all__ = ["runtime_session_hooks"]
+async def notify_compaction(hooks: SessionHooks, trigger: str = "auto") -> None:
+    """``session.compact`` for a runtime that learns of a compaction only once
+    it has happened (codex, deepagents, dsh): observe-only, the decision is
+    ignored. Claude dispatches it before compacting (PreCompact) instead."""
+    if not hooks.wants(SESSION_COMPACT):
+        return
+
+    async def core(_event: HookEvent) -> CompactDecision:
+        return CompactDecision()
+
+    try:
+        await hooks.dispatch(SESSION_COMPACT, {"trigger": trigger}, core)
+    except Exception:  # noqa: BLE001 — an observer never breaks the turn
+        logger.warning("session.compact notification failed", exc_info=True)
+
+
+__all__ = ["notify_compaction", "runtime_session_hooks"]

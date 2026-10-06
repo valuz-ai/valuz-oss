@@ -179,6 +179,33 @@ async def test_a_subagents_usage_counts_toward_the_turn_and_announces_the_spawn(
 
 
 @pytest.mark.asyncio
+async def test_a_dsh_compaction_is_announced_like_the_other_runtimes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from src.core.hooks import SESSION_COMPACT, hook_registry
+
+    monkeypatch.setenv("FAKE_DSH_MODE", "compaction")
+    compacted: list[str] = []
+
+    async def on_compact(ctx, event, next_):  # noqa: ANN001, ANN202
+        compacted.append(str(event.get("trigger")))
+        return await next_()
+
+    remove = hook_registry.register(SESSION_COMPACT, on_compact, owner="test-dsh-compact")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    try:
+        await runtime.run(_session(), UserMessage(text="long task"))
+    finally:
+        remove()
+        await runtime.close()
+
+    assert sink.types().count("compaction") == 1
+    assert compacted == ["auto"]
+
+
+@pytest.mark.asyncio
 async def test_completed_turn_maps_events_and_stop_reason(tmp_path: Path) -> None:
     (tmp_path / "ws").mkdir()
     sink = _CollectSink()

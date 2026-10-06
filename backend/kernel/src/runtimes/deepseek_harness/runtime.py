@@ -66,7 +66,7 @@ from src.core.events import (
     EventSink,
 )
 from src.core.hooks import AGENT_SPAWN, TOOL_CALL, TOOL_CHECK, SessionHooks, SessionRef
-from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.tools import ToolDef, ToolKit
 from src.core.types import (
     EndTurn,
@@ -608,6 +608,8 @@ class DeepSeekHarnessRuntime:
                     if isinstance(plan_data, dict) and isinstance(plan_data.get("active"), bool):
                         self._dsh_plan_active = plan_data["active"]
                 for mapped in self._mapper.map_session_event(event):
+                    if mapped.type == "compaction":
+                        await notify_compaction(self._hook_session())
                     await self.event_sink.emit(mapped)
                 reason = extract_turn_end_reason(event)
                 if reason is not None:

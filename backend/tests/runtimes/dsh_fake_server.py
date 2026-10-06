@@ -15,6 +15,8 @@ every scenario:
   child (``subagent.started``), the child runs one step of its own in its own
   session (7 in / 5 out tokens) and finishes (``subagent.finished``) — the
   real SDK server's notifications for an in-process subagent
+* ``FAKE_DSH_MODE=compaction`` — like ``ok`` but dsh compacts mid-turn
+  (``compaction/end``)
 """
 
 from __future__ import annotations
@@ -71,6 +73,8 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
         )
         notify("session.status", {"sessionId": session_id, "status": "idle"})
         return
+    if mode == "compaction":
+        session_event(session_id, {"type": "compaction/end", "seq": next(seq), "data": {}})
     if mode == "subagent":
         child = f"{session_id}-child"
         notify("subagent.started", {"parentSessionId": session_id, "childSessionId": child})
