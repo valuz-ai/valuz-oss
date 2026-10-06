@@ -460,7 +460,7 @@ async def set_session_mode(
 
     Validation:
 
-    * 400 — `deepagents` runtime: plan / goal have no native primitive.
+    * 400 — `goal` on `deepagents` / `deepseek_harness`: no goal primitive.
     * 422 — `mode` not in `{"default", "plan", "goal"}` (Pydantic).
 
     Direct ``plan ↔ goal`` transitions are allowed. The runtime
@@ -474,21 +474,15 @@ async def set_session_mode(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if body.mode != "default" and session.runtime_provider == "deepagents":
+    # Plan runs everywhere: natively on claude_agent / codex / deepseek_harness,
+    # bus-filled on deepagents (core/hooks/builtin/plan_gate.py + the
+    # runtime's plan instructions and proposal card). Goal has no lowering on
+    # deepagents or deepseek_harness.
+    if body.mode == "goal" and session.runtime_provider in ("deepagents", "deepseek_harness"):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"mode={body.mode!r} is not supported on {session.runtime_provider} "
-                "sessions (no native plan/goal primitive)."
-            ),
-        )
-    # deepseek_harness gained plan (dsh-plan-mode via the vendored closure,
-    # slice 3); goal still has no dsh lowering.
-    if body.mode == "goal" and session.runtime_provider == "deepseek_harness":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "mode='goal' is not supported on deepseek_harness sessions "
+                f"mode='goal' is not supported on {session.runtime_provider} sessions "
                 "(no native goal primitive)."
             ),
         )

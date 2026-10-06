@@ -621,7 +621,7 @@ export function ComposerPane({
           // the next reconcile and emits ``mode_changed``); a new-session
           // toggle stages the value here and the send path PATCHes it onto
           // the freshly created session before the first message. Gated on
-          // the effective runtime — deepagents/dsh never see the toggle.
+          // the effective runtime (``PLAN_MODE_RUNTIMES``).
           sessionMode={selectedSessionMode}
           planModeAvailable={supportsPlanMode(
             selectedSession?.runtime_provider ?? selectedRuntimeId,

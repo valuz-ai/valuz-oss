@@ -28,6 +28,7 @@ hard-400'd at the route layer because DeepAgents has no classifier.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import errno
 import json
 import logging
@@ -66,6 +67,7 @@ from src.core.hooks import (
     ToolDecision,
     thaw,
 )
+from src.core.hooks.builtin.plan_gate import PLAN_MODE_DENY_REASON
 from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.hooks.toolkit import call_tooldef
 from src.core.mcp_source_metadata import wrap_mcp_result_metadata_for_transport
@@ -115,6 +117,20 @@ from src.runtimes.mcp_env import resolve_stdio_env
 from src.runtimes.network_egress import ForwardProxyDescriptor, record_runtime_egress_phase
 
 logger = logging.getLogger(__name__)
+
+
+# Plan mode (bus-filled; Claude, Codex and DSH lower it natively). The
+# instructions ride each plan-mode turn's prompt; the final answer's
+# <proposed_plan> block becomes the plan card the user approves.
+PLAN_MODE_INSTRUCTIONS = (
+    "Plan mode is on. Investigate with read-only tools only (reading, listing, "
+    "searching, research sub-agents); do not edit files, run commands or "
+    "change anything — those tools are refused until the plan is approved. "
+    "When you are ready, reply with your complete plan in Markdown inside "
+    "<proposed_plan>…</proposed_plan>. The user approves it or asks for "
+    "changes; you start executing only after approval."
+)
+_PROPOSED_PLAN_RE = re.compile(r"<proposed_plan>(.*?)</proposed_plan>", re.DOTALL)
 
 
 def _is_internal_summarization_event(chunk: dict[str, Any]) -> bool:
@@ -717,6 +733,14 @@ class DeepAgentsRuntime:
         )
         self._applied_effort: str | None = None
         self._applied_citation_mode: bool | None = None
+        # Plan mode (bus-filled, see core/hooks/builtin/plan_gate.py): whether
+        # the cached graph was built for a plan-mode session. The hook-bus
+        # middleware is installed only while some handler wants tool calls,
+        # so entering / leaving plan rebuilds the graph like the levers above.
+        self._applied_plan_mode: bool | None = None
+        # This turn runs in plan mode: plan instructions ride the prompt and a
+        # <proposed_plan> block in the answer becomes the plan card.
+        self._plan_turn = False
         self._mcp_tool_names: set[str] = set()
         # MCP tool name -> its server (hook events name MCP tools by server).
         self._mcp_tool_servers: dict[str, str] = {}
@@ -892,8 +916,20 @@ class DeepAgentsRuntime:
                 session.runtime_session_id = session.id
             thread_id = session.runtime_session_id
 
+            self._plan_turn = getattr(session, "mode", "default") == "plan"
             prompt = build_user_prompt(
-                user_message,
+                (
+                    dataclasses.replace(
+                        user_message,
+                        additional_context="\n\n".join(
+                            part
+                            for part in (user_message.additional_context, PLAN_MODE_INSTRUCTIONS)
+                            if part
+                        ),
+                    )
+                    if self._plan_turn
+                    else user_message
+                ),
                 cwd=self.workspace_root,
                 now=datetime.now().astimezone(),
                 # Prevention half of the image gate — see the claude runtime.
@@ -1025,6 +1061,21 @@ class DeepAgentsRuntime:
                             await notify_compaction(self._hook_session())
                             await self.event_sink.emit(Event(type="compaction", data={}))
                         full_text = _extract_full_text(output)
+                        proposal = (
+                            _PROPOSED_PLAN_RE.search(full_text)
+                            if full_text and self._plan_turn and not internal_summarization
+                            else None
+                        )
+                        if proposal is not None:
+                            # The plan card (same event as codex's plan item);
+                            # the bubble keeps only the prose around it.
+                            full_text = _PROPOSED_PLAN_RE.sub("", full_text).strip()
+                            await self.event_sink.emit(
+                                Event(
+                                    type="plan_proposed",
+                                    data={"plan": proposal.group(1).strip()},
+                                )
+                            )
                         if full_text and not internal_summarization:
                             await self.event_sink.emit(
                                 Event(type="assistant_message", data={"text": full_text})
@@ -1767,11 +1818,13 @@ class DeepAgentsRuntime:
         new_mode = session.permission_mode
         new_effort = session.model_settings.effort if session.model_settings else None
         new_citation_mode = _session_evidence_binding_enabled(session)
+        new_plan_mode = getattr(session, "mode", "default") == "plan"
 
         if (
             new_mode == self._applied_permission_mode
             and new_effort == self._applied_effort
             and new_citation_mode == self._applied_citation_mode
+            and new_plan_mode == bool(getattr(self, "_applied_plan_mode", False))
         ):
             return
 
@@ -1799,6 +1852,7 @@ class DeepAgentsRuntime:
             self._applied_permission_mode = session.permission_mode
             self._applied_effort = session.model_settings.effort if session.model_settings else None
             self._applied_citation_mode = _session_evidence_binding_enabled(session)
+            self._applied_plan_mode = getattr(session, "mode", "default") == "plan"
             return self._graph
 
         # inherit_env=True so the agent shell sees the host's PATH / HOME / etc.
@@ -1855,7 +1909,10 @@ class DeepAgentsRuntime:
         self._applied_permission_mode = session.permission_mode
         self._applied_effort = session.model_settings.effort if session.model_settings else None
         self._applied_citation_mode = _session_evidence_binding_enabled(session)
-        interrupt_on = self._build_interrupt_on(session.permission_mode, tools)
+        self._applied_plan_mode = getattr(session, "mode", "default") == "plan"
+        interrupt_on = self._build_interrupt_on(
+            session.permission_mode, tools, plan_mode=self._applied_plan_mode
+        )
 
         graph_kwargs: dict[str, Any] = {
             "model": self._build_model_client(session),
@@ -1910,6 +1967,8 @@ class DeepAgentsRuntime:
         self,
         permission_mode: Literal["default", "auto_review", "full_access"],
         tools: list[Any],
+        *,
+        plan_mode: bool = False,
     ) -> dict[str, dict[str, list[str]]]:
         """Build the ``interrupt_on`` dict for ``create_deep_agent``.
 
@@ -1938,7 +1997,20 @@ class DeepAgentsRuntime:
         # (``task``) stay unapproved, also as on Claude.
         for name in _BUILTIN_APPROVAL_TOOLS:
             gated.setdefault(name, {"allowed_decisions": list(allowed)})
+        if plan_mode:
+            # Plan mode refuses these outright (plan_gate / the toolkit gate
+            # in ``_to_structured_tool``); parking one first would ask the
+            # user to approve a call that is then refused.
+            for name in [
+                n for n in gated if n in _BUILTIN_APPROVAL_TOOLS or self._mutating_toolkit_tool(n)
+            ]:
+                del gated[name]
         return gated
+
+    def _mutating_toolkit_tool(self, name: str) -> bool:
+        toolkit = getattr(self, "toolkit", None)
+        tdef = toolkit.get(name) if toolkit is not None else None
+        return tdef is not None and not tdef.read_only
 
     def _build_model_client(self, session: Session, model: str | None = None) -> Any:
         """Build a langchain chat model bound to the per-session gateway.
@@ -2343,6 +2415,10 @@ class DeepAgentsRuntime:
 
         async def _coroutine(**kwargs: Any) -> str:
             assert captured_handler is not None
+            if self._plan_turn and not tdef.read_only:
+                # Plan mode's read-only guarantee for toolkit tools (as dsh's
+                # ``_plan_toolkit_gate``); built-ins go through the bus gate.
+                return PLAN_MODE_DENY_REASON
             result: ToolResult = await call_tooldef(
                 self._hook_session(),
                 tdef,

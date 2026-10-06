@@ -1056,9 +1056,9 @@ export const sessionsApi = {
    * before touching anything — Claude applies the SDK's typed
    * ``set_permission_mode("plan")`` mutator immediately and exits via
    * the ``ExitPlanMode`` approval card; ``default`` exits the current
-   * mode. Same-mode re-set is idempotent. Only ``claude_agent`` /
-   * ``codex`` sessions accept non-default modes — the server 400s
-   * deepagents / deepseek_harness.
+   * mode. Same-mode re-set is idempotent. Plan is accepted on every
+   * runtime (``PLAN_MODE_RUNTIMES``); goal only on ``claude_agent`` /
+   * ``codex`` — the server 400s it on deepagents / deepseek_harness.
    */
   updateMode(sessionId: string, mode: SessionMode): Promise<SessionDetail> {
     return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/mode`, {

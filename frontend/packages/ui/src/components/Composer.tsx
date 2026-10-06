@@ -429,10 +429,8 @@ export interface ComposerProps {
   /** Called when the user toggles plan mode from the composer. */
   onSessionModeChange?: (mode: "default" | "plan") => void;
   /**
-   * Whether the session's runtime supports plan mode. Only
-   * ``claude_agent`` lowers plan natively today (codex follows with
-   * its ``collaborationMode`` wiring); deepagents / deepseek_harness
-   * have no native primitive and the server 400s them.
+   * Whether the session's runtime supports plan mode
+   * (``supportsPlanMode`` / ``PLAN_MODE_RUNTIMES`` in ``@valuz/shared``).
    */
   planModeAvailable?: boolean;
   /**
@@ -1437,7 +1435,7 @@ export const Composer = ({
   // Session working mode (docs/design/session-modes.md). The composer
   // only *toggles* plan; goal is entered elsewhere (task path). The "+"
   // menu entry and the active chip both need the handler AND runtime
-  // support — a session on deepagents/dsh gets neither affordance.
+  // support — a runtime outside ``PLAN_MODE_RUNTIMES`` gets neither.
   const planActive = sessionMode === "plan";
   const planToggleVisible =
     planModeAvailable && onSessionModeChange !== undefined;

@@ -905,7 +905,7 @@ describe("ConversationTurnList — host wrappers around tool cards and messages"
         kind: "tool",
         tool: {
           id: "tool-custom",
-          kind: "other",
+          kind: "fetch",
           title: "custom-tool",
           status: "success",
         },
