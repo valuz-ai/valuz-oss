@@ -259,7 +259,7 @@ export function createValuzClient(options: ValuzClientOptions): ValuzClient {
               query,
               project_id: opts?.projectId ?? "",
               top_k: opts?.topK ?? 5,
-              ...(opts?.kbIds ? { folder_ids: opts.kbIds } : {}),
+              ...(opts?.kbIds !== undefined ? { knowledge_base_ids: opts.kbIds } : {}),
             },
           }),
         );

@@ -243,12 +243,14 @@ export class AppPluginRuntime {
     while (!signal.aborted) {
       try {
         const generation = this.snapshot.generation ?? list.generation;
-        const next = await this.deps.api.watch(generation, 25, signal);
+        await this.deps.api.watch(generation, 25, signal);
         if (signal.aborted) return;
         backoff = this.deps.retryBaseMs ?? 1500;
-        if (next.generation !== generation) {
-          await this.applyList(await this.deps.api.list());
-        }
+        // Connector requirements may change without an install mutation.
+        // Recheck after timeout too; unchanged active packages are not reloaded.
+        const updated = await this.deps.api.list();
+        if (signal.aborted) return;
+        await this.applyList(updated);
       } catch (error) {
         if (signal.aborted) return;
         if (isUnavailable(error)) {

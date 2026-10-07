@@ -159,11 +159,7 @@ def test_custom_provider_secrets_disable_login_shell(base_url: str | None) -> No
     assert "shell_environment_policy.ignore_default_excludes=false" in overrides
     assert 'shell_environment_policy.inherit="core"' in overrides
     assert "allow_login_shell=false" in overrides
-    expected_env_key = (
-        codex_runtime._HARNESS_PROVIDER_ENV_KEY
-        if base_url is not None
-        else codex_runtime._CODEX_OPENAI_API_KEY
-    )
+    expected_env_key = codex_runtime._HARNESS_PROVIDER_ENV_KEY
     assert f'shell_environment_policy.filters.{expected_env_key}="exclude"' in overrides
 
 

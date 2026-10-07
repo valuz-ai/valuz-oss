@@ -1,7 +1,7 @@
 ---
 name: valuz-plugin-dev
 description: 在会话里从零开发一个Valuz 应用插件（给界面加页面、标签页、按钮、工具卡片、设置分区，读项目 / 产物 / 知识库 / 连接器的数据，跑代码自动化），构建、测试、装进用户本机的 Valuz 并排错，最后打包发布。Use when the user wants to build, extend, debug, install or publish a Valuz App Plugin — e.g. "在项目页加一个显示 XX 数据的标签页", "给会话标题栏加个导出按钮", "做一个插件把连接器的数据展示出来", "把这个插件发布给团队".
-version: 1
+version: 2
 tags: [official, plugin]
 ---
 
@@ -21,14 +21,28 @@ tags: [official, plugin]
 | 工具 `app_plugin_manager` | `validate` / `pack` / `status` / `logs` / `reload`，以及要用户确认的 `dev_link` / `install` / `uninstall` / `publish` |
 | 本技能 | 清单规则、SDK 全部接口、12 个公开插槽、验证与排错流程 |
 
-按需读 `references/`：`manifest.md`（清单字段与规则）· `sdk-api.md`（SDK 全部接口与权限）· `slots.md`（12 个公开插槽的位置与 props）· `examples.md`（三个可抄的完整例子）· `workflow.md`（命令、确认卡片、调试、发布的细节）。
+按需读 `references/`：`manifest.md`（清单字段与规则）· `sdk-api.md`（SDK 全部接口与权限）· `slots.md`（12 个公开插槽的位置与 props）· `examples.md`（三个可抄的完整例子）· `workflow.md`（命令、确认卡片、调试、发布的细节）· [`data-access.md`](references/data-access.md)（数据能力发现、现有连接器复用、真实数据验证）。
+
+## 0. 先找已有能力
+
+用户只需描述想做的功能，不需要知道 SDK 方法、权限名或 MCP 工具名。涉及数据时，先读 [`references/sdk-api.md`](references/sdk-api.md) §5 的**已实现接口表**，再按 [`references/data-access.md`](references/data-access.md) 自己发现当前账号的数据能力。不要把未检查、缺权限或未接入说成 SDK 不支持。
+
+| 用户想做什么 | 已有 SDK 能力 | 去哪里查 |
+|---|---|---|
+| 读项目、文件、产物、知识库 | `projects`、`artifacts`、`knowledge` | `references/sdk-api.md` §5 |
+| 展示行情或外部业务数据 | `connectors.list` / `listTools` / `callTool` | `references/data-access.md`；参数与权限见 `references/sdk-api.md` §5 |
+| 读会话、准备或发送消息 | `conversations` | `references/sdk-api.md` §5 |
+| 执行后台计算、读运行结果 | `automations` | `references/sdk-api.md` §5；清单见 `references/manifest.md` |
+| 保存插件数据、发通知 | `storage`、`notifications` | `references/sdk-api.md` §5 |
+
+当前账号已经安装并授权的连接器可以直接复用；内置连接器与用户添加的连接器走同一 SDK。**不开放 edition 专属 API，不代表不能经 MCP 连接器读取行情等数据。** 只有实际检查后确认缺少连接器或授权，才引导用户配置。
 
 ## 1. 先问清楚再动手
 
 动手前用一两句话确认（缺哪个问哪个，别一次问一堆）：
 
 1. **放在哪**：项目页标签页（`project.detail.tabs`）？会话标题栏按钮？某个工具的结果卡片（`conversation.tool-card.<tool>`）？独立页面（`pageRoute`）？设置分区？见 `references/slots.md`。
-2. **数据从哪来**：Valuz 里已有的（项目 / 产物 / 知识库 / 会话），还是外部系统？外部系统**先接一个 MCP 连接器**，插件只负责展示（`ctx.valuz.connectors.callTool`），不要在插件里写网络请求。要在后端算东西，用清单里声明的**代码自动化**（`automations`）。
+2. **数据从哪来**：先按 `references/data-access.md` 检查 Valuz 的已有能力和当前连接器，复用可用数据源。需要用户选择的是业务范围或数据来源偏好，不是接口定义。确实没有匹配能力时再询问数据来源；外部系统通过 MCP 连接器接入，插件用 `ctx.valuz.connectors.callTool` 展示，不直接写网络请求。后端计算用清单里声明的**代码自动化**（`automations`）。
 3. **插件 id**：`<发布者>.<名字>`，小写字母 / 数字 / 连字符，恰好一个 `.`，如 `acme.dashboard`。不能以 `oss-`、`commercial.`、`commercial-`、`finance.`、`finance-`、`team.`、`team-`、`edition.`、`valuz.` 开头。
 4. **要哪些权限**：只声明真正用到的（见 `references/sdk-api.md` 的权限表）。多声明一个权限，用户安装时就多看到一行。
 

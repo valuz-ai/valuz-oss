@@ -37,6 +37,10 @@ export interface AppPluginSource {
   url?: string;
   scope?: string;
   item_id?: string;
+  owner_key?: string;
+  installed_by_user_id?: string;
+  origin_scope?: string;
+  origin_owner_key?: string;
 }
 
 export interface AppPluginAutomationDecl {

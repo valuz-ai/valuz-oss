@@ -200,6 +200,10 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     # every automation a user or an agent made.
     app_plugin_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     app_plugin_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    app_plugin_source_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    app_plugin_catalog_binding: Mapped[dict[str, Any] | None] = mapped_column(
+        _JSON_VARIANT, nullable=True
+    )
 
     # ── Schedule state ────────────────────────────────────────────────
     status: Mapped[str] = mapped_column(String(32), default="enabled")

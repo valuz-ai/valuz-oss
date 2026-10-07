@@ -1730,6 +1730,9 @@ class AutomationService:
         row = await self._ds.get_automation_for_update(user_id, automation_id)
         if row is None:
             raise AutomationNotFound()
+        from .app_plugin_authorization import authorize_managed_automation
+
+        await authorize_managed_automation(row, user_id=user_id)
         # ``paused`` only suspends the schedule. An explicit "run now" — a
         # human clicking a workbench card or an agent invoking the tool — is
         # the opposite of the tick loop, so it runs regardless; the row stays

@@ -214,6 +214,7 @@ export function ProjectLayoutBase({
   // while their slot is occupied: ``DesktopSidebar`` branches on the presence of
   // these props (a "..." trigger, a menu entry), and a ``<SlotRenderer/>``
   // element is always truthy even when it renders nothing.
+  const hasTopbarActionsSlot = useHasSlot("shell.topbar.actions");
   const hasBrandMenuItems = useHasSlot("shell.brand.menu-items");
   const hasNoticeSlot = useHasSlot("shell.notice");
   const hasSidebarHeaderSlot = useHasSlot("sidebar.header");
@@ -911,14 +912,6 @@ export function ProjectLayoutBase({
     <div className="flex items-center gap-1">
       <NotificationBadge />
       {topbarActions}
-      <SlotRenderer
-        name="shell.topbar.actions"
-        context={{
-          pathname: location.pathname,
-          activeProjectId,
-          rightPanelCollapsed,
-        }}
-      />
       {rightPanelControls}
     </div>
   );
@@ -1077,6 +1070,18 @@ export function ProjectLayoutBase({
               </DropdownMenu>
             }
             rightControl={topbarRightControl}
+            centerContent={
+              hasTopbarActionsSlot ? (
+                <SlotRenderer
+                  name="shell.topbar.actions"
+                  context={{
+                    pathname: location.pathname,
+                    activeProjectId,
+                    rightPanelCollapsed,
+                  }}
+                />
+              ) : undefined
+            }
             extraLeft={
               <>
                 {platform.isElectron && (

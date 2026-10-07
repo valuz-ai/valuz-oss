@@ -2259,7 +2259,9 @@ def _build_config_overrides(
         # the same non-subscription wall.
         overrides.append('web_search="disabled"')
 
-    effective_base_url = egress_base_url or (provider.base_url if provider is not None else None)
+    effective_base_url = egress_base_url or (
+        (provider.base_url or "https://api.openai.com/v1") if provider is not None else None
+    )
     if provider is None and egress_base_url is not None:
         name = _HARNESS_PROVIDER_NAME
         if model:
@@ -2278,8 +2280,9 @@ def _build_config_overrides(
                 f"model_providers.{name}.supports_websockets=false",
             ]
         )
-    elif provider is not None and effective_base_url is not None:
+    elif provider is not None:
         name = _HARNESS_PROVIDER_NAME
+        display_name = "OpenAI" if provider.base_url is None else "Harness-supplied gateway"
         env_key = _HARNESS_PROVIDER_ENV_KEY
         # Codex only supports ``wire_api = "responses"``; the harness-side
         # api_protocol field is ignored here. Routing for non-openai
@@ -2289,31 +2292,22 @@ def _build_config_overrides(
         # ``CodexConfig.env`` (see ``_build_codex_env``), not the TOML
         # ``[model_providers.harness.env]`` block, which only injects extras
         # into model HTTP calls and is not consulted for ``env_key``.
+        if model:
+            overrides.append(f"model={_toml_quote(model)}")
         overrides.extend(
             [
-                f"model={_toml_quote(model)}",
                 f"model_provider={_toml_quote(name)}",
-                f"model_providers.{name}.name={_toml_quote('Harness-supplied gateway')}",
+                f"model_providers.{name}.name={_toml_quote(display_name)}",
                 f"model_providers.{name}.base_url={_toml_quote(effective_base_url)}",
                 f'model_providers.{name}.wire_api="responses"',
                 f"model_providers.{name}.env_key={_toml_quote(env_key)}",
+                f"model_providers.{name}.requires_openai_auth=false",
             ]
         )
-    elif provider is not None and model:
-        # First-party OpenAI: no synthetic provider block, no
-        # ``model_provider=harness`` override. Codex uses its built-in
-        # ``openai`` provider (which reads ``OPENAI_API_KEY`` from env —
-        # we inject it in ``_build_codex_env``). We still emit the model
-        # override so the subprocess targets the session's model instead
-        # of whatever ``~/.codex/config.toml`` happens to pin. The
-        # ``model`` truthy guard mirrors ``_build_thread_kwargs``: empty
-        # string here would make codex try to resolve a deployment named
-        # ``""`` and fail with "Missed model deployment".
-        overrides.append(f"model={_toml_quote(model)}")
 
     if provider is not None:
         # Every custom provider path puts an API key in the app-server parent
-        # environment (HARNESS_CODEX_PROVIDER_API_KEY or OPENAI_API_KEY).
+        # environment (HARNESS_CODEX_PROVIDER_API_KEY).
         # codex-cli 0.144.4's model ``shell`` path does not reliably honor the
         # automatic name filter, so use the same core boundary, login-shell
         # block, and exact keyed exclusion as MCP secrets.  Avoid changing
@@ -2325,9 +2319,7 @@ def _build_config_overrides(
             overrides.append(_CODEX_SHELL_CORE_INHERIT)
         if _CODEX_DISABLE_LOGIN_SHELL not in overrides:
             overrides.append(_CODEX_DISABLE_LOGIN_SHELL)
-        provider_env_key = (
-            _HARNESS_PROVIDER_ENV_KEY if effective_base_url is not None else _CODEX_OPENAI_API_KEY
-        )
+        provider_env_key = _HARNESS_PROVIDER_ENV_KEY
         overrides.append(
             f"shell_environment_policy.filters.{_toml_key(provider_env_key)}="
             f"{_toml_quote('exclude')}"
@@ -2364,20 +2356,15 @@ def _select_codex_home(
     servers such as ``cua_repl``), MCP servers, ``AGENTS.md``, rules and
     skills, and Valuz threads land in their history (B5,
     docs/design/plugin-architecture/runtime-capabilities.md). A session whose
-    credentials come from the env — the ``harness`` provider, i.e. a gateway
-    ``base_url`` or the desktop egress — runs in the Valuz-owned home instead.
-    The ChatGPT subscription authenticates from ``auth.json`` there, and the
-    built-in ``openai`` provider's env-key handling on the app-server is
-    unverified, so both stay in the user's home, trimmed by
-    :func:`_user_home_isolation_overrides`.
+    credentials come from the env — including direct OpenAI API keys — runs
+    in the Valuz-owned home instead. Only ChatGPT subscriptions authenticate
+    from the user's ``auth.json``, trimmed by :func:`_user_home_isolation_overrides`.
 
     A thread stays where its rollout is: a session started before the Valuz
     home existed — or forked from one — resumes and forks in the user's home.
     """
     private = os.environ.get(VALUZ_CODEX_HOME_ENV, "").strip()
     if not private or provider is None:
-        return None
-    if egress_base_url is None and provider.base_url is None:
         return None
     home = Path(private)
     if (
@@ -2435,17 +2422,10 @@ def _build_codex_env(
 
     Inherits the parent process env (``AZURE_OPENAI_API_KEY`` etc.; which
     CODEX_HOME the CLI reads is :func:`_select_codex_home`'s call), and
-    publishes the per-session API key on **one of two** channels
-    depending on whether the user wired a gateway:
-
-    * ``base_url`` present — the harness emits a synthetic
-      ``[model_providers.harness]`` TOML block whose ``env_key`` points
-      at ``HARNESS_CODEX_PROVIDER_API_KEY``; we set that here.
-    * ``base_url is None`` — codex uses its built-in ``openai``
-      provider, which reads ``OPENAI_API_KEY``; we set that instead.
-      The harness-specific env var is *not* set in this branch (it'd
-      be dead weight; codex's built-in openai provider doesn't read
-      it).
+    publishes every per-session API key as ``HARNESS_CODEX_PROVIDER_API_KEY``.
+    The explicit ``model_providers.harness.env_key`` selects it for gateways
+    and direct OpenAI alike. No API-key session relies on the built-in
+    provider's subscription credentials or writes account login files.
 
     ``mcp_secret_env`` carries values referenced by secret-free MCP
     ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
@@ -2470,8 +2450,11 @@ def _build_codex_env(
             subscription_env.update(mcp_secret_env)
         return subscription_env
     merged: dict[str, str] = dict(os.environ)
+    # Explicit provider credentials always win over any subscription login.
+    # The built-in openai provider ignores OPENAI_API_KEY on app-server in
+    # supported CLI versions, so direct OpenAI uses the same env_key route.
+    merged[_HARNESS_PROVIDER_ENV_KEY] = provider.api_key
     if egress_base_url is not None or provider.base_url is not None:
-        merged[_HARNESS_PROVIDER_ENV_KEY] = provider.api_key
         if egress_base_url is not None:
             merge_loopback_no_proxy(merged, egress_base_url)
         # Present as the CLI's originator (``codex_exec``) rather than the SDK's
@@ -2482,8 +2465,6 @@ def _build_codex_env(
         # even though the request body is byte-identical. Same App Server, so
         # spoofing the originator makes the SDK path match the working CLI path.
         merged["CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] = "codex_exec"
-    else:
-        merged[_CODEX_OPENAI_API_KEY] = provider.api_key
     if mcp_secret_env:
         merged.update(mcp_secret_env)
     return merged

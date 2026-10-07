@@ -51,13 +51,13 @@ def _select(
 def test_env_credential_sessions_run_in_the_valuz_home(homes: tuple[Path, Path]) -> None:
     _, valuz = homes
     assert _select(GATEWAY) == valuz
+    assert _select(FIRST_PARTY) == valuz
     assert _select(FIRST_PARTY, egress="http://127.0.0.1:9") == valuz
 
 
 def test_auth_json_sessions_keep_the_user_home(homes: tuple[Path, Path]) -> None:
     assert _select(None) is None  # ChatGPT subscription
     assert _select(None, egress="http://127.0.0.1:9") is None
-    assert _select(FIRST_PARTY) is None  # built-in openai provider
 
 
 def test_unset_valuz_home_keeps_codex_default(monkeypatch: pytest.MonkeyPatch) -> None:

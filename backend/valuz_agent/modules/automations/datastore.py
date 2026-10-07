@@ -282,6 +282,20 @@ class AutomationDatastore:
             .first()
         )
 
+    async def get_run_by_input_id(self, user_id: str, input_id: str) -> AutomationRunRow | None:
+        """Exact durable background correlation; never select a session's latest run."""
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow).where(
+                        AutomationRunRow.id == input_id, AutomationRunRow.user_id == user_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+
     async def get_run_by_session(self, user_id: str, session_id: str) -> AutomationRunRow | None:
         """Resolve the run actually executing on a reusable session.
 

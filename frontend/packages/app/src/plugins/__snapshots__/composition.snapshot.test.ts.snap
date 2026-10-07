@@ -121,7 +121,7 @@ exports[`OSS bare registry composition > registers the personal edition's routes
       "showInNav": false,
     },
     {
-      "description": "Installed Agent Plugins (skill suites and skills + connectors bundles).",
+      "description": "Installed plugins (skill suites and skills + connectors bundles).",
       "edition": "personal",
       "id": "plugins",
       "label": "plugin.title",

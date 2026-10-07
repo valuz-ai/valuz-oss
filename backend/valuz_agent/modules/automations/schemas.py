@@ -231,6 +231,21 @@ class AutomationCreatePayload(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_managed_source_input(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(
+            key in value
+            for key in (
+                "app_plugin_id",
+                "app_plugin_name",
+                "app_plugin_source_kind",
+                "app_plugin_catalog_binding",
+            )
+        ):
+            raise ValueError("App Plugin ownership is internal and cannot be supplied by callers")
+        return value
+
     @field_validator("event_refs")
     @classmethod
     def _check_event_refs(cls, value: list[str] | None) -> list[str] | None:
@@ -313,6 +328,21 @@ class AutomationUpdatePayload(BaseModel):
     execution: ExecutionContract | None = None
     input: InputContract | None = None
     result: ResultContract | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_managed_source_input(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(
+            key in value
+            for key in (
+                "app_plugin_id",
+                "app_plugin_name",
+                "app_plugin_source_kind",
+                "app_plugin_catalog_binding",
+            )
+        ):
+            raise ValueError("App Plugin ownership is internal and cannot be supplied by callers")
+        return value
 
     @field_validator("event_refs")
     @classmethod

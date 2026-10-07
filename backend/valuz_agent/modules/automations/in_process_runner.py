@@ -518,7 +518,7 @@ class InProcessAutomationRunner:
 
             receipt = (
                 await SessionLibrary(user_id).get_input(run.session_id, run.id)
-                if run.session_id and getattr(row, "target_session_id", None)
+                if run.session_id
                 else None
             )
             if receipt is not None and receipt.status != "queued":
@@ -528,7 +528,11 @@ class InProcessAutomationRunner:
             admission = await evaluate_automation_run_guards(
                 AutomationRunCommand(user_id, automation_id, run_id),
                 project_id=row.project_id,
-                target_session_id=getattr(row, "target_session_id", None),
+                target_session_id=(
+                    run.session_id
+                    if receipt is not None
+                    else getattr(row, "target_session_id", None)
+                ),
             )
             if admission.allowed:
                 return True
@@ -541,7 +545,11 @@ class InProcessAutomationRunner:
                     if current is not None and current.status != "queued":
                         return True
             run.status, run.error_message = admission.status, admission.reason
-            run.error_code = "AUTOMATION_GUARD_DENIED"
+            run.error_code = (
+                "app_plugin_source_unavailable"
+                if (admission.reason or "").startswith("app_plugin_source_unavailable:")
+                else "AUTOMATION_GUARD_DENIED"
+            )
             run.completed_at = now_ms()
             await ds.replace_run(run)
             row.last_run_at = run.triggered_at
@@ -584,6 +592,38 @@ class InProcessAutomationRunner:
         if not await self._admit_run(user_id, automation_id, run_id, execution_lease):
             return
 
+        # Recover already-dispatched input from its actual receipt even when
+        # catalogue authority was revoked after it started. This never grants
+        # another turn or converts completed work into a new admission failure.
+        async with async_unit_of_work(commit=False) as recovery_db:
+            recovery_store = AutomationDatastore(recovery_db)
+            recovery_row = await recovery_store.get_automation(user_id, automation_id)
+            recovery_run = await recovery_store.last_run(user_id, automation_id)
+        if (
+            recovery_row is not None
+            and recovery_run is not None
+            and recovery_run.id == run_id
+            and recovery_run.status in ACTIVE_RUN_STATUSES
+            and getattr(recovery_run, "session_id", None)
+        ):
+            from valuz_agent.facade.sessions import SessionLibrary
+
+            receipt = await SessionLibrary(user_id).get_input(recovery_run.session_id, run_id)
+            if receipt is not None and receipt.status != "queued":
+                finish_existing = self._finish_existing_chat_run(
+                    user_id=user_id,
+                    automation_id=automation_id,
+                    run_id=run_id,
+                    session_id=recovery_run.session_id,
+                    rendered_prompt=str(receipt.input.get("text") or ""),
+                    lease=execution_lease,
+                )
+                if detach_chat:
+                    asyncio.create_task(finish_existing)
+                else:
+                    await finish_existing
+                return
+
         # ── Code execution: no agent, no prompt ──────────────────────────
         # Marked running in its own unit of work, then handed to
         # ``_finish_code_run`` exactly like a chat turn is handed to
@@ -613,6 +653,18 @@ class InProcessAutomationRunner:
                 # Cancelled (or otherwise terminalised) between enqueue and
                 # pickup — nothing to execute.
                 logger.info("Run %s is already %s; not executing", run_id, run.status)
+                return
+
+            from .app_plugin_authorization import authorize_managed_automation
+
+            try:
+                await authorize_managed_automation(row, user_id=user_id)
+            except Exception as exc:
+                run.status = "failed"
+                run.error_code = "app_plugin_source_unavailable"
+                run.error_message = str(exc)[:500]
+                run.completed_at = now_ms()
+                await ds.replace_run(run)
                 return
 
             # Owner boundary: an automation fires from the background scheduler

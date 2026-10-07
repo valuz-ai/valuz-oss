@@ -19,7 +19,7 @@ export const ossAgentPluginsPlugin = definePlugin({
         path: "/plugins",
         label: "plugin.title",
         description:
-          "Installed Agent Plugins (skill suites and skills + connectors bundles).",
+          "Installed plugins (skill suites and skills + connectors bundles).",
         layout: "project",
         showInNav: false,
         edition: "personal",

@@ -2,6 +2,7 @@ import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { recordEntityOrigins } from "../edition/entity-origin";
+import type { components } from "./generated/docs";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -302,19 +303,14 @@ export const docsApi = {
     });
   },
 
-  search(params: {
-    query: string;
-    project_id: string;
-    top_k?: number;
-    folder_ids?: string[];
-    document_ids?: string[];
-  }): Promise<{ hits: SearchHit[] }> {
+  search(params: components["schemas"]["SearchRequest"]): Promise<{ hits: SearchHit[] }> {
     return fetchJson(
       "/v1/docs/search",
       jsonPost({
         query: params.query,
         project_id: params.project_id,
         top_k: params.top_k ?? 5,
+        knowledge_base_ids: params.knowledge_base_ids,
         folder_ids: params.folder_ids,
         document_ids: params.document_ids,
       }),

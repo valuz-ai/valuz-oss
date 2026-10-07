@@ -52,7 +52,8 @@ export const createMainWindow = async () => {
   // renderer TopBar.
   windowOptions.titleBarStyle = "hidden";
   if (process.platform === "darwin") {
-    windowOptions.trafficLightPosition = { x: 10, y: 12 };
+    // Align native buttons with the logo and icons in the custom TopBar.
+    windowOptions.trafficLightPosition = { x: 10, y: 14 };
   }
 
   mainWindow = new BrowserWindow(windowOptions);
