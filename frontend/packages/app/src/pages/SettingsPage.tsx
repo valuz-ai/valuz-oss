@@ -139,7 +139,7 @@ export const SettingsPage = () => {
     <div className="flex h-full min-h-0 overflow-hidden bg-card">
       <SettingsNav items={nav} value={tab} onValueChange={setTab} />
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,#FFFFFF_0%,#FBFBFD_100%)] dark:bg-[linear-gradient(180deg,#131418_0%,#0f1012_100%)]">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] bg-[linear-gradient(180deg,#FFFFFF_0%,#FBFBFD_100%)] dark:bg-[linear-gradient(180deg,#131418_0%,#0f1012_100%)]">
         <div
           className={cn(
             "mx-auto max-w-[920px] px-5 md:px-8",

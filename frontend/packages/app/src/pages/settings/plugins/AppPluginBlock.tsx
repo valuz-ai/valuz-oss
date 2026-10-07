@@ -182,7 +182,11 @@ export const AppPluginBlock = () => {
       {extraTabs.length === 0 ? (
         installed
       ) : (
-        <Tabs value={activeTab} onValueChange={setTab}>
+        <Tabs
+          value={activeTab}
+          onValueChange={setTab}
+          className="w-full min-w-0 gap-0"
+        >
           <TabsList
             variant="line"
             aria-label={t("pluginSettings.appPlugins.tabsLabel")}
@@ -200,11 +204,11 @@ export const AppPluginBlock = () => {
               </TabsTrigger>
             ))}
           </TabsList>
-          <TabsContent value={INSTALLED_TAB} className="mt-4">
+          <TabsContent value={INSTALLED_TAB} className="mt-3 min-w-0">
             {installed}
           </TabsContent>
           {extraTabs.map(({ id, registration }) => (
-            <TabsContent key={id} value={id} className="mt-4">
+            <TabsContent key={id} value={id} className="mt-3 min-w-0">
               <SlotContribution
                 name={TABS_SLOT}
                 registration={registration}
