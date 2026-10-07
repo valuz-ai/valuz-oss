@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from valuz_agent.api.deps import get_current_user_id, get_document_service
 from valuz_agent.modules.docs.errors import KbNotFound
@@ -45,6 +45,13 @@ class SearchRequest(BaseModel):
     query: str
     project_id: str
     top_k: int = 5
+    knowledge_base_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Explicit knowledge-base selection, re-authorized for the caller. "
+            "Omit to use project bindings and authorized shared documents; [] selects none."
+        ),
+    )
     folder_ids: list[str] | None = None
     document_ids: list[str] | None = None
 
@@ -239,6 +246,7 @@ async def search_docs(
             body.project_id,
             body.query,
             body.top_k,
+            knowledge_base_ids=body.knowledge_base_ids,
             folder_ids=body.folder_ids,
             document_ids=body.document_ids,
         )

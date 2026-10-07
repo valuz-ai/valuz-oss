@@ -8303,6 +8303,16 @@ components:
         top_k:
           type: integer
           default: 5
+        knowledge_base_ids:
+          type: [array, "null"]
+          items: {type: string}
+          description: Explicit knowledge-base selection, re-authorized for the caller. Omit to use project bindings and authorized shared documents; [] selects none.
+        folder_ids:
+          type: [array, "null"]
+          items: {type: string}
+        document_ids:
+          type: [array, "null"]
+          items: {type: string}
 
     SearchHit:
       type: object

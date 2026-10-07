@@ -124,10 +124,24 @@ describe("ctx.valuz request shapes", () => {
     expect(requests[0]).toEqual({
       method: "POST",
       path: "/v1/docs/search",
-      json: { query: "risk", project_id: "p1", top_k: 3, folder_ids: ["k1"] },
+      json: { query: "risk", project_id: "p1", top_k: 3, knowledge_base_ids: ["k1"] },
       headers: HEADER,
     });
     expect(requests[1]).toMatchObject({ method: "GET", path: "/v1/docs/d1" });
+  });
+
+  it("knowledge preserves explicit empty selection and omits unspecified KBs", async () => {
+    const { valuz, requests } = setup(() => ({ hits: [] }));
+    await valuz.knowledge.search("marker", { kbIds: [] });
+    await valuz.knowledge.search("marker");
+
+    expect(requests[0].json).toEqual({
+      query: "marker", project_id: "", top_k: 5, knowledge_base_ids: [],
+    });
+    expect(requests[1].json).toEqual({ query: "marker", project_id: "", top_k: 5 });
+    for (const request of requests) {
+      expect(request.json).not.toHaveProperty("folder_ids");
+    }
   });
 
   it("conversations: draft goes to the host, send creates then messages, events lists", async () => {

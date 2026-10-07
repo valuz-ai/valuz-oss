@@ -82,7 +82,7 @@ await host.draftConversation({ projectId?, agent?, text });   // 开新对话并
 | `projects.list()` / `projects.get(id)` | 项目列表 / 详情（多一个 `instructions`） | `projects:read` | stable |
 | `projects.files(id, { path?, depth? })` | 项目文件树 | `projects:read` | stable |
 | `artifacts.list({ projectId?, sessionId? })` / `artifacts.content(revisionId)` | 产物列表 / 某个版本的文本内容 | `artifacts:read` | stable |
-| `knowledge.search(query, { projectId?, kbIds?, topK? })` / `knowledge.get(docId)` | 知识库检索 / 读文档 | `knowledge:read` | stable |
+| `knowledge.search(query, { projectId?, kbIds?, topK? })` / `knowledge.get(docId)` | 知识库检索（命中含 `snippet`）/ 文档元信息（如 `filename`、`status`） | `knowledge:read` | stable |
 | `conversations.draft({ projectId?, agent?, text })` | 开新对话并填好输入框，用户自己点发送（不消耗点数） | 无 | stable |
 | `conversations.send({ sessionId?, projectId?, agent?, text })` | 直接发一条消息让 agent 开始工作（会消耗点数） | `conversations:write` | experimental |
 | `conversations.events(sessionId, { afterSeq? })` | 读会话事件（消息、工具调用） | `conversations:read` | stable |
@@ -101,6 +101,8 @@ await host.draftConversation({ projectId?, agent?, text });   // 开新对话并
 - 没声明权限就调用 → 后端回 403 `plugin_permission_denied`，并写进插件日志（`audit`）。
 - 不暴露：账号 / 组织 / 计费 / 鉴权 / API key / 模型渠道与密钥、其他用户的数据、扩展管理本身；也没有 edition 专属 SDK 模块（如 Finance 的自选、组合 API）。**这是接口边界，不是数据种类禁令**：行情等数据可以通过当前账号已授权的 MCP 连接器读取。
 - 当前账号已有的连接器（包括部署提供的内置连接器）无需重复添加。插件声明权限后，用 `connectors.list()` 找实际 id / slug，再用 `listTools()` 查工具 schema 与 `readOnly`，最后按真实 schema 调 `callTool()`。具体流程见 [data-access.md](data-access.md)。
+- `knowledge.get` 返回文档元信息，不返回解析后的 Markdown 正文；知识检索的文本片段在 `KnowledgeHit.snippet` 中。`artifacts.content` 是产物版本的完整文本读取接口。
+- `knowledge.search` 的 `kbIds` 使用顶层知识库 ID，对应 HTTP 字段 `knowledge_base_ids`。未提供时沿用项目绑定范围；显式 `[]` 返回零命中；指定 ID 时只检索当前用户本人或宿主已授权共享的相应知识库，并在每次请求重新检查授权与存在状态。
 
 ## 6. 配置、文案、样式
 
