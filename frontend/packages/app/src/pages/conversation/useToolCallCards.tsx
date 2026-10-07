@@ -45,6 +45,21 @@ import { AppPluginOperationCard } from "./AppPluginOperationCard";
 import { skillSubmissionView } from "./skill-submission-view";
 import { useToolCallCardActions } from "./useToolCallCardActions";
 
+type ToolCallCard = {
+  id: string;
+  title: string;
+  input?: string;
+  output?: string;
+  status?: string;
+  thinking?: string;
+};
+
+function isInstallConfirmationTool(tool: ToolCallCard): boolean {
+  if (!isToolNamed(tool.title, "app_plugin_manager")) return false;
+  const type = parseOperationToolOutput(tool.output)?.operation?.operation_type;
+  return type === "app_plugin.install" || type === "app_plugin.dev_link";
+}
+
 type ToolCallCardsParams = {
   events: SessionEventDTO[];
   turns: ReturnType<typeof useIncrementalTurns>;
@@ -198,14 +213,7 @@ export function useToolCallCards({
   const registeredSlots = useRegisteredSlotNames();
 
   const renderToolCall = useCallback(
-    (tool: {
-      id: string;
-      title: string;
-      input?: string;
-      output?: string;
-      status?: string;
-      thinking?: string;
-    }) => {
+    (tool: ToolCallCard) => {
       const name = tool.title || "";
 
       // ── Edition tool cards ────────────────────────────────────────────
@@ -877,5 +885,5 @@ export function useToolCallCards({
     ],
   );
 
-  return { isToolCardFoldable, renderToolCall };
+  return { isToolCardFoldable, renderToolCall, isToolCardTrailing: isInstallConfirmationTool };
 }

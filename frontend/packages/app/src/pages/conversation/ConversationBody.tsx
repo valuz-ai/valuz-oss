@@ -71,6 +71,7 @@ type ConversationBodyProps = {
   handleTurnListVirtualApiReady: ConversationScroll["handleTurnListVirtualApiReady"];
   scrollToTurnIndex: ConversationScroll["scrollToTurnIndex"];
   renderToolCall: ToolCallCards["renderToolCall"];
+  isToolCardTrailing?: ToolCallCards["isToolCardTrailing"];
   isToolCardFoldable: ToolCallCards["isToolCardFoldable"];
   revealInFinder: ReturnType<typeof usePlatform>["revealInFinder"];
   localFileLinks: ReturnType<typeof useArtifactPane>["localFileLinks"];
@@ -167,6 +168,7 @@ export function ConversationBody({
   handleTurnListVirtualApiReady,
   scrollToTurnIndex,
   renderToolCall,
+  isToolCardTrailing,
   isToolCardFoldable,
   revealInFinder,
   localFileLinks,
@@ -573,6 +575,7 @@ export function ConversationBody({
                 skillsBySlug={skillsBySlug}
                 onVirtualApiReady={handleTurnListVirtualApiReady}
                 renderToolCall={renderToolCall}
+                isToolCardTrailing={isToolCardTrailing}
                 isToolCardFoldable={isToolCardFoldable}
                 onRevealFile={revealInFinder}
                 isLocalFileHref={localFileLinks.isLocalFileHref}

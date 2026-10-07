@@ -315,6 +315,7 @@ function ConversationViewPage(props: ConversationViewProps) {
             handleTurnListVirtualApiReady={core.handleTurnListVirtualApiReady}
             scrollToTurnIndex={core.scrollToTurnIndex}
             renderToolCall={core.renderToolCall}
+            isToolCardTrailing={core.isToolCardTrailing}
             isToolCardFoldable={core.isToolCardFoldable}
             revealInFinder={core.revealInFinder}
             localFileLinks={core.localFileLinks}
@@ -508,6 +509,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
         handleTurnListVirtualApiReady={core.handleTurnListVirtualApiReady}
         scrollToTurnIndex={core.scrollToTurnIndex}
         renderToolCall={core.renderToolCall}
+        isToolCardTrailing={core.isToolCardTrailing}
         isToolCardFoldable={core.isToolCardFoldable}
         revealInFinder={core.revealInFinder}
         localFileLinks={core.localFileLinks}

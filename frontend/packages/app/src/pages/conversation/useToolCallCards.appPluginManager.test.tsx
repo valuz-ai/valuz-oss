@@ -37,7 +37,7 @@ import { useToolCallCards } from "./useToolCallCards";
 type Tool = Parameters<ReturnType<typeof useToolCallCards>["renderToolCall"]>[0];
 
 const Harness = ({ tool }: { tool: Tool }) => {
-  const { renderToolCall } = useToolCallCards({
+  const { renderToolCall, isToolCardTrailing } = useToolCallCards({
     events: [],
     turns: [],
     isBusy: false,
@@ -49,7 +49,7 @@ const Harness = ({ tool }: { tool: Tool }) => {
     askUserQuestionLocalAnswers: {},
     askUserQuestionSubmitRef: { current: () => undefined },
   } as unknown as Parameters<typeof useToolCallCards>[0]);
-  return <div data-testid="out">{renderToolCall(tool)}</div>;
+  return <div data-testid="out" data-trailing={isToolCardTrailing(tool)}>{renderToolCall(tool)}</div>;
 };
 
 const view = (tool: Tool) =>
@@ -129,6 +129,11 @@ describe("renderToolCall — app_plugin_manager", () => {
     }
   });
 
+  it.each(["app_plugin.install", "app_plugin.dev_link"])("marks %s for the completed reply", (operation_type) => {
+    view({ id: "t1", title: "app_plugin_manager", output: envelope({ operation: { ...operationRecord, operation_type } }), status: "success" });
+    expect(screen.getByTestId("out").getAttribute("data-trailing")).toBe("true");
+  });
+
   it("confirms and cancels through the operation handlers with the live record", async () => {
     // A state the user already moved the record to wins over the snapshot.
     const live = { ...operationRecord, state: "awaiting_confirmation", id: "op-1" };
@@ -139,7 +144,7 @@ describe("renderToolCall — app_plugin_manager", () => {
       output: envelope({ operation: operationRecord }),
       status: "success",
     });
-    await userEvent.click(screen.getByRole("button", { name: "安装" }));
+    await userEvent.click(screen.getByRole("button", { name: "安装并启用" }));
     expect(actions.handleConfirmOperation).toHaveBeenCalledWith(live);
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(actions.handleCancelOperation).toHaveBeenCalledWith(live);
@@ -159,6 +164,12 @@ describe("renderToolCall — app_plugin_manager", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it.each([["publish", "发布"], ["uninstall", "卸载"]])("keeps %s proposals inline", (action, label) => {
+    view({ id: "t1", title: "app_plugin_manager", output: envelope({ operation: { ...operationRecord, operation_type: `app_plugin.${action}` } }), status: "success" });
+    expect(screen.getByTestId("out").contains(screen.getByRole("button", { name: label }))).toBe(true);
+    expect(screen.getByTestId("out").getAttribute("data-trailing")).toBe("false");
+  });
+
   it("leaves the read-only actions to the generic tool card", () => {
     const { container } = view({
       id: "t2",
@@ -168,6 +179,7 @@ describe("renderToolCall — app_plugin_manager", () => {
     });
     expect(container.querySelector('[data-slot="app-plugin-operation-card"]')).toBeNull();
     expect(screen.getByTestId("out").textContent).toBe("");
+
   });
 
   it("draws nothing while the tool is still running", () => {

@@ -79,7 +79,7 @@ describe("AppPluginOperationCard", () => {
         onCancel={onCancel}
       />,
     );
-    expect(screen.getByText("安装应用插件")).toBeTruthy();
+    expect(screen.getByText("安装并启用应用插件")).toBeTruthy();
     expect(screen.getByText("Acme 看板")).toBeTruthy();
     expect(screen.getByText("v1.2.0")).toBeTruthy();
     expect(screen.getByText("更新自 v1.0.0")).toBeTruthy();
@@ -98,7 +98,7 @@ describe("AppPluginOperationCard", () => {
     expect(within(unmet as HTMLElement).getByText("connector:acme-data")).toBeTruthy();
     expect(within(unmet as HTMLElement).getByText("未满足")).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: "安装" }));
+    await userEvent.click(screen.getByRole("button", { name: "安装并启用" }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
@@ -115,11 +115,11 @@ describe("AppPluginOperationCard", () => {
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.getByText("链接应用插件开发目录")).toBeTruthy();
+    expect(screen.getByText("安装并启用应用插件")).toBeTruthy();
     expect(screen.getByText("/work/acme")).toBeTruthy();
     expect(screen.getByText("未声明任何权限")).toBeTruthy();
-    expect(screen.getByText(/之后每次重新构建都会直接重载/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "链接" })).toBeTruthy();
+    expect(screen.getByText(/后续构建会更新插件/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "安装并启用" })).toBeTruthy();
   });
 
   it("shows scope and targets for a publish", () => {

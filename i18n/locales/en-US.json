@@ -2398,8 +2398,8 @@
     "running": "Running",
     "appPluginManager": {
       "title": {
-        "install": "Install app plugin",
-        "dev_link": "Link an app plugin dev folder",
+        "install": "Install and enable app plugin",
+        "dev_link": "Install and enable app plugin",
         "uninstall": "Uninstall app plugin",
         "publish": "Publish app plugin",
         "generic": "App Plugin action"
@@ -2429,12 +2429,12 @@
       },
       "purgeData": "Also delete the app plugin's data",
       "keepData": "Keep the app plugin's data",
-      "devHint": "You are confirming the code in this folder: every later rebuild reloads directly without asking again.",
+      "devHint": "The installed plugin uses this folder directly. Later builds update it without another installation.",
       "risk": "Once confirmed, this app plugin runs third-party code on this computer with your permissions.",
       "publishHint": "Once confirmed, the package is uploaded and goes through the automatic checks and review.",
       "confirm": {
-        "install": "Install",
-        "dev_link": "Link",
+        "install": "Install and enable",
+        "dev_link": "Install and enable",
         "uninstall": "Uninstall",
         "publish": "Publish",
         "generic": "Confirm"

@@ -113,6 +113,35 @@ describe("ConversationBody slots", () => {
     act(() => useRegistryStore.setState({ slots: {} }));
   });
 
+  it("places installation after the report, before the file summary and action row", () => {
+    register("conversation.turn.actions", () => <button>回复操作</button>);
+    const finished = {
+      ...turn(1),
+      blocks: [
+        { kind: "tool", tool: { id: "write", kind: "file", title: "Write", status: "success", input: JSON.stringify({ file_path: "/work/plugin.tsx", content: "export default {};" }) } },
+        { kind: "tool", tool: { id: "install", kind: "generic", title: "app_plugin_manager", status: "success" } },
+        { kind: "assistant", text: "插件制作完成" },
+      ],
+    };
+    const body = renderBody({
+      effectiveTurns: [finished],
+      isToolCardTrailing: (tool: { id: string }) => tool.id === "install",
+      renderToolCall: (tool: { id: string }) => tool.id === "install" ? <button>安装并启用</button> : null,
+    });
+    const report = screen.getByText("插件制作完成");
+    const card = screen.getByRole("button", { name: "安装并启用" });
+    const summary = screen.getByTestId("turn-diff-summary");
+    const actions = screen.getByRole("button", { name: "回复操作" });
+    for (const [before, after] of [[report, card], [card, summary], [summary, actions]]) {
+      expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    body.rerenderWith({ displayBusy: true });
+    expect(screen.queryByRole("button", { name: "安装并启用" })).toBeNull();
+    body.rerenderWith({ displayBusy: false });
+    expect(screen.getByRole("button", { name: "安装并启用" })).toBeTruthy();
+    expect(screen.getByText("插件制作完成")).toBeTruthy();
+  });
+
   describe("conversation.empty.no-model", () => {
     const noModel = { id: "new", providers: [] };
 

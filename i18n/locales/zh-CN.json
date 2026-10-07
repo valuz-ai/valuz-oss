@@ -2398,8 +2398,8 @@
     "running": "运行中",
     "appPluginManager": {
       "title": {
-        "install": "安装应用插件",
-        "dev_link": "链接应用插件开发目录",
+        "install": "安装并启用应用插件",
+        "dev_link": "安装并启用应用插件",
         "uninstall": "卸载应用插件",
         "publish": "发布应用插件",
         "generic": "应用插件操作"
@@ -2429,12 +2429,12 @@
       },
       "purgeData": "同时删除应用插件数据",
       "keepData": "保留应用插件数据",
-      "devHint": "确认的是这个目录里的代码：之后每次重新构建都会直接重载，不会再次确认。",
+      "devHint": "安装后直接使用此目录中的插件；后续构建会更新插件，无需再次安装。",
       "risk": "确认后，该应用插件将以你的权限在本机运行第三方代码。",
       "publishHint": "确认后将上传该应用插件包，并进入自动检查和审核。",
       "confirm": {
-        "install": "安装",
-        "dev_link": "链接",
+        "install": "安装并启用",
+        "dev_link": "安装并启用",
         "uninstall": "卸载",
         "publish": "发布",
         "generic": "确认"

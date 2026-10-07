@@ -988,7 +988,7 @@ export function useConversationOrchestration({
   // Special-cased tool-call cards (skill submissions, agent/automation
   // proposals, chatplan pills, AskUserQuestion, generative UI, workflow
   // progress) — state + renderers live in the hook.
-  const { isToolCardFoldable, renderToolCall } = useToolCallCards({
+  const { isToolCardFoldable, renderToolCall, isToolCardTrailing } = useToolCallCards({
     events,
     turns,
     isBusy,
@@ -1780,6 +1780,7 @@ export function useConversationOrchestration({
     handleTurnListVirtualApiReady,
     scrollToTurnIndex,
     // tool cards
+    isToolCardTrailing,
     isToolCardFoldable,
     renderToolCall,
     startingRuntime,

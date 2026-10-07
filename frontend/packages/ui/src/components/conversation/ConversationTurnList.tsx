@@ -502,7 +502,7 @@ type DisplayBlock =
   // Tool block whose rendering is overridden by the caller (e.g. the
   // SkillSubmissionCard for ``submit_skill`` tool_use). Lifted out of
   // the segment fold so the user can actually see and interact with it.
-  | { kind: "tool-overridden"; tool: PrototypeToolCall; node: ReactNode }
+  | { kind: "tool-overridden"; tool: PrototypeToolCall; node: ReactNode; trailing?: boolean }
   // Aggregated per-turn file-change card. Always sits at the END of the
   // turn (after every segment) and replaces the per-tool ToolCallCard
   // rendering for Edit / MultiEdit / Write blocks within that turn.
@@ -655,6 +655,7 @@ const CompactionDivider = () => {
 const buildDisplayBlocks = (
   turn: ConversationTurn,
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null,
+  isToolCardTrailing?: (tool: PrototypeToolCall) => boolean,
 ): DisplayBlock[] => {
   // Edit / MultiEdit / Write tool blocks render through the regular
   // per-segment ToolCallCard path AND get aggregated into the turn-level
@@ -685,6 +686,7 @@ const buildDisplayBlocks = (
   // Phase 3: walk blocks, accumulate one segment at a time. Each new
   // ``assistant`` block flushes the in-flight segment and opens a new one.
   const result: DisplayBlock[] = [];
+  const trailingCards: DisplayBlock[] = [];
   let cur: {
     header: string | null;
     items: ProcessingItem[];
@@ -725,10 +727,12 @@ const buildDisplayBlocks = (
       // then leave ``cur`` empty so the next assistant / tool starts a
       // fresh segment after the override card.
       flush();
-      result.push({
+      const trailing = isToolCardTrailing?.(block.tool) ?? false;
+      (trailing ? trailingCards : result).push({
         kind: "tool-overridden",
         tool: block.tool,
         node: overrideMap.get(block.tool.id)!,
+        trailing,
       });
       continue;
     }
@@ -804,6 +808,9 @@ const buildDisplayBlocks = (
     }
     break;
   }
+
+  // Confirmation cards belong to the completed reply, before its file summary.
+  result.push(...trailingCards);
 
   // Phase 5: aggregate file changes from the turn's Edit/MultiEdit/Write
   // tool blocks (the originals from ``turn.blocks``, not the filtered
@@ -1002,6 +1009,8 @@ interface TurnRowProps {
    * Used by the conversation page to render the SkillSubmissionCard
    * for ``submit_skill`` tool_use events. */
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
+  /** Show selected cards after the completed answer, before the file summary and actions. */
+  isToolCardTrailing?: (tool: PrototypeToolCall) => boolean;
   /**
    * Host-supplied controls appended to a turn's action row (share, export…).
    * Returning null adds nothing, so OSS renders exactly as before.
@@ -1118,6 +1127,7 @@ const TurnRow = memo(
     onRetry,
     retryCount,
     renderToolCall,
+    isToolCardTrailing,
     renderTurnActions,
     turnRating,
     onRateTurn,
@@ -1143,7 +1153,7 @@ const TurnRow = memo(
     const lastBlock = turn.blocks[turn.blocks.length - 1];
     const showStreamingCaret = inFlight && lastBlock?.kind === "assistant";
     const showLoadingDots = inFlight && !turn.failedMessage;
-    const displayBlocks = buildDisplayBlocks(turn, renderToolCall);
+    const displayBlocks = buildDisplayBlocks(turn, renderToolCall, isToolCardTrailing);
     const assistantText = turn.blocks
       .filter((b) => b.kind === "assistant")
       .map((b) => b.text)
@@ -1226,6 +1236,7 @@ const TurnRow = memo(
         // boundary would land at ``displayBlocks.length`` and the actual
         // answer segment(s) before it would get folded away.
         if (b.kind === "turn-diff-summary") continue;
+        if (b.kind === "tool-overridden" && b.trailing) continue;
         // The compaction divider is meta — always visible, never folded —
         // so it must be transparent to this walk (same as the diff summary).
         if (b.kind === "compaction") continue;
@@ -1478,15 +1489,14 @@ const TurnRow = memo(
                   />
                 );
               }
+              if (block.kind === "tool-overridden" && block.trailing && inFlight) return null;
               if (
                 block.kind === "tool-overridden" &&
                 !isToolCardFoldable?.(block.tool)
               ) {
-                // Pinned caller card (agent/automation proposals, SkillSubmission,
-                // workflow & task cards…). It appears mid-process but must stay at
-                // its original position after the turn ends — render BEFORE the
-                // fold check (like the compaction divider) so the auto-fold never
-                // hides it.
+                // Pinned cards stay visible when the process trail folds.
+                // Trailing cards have already moved after the completed answer;
+                // other proposals keep their original timeline position.
                 return (
                   <div key={`tool-${block.tool.id}`}>
                     {wrapToolCall
@@ -1710,6 +1720,8 @@ interface ConversationTurnListProps {
   ) => void;
   /** See ``TurnRowProps.renderToolCall``. */
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
+  /** Show selected cards after the completed answer, before the file summary and actions. */
+  isToolCardTrailing?: (tool: PrototypeToolCall) => boolean;
   /** See ``TurnRowProps.renderTurnActions``. */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
   /** Current 👍/👎 keyed by ``turn.messageId`` (docs/design/feedback-signals.md). */
@@ -1849,6 +1861,7 @@ export function ConversationTurnList({
   skillsBySlug,
   onVirtualApiReady,
   renderToolCall,
+  isToolCardTrailing,
   renderTurnActions,
   turnActionsKey,
   turnRatings,
@@ -2033,6 +2046,7 @@ export function ConversationTurnList({
                     onRetry={onRetry}
                     retryCount={retryCounts?.[turn.id] ?? 0}
                     renderToolCall={renderToolCall}
+                    isToolCardTrailing={isToolCardTrailing}
                     renderTurnActions={renderTurnActions}
                     turnActionsKey={turnActionsKey}
                     turnRating={
