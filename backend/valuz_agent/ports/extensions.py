@@ -43,6 +43,7 @@ from valuz_agent.ports.automation_create_policy import (
 )
 from valuz_agent.ports.automation_event_source import AutomationEventSourceRegistry
 from valuz_agent.ports.automation_result import AutomationResultHook
+from valuz_agent.ports.automation_run_guard import AutomationRunGuardPort
 from valuz_agent.ports.automation_runtime import (
     AutomationRuntimePort,
     InProcessAutomationRuntime,
@@ -140,6 +141,7 @@ class Extensions:
         # semantics — a deployment projects artifacts into its own surfaces
         # (a site data channel, a workbench). OSS registers none.
         self.automation_result_hooks: list[AutomationResultHook] = []
+        self.automation_run_guards: list[AutomationRunGuardPort] = []
         # Whether the ``automation`` tool may persist a ``create`` without the
         # confirmation card (ports/automation_create_policy.py). OSS: never.
         self.automation_create_policy: AutomationCreatePolicyPort = CardOnlyAutomationCreatePolicy()

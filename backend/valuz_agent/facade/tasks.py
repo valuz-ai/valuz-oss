@@ -325,14 +325,20 @@ class TaskLibrary:
         task_id: str,
         *,
         text: str,
-        from_session_id: str,
+        from_session_id: str | None = None,
     ) -> TaskCommandResult:
-        """Send an instruction, using the host's halted-task revival policy."""
+        """Send an owned instruction, using the host's halted-task revival policy.
+
+        An explicit session must be real and owned. ``None`` is a command from
+        the verified owner without a local chat (e.g. an HTTP host controller),
+        attributed to ``user`` rather than a forged cross-host session id.
+        """
         from valuz_agent.modules.tasks.orchestrator import task_orchestrator
 
         _identity(user_id, "user_id")
         _identity(text, "text")
-        await _require_source(user_id, from_session_id)
+        if from_session_id is not None:
+            await _require_source(user_id, from_session_id)
         detail = await self.get(user_id, task_id)
         if detail is None:
             return TaskCommandResult(False, reason="TASK_NOT_FOUND", delivered=False)
@@ -340,7 +346,7 @@ class TaskLibrary:
             task_id=task_id,
             project_id=detail.task.project_id,
             text=text,
-            from_session_id=from_session_id,
+            from_session_id=from_session_id or "user",
             user_id=user_id,
         )
         current = await self.get(user_id, task_id)

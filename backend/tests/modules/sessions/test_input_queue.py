@@ -1000,3 +1000,48 @@ async def test_restart_closes_orphaned_dispatch_without_replaying(monkeypatch):
     assert receipt.status == "cancelled" and receipt.completed_at is not None
     assert "restarted" in receipt.error_message
     assert await recovery.recover_orphaned_inputs() == 0
+
+
+async def test_queued_automation_rechecks_guard_before_actual_model_turn(monkeypatch):
+    from valuz_agent.modules.sessions import run_orchestrator
+    from valuz_agent.modules.sessions.input_receipts import get_input
+    from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+    from valuz_agent.ports.automation_run_guard import AutomationRunAdmission
+    from valuz_agent.ports.capability_policy import TaskCheckConfig
+    from valuz_agent.ports.extensions import ext
+
+    seen = []
+
+    class PauseGuard:
+        async def check(self, command, *, project_id, target_session_id):
+            seen.append((command.user_id, command.run_id, project_id, target_session_id))
+            return AutomationRunAdmission(False, "Personal assistant paused")
+
+    monkeypatch.setattr(ext, "automation_run_guards", [PauseGuard()])
+    calls = _patch_drain(monkeypatch)
+    async with async_unit_of_work() as db:
+        row = _row("main", "scheduled follow-up")
+        row.input[CONFIG_KEY] = TaskCheckConfig(
+            origin="automation", automation_id="auto", run_id="run"
+        ).model_dump(mode="json")
+        row = await SessionDatastore(db).create_queued(OWNER, row)
+    await run_orchestrator._drain_queue_after_turn("main", _FakeBus(), user_id=OWNER)
+    assert calls == []
+    assert seen == [(OWNER, "run", "proj-1", "main")]
+    receipt = await get_input(OWNER, "main", row.id)
+    assert receipt.status == "cancelled" and "paused" in receipt.error_message
+
+
+async def test_queue_claim_and_owner_cancel_are_mutually_exclusive():
+    async with async_unit_of_work() as db:
+        ds = SessionDatastore(db)
+        cancelled = await ds.create_queued(OWNER, _row("cancel-race", "cancel before dispatch"))
+        assert await ds.delete_queued(OWNER, "cancel-race", cancelled.id)
+        assert not await ds.mark_queued_status(cancelled.id, "dispatched", expected_status="queued")
+        dispatched = await ds.create_queued(OWNER, _row("dispatch-race", "dispatch before cancel"))
+        assert await ds.mark_queued_status(dispatched.id, "dispatched", expected_status="queued")
+        assert not await ds.delete_queued(OWNER, "dispatch-race", dispatched.id)
+    async with async_unit_of_work(commit=False) as db:
+        ds = SessionDatastore(db)
+        assert (await ds.get_queued(OWNER, "cancel-race", cancelled.id)).status == "cancelled"
+        assert (await ds.get_queued(OWNER, "dispatch-race", dispatched.id)).status == "dispatched"

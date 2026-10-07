@@ -288,6 +288,51 @@ async def _drain_queue_after_turn(
             if session is None:
                 return
 
+            if payload.get("source") == "background":
+                from valuz_agent.ports.automation_run_guard import (
+                    BackgroundInputCommand,
+                    evaluate_background_input_guards,
+                )
+
+                admission = await evaluate_background_input_guards(
+                    BackgroundInputCommand(
+                        owner_user_id,
+                        head_id,
+                        session_id,
+                        str(head.project_id or ""),
+                    )
+                )
+                if not admission.allowed:
+                    async with async_unit_of_work() as db:
+                        await SessionDatastore(db).mark_queued_status(
+                            head_id,
+                            "failed" if admission.status == "failed" else "cancelled",
+                            error_message=admission.reason or "BACKGROUND_GUARD_DENIED",
+                        )
+                    continue
+
+            # Policy can change while an automation waits behind a user turn.
+            # Recheck at dispatch, not only when the automation was admitted.
+            if check_config.origin == "automation" and check_config.automation_id:
+                from valuz_agent.ports.automation_run_guard import evaluate_automation_run_guards
+                from valuz_agent.ports.automation_runtime import AutomationRunCommand
+
+                admission = await evaluate_automation_run_guards(
+                    AutomationRunCommand(
+                        owner_user_id, check_config.automation_id, check_config.run_id or head_id
+                    ),
+                    project_id=str(head.project_id or ""),
+                    target_session_id=session_id,
+                )
+                if not admission.allowed:
+                    async with async_unit_of_work() as db:
+                        await SessionDatastore(db).mark_queued_status(
+                            head_id,
+                            "failed" if admission.status == "failed" else "cancelled",
+                            error_message=admission.reason or "AUTOMATION_GUARD_DENIED",
+                        )
+                    continue
+
             try:
                 from valuz_agent.modules.sessions.service import _enforce_budget
 
@@ -325,7 +370,14 @@ async def _drain_queue_after_turn(
             # yet exposed as the in-flight one.
             _dispatching_heads[session_id] = head_id
             async with async_unit_of_work() as db:
-                await SessionDatastore(db).mark_queued_status(head_id, "dispatched")
+                started = await SessionDatastore(db).mark_queued_status(
+                    head_id,
+                    "dispatched",
+                    expected_status="queued",
+                )
+            if not started:
+                _dispatching_heads.pop(session_id, None)
+                continue
 
             async def record_outcome(
                 status: str,

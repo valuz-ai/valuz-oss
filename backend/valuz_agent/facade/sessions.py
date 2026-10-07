@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -70,6 +71,19 @@ class SessionLibrary:
     async def list(self, *, project_id: str | None = None) -> list[Any]:
         async with _session_service() as service:
             return list(await service.list_sessions(project_id=project_id, user_id=self.user_id))
+
+    async def events(
+        self, session_id: str, *, after_seq: int = 0, limit: int = 100
+    ) -> builtins.list[Any]:
+        """Read a bounded event history through the normal owner-checked session service."""
+        if after_seq < 0 or not 1 <= limit <= 500:
+            raise ValueError("invalid event window")
+        async with _session_service() as service:
+            if after_seq:
+                events = await service.list_events(session_id, self.user_id, after_seq=after_seq)
+            else:
+                events, _ = await service.list_events_window(session_id, self.user_id, turn_limit=5)
+        return builtins.list(events[-limit:])
 
     async def enqueue_background(
         self,

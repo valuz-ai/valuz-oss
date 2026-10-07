@@ -106,6 +106,7 @@
   "POST /v1/sessions/{session_id}/fork fork_session",
   "GET /v1/sessions/{session_id}/queue list_session_queue",
   "POST /v1/sessions/{session_id}/queue enqueue_session_input",
+  "GET /v1/sessions/{session_id}/queue/{queue_id} get_session_input_receipt",
   "PATCH /v1/sessions/{session_id}/queue/{queue_id} edit_session_queued_input",
   "DELETE /v1/sessions/{session_id}/queue/{queue_id} delete_session_queued_input",
   "POST /v1/sessions/{session_id}/queue/resume resume_session_queue",

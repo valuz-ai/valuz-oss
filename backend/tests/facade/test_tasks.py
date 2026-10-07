@@ -332,3 +332,31 @@ async def test_goal_revision_write_failure_rolls_back_header_and_mailbox(store, 
         assert db.get(TaskRow, "t1").goal == "original goal"
         assert list(db.scalars(select(TaskEventRow))) == []
         assert list(db.scalars(select(TaskMailboxRow))) == []
+
+
+async def test_owner_instruction_without_a_local_source_uses_user_actor(store):
+    seed_task(store)
+    with store() as db:
+        db.add(
+            TaskSessionRow(
+                id="lead-run",
+                user_id=OWNER,
+                task_id="t1",
+                project_id="project",
+                session_id="lead",
+                agent_slug="lead",
+                sequence=0,
+                kind="lead",
+                status="active",
+            )
+        )
+        db.commit()
+    rejected = await TaskLibrary().inject("other-owner", "t1", text="not authorized")
+    assert not rejected.ok and rejected.reason == "TASK_NOT_FOUND"
+    result = await TaskLibrary().inject(OWNER, "t1", text="Direct owner instruction")
+    assert result.ok and result.delivered
+    with store() as db:
+        event = db.scalars(select(TaskEventRow)).one()
+        assert event.actor == "user" and event.type == "user_inject"
+        message = db.scalars(select(TaskMailboxRow)).one()
+        assert message.from_session == "user"

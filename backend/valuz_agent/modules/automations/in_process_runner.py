@@ -497,6 +497,64 @@ class InProcessAutomationRunner:
 
     # ── Per-run execution ────────────────────────────────────────────
 
+    async def _admit_run(
+        self, user_id: str, automation_id: str, run_id: str, lease: AutomationExecutionLease
+    ) -> bool:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.ports.automation_run_guard import evaluate_automation_run_guards
+        from valuz_agent.ports.automation_runtime import AutomationRunCommand
+        from valuz_agent.ports.extensions import ext
+
+        if not ext.automation_run_guards:
+            return True
+        async with async_unit_of_work() as db:
+            ds = AutomationDatastore(db)
+            row = await ds.get_automation(user_id, automation_id)
+            run = await ds.get_run(user_id, automation_id, run_id)
+            if row is None or run is None or run.status not in ACTIVE_RUN_STATUSES:
+                return False
+            from valuz_agent.facade.sessions import SessionLibrary
+
+            receipt = (
+                await SessionLibrary(user_id).get_input(run.session_id, run.id)
+                if run.session_id and getattr(row, "target_session_id", None)
+                else None
+            )
+            if receipt is not None and receipt.status != "queued":
+                # Recovery must record already-executed work, even if admission
+                # policy changed after that execution. It never replays input.
+                return True
+            admission = await evaluate_automation_run_guards(
+                AutomationRunCommand(user_id, automation_id, run_id),
+                project_id=row.project_id,
+                target_session_id=getattr(row, "target_session_id", None),
+            )
+            if admission.allowed:
+                return True
+            if not await lease.is_current():
+                return False
+            if receipt is not None and run.session_id:
+                cancelled = await SessionLibrary(user_id).cancel_input(run.session_id, run.id)
+                if not cancelled:
+                    current = await SessionLibrary(user_id).get_input(run.session_id, run.id)
+                    if current is not None and current.status != "queued":
+                        return True
+            run.status, run.error_message = admission.status, admission.reason
+            run.error_code = "AUTOMATION_GUARD_DENIED"
+            run.completed_at = now_ms()
+            await ds.replace_run(run)
+            row.last_run_at = run.triggered_at
+            assert self._triggers is not None
+            row.next_run_at = (
+                self._triggers.next_fire_at(row, run.triggered_at)
+                if row.status == "enabled"
+                else None
+            )
+            await ds.update_automation(row)
+            await ds.trim_runs(user_id, automation_id, keep=100)
+            return False
+
     async def _execute_run(
         self,
         user_id: str,
@@ -522,6 +580,9 @@ class InProcessAutomationRunner:
         # Bound before the ``try`` below so the catch-all handler can reach it
         # however early the failure happened.
         playbook_run: PlaybookRunRow | None = None
+
+        if not await self._admit_run(user_id, automation_id, run_id, execution_lease):
+            return
 
         # ── Code execution: no agent, no prompt ──────────────────────────
         # Marked running in its own unit of work, then handed to
