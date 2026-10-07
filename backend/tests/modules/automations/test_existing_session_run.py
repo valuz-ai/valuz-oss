@@ -9,7 +9,13 @@ import pytest
 from valuz_agent.modules.automations.contracts import AgentExecution
 from valuz_agent.modules.automations.in_process_runner import InProcessAutomationRunner
 from valuz_agent.modules.sessions.input_receipts import SessionInputReceipt
+from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
 from valuz_agent.ports.automation_runtime import NoopAutomationExecutionLease
+
+
+def _receipt(*args, **kwargs):
+    kwargs.setdefault("input", {CONFIG_KEY: {"configuration": {"result_kind": "conversation"}}})
+    return SessionInputReceipt(*args, **kwargs)
 
 
 @asynccontextmanager
@@ -39,12 +45,12 @@ async def test_run_waits_for_its_receipt_and_preserves_same_session(outcome, exp
         replace_run=AsyncMock(),
         update_automation=AsyncMock(),
     )
-    receipt = SessionInputReceipt("run-1", "main", "queued")
+    receipt = _receipt("run-1", "main", "queued")
     library = Mock(
         get_input=AsyncMock(
             side_effect=[
                 None,
-                SessionInputReceipt(
+                _receipt(
                     "run-1",
                     "main",
                     outcome,
@@ -93,9 +99,7 @@ async def test_replayed_run_reuses_completed_receipt_without_new_input():
     )
     library = Mock(
         get_input=AsyncMock(
-            return_value=SessionInputReceipt(
-                "run-2", "main", "completed", result_summary="second output"
-            )
+            return_value=_receipt("run-2", "main", "completed", result_summary="second output")
         ),
         enqueue_background=AsyncMock(),
     )

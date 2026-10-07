@@ -92,7 +92,10 @@ async def seed(*, managed=True, input_status="queued"):
                     "attachments": [],
                     "source": "background",
                     CONFIG_KEY: TaskCheckConfig(
-                        origin="automation", automation_id="automation", run_id="run"
+                        origin="automation",
+                        automation_id="automation",
+                        run_id="run",
+                        configuration={"result_kind": "conversation"},
                     ).model_dump(mode="json"),
                 },
                 result_summary="real output" if input_status == "completed" else None,
@@ -293,4 +296,45 @@ async def test_original_artifact_contract_is_not_relaxed_after_manifest_change(m
     async with async_unit_of_work(commit=False) as db:
         run = await db.get(AutomationRunRow, "run")
         assert run.status == "failed" and "declared artifact" in run.error_message
+    code.assert_not_awaited()
+
+
+@pytest.mark.parametrize("original_kind", ["conversation", "artifact"])
+async def test_ambiguous_newline_legacy_never_uses_rewritten_manifest(monkeypatch, original_kind):
+    from valuz_agent.modules.automations.in_process_runner import (
+        _automation_check_config,
+        _frame_agent_prompt,
+    )
+
+    await seed(input_status="completed")
+    async with async_unit_of_work() as db:
+        row, run = await db.get(AutomationRow, "automation"), await db.get(AutomationRunRow, "run")
+        row.name, row.result_kind = "Legal\nname", original_kind
+        receipt = await db.get(QueuedInputRow, "run")
+        config = _automation_check_config(row, run).model_dump(mode="json")
+        config["configuration"].pop("result_kind")
+        receipt.input = {
+            **receipt.input,
+            "text": _frame_agent_prompt(row, run, "work", None),
+            CONFIG_KEY: config,
+        }
+        row.execution_kind, row.code_entry, row.code_runtime, row.target_session_id = (
+            "code",
+            "job.py",
+            "python",
+            None,
+        )
+        row.result_kind = "artifact" if original_kind == "conversation" else "conversation"
+    runner = InProcessAutomationRunner()
+    runner._triggers = Mock(next_fire_at=Mock(return_value=None))
+    code = AsyncMock(side_effect=AssertionError("completed work must not rerun"))
+    monkeypatch.setattr(runner, "_start_code_run", code)
+    await runner._execute_run(
+        OWNER, "automation", "run", lease=NoopAutomationExecutionLease(), detach_chat=False
+    )
+    async with async_unit_of_work(commit=False) as db:
+        run, receipt = await db.get(AutomationRunRow, "run"), await db.get(QueuedInputRow, "run")
+        assert run.status == "failed" and run.error_code == "original_result_contract_unavailable"
+        assert "inspect" in run.error_message and "declared artifact" not in run.error_message
+        assert receipt.status == "completed" and receipt.result_summary == "real output"
     code.assert_not_awaited()

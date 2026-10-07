@@ -1325,11 +1325,26 @@ class InProcessAutomationRunner:
             row = await ds.get_automation(user_id, automation_id)
             if run is None or row is None or run.status not in ACTIVE_RUN_STATUSES:
                 return
-            result_kind = admitted_result_kind or row.result_kind
-            if status == "success" and result_kind == "artifact" and run.artifact_json is None:
+            original_contract_unavailable = status == "success" and admitted_result_kind is None
+            if original_contract_unavailable:
+                status, error = (
+                    "failed",
+                    ("Original result contract is unavailable; inspect the completed input result"),
+                )
+            elif (
+                status == "success"
+                and admitted_result_kind == "artifact"
+                and run.artifact_json is None
+            ):
                 status, error = "failed", "The run ended without producing its declared artifact"
             run.status, run.error_message = status, error
-            run.error_code = "SessionError" if status == "failed" else None
+            run.error_code = (
+                "original_result_contract_unavailable"
+                if original_contract_unavailable
+                else "SessionError"
+                if status == "failed"
+                else None
+            )
             run.result_summary = summary
             run.completed_at = now_ms()
             run.duration_ms = run.completed_at - run.started_at if run.started_at else None
