@@ -366,6 +366,18 @@ def _reset_host_data_plane():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_automation_run_guards(monkeypatch):
+    """Boot composition must not leak dispatch guards into an unrelated unit
+    store. A test that exercises admission explicitly registers its guards;
+    monkeypatch restores the original registry after the per-test composition.
+    Production feature registration/disposal remains unchanged.
+    """
+    from valuz_agent.ports.extensions import ext
+
+    monkeypatch.setattr(ext, "automation_run_guards", [])
+
+
+@pytest.fixture(autouse=True)
 def _restore_boot_globals():
     """Restore the process-wide globals the BOOT path mutates.
 
