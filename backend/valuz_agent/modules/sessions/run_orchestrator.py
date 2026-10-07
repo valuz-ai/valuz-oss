@@ -210,12 +210,9 @@ async def _run_agent_background(
         user_id=owner_user_id,
         host_ref=host_ref,
     )
-    await _drain_queue_after_turn(
-        session_id,
-        event_bus,
-        on_message=meter,
-        user_id=owner_user_id,
-    )
+    # Every production drain uses the existing cross-process lease, including
+    # a chain started by a user turn (not only an idle/background enqueue).
+    schedule_drain(session_id, event_bus)
 
 
 async def _drain_queue_after_turn(
@@ -299,7 +296,7 @@ async def _drain_queue_after_turn(
                 async with async_unit_of_work() as db:
                     await SessionDatastore(db).mark_queued_status(
                         head_id,
-                        "blocked",
+                        "failed" if payload.get("source") == "background" else "blocked",
                         error_message=getattr(exc, "message_key", None) or str(exc),
                     )
                 # Surface the stall: followers refetch the queue on a finish.
@@ -330,6 +327,16 @@ async def _drain_queue_after_turn(
             async with async_unit_of_work() as db:
                 await SessionDatastore(db).mark_queued_status(head_id, "dispatched")
 
+            async def record_outcome(
+                status: str,
+                message: Any,
+                error: BaseException | None,
+                input_id: str = head_id,
+            ) -> None:
+                from valuz_agent.modules.sessions.input_receipts import complete_input
+
+                await complete_input(input_id, status, message, error)
+
             try:
                 await run_session_to_idle(
                     session_id,
@@ -337,12 +344,15 @@ async def _drain_queue_after_turn(
                     event_bus,
                     on_message=on_message,
                     queued_attachments=attachments,
+                    on_outcome=record_outcome,
                     # A queued follow-up is a chat turn like any other, and it
                     # can run arbitrarily long after the send that enqueued it
                     # — so it needs the same per-turn convergence, not just the
                     # credential re-stamp the default would give it.
                     pre_turn=chat_capability_hook(
-                        session_id, owner_user_id, host_ref=host_ref,
+                        session_id,
+                        owner_user_id,
+                        host_ref=host_ref,
                         task_check_config=check_config,
                     ),
                     user_id=owner_user_id,

@@ -719,6 +719,22 @@ class AutomationService:
         """
         user_id = self._require_user_id(user_id)
         code_execution = isinstance(payload.effective_execution, CodeExecution)
+        target = getattr(payload.effective_execution, "target_session_id", None)
+        if target is not None:
+            from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+            session = await validate_chat_target(
+                user_id,
+                target,
+                project_id=payload.project_id,
+                agent_slug=payload.agent_slug,
+                worktree=payload.worktree,
+            )
+            project_id = str((session.metadata.get("valuz") or {}).get("project_id") or "")
+            _, ws_kind = await self._get_project_info(project_id, user_id)
+            if ws_kind != payload.project_kind:
+                raise AutomationProjectNotFound()
+            return project_id, payload.agent_slug or ""
         # ── Chat path ───────────────────────────────────────────────────
         if payload.project_kind == "chat":
             if self._ws is None:
@@ -1437,6 +1453,19 @@ class AutomationService:
         if payload.worktree is not None and not is_code:
             row.worktree = bool(payload.worktree)
 
+        if getattr(row, "target_session_id", None):
+            from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+            if row.execution_kind != "agent" or row.action_kind != "chat":
+                raise ValueError("target_session_id requires agent chat execution")
+            await validate_chat_target(
+                user_id,
+                row.target_session_id,
+                project_id=row.project_id,
+                agent_slug=row.agent_slug,
+                worktree=row.worktree,
+            )
+
         # ── Event subscription ──────────────────────────────────────────
         # Both fields patchable, but only as a pair (schema-enforced): to
         # touch refs you resend the whole subscription. Omitted = untouched;
@@ -1781,7 +1810,7 @@ class AutomationService:
             run.completed_at = now
             await self._ds.replace_run(run)
         elif run.status == "running":
-            if row.execution_kind != "code":
+            if row.execution_kind != "code" and not getattr(row, "target_session_id", None):
                 raise AutomationCancelUnsupported()
             if run.cancel_requested_at is None:
                 run.cancel_requested_at = now

@@ -364,6 +364,7 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
         event_bus,
         on_message=None,
         queued_attachments=None,
+        on_outcome=None,
         pre_turn=None,
         user_id=None,
         host_ref=None,
@@ -377,6 +378,8 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
         # the item is never invisible in both queue and transcript (§14.5).
         assert run_orchestrator.get_dispatching_queue_id(session_id) is not None
         calls.append(text)
+        if on_outcome is not None:
+            await on_outcome("idle", None, None)
         return "idle"
 
     async def _fake_get_session(uid, sid):
@@ -889,3 +892,111 @@ async def test_our_own_drain_needs_no_query(monkeypatch) -> None:
         assert await run_orchestrator.is_draining_queue_anywhere("px2") is True
     finally:
         run_orchestrator._active_drains.discard("px2")
+
+
+async def test_background_input_preserves_owner_idempotence_and_staging(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.facade.sessions import SessionLibrary
+    from valuz_agent.modules.sessions import run_orchestrator
+    from valuz_agent.modules.sessions.errors import SessionNotFound
+
+    session = SimpleNamespace(
+        status="running", metadata={"valuz": {"project_id": "p", "agent_slug": "valurion"}}
+    )
+
+    async def read(owner, sid):
+        return session if owner == OWNER else None
+
+    monkeypatch.setattr(
+        "valuz_agent.adapters.data_reader.data_reader", lambda: SimpleNamespace(get_session=read)
+    )
+    monkeypatch.setattr(run_orchestrator, "schedule_drain", lambda *args: None)
+    pending = AsyncMock(
+        side_effect=AssertionError("Background must not inspect pending attachments")
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.sessions.attachments._load_pending_attachments", pending
+    )
+    async with async_unit_of_work() as db:
+        staged = SessionAttachmentRow(
+            user_id=OWNER, session_id="main", filename="draft.pdf", stored_path="draft.pdf"
+        )
+        db.add(staged)
+    library = SessionLibrary(OWNER)
+    first = await library.enqueue_background("main", "check progress", input_id="event-1")
+    repeat = await library.enqueue_background("main", "check progress", input_id="event-1")
+    assert first.id == repeat.id and first.status == "queued"
+    assert first.input["attachments"] == [] and first.source == "background"
+    with pytest.raises(ValueError, match="different content"):
+        await library.enqueue_background("main", "different work", input_id="event-1")
+    with pytest.raises(SessionNotFound):
+        await SessionLibrary("someone-else").enqueue_background(
+            "main", "check progress", input_id="event-1"
+        )
+    assert await SessionLibrary("someone-else").get_input("main", "event-1") is None
+    async with async_unit_of_work(commit=False) as db:
+        assert (await db.get(SessionAttachmentRow, staged.id)).consumed_at is None
+        assert await SessionDatastore(db).count_queued(OWNER, "main") == 1
+
+
+@pytest.mark.parametrize(
+    "final_status,error,expected",
+    [
+        ("idle", None, "completed"),
+        ("terminated", RuntimeError("provider denied"), "failed"),
+        ("interrupted", None, "cancelled"),
+    ],
+)
+async def test_queue_receipt_records_its_actual_turn_outcome(
+    monkeypatch, final_status, error, expected
+):
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.sessions import run_orchestrator
+    from valuz_agent.modules.sessions.input_receipts import get_input
+
+    _patch_drain(monkeypatch)
+    async with async_unit_of_work() as db:
+        row = await SessionDatastore(db).create_queued(OWNER, _row("receipt", "check"))
+
+    async def run(*args, on_outcome=None, **kwargs):
+        message = SimpleNamespace(
+            id="turn-result", assistant_message="exact turn output", stop_reason=None
+        )
+        await on_outcome(final_status, message, error)
+        return final_status
+
+    monkeypatch.setattr(run_orchestrator, "run_session_to_idle", run)
+    await run_orchestrator._drain_queue_after_turn("receipt", _FakeBus(), user_id=OWNER)
+    receipt = await get_input(OWNER, "receipt", row.id)
+    assert receipt.status == expected
+    assert (
+        receipt.output_message_id == "turn-result" and receipt.result_summary == "exact turn output"
+    )
+    assert receipt.completed_at is not None
+    if error:
+        assert receipt.error_message == "provider denied"
+
+
+async def test_restart_closes_orphaned_dispatch_without_replaying(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import recovery
+    from valuz_agent.modules.sessions.input_receipts import get_input
+
+    async with async_unit_of_work() as db:
+        row = await SessionDatastore(db).create_queued(OWNER, _row("orphan", "possibly executed"))
+        await SessionDatastore(db).mark_queued_status(row.id, "dispatched")
+    monkeypatch.setattr(
+        recovery.kernel_client,
+        "get_session",
+        AsyncMock(return_value=SimpleNamespace(status="idle")),
+    )
+    assert await recovery.recover_orphaned_inputs() == 1
+    receipt = await get_input(OWNER, "orphan", row.id)
+    assert receipt.status == "cancelled" and receipt.completed_at is not None
+    assert "restarted" in receipt.error_message
+    assert await recovery.recover_orphaned_inputs() == 0

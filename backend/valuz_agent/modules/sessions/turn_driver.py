@@ -162,6 +162,7 @@ async def run_session_to_idle(
     on_message: Any | None = None,
     *,
     queued_attachments: list[dict[str, Any]] | None = None,
+    on_outcome: Any | None = None,
     pre_turn: PreTurnHook | None = None,
     user_id: str,
     host_ref: HostRef | None = None,
@@ -203,6 +204,7 @@ async def run_session_to_idle(
     from valuz_agent.modules.sessions.events import SESSION_FINISHED
 
     final_status: str = "idle"
+    message: Any | None = None
     encountered_error = False
     turn_error: BaseException | None = None
     # Set only on the non-raising interrupt path (the user pressed Stop and the
@@ -455,4 +457,6 @@ async def run_session_to_idle(
         status="failed" if encountered_error else final_status,
     )
 
+    if on_outcome is not None:
+        await on_outcome(final_status, message, turn_error)
     return final_status

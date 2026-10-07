@@ -174,6 +174,7 @@ async def resume_queued_drains() -> int:
     from valuz_agent.modules.sessions.run_orchestrator import schedule_drain
 
     try:
+        await recover_orphaned_inputs()
         async with async_unit_of_work(commit=False) as db:
             pairs = await SessionDatastore(db).list_queued_session_owners()
     except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
@@ -202,3 +203,50 @@ async def resume_queued_drains() -> int:
 
 
 __all__ = ["recover_running_sessions", "resume_queued_drains"]
+
+
+async def recover_orphaned_inputs() -> int:
+    """Close orphaned dispatches without replaying uncertain model/tool work.
+
+    A live cross-process drain lease is authoritative and must never be stolen.
+    A receipt lost between model execution and persistence is cancelled; the
+    owner can deliberately issue new input after inspecting the transcript.
+    """
+    from sqlalchemy import select
+
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.infra.execution_lease import load_lease_states
+    from valuz_agent.infra.time_utils import now_ms
+    from valuz_agent.modules.sessions.datastore import SessionDatastore
+    from valuz_agent.modules.sessions.models import QueuedInputRow
+    from valuz_agent.modules.sessions.run_orchestrator import DRAIN_LEASE_SCOPE, is_draining_queue
+
+    async with async_unit_of_work(commit=False) as db:
+        rows = list(
+            (
+                await db.execute(
+                    select(QueuedInputRow).where(
+                        QueuedInputRow.status == "dispatched",
+                    )
+                )
+            ).scalars()
+        )
+    leases = await load_lease_states(DRAIN_LEASE_SCOPE, [r.session_id for r in rows])
+    recovered = 0
+    for row in rows:
+        if is_draining_queue(row.session_id):
+            continue
+        lease = leases.get(row.session_id)
+        if lease is not None and lease.is_live(now_ms()):
+            continue
+        session = await kernel_client.get_session(row.user_id, row.session_id)
+        if session is not None and str(session.status) == "running":
+            continue
+        async with async_unit_of_work() as db:
+            await SessionDatastore(db).mark_queued_status(
+                row.id,
+                "cancelled",
+                error_message="Host restarted before input outcome was confirmed",
+            )
+        recovered += 1
+    return recovered

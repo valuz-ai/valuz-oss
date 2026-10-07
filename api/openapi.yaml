@@ -1035,6 +1035,8 @@ paths:
                 $ref: "#/components/schemas/Task"
         "404":
           description: Task not found
+        "409":
+          description: Goal revision could not be delivered to an active owned lead; task remains unchanged
   /v1/tasks/{task_id}:commit:
     post:
       summary: Promote a draft task to active (spawns its lead session)
@@ -3264,6 +3266,20 @@ paths:
           description: Queue is full (soft cap reached) or session not runnable
 
   /v1/sessions/{session_id}/queue/{queue_id}:
+    get:
+      tags: [sessions]
+      operationId: getSessionInputReceipt
+      summary: Read the durable outcome of one queued input
+      parameters:
+        - {name: session_id, in: path, required: true, schema: {type: string}}
+        - {name: queue_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Owner-scoped input receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionInputReceipt"}
+        "404": {description: Session or input not found}
     patch:
       summary: Edit a queued input (only while still queued)
       operationId: editSessionQueuedInput
@@ -5424,6 +5440,45 @@ paths:
   # 403 {detail: {code: app_plugins_unavailable}} on a cloud deployment. Errors are
   # {detail: AppPluginError}. Requests a plugin makes carry X-Valuz-App-Plugin-Id and are
   # held to its manifest permissions by the plugin-request middleware.
+  /v1/automations:
+    post:
+      tags: [automations]
+      operationId: createAutomation
+      summary: Create an automation, optionally targeting an existing chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AutomationDefinitionCommand"}
+      responses:
+        "201":
+          description: Automation definition
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "404": {description: Owner-scoped project, agent or target session not found}
+        "422": {description: Invalid target or execution contract}
+  /v1/automations/{automation_id}:
+    patch:
+      tags: [automations]
+      operationId: updateAutomation
+      summary: Update an automation execution contract
+      parameters:
+        - {name: automation_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AutomationDefinitionCommand"}
+      responses:
+        "200":
+          description: Updated automation definition
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "404": {description: Owner-scoped definition or target not found}
+        "422": {description: Invalid target or execution contract}
+
   /v1/app-plugins:
     get:
       summary: Installed third-party plugins
@@ -10822,6 +10877,62 @@ components:
           type: integer
           format: int64
           nullable: true
+
+    SessionInputReceipt:
+      type: object
+      required: [id, session_id, status]
+      properties:
+        id: {type: string}
+        session_id: {type: string}
+        status: {type: string, enum: [queued, dispatched, blocked, completed, failed, cancelled]}
+        completed_at: {type: integer, format: int64, nullable: true}
+        source: {type: string}
+        input: {type: object, additionalProperties: true}
+        output_message_id: {type: string, nullable: true}
+        result_summary: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+
+    AutomationDefinitionCommand:
+      type: object
+      additionalProperties: true
+      description: Creation requires name, project_kind and trigger; patch fields are optional. Legacy scheduling and input/result fields retain their existing behavior.
+      properties:
+        name: {type: string, minLength: 1, maxLength: 50}
+        project_kind: {type: string, enum: [chat, project]}
+        project_id: {type: string, nullable: true}
+        agent_kind: {type: string, enum: [project_member, library_agent], nullable: true}
+        agent_slug: {type: string, nullable: true}
+        prompt_template: {type: string}
+        trigger: {type: object, additionalProperties: true}
+        action_kind: {type: string, enum: [chat, task]}
+        worktree: {type: boolean, default: false}
+        execution:
+          oneOf:
+            - {$ref: "#/components/schemas/AutomationAgentExecution"}
+            - {$ref: "#/components/schemas/AutomationCodeExecution"}
+          discriminator: {propertyName: kind}
+    AutomationCodeExecution:
+      type: object
+      additionalProperties: false
+      required: [kind, runtime, entry]
+      properties:
+        kind: {type: string, enum: [code]}
+        runtime: {type: string, enum: [python, shell]}
+        entry: {type: string}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 3600}
+
+    AutomationAgentExecution:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [agent]}
+        mode: {type: string, enum: [chat, task], default: chat}
+        target_session_id:
+          type: string
+          nullable: true
+          maxLength: 36
+          description: Existing owner/project/agent-bound chat session. Incompatible with task, code or worktree execution. Omitted creates a fresh session per run.
 
     QueuedInputList:
       type: object

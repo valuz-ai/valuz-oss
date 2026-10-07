@@ -109,9 +109,7 @@ class SessionDatastore:
         if not attachment_ids:
             return []
         rows = [
-            r
-            for r in await self.get_attachments(user_id, attachment_ids)
-            if r.session_id is None
+            r for r in await self.get_attachments(user_id, attachment_ids) if r.session_id is None
         ]
         for row in rows:
             row.session_id = session_id
@@ -288,7 +286,10 @@ class SessionDatastore:
         row = await self.get_queued(user_id, session_id, queue_id)
         if row is None:
             return False
-        await self._db.delete(row)
+        if row.status not in ("queued", "blocked"):
+            return False
+        row.status = "cancelled"
+        row.completed_at = now_ms()
         await self._db.commit()
         return True
 
@@ -346,13 +347,26 @@ class SessionDatastore:
         )
 
     async def mark_queued_status(
-        self, queue_id: str, status: str, error_message: str | None = None
+        self,
+        queue_id: str,
+        status: str,
+        error_message: str | None = None,
+        *,
+        output_message_id: str | None = None,
+        result_summary: str | None = None,
     ) -> None:
         """Transition a queued row (SYSTEM / drain path), keyed on its unique id."""
         await self._db.execute(
             update(QueuedInputRow)
             .where(QueuedInputRow.id == queue_id)
-            .values(status=status, error_message=error_message, updated_at=now_ms())
+            .values(
+                status=status,
+                error_message=error_message,
+                updated_at=now_ms(),
+                completed_at=now_ms() if status in {"completed", "failed", "cancelled"} else None,
+                output_message_id=output_message_id,
+                result_summary=result_summary,
+            )
         )
         await self._db.commit()
 

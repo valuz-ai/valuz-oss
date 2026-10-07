@@ -253,6 +253,8 @@ class AutomationCreatePayload(BaseModel):
             # Keep the legacy column in step so readers that still branch on
             # ``action_kind`` see the same mode the contract declares.
             self.action_kind = execution.mode
+            if execution.target_session_id and self.worktree:
+                raise ValueError("target_session_id is incompatible with worktree execution")
         return self
 
     @property

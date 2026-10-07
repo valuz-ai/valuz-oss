@@ -336,6 +336,12 @@ class InProcessAutomationRunner:
             stranded = await ds.list_stranded_runs()
             now = now_ms()
             for run in stranded:
+                row = await ds.get_automation(run.user_id, run.automation_id)
+                if getattr(row, "target_session_id", None):
+                    # A durable input owns the outcome. Re-enter admission with
+                    # the same run/input id; it never duplicates the message.
+                    await self.enqueue(run.automation_id, run.id, run.user_id)
+                    continue
                 run.status = "interrupted_by_shutdown"
                 run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
                 run.completed_at = now
@@ -366,6 +372,9 @@ class InProcessAutomationRunner:
             # context) — use each automation's own owner, never ambient.
             for automation_id, owner in list(self._active_ids.items()):
                 last_run = await ds.last_run(owner, automation_id)
+                row = await ds.get_automation(owner, automation_id)
+                if getattr(row, "target_session_id", None):
+                    continue
                 if last_run and last_run.status == "running":
                     last_run.status = "interrupted_by_shutdown"
                     last_run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
@@ -570,7 +579,9 @@ class InProcessAutomationRunner:
                 if run.extra_input:
                     rendered_prompt = f"{rendered_prompt}\n\n{run.extra_input}"
 
-                if row.playbook_definition_id is not None:
+                if run.playbook_run_id is not None:
+                    playbook_run = await playbooks.get_run(user_id, run.playbook_run_id)
+                if row.playbook_definition_id is not None and playbook_run is None:
                     definition = await playbooks.get_definition(
                         user_id,
                         row.playbook_definition_id,
@@ -708,15 +719,38 @@ class InProcessAutomationRunner:
                     # Execution identity follows the bound agent — no model /
                     # provider / runtime override surface remains. The agent's
                     # ``AgentConfig`` is the single source of truth.
-                    session = await session_svc.create_session(
-                        project_id=row.project_id,
-                        origin="automation",
-                        title=f"{t('backend.automation.titlePrefix')} {row.name}",
-                        agent_slug=row.agent_slug,
-                        user_id=user_id,
-                        worktree=wt_spec,
-                        trigger_meta=_automation_trigger_meta(row, run, playbook_run),
-                    )
+                    target = getattr(row, "target_session_id", None)
+                    if target:
+                        from valuz_agent.adapters.data_reader import data_reader
+                        from valuz_agent.modules.sessions.background_targets import (
+                            validate_chat_target,
+                        )
+                        from valuz_agent.modules.sessions.input_receipts import get_input
+
+                        existing_input = await get_input(user_id, target, run_id)
+                        session = (
+                            await data_reader().get_session(user_id, target)
+                            if existing_input is not None
+                            else await validate_chat_target(
+                                user_id,
+                                target,
+                                project_id=row.project_id,
+                                agent_slug=row.agent_slug,
+                                worktree=bool(row.worktree),
+                            )
+                        )
+                        if session is None:
+                            raise RuntimeError("Target session disappeared")
+                    else:
+                        session = await session_svc.create_session(
+                            project_id=row.project_id,
+                            origin="automation",
+                            title=f"{t('backend.automation.titlePrefix')} {row.name}",
+                            agent_slug=row.agent_slug,
+                            user_id=user_id,
+                            worktree=wt_spec,
+                            trigger_meta=_automation_trigger_meta(row, run, playbook_run),
+                        )
                 except Exception as exc:
                     run.status = "failed"
                     run.error_code = type(exc).__name__
@@ -744,7 +778,7 @@ class InProcessAutomationRunner:
                     return
 
                 run.status = "running"
-                run.started_at = now_ms()
+                run.started_at = run.started_at or now_ms()
                 run.session_id = session.id
                 if playbook_run is not None:
                     playbook_run.session_id = session.id
@@ -859,6 +893,20 @@ class InProcessAutomationRunner:
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
+        async with async_unit_of_work(commit=False) as target_db:
+            target_row = await AutomationDatastore(target_db).get_automation(user_id, automation_id)
+            existing_target = getattr(target_row, "target_session_id", None)
+        if existing_target:
+            await self._finish_existing_chat_run(
+                user_id=user_id,
+                automation_id=automation_id,
+                run_id=run_id,
+                session_id=session_id,
+                rendered_prompt=rendered_prompt,
+                lease=execution_lease,
+                task_check_config=task_check_config,
+            )
+            return
         try:
             async with async_unit_of_work() as db:
                 ds = AutomationDatastore(db)
@@ -1012,6 +1060,137 @@ class InProcessAutomationRunner:
             logger.exception("Background chat run %s crashed", run_id)
         finally:
             self._active_ids.pop(automation_id, None)
+
+    async def _finish_existing_chat_run(
+        self,
+        *,
+        user_id: str,
+        automation_id: str,
+        run_id: str,
+        session_id: str,
+        rendered_prompt: str,
+        lease: AutomationExecutionLease,
+        task_check_config: TaskCheckConfig | None = None,
+    ) -> None:
+        """Admission is not success: wait for this input's durable outcome.
+
+        The input id equals the automation run id, making worker retries safe.
+        No DB transaction remains open while waiting for the model turn.
+        """
+        from valuz_agent.facade.projects import ProjectLibrary
+        from valuz_agent.facade.sessions import SessionLibrary
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
+        from valuz_agent.modules.sessions.input_receipts import TERMINAL_INPUT_STATUSES
+
+        assert self._triggers is not None
+        status, error, summary = "failed", None, None
+        try:
+            library = SessionLibrary(user_id)
+            receipt = await library.get_input(session_id, run_id)
+            if receipt is None:
+                receipt = await library.enqueue_background(
+                    session_id,
+                    rendered_prompt,
+                    input_id=run_id,
+                    task_check_config=task_check_config,
+                )
+            elif receipt.status == "queued":
+                from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+
+                stored_config = TaskCheckConfig.model_validate(receipt.input.get(CONFIG_KEY) or {})
+                receipt = await library.enqueue_background(
+                    session_id,
+                    str(receipt.input.get("text") or rendered_prompt),
+                    input_id=run_id,
+                    task_check_config=stored_config,
+                )
+            polls = 0
+            while receipt.status not in TERMINAL_INPUT_STATUSES:
+                polls += 1
+                if receipt.status == "dispatched" and polls % 25 == 0:
+                    from valuz_agent.modules.sessions.recovery import recover_orphaned_inputs
+
+                    await recover_orphaned_inputs()
+                if not await lease.is_current():
+                    return
+                async with async_unit_of_work(commit=False) as db:
+                    run = await AutomationDatastore(db).get_run(user_id, automation_id, run_id)
+                    if run is None:
+                        return
+                    cancel = run.cancel_requested_at is not None or run.status == "cancelled"
+                if cancel:
+                    removed = await library.cancel_input(session_id, run_id)
+                    if not removed and receipt.status == "dispatched":
+                        # Only this run's executing head may be interrupted.
+                        from valuz_agent.modules.sessions.run_orchestrator import (
+                            get_dispatching_queue_id,
+                        )
+
+                        if get_dispatching_queue_id(session_id) == run_id:
+                            await library.interrupt(session_id)
+                if receipt.status == "blocked":
+                    error = receipt.error_message or "Background input blocked"
+                    status = "failed"
+                    break
+                await asyncio.sleep(0.2)
+                receipt = await library.get_input(session_id, run_id)
+                if receipt is None:
+                    raise RuntimeError("Background input receipt disappeared")
+            else:
+                status = {"completed": "success", "failed": "failed", "cancelled": "cancelled"}[
+                    receipt.status
+                ]
+                error, summary = receipt.error_message, receipt.result_summary
+        except Exception as exc:
+            error = str(exc)[:500]
+            logger.exception("Existing-session run %s failed", run_id)
+        finally:
+            self._active_ids.pop(automation_id, None)
+
+        if not await lease.is_current():
+            return
+        async with async_unit_of_work() as db:
+            ds = AutomationDatastore(db)
+            run = await ds.get_run(user_id, automation_id, run_id)
+            row = await ds.get_automation(user_id, automation_id)
+            if run is None or row is None or run.status not in ACTIVE_RUN_STATUSES:
+                return
+            if status == "success" and row.result_kind == "artifact" and run.artifact_json is None:
+                status, error = "failed", "The run ended without producing its declared artifact"
+            run.status, run.error_message = status, error
+            run.error_code = "SessionError" if status == "failed" else None
+            run.result_summary = summary
+            run.completed_at = now_ms()
+            run.duration_ms = run.completed_at - run.started_at if run.started_at else None
+            run.session_id = session_id
+            if run.playbook_run_id:
+                pb = await PlaybookService(db, ProjectLibrary()).get_run(
+                    user_id, run.playbook_run_id
+                )
+                if pb is not None:
+                    pb.status = (
+                        "completed"
+                        if status == "success"
+                        else "stopped"
+                        if status == "cancelled"
+                        else "failed"
+                    )
+                    pb.completed_at, pb.error_message, pb.error_code = (
+                        run.completed_at,
+                        error,
+                        run.error_code,
+                    )
+            await ds.replace_run(run)
+            row.last_run_at = run.triggered_at
+            row.next_run_at = (
+                self._triggers.next_fire_at(row, run.triggered_at)
+                if row.status == "enabled"
+                else None
+            )
+            row.updated_at = now_ms()
+            await ds.update_automation(row)
 
     # ── Code execution ─────────────────────────────────────────────
 

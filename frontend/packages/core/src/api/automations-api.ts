@@ -144,10 +144,7 @@ export interface JsonInput {
 
 export type InputContract = NoneInput | TextInput | JsonInput;
 
-export interface AgentExecution {
-  kind: "agent";
-  mode: "chat" | "task";
-}
+export type AgentExecution = import("./generated/sessions").components["schemas"]["AutomationAgentExecution"];
 
 export interface CodeExecution {
   kind: "code";
