@@ -18,6 +18,8 @@ export interface TopBarProps {
   /** Optional control rendered at the far right (typically the right-panel
    * collapse / expand toggle, mirroring the sidebar toggle on the left). */
   rightControl?: ReactNode;
+  /** Shrinkable plugin content between navigation and fixed right controls. */
+  centerContent?: ReactNode;
   /** Browser-style back navigation. When provided renders a chevron-left
    * button next to the sidebar toggle. */
   onGoBack?: () => void;
@@ -57,6 +59,7 @@ export const TopBar = ({
   onToggleSidebar,
   logo,
   rightControl,
+  centerContent,
   extraLeft,
   onGoBack,
   onGoForward,
@@ -72,11 +75,11 @@ export const TopBar = ({
     // toggle buttons are click-targets without relying on child no-drag
     // overrides (which Electron 36 occasionally swallows).
     <div
-      className={`flex h-[36px] shrink-0 items-center pl-4 ${windowControls ? "pr-0" : "pr-4"}`}
+      className={`flex h-[36px] min-w-0 shrink-0 items-center pl-4 ${windowControls ? "pr-0" : "pr-4"}`}
     >
       {/* Left: traffic light spacer + brand logo + collapse toggle */}
       <div
-        className={`flex items-center gap-2 pt-[4px] ${trafficLightPad ? "ml-[58px]" : ""}`}
+        className={`flex shrink-0 items-center gap-2 pt-[4px] ${trafficLightPad ? "ml-[58px]" : ""}`}
       >
         {logo}
         {onToggleSidebar && (
@@ -171,15 +174,30 @@ export const TopBar = ({
         {extraLeft}
       </div>
 
-      {/* Drag spacer fills the middle so the user can drag the window from
-        anywhere except the buttons themselves. */}
+      {/* Keep a drag gutter even when an interactive plugin fills the bar.
+        Contributions shrink within this region; host controls never shrink. */}
       <div
-        className="flex-1 self-stretch"
+        data-slot="topbar-center"
+        className="mx-2 flex min-w-0 flex-1 items-center justify-end self-stretch overflow-hidden pl-6"
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-      />
+      >
+        {centerContent && (
+          <div
+            className="flex min-w-0 max-w-full items-center justify-end overflow-hidden"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+          >
+            {centerContent}
+          </div>
+        )}
+      </div>
 
       {/* Right: optional control (e.g. right-panel toggle). */}
-      <div className="mr-[4px] flex items-center pt-[0px]">{rightControl}</div>
+      <div
+        data-slot="topbar-controls"
+        className="mr-[4px] flex shrink-0 items-center pt-[0px]"
+      >
+        {rightControl}
+      </div>
 
       {/* Window controls (minimize / maximize / close) — flush right,
           rendered only on Windows/Linux. macOS uses native traffic lights. */}

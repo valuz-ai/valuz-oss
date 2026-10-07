@@ -59,7 +59,11 @@ const register = (name: string, registration: Registration) =>
   useRegistryStore.getState().registerSlot(name, registration);
 
 const renderLayout = (
-  props: { sidebarFooter?: ReactNode; sidebarHeader?: ReactNode } = {},
+  props: {
+    sidebarFooter?: ReactNode;
+    sidebarHeader?: ReactNode;
+    topbarActions?: ReactNode;
+  } = {},
   path = "/conversation/new",
 ) =>
   render(
@@ -217,8 +221,12 @@ describe("ProjectLayoutBase slots", () => {
         return <span>顶栏右侧扩展</span>;
       },
     });
-    renderLayout();
-    expect(await screen.findByText("顶栏右侧扩展")).toBeTruthy();
+    renderLayout({ topbarActions: <button>宿主右侧操作</button> });
+    const extension = await screen.findByText("顶栏右侧扩展");
+    const hostAction = screen.getByRole("button", { name: "宿主右侧操作" });
+    expect(before(extension, hostAction)).toBe(true);
+    expect(extension.closest('[data-slot="topbar-controls"]')).toBeNull();
+    expect(hostAction.closest('[data-slot="topbar-center"]')).toBeNull();
     expect(seen.pathname).toBe("/conversation/new");
     expect(seen.activeProjectId).toBeNull();
     expect(typeof seen.rightPanelCollapsed).toBe("boolean");
