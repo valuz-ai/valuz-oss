@@ -428,3 +428,27 @@ def test_should_forward_fork_anchor_on_terminal_session_update():
         "session_update", {"status": "running", "message_id": "msg-3"}
     )
     assert "fork_anchor" not in legacy
+
+
+def test_background_presentation_survives_shared_live_and_history_user_message_mapping():
+    metadata = {
+        "background_input": {
+            "input_id": "receipt",
+            "source": "background",
+            "presentation": {"kind": "personal_work_result", "work_ref_id": "work"},
+        }
+    }
+    kind, payload = _translate_kernel_event(
+        "user_message",
+        {
+            "message": "unchanged evidence",
+            "attachments": [],
+            "metadata": metadata,
+            "message_id": "message",
+        },
+    )
+    assert kind == "message.user"
+    assert json.loads(payload["metadata"]) == metadata
+    assert payload["message_id"] == "message" and payload["text"] == "unchanged evidence"
+    _, plain = _translate_kernel_event("user_message", {"message": "managed_work_result user text"})
+    assert "metadata" not in plain

@@ -270,6 +270,11 @@ def _translate_kernel_event(
             {
                 "text": _stringify(data.get("message") or data.get("text") or ""),
                 "attachments": _stringify(data.get("attachments") or []),
+                **(
+                    {"metadata": _stringify(data["metadata"])}
+                    if isinstance(data.get("metadata"), dict) and data["metadata"]
+                    else {}
+                ),
             },
             data,
         )
