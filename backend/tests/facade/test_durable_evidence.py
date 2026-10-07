@@ -202,7 +202,13 @@ async def test_status_cas_preserves_history_and_hides_inaccessible_payload(
     assert (await library.get_snapshot("owner", first.id)).fingerprint == first.fingerprint
 
 
-async def test_provenance_owner_refs_versions_pagination_and_no_mutation(db: AsyncSession) -> None:
+async def test_provenance_owner_refs_versions_pagination_and_no_mutation(
+    db: AsyncSession, monkeypatch
+) -> None:
+    from itertools import count
+
+    clock = count(1_000)
+    monkeypatch.setattr("valuz_agent.facade.durable_evidence.now_ms", lambda: next(clock))
     library = DurableEvidenceLibrary(db)
     snapshot, _ = await library.capture("owner", seal())
     values = ProvenanceInput(
