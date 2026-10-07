@@ -262,6 +262,7 @@ async def test_revised_goal_invalidates_lead_and_member_policy(runtime, monkeypa
         id="task",
         project_id="project",
         goal="layout",
+        status="active",
         metadata_={
             "keep": True,
             task_checks.CONFIG_KEY: task_checks.fresh_config(
@@ -281,8 +282,11 @@ async def test_revised_goal_invalidates_lead_and_member_policy(runtime, monkeypa
     old_revision = task.metadata_[task_checks.CONFIG_KEY]["revision"]
 
     svc = TaskService.__new__(TaskService)
-    svc._db = None
-    svc._tasks = SimpleNamespace(update_task=AsyncMock())
+    svc._db = SimpleNamespace(commit=AsyncMock(), new=[], dirty=[], deleted=[])
+    svc._tasks = SimpleNamespace(get_task=AsyncMock(return_value=task), update_task=AsyncMock())
+    svc._runs = SimpleNamespace(list_runs=AsyncMock(return_value=[
+        SimpleNamespace(kind="lead", status="active", sequence=0, created_at=0),
+    ]))
     svc._events = SimpleNamespace(append_event=AsyncMock())
     monkeypatch.setattr(
         "valuz_agent.modules.tasks.messaging.notify_lead_goal_revised",
