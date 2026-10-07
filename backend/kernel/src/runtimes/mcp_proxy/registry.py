@@ -34,6 +34,7 @@ class ProxiedSession:
     token: str
     hooks: SessionHooks
     upstreams: dict[str, McpUpstream] = field(default_factory=dict)
+    advertised_names: frozenset[str] = field(default_factory=frozenset)
 
     def authorized(self, supplied: str) -> bool:
         return hmac.compare_digest(supplied, f"Bearer {self.token}")
@@ -82,6 +83,7 @@ def register_session_proxy(
         token=token,
         hooks=hooks,
         upstreams={cfg.name: McpUpstream(cfg) for cfg in servers},
+        advertised_names=frozenset(cfg.name for cfg in servers),
     )
     with _LOCK:
         _SESSIONS[session_id] = entry
@@ -97,6 +99,25 @@ def register_session_proxy(
     )
 
 
+def _selected_servers(
+    servers: tuple[McpServerConfig, ...] | list[McpServerConfig],
+    hooks: SessionHooks,
+) -> list[McpServerConfig]:
+    from src.core.hooks import TOOL_CALL
+    from src.core.hooks.builtin.citation_projection import OWNER as CITATION_PROJECTION
+
+    owners = hooks.tool_source_owners(TOOL_CALL, "mcp")
+    if not owners:
+        return []
+    citation_only = all(owner == CITATION_PROJECTION for owner in owners)
+    selected = (
+        [cfg for cfg in servers if isinstance(cfg, McpHttpServerConfig)]
+        if citation_only
+        else list(servers)
+    )
+    return selected
+
+
 def proxy_session_mcp(
     session_id: str,
     servers: tuple[McpServerConfig, ...] | list[McpServerConfig],
@@ -110,22 +131,51 @@ def proxy_session_mcp(
     connectors — and stdio servers keep running as the CLI's own children.
     Any other handler gets every MCP call, so every server is proxied.
     """
-    from src.core.hooks import TOOL_CALL
-    from src.core.hooks.builtin.citation_projection import OWNER as CITATION_PROJECTION
-
-    owners = hooks.tool_source_owners(TOOL_CALL, "mcp")
-    if not owners:
-        return None
-    citation_only = all(owner == CITATION_PROJECTION for owner in owners)
-    selected = (
-        [cfg for cfg in servers if isinstance(cfg, McpHttpServerConfig)]
-        if citation_only
-        else list(servers)
-    )
+    selected = _selected_servers(servers, hooks)
     if not selected:
         return None
     proxied = {cfg.name: cfg for cfg in register_session_proxy(session_id, selected, hooks)}
     return tuple(proxied.get(cfg.name, cfg) for cfg in servers)
+
+
+async def refresh_session_proxy(
+    session_id: str,
+    servers: tuple[McpServerConfig, ...] | list[McpServerConfig],
+    hooks: SessionHooks,
+) -> None:
+    """Refresh per-turn upstream credentials without invalidating a warm CLI.
+
+    Its advertised proxy URLs and bearer token remain stable. Changed or
+    revoked upstreams are replaced/closed; unchanged connections survive.
+    Only names advertised when the CLI started can be refreshed. Adding a
+    new server still requires the runtime's normal configuration reload.
+    """
+    selected = _selected_servers(servers, hooks)
+    stale: list[McpUpstream] = []
+    with _LOCK:
+        entry = _SESSIONS.get(session_id)
+        if entry is None:
+            raise RuntimeError("Warm MCP proxy registration is missing")
+        current = {cfg.name: cfg for cfg in selected if cfg.name in entry.advertised_names}
+        refreshed: dict[str, McpUpstream] = {}
+        for name, config in current.items():
+            existing = entry.upstreams.get(name)
+            refreshed[name] = (
+                existing
+                if existing is not None and existing.config == config
+                else McpUpstream(config)
+            )
+        stale = [
+            upstream
+            for name, upstream in entry.upstreams.items()
+            if refreshed.get(name) is not upstream
+        ]
+        entry.hooks = hooks
+        entry.upstreams = refreshed
+    # McpUpstream exits its anyio transport on its own worker task. Do not
+    # close the native CLI: it may still own running background commands.
+    for upstream in stale:
+        await upstream.close()
 
 
 def get_session_proxy(session_id: str) -> ProxiedSession | None:
@@ -157,6 +207,7 @@ __all__ = [
     "proxy_base_url",
     "proxy_url",
     "register_session_proxy",
+    "refresh_session_proxy",
     "reset_for_tests",
     "unregister_session_proxy",
 ]

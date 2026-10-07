@@ -989,6 +989,18 @@ class CodexRuntime:
         will resume or fork (default: the session's own), which decides the
         CODEX_HOME it runs in (:func:`_select_codex_home`)."""
         if self._codex is not None:
+            # prepare() can precede pre-turn credential materialization, and
+            # resumed turns may have a new host authorization context. Keep
+            # the app-server (and its background commands) alive while its
+            # kernel-owned MCP upstreams follow this turn's session config.
+            self._hook_session_ref = SessionRef.from_session(session)
+            self._register_toolkit_if_eligible(session)
+            if self._mcp_proxy_session_id is not None:
+                from src.runtimes.mcp_proxy import refresh_session_proxy
+
+                await refresh_session_proxy(
+                    self._mcp_proxy_session_id, session.mcp_servers, self._hook_session()
+                )
             return
         t0 = time.monotonic()
         await self._emit_turn_phase("runtime_init_started")
