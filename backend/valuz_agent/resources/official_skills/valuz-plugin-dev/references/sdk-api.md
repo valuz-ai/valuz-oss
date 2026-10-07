@@ -73,6 +73,8 @@ await host.draftConversation({ projectId?, agent?, text });   // 开新对话并
 
 ## 5. `ctx.valuz`（`useValuz()`）— Valuz 内置后端能力
 
+下面除明确标为“不支持”的 `service.fetch` 外，都是已实现的 SDK 接口，stable / experimental 表示稳定级别，不表示“设计中”。涉及数据发现与连接器选型时读 [data-access.md](data-access.md)。
+
 宿主代发请求并处理鉴权；错误统一为 `ValuzApiError { status, code, message }`（`import { ValuzApiError } from "@valuz/plugin-sdk"`）。**每个后端能力对应清单里的一项权限**：
 
 | 方法 | 做什么 | 权限 | 级别 |
@@ -87,7 +89,7 @@ await host.draftConversation({ projectId?, agent?, text });   // 开新对话并
 | `connectors.list()` | 当前用户的连接器 `{ id, slug, name, description, enabled, status, toolCount }` | `connectors:read` | stable |
 | `connectors.listTools(connector)` | 某连接器的工具 `{ name, description, inputSchema, readOnly }`；`connector` 是 id 或 slug | `connectors:read` | stable |
 | `connectors.callTool(connector, tool, args?)` | 调**只读**工具（声明了 `readOnlyHint: true` 的）→ `{ content, structuredContent, isError }` | `connectors:call` | stable |
-| `connectors.callTool(connector, tool, args, { write: true })` | 调有副作用的工具，宿主先让用户确认 | `connectors:write` | experimental |
+| `connectors.callTool(connector, tool, args, { write: true })` | 调有副作用的工具，宿主先让用户确认 | `connectors:call` + `connectors:write` | experimental |
 | `automations.run(name, input?)` | 触发本插件声明的自动化 → `{ runId, automationId }` | `automations:run` | stable |
 | `automations.getRun(runId)` / `waitRun(runId, { timeoutMs?, intervalMs? })` / `latestRun(name)` | 读运行状态 / 等到结束 / 最近一次运行（`AutomationRun`：`status`、`done`、`output`、`files`、`errorMessage`…） | `automations:run` | stable |
 | `storage.get(key)` / `set(key, value)` / `delete(key)` / `list(prefix?)` | 插件自己的持久数据（按用户 × 插件隔离，JSON 值）；`get` 没有时返回 `null` | `storage` | stable |
@@ -97,7 +99,8 @@ await host.draftConversation({ projectId?, agent?, text });   // 开新对话并
 - 存储限额：键 ≤200 字符，单个值 ≤256 KiB，每个插件每个用户合计 ≤10 MiB；超限抛 413。数据只存在这台设备的 `valuz.db`，不跨设备同步；卸载时默认保留。
 - experimental 的接口可以在 minor 版本里调整；stable 的破坏性变更只走 major。
 - 没声明权限就调用 → 后端回 403 `plugin_permission_denied`，并写进插件日志（`audit`）。
-- 不暴露：账号 / 组织 / 计费 / 鉴权 / API key / 模型渠道与密钥、其他用户的数据、扩展管理本身、edition 专属接口（行情、自选等）。
+- 不暴露：账号 / 组织 / 计费 / 鉴权 / API key / 模型渠道与密钥、其他用户的数据、扩展管理本身；也没有 edition 专属 SDK 模块（如 Finance 的自选、组合 API）。**这是接口边界，不是数据种类禁令**：行情等数据可以通过当前账号已授权的 MCP 连接器读取。
+- 当前账号已有的连接器（包括部署提供的内置连接器）无需重复添加。插件声明权限后，用 `connectors.list()` 找实际 id / slug，再用 `listTools()` 查工具 schema 与 `readOnly`，最后按真实 schema 调 `callTool()`。具体流程见 [data-access.md](data-access.md)。
 
 ## 6. 配置、文案、样式
 
