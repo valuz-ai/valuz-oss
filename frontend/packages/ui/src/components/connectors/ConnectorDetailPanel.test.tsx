@@ -117,12 +117,11 @@ describe("ConnectorDetailPanel", () => {
       />,
     );
 
-    const labels = screen
-      .getAllByRole("button")
-      .map((b) => (b.textContent ?? "").trim());
-    const copy = labels.findIndex((l) => l === "Copy");
-    const edit = labels.findIndex((l) => /^(edit|编辑)$/i.test(l));
-    const disconnect = labels.findIndex((l) => /disconnect|断开/i.test(l));
+    const buttons = screen.getAllByRole("button");
+    const copy = buttons.indexOf(screen.getByRole("button", { name: "Copy" }));
+    // Edit is an icon action now; its accessible label still names the action.
+    const edit = buttons.indexOf(screen.getByRole("button", { name: /^(edit|编辑)$/i }));
+    const disconnect = buttons.indexOf(screen.getByRole("button", { name: /disconnect|断开/i }));
 
     expect(copy).toBeGreaterThanOrEqual(0);
     expect(copy).toBeLessThan(edit);

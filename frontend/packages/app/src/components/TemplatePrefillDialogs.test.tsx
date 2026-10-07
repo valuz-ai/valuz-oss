@@ -78,8 +78,8 @@ describe("template-prefilled create dialogs", () => {
       "active",
     );
     expect(
-      screen.getByRole("button", { name: /Task 任务/ }).className,
-    ).toContain("border-brand");
+      screen.getByRole("button", { name: /Task 任务/ }).classList.contains("bg-surface"),
+    ).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() =>
