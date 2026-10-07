@@ -833,7 +833,10 @@ class SkillLibraryService:
                 # skills are not versioned (docs/design/skill-versioning §0).
                 try:
                     recorded = await self._record_library_version(
-                        user_id, Path(result.written_path), source_session_id=session_id
+                        user_id,
+                        Path(result.written_path),
+                        source_session_id=session_id,
+                        fresh_fork=result.strategy == "fork",
                     )
                     await self._ds.set_artifact_id_by_path(
                         user_id, written.path, recorded.artifact_id
@@ -2315,7 +2318,12 @@ class SkillLibraryService:
         return recorded
 
     async def _record_library_version(
-        self, user_id: str, library_dir: Path, *, source_session_id: str | None
+        self,
+        user_id: str,
+        library_dir: Path,
+        *,
+        source_session_id: str | None,
+        fresh_fork: bool = False,
     ) -> RecordedVersion:
         """History step for paths that land the directory first (the staging
         panel's sync): record the library copy, stamping the next version into
@@ -2334,7 +2342,11 @@ class SkillLibraryService:
             library_dir,
             artifact_id=artifact_id,
             manifest_path=_detect_manifest(library_dir),
-            installed_dir=library_dir,
+            # A just-created fork is a new lineage, not a pre-versioning
+            # installed copy. Its filesystem-only -vN stamp names the fork;
+            # absent recorded history, the host must start at v1. Existing
+            # overwrite/legacy saves keep their installed-version baseline.
+            installed_dir=None if fresh_fork else library_dir,
             source_session_id=source_session_id,
         )
         if existing is not None and getattr(existing, "artifact_id", None) != recorded.artifact_id:

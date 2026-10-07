@@ -137,6 +137,43 @@ async def test_first_save_records_v1_and_links_the_index_row(env) -> None:  # ty
     assert snapshot.is_file()
 
 
+@pytest.mark.parametrize("new_slug", [None, "demo-v9"])
+async def test_panel_fork_starts_new_lineage_with_matching_manifest_head_and_archive(
+    env, new_slug
+) -> None:
+    import zipfile
+
+    from valuz_agent.modules.skills.models import StagingSyncItem
+
+    _stage(env.staging, "demo", "original")
+    original, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
+    _stage(env.staging, "demo", "forked")
+    results = await env.svc.sync_staging(
+        USER,
+        "fork-session",
+        [StagingSyncItem(slug="demo", strategy="fork", new_slug=new_slug)],
+    )
+    chosen = new_slug or "demo-v2"
+    assert results[0].new_slug == chosen
+    fork_dir = env.library / chosen
+    row = await SkillDatastore(env.db).get_by_skill_dir(USER, fork_dir)
+    assert row is not None and row.artifact_id and row.artifact_id != original.artifact_id
+    catalog = await env.svc.list_catalog(USER, "chat-default")
+    fork = next(skill for skill in catalog.skills if Path(skill.path) == fork_dir)
+    history = await env.svc.list_versions(USER, fork.id)
+    assert [(v.version_no, v.is_current) for v in history.items] == [(1, True)]
+    assert _manifest_version(fork_dir) == "1"
+    snapshot = (
+        env.data_dir / "skill-versions" / ".artifact" / row.artifact_id / "v1" / f"{chosen}.zip"
+    )
+    with zipfile.ZipFile(snapshot) as archive:
+        assert "version: 1" in archive.read("SKILL.md").decode()
+        assert "forked" in archive.read("SKILL.md").decode()
+    assert _manifest_version(env.library / "demo") == "1"
+    assert "original" in (env.library / "demo" / "SKILL.md").read_text()
+    assert [v.version_no for v in (await env.svc.list_versions(USER, original.id)).items] == [1]
+
+
 async def test_second_save_is_v2_on_the_same_lineage(env) -> None:  # type: ignore[no-untyped-def]
     _stage(env.staging, "demo", "first")
     first, _, _ = await env.svc.confirm_submission(USER, SESSION, "demo")
