@@ -19,9 +19,25 @@ export const PluginSettingsSection = () => {
   const [tab, setTab] = useState("app");
   const activeTab = tab === "dsh" && blocks.length === 0 ? "app" : tab;
   const categories = [
-    { id: "app", label: t("pluginSettings.appPlugins.title") },
-    { id: "builtin", label: t("pluginSettings.valuz.title") },
-    ...(blocks.length > 0 ? [{ id: "dsh", label: t("pluginSettings.dsh.title") }] : []),
+    {
+      id: "app",
+      label: t("pluginSettings.appPlugins.title"),
+      desc: t("pluginSettings.appPlugins.desc"),
+    },
+    {
+      id: "builtin",
+      label: t("pluginSettings.valuz.title"),
+      desc: t("pluginSettings.valuz.desc"),
+    },
+    ...(blocks.length > 0
+      ? [
+          {
+            id: "dsh",
+            label: t("pluginSettings.dsh.title"),
+            desc: t("pluginSettings.dsh.desc"),
+          },
+        ]
+      : []),
   ];
   return (
     <SettingsSection
@@ -50,7 +66,7 @@ export const PluginSettingsSection = () => {
           ))}
         </span>
       }
-      desc={t("pluginSettings.desc")}
+      desc={categories.find((category) => category.id === activeTab)?.desc}
     >
       {activeTab === "app" ? <AppPluginBlock /> : null}
       {activeTab === "builtin" ? <BuiltinFrontendPluginsBlock /> : null}

@@ -166,19 +166,7 @@ export const AppPluginBlock = () => {
     );
 
   return (
-    <section aria-labelledby="app-plugins-heading" className="mb-8">
-      <div className="mb-3">
-        <h3
-          id="app-plugins-heading"
-          className="text-sm font-semibold text-ink-heading"
-        >
-          {t("pluginSettings.appPlugins.title")}
-        </h3>
-        <p className="text-xs text-ink-body">
-          {t("pluginSettings.appPlugins.desc")}
-        </p>
-      </div>
-
+    <section aria-label={t("pluginSettings.appPlugins.title")} className="mb-8">
       {extraTabs.length === 0 ? (
         installed
       ) : (

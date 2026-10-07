@@ -168,16 +168,7 @@ export const DshPluginsBlock = () => {
   }
 
   return (
-    <section aria-labelledby="plugins-dsh-heading" className="mb-8">
-      <div className="mb-3">
-        <h3
-          id="plugins-dsh-heading"
-          className="text-sm font-semibold text-ink-heading"
-        >
-          {t("pluginSettings.dsh.title")}
-        </h3>
-        <p className="text-xs text-ink-body">{t("pluginSettings.dsh.desc")}</p>
-      </div>
+    <section aria-label={t("pluginSettings.dsh.title")} className="mb-8">
       {body}
     </section>
   );

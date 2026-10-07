@@ -126,7 +126,7 @@ const renderBlock = async (
     .mockResolvedValue(listOf(plugins, over));
   const watch = vi.spyOn(appPluginsApi, "watch").mockImplementation(never);
   const view = render(<AppPluginBlock />);
-  await screen.findByRole("heading", { name: "应用插件" });
+  await screen.findByRole("button", { name: "从文件安装" });
   return { ...view, list, watch };
 };
 

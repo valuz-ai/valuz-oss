@@ -15,7 +15,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { initI18n } from "@valuz/shared/i18n";
+import { initI18n, t } from "@valuz/shared/i18n";
 import {
   ApiError,
   createPluginHost,
@@ -156,15 +156,22 @@ describe("PluginSettingsSection — categories", () => {
       "DSH 插件",
     ]);
     expect(choices[0].getAttribute("aria-pressed")).toBe("true");
+    const description = group.closest("h2")?.nextElementSibling;
+    expect(description?.textContent).toBe(t("pluginSettings.appPlugins.desc"));
+    expect(screen.getAllByText("应用插件", { exact: true })).toHaveLength(1);
     await screen.findByRole("button", { name: "从文件安装" });
-    expect(screen.queryByRole("heading", { name: "内置插件" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "DSH 插件" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "内置插件" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "DSH 插件" })).toBeNull();
     fireEvent.click(choices[1]);
+    expect(description?.textContent).toBe(t("pluginSettings.valuz.desc"));
+    expect(screen.getAllByText("内置插件", { exact: true })).toHaveLength(1);
     await screen.findByText("此构建没有后端插件");
     expect(screen.queryByRole("button", { name: "从文件安装" })).toBeNull();
     fireEvent.click(choices[2]);
-    expect(screen.getByRole("heading", { name: "DSH 插件" })).not.toBeNull();
-    expect(screen.queryByRole("heading", { name: "内置插件" })).toBeNull();
+    expect(description?.textContent).toBe(t("pluginSettings.dsh.desc"));
+    expect(screen.getAllByText("DSH 插件", { exact: true })).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "DSH 插件" })).not.toBeNull();
+    expect(screen.queryByRole("region", { name: "内置插件" })).toBeNull();
   });
 });
 
@@ -254,9 +261,9 @@ describe("PluginSettingsSection — oss-dsh-plugins", () => {
     try {
       const view = renderTab("内置插件");
       await screen.findByText("此构建没有后端插件");
-      expect(screen.queryByRole("heading", { name: "DSH 插件" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "DSH 插件" })).toBeNull();
       // The page itself is core: its own list is still there.
-      expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();
+      expect(screen.getByRole("region", { name: "内置插件" })).not.toBeNull();
       view.unmount();
     } finally {
       await dshHost.load(ossDshPluginsPlugin);
@@ -264,7 +271,7 @@ describe("PluginSettingsSection — oss-dsh-plugins", () => {
 
     renderTab("DSH 插件");
     expect(
-      (await screen.findAllByRole("heading", { name: "DSH 插件" })).length,
+      (await screen.findAllByRole("region", { name: "DSH 插件" })).length,
     ).toBeGreaterThan(0);
   });
 });
@@ -294,7 +301,7 @@ describe("PluginSettingsSection — built-in backend plugins", () => {
     const { container } = renderTab("内置插件");
     await screen.findByText("commercial-sites");
     const valuz = screen
-      .getByRole("heading", { name: "内置插件" })
+      .getByRole("region", { name: "内置插件" })
       .closest("section")!;
     expect(within(valuz).getByRole("heading", { name: "界面插件" })).not.toBeNull();
     expect(within(valuz).getByRole("heading", { name: "后端插件" })).not.toBeNull();

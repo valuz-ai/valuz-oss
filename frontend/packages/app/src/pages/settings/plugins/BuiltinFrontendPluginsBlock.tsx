@@ -64,16 +64,7 @@ export const BuiltinFrontendPluginsBlock = () => {
   );
 
   return (
-    <section aria-labelledby="builtin-plugins-heading" className="mb-8">
-      <div className="mb-4">
-        <h3
-          id="builtin-plugins-heading"
-          className="text-sm font-semibold text-ink-heading"
-        >
-          {t("pluginSettings.valuz.title")}
-        </h3>
-        <p className="text-xs text-ink-body">{t("pluginSettings.valuz.desc")}</p>
-      </div>
+    <section aria-label={t("pluginSettings.valuz.title")} className="mb-8">
       <SubHeading
         id="builtin-frontend-plugins-heading"
         title={t("pluginSettings.valuz.frontend.title")}

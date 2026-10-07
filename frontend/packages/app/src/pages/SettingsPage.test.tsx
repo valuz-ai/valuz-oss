@@ -187,10 +187,10 @@ describe("SettingsPage plugin settings", () => {
     ).toBe("true");
     await screen.findByRole("button", { name: "从文件安装" });
     fireEvent.click(categories.getByRole("button", { name: "内置插件" }));
-    expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();
+    expect(screen.getByRole("region", { name: "内置插件" })).not.toBeNull();
     await screen.findByText("此构建没有后端插件");
     fireEvent.click(categories.getByRole("button", { name: "DSH 插件" }));
-    expect(screen.getByRole("heading", { name: "DSH 插件" })).not.toBeNull();
+    expect(screen.getByRole("region", { name: "DSH 插件" })).not.toBeNull();
     expect(await screen.findByText("DSH 插件在此环境不可用")).not.toBeNull();
   });
 });
