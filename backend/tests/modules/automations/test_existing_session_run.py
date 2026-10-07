@@ -214,3 +214,45 @@ async def test_output_lookup_uses_dispatched_input_not_latest_run(tmp_path):
         # A human turn on this reusable session is not an automation output.
         assert await AutomationDatastore(db).get_run_by_session("u", "main") is None
     await engine.dispose()
+
+
+async def test_creation_reuses_library_agent_binding_of_target_without_deploying():
+    from valuz_agent.modules.automations.schemas import AutomationCreatePayload, ManualTrigger
+    from valuz_agent.modules.automations.service import AutomationService
+
+    service = AutomationService.__new__(AutomationService)
+    service._get_project_info = AsyncMock(return_value=("Chat", "chat"))
+    service._members = Mock(get=AsyncMock(side_effect=AssertionError("No member deployment")))
+    target = SimpleNamespace(metadata={"valuz": {"project_id": "p", "agent_slug": "valurion"}})
+    payload = AutomationCreatePayload(
+        name="follow",
+        project_kind="chat",
+        project_id="p",
+        agent_kind="library_agent",
+        agent_slug="valurion",
+        trigger=ManualTrigger(),
+        execution=AgentExecution(target_session_id="main"),
+    )
+    with patch(
+        "valuz_agent.modules.sessions.background_targets.validate_chat_target",
+        AsyncMock(return_value=target),
+    ):
+        assert await service._resolve_project_and_agent(
+            payload, calling_session_project_id=None, user_id="u"
+        ) == ("p", "valurion")
+    service._members.get.assert_not_called()
+
+
+async def test_legacy_task_update_cannot_keep_existing_chat_target():
+    from valuz_agent.modules.automations.errors import AutomationContractInvalid
+    from valuz_agent.modules.automations.schemas import AutomationUpdatePayload
+    from valuz_agent.modules.automations.service import AutomationService
+
+    service = AutomationService.__new__(AutomationService)
+    row = SimpleNamespace(
+        id="a", project_id="p", execution_kind="agent", target_session_id="main", action_kind="chat"
+    )
+    service._ds = Mock(get_automation=AsyncMock(return_value=row))
+    with pytest.raises(AutomationContractInvalid):
+        await service.update("a", AutomationUpdatePayload(action_kind="task"), user_id="u")
+    assert row.action_kind == "chat"

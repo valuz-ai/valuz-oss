@@ -1373,9 +1373,22 @@ class AutomationService:
                 candidate = (payload.agent_slug or row.agent_slug or "").strip()
                 if not candidate:
                     raise AutomationAgentRequired()
-                member = await self._members.get(user_id, row.project_id, candidate)
-                if member is None:
-                    raise AgentNotInProject()
+                if payload.execution.target_session_id:
+                    from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+                    await validate_chat_target(
+                        user_id,
+                        payload.execution.target_session_id,
+                        project_id=row.project_id,
+                        agent_slug=candidate,
+                        worktree=bool(
+                            payload.worktree if payload.worktree is not None else row.worktree
+                        ),
+                    )
+                else:
+                    member = await self._members.get(user_id, row.project_id, candidate)
+                    if member is None:
+                        raise AgentNotInProject()
                 apply_execution_contract(row, payload.execution)
                 row.agent_slug = candidate
                 row.agent_kind = row.agent_kind or "project_member"
@@ -1401,9 +1414,19 @@ class AutomationService:
             new_slug = payload.agent_slug.strip()
             if not new_slug:
                 raise AutomationAgentRequired()
-            member = await self._members.get(user_id, row.project_id, new_slug)
-            if member is None:
-                raise AgentNotInProject()
+            if getattr(row, "target_session_id", None):
+                from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+                await validate_chat_target(
+                    user_id,
+                    row.target_session_id,
+                    project_id=row.project_id,
+                    agent_slug=new_slug,
+                )
+            else:
+                member = await self._members.get(user_id, row.project_id, new_slug)
+                if member is None:
+                    raise AgentNotInProject()
             row.agent_slug = new_slug
 
         if payload.action_kind is not None and not is_code and payload.execution is None:
@@ -1412,6 +1435,12 @@ class AutomationService:
             # trusting any cached value — projects don't change kind
             # post-create today, but the lookup is cheap.
             if payload.action_kind == "task":
+                if getattr(row, "target_session_id", None):
+                    from valuz_agent.modules.automations.errors import AutomationContractInvalid
+
+                    raise AutomationContractInvalid(
+                        "target_session_id requires agent chat execution"
+                    )
                 _, ws_kind = await self._get_project_info(row.project_id, user_id)
                 if ws_kind != "project":
                     raise AutomationTaskOnlyOnProject()
@@ -1457,7 +1486,9 @@ class AutomationService:
             from valuz_agent.modules.sessions.background_targets import validate_chat_target
 
             if row.execution_kind != "agent" or row.action_kind != "chat":
-                raise ValueError("target_session_id requires agent chat execution")
+                from valuz_agent.modules.automations.errors import AutomationContractInvalid
+
+                raise AutomationContractInvalid("target_session_id requires agent chat execution")
             await validate_chat_target(
                 user_id,
                 row.target_session_id,

@@ -5457,6 +5457,7 @@ paths:
             application/json:
               schema: {type: object, additionalProperties: true}
         "404": {description: Owner-scoped project, agent or target session not found}
+        "400": {description: Target is not a runnable matching chat}
         "422": {description: Invalid target or execution contract}
   /v1/automations/{automation_id}:
     patch:
@@ -5477,6 +5478,7 @@ paths:
             application/json:
               schema: {type: object, additionalProperties: true}
         "404": {description: Owner-scoped definition or target not found}
+        "400": {description: Target is not a runnable matching chat}
         "422": {description: Invalid target or execution contract}
 
   /v1/app-plugins:
