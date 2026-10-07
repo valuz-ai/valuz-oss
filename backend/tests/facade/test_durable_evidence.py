@@ -202,13 +202,7 @@ async def test_status_cas_preserves_history_and_hides_inaccessible_payload(
     assert (await library.get_snapshot("owner", first.id)).fingerprint == first.fingerprint
 
 
-async def test_provenance_owner_refs_versions_pagination_and_no_mutation(
-    db: AsyncSession, monkeypatch
-) -> None:
-    from itertools import count
-
-    clock = count(1_000)
-    monkeypatch.setattr("valuz_agent.facade.durable_evidence.now_ms", lambda: next(clock))
+async def test_provenance_owner_refs_versions_pagination_and_no_mutation(db: AsyncSession) -> None:
     library = DurableEvidenceLibrary(db)
     snapshot, _ = await library.capture("owner", seal())
     values = ProvenanceInput(
@@ -226,6 +220,13 @@ async def test_provenance_owner_refs_versions_pagination_and_no_mutation(
     third = await library.append_provenance(
         "owner", values.model_copy(update={"subject_version": "v2"})
     )
+    # This scenario exercises chronological pagination; equal wall-clock
+    # milliseconds legitimately use the id tie-breaker instead of insertion order.
+    for timestamp, record in enumerate((first, next_record, third), start=1_000):
+        stored = await db.get(ProvenanceRecordStorage, record.id)
+        assert stored is not None
+        stored.created_at = timestamp
+    await db.flush()
     next_record.context_refs[0].id = "changed"
     page = await library.list_provenance(
         "owner", subject_type="test.object", subject_id="object", limit=1
