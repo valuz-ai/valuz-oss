@@ -1414,12 +1414,13 @@ class AutomationService:
             new_slug = payload.agent_slug.strip()
             if not new_slug:
                 raise AutomationAgentRequired()
-            if getattr(row, "target_session_id", None):
+            current_target = row.target_session_id
+            if current_target:
                 from valuz_agent.modules.sessions.background_targets import validate_chat_target
 
                 await validate_chat_target(
                     user_id,
-                    row.target_session_id,
+                    current_target,
                     project_id=row.project_id,
                     agent_slug=new_slug,
                 )
@@ -1482,7 +1483,8 @@ class AutomationService:
         if payload.worktree is not None and not is_code:
             row.worktree = bool(payload.worktree)
 
-        if getattr(row, "target_session_id", None):
+        final_target = row.target_session_id
+        if final_target:
             from valuz_agent.modules.sessions.background_targets import validate_chat_target
 
             if row.execution_kind != "agent" or row.action_kind != "chat":
@@ -1491,7 +1493,7 @@ class AutomationService:
                 raise AutomationContractInvalid("target_session_id requires agent chat execution")
             await validate_chat_target(
                 user_id,
-                row.target_session_id,
+                final_target,
                 project_id=row.project_id,
                 agent_slug=row.agent_slug,
                 worktree=row.worktree,

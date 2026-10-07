@@ -302,6 +302,9 @@ class AutomationDatastore:
         ).first()
         if result is None:
             return None
+        # SQLAlchemy's mixed ORM/scalar Row loses the mapped entity type at
+        # tuple unpacking; its first selected value is the AutomationRunRow.
+        run: AutomationRunRow
         run, target = result
         if target is None:
             return run

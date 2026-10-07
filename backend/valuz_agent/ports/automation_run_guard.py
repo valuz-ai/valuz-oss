@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -59,7 +60,9 @@ async def evaluate_background_input_guards(
     from valuz_agent.ports.extensions import ext
 
     for guard in tuple(ext.automation_run_guards):
-        check_input = getattr(guard, "check_input", None)
+        check_input: (
+            Callable[[BackgroundInputCommand], Awaitable[AutomationRunAdmission]] | None
+        ) = getattr(guard, "check_input", None)
         if check_input is None:
             continue
         try:

@@ -66,7 +66,8 @@ async def _resolve_session_owner(session_id: str) -> str | None:
     try:
         sessions = await data_reader().list_all_sessions(ids=[session_id], limit=1)
         if sessions:
-            return sessions[0].user_id
+            owner: str | None = sessions[0].user_id
+            return owner
     except Exception:
         logger.debug("session owner read unavailable; checking durable input owner", exc_info=True)
     from sqlalchemy import select
