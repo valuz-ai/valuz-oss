@@ -27,7 +27,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from valuz_agent.infra.db import async_commit_with_retry
+from valuz_agent.infra.db import async_commit_with_retry, commits_deferred
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.tasks.models import (
     PLAN_SNAPSHOT_EVENT,
@@ -570,12 +570,22 @@ class TaskEventDatastore:
             )
             self._db.add(row)
             try:
-                await self._db.commit()
+                if commits_deferred():
+                    await self._db.flush()
+                else:
+                    await self._db.commit()
                 return row
             except IntegrityError as exc:
+                if commits_deferred():
+                    # A rollback here would erase the caller's other enlisted
+                    # writes, then retry only this event. Let it retry the whole
+                    # command instead of committing a partial transaction.
+                    raise
                 await self._db.rollback()
                 last_exc = exc
             except OperationalError as exc:
+                if commits_deferred():
+                    raise
                 await self._db.rollback()
                 last_exc = exc
                 if "locked" not in str(exc).lower():
