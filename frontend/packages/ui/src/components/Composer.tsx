@@ -1392,9 +1392,13 @@ export const Composer = ({
   // settled on one yet (e.g. before ``useRuntimes`` resolves); fall back
   // to the first available runtime's label so the trigger still reads
   // sensibly.
+  // Existing temporary conversations own a frozen brain. The library agent
+  // identifies their persona; its current defaults are not execution state.
+  const frozenAgentBrain = agentLocked && allowAgentBrainOverride;
   const selectedRuntimeLabel =
     (selectedRuntimeId
-      ? runtimes.find((r) => r.id === selectedRuntimeId)?.displayName
+      ? runtimes.find((r) => r.id === selectedRuntimeId)?.displayName ??
+        (frozenAgentBrain ? selectedRuntimeId : null)
       : null) ??
     runtimes.find((r) => r.available)?.displayName ??
     runtimes[0]?.displayName ??
@@ -1495,7 +1499,8 @@ export const Composer = ({
               c.providerId === selectedProviderId &&
               c.modelId === selectedModelId,
           );
-          if (!m) return null;
+          // A removed channel does not change a frozen session's model.
+          if (!m) return frozenAgentBrain ? modelLabel(selectedModelId) : null;
           return m.source === "managed"
             ? m.providerName
             : modelLabel(m.modelId);
@@ -2425,17 +2430,15 @@ export const Composer = ({
                               typeof t
                             >[0],
                           );
-                  // When an agent is selected use its own host-computed model
-                  // label (correct for project members, whose model id may not
-                  // resolve against the composer's own provider list — that path
-                  // falls back to a placeholder). Default/agentless uses the
-                  // composer's resolved model.
+                  // Existing temporary sessions display their actual creation
+                  // override. New conversations and project members retain the
+                  // host-computed agent label (their provider catalog may differ).
                   const triggerModelLabel =
-                    selectedAgent?.modelLabel ??
-                    // Hide the "Model" placeholder when no model channel is
-                    // configured — ``selectedModelLabel`` falls back to that
-                    // literal only when ``providers`` is empty.
-                    (providers.length > 0 ? selectedModelLabel : null);
+                    frozenAgentBrain && selectedModelId
+                      ? selectedModelLabel
+                      : selectedAgent?.modelLabel ??
+                        // Hide the placeholder when no channel is configured.
+                        (providers.length > 0 ? selectedModelLabel : null);
                   return (
                     <>
                       <button
@@ -2605,8 +2608,12 @@ export const Composer = ({
                                       </span>
                                       {selectedAgent && (
                                         <span className="truncate text-2xs text-ink-meta">
-                                          {selectedAgent.runtimeLabel} ·{" "}
-                                          {selectedAgent.modelLabel}
+                                          {frozenAgentBrain
+                                            ? selectedRuntimeLabel
+                                            : selectedAgent.runtimeLabel} ·{" "}
+                                          {frozenAgentBrain
+                                            ? selectedModelLabel
+                                            : selectedAgent.modelLabel}
                                         </span>
                                       )}
                                     </span>
