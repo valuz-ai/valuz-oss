@@ -2396,7 +2396,7 @@
     "executing": "执行中",
     "failed": "失败",
     "running": "运行中",
-    "extensionManager": {
+    "appPluginManager": {
       "title": {
         "install": "安装应用插件",
         "dev_link": "链接应用插件开发目录",
@@ -3547,7 +3547,7 @@
     "overlays": "浮层预览",
     "playbookDetail": "手册详情"
   },
-  "extensions": {
+  "pluginSettings": {
     "title": "插件",
     "navDesc": "应用插件、内置插件与 DSH 插件",
     "desc": "管理应用插件、随 Valuz 发行的内置插件，以及标准 DSH（DeepSeek Harness）插件。",
@@ -3696,7 +3696,7 @@
         "entitlement": "权益：{key}"
       }
     },
-    "thirdParty": {
+    "appPlugins": {
       "title": "应用插件",
       "desc": "安装和管理扩展 Valuz 界面与功能的应用插件。应用插件以你的权限在本机运行，请只安装你信任的来源。",
       "loadFailed": "无法读取应用插件",

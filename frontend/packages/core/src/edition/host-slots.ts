@@ -558,7 +558,7 @@ export const HOST_SLOTS: readonly SlotSpec[] = [
     context: ["provider", "isSystem", "isConfigured"],
   },
   {
-    name: "settings.extensions.third-party.tabs",
+    name: "settings.plugins.app-plugins.tabs",
     kind: "keyed",
     region: "settings",
     description:
@@ -566,7 +566,7 @@ export const HOST_SLOTS: readonly SlotSpec[] = [
     context: ["refresh"],
   },
   {
-    name: "settings.extensions.third-party.item.actions",
+    name: "settings.plugins.app-plugins.item.actions",
     kind: "list",
     region: "settings",
     description:

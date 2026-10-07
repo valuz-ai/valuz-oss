@@ -102,28 +102,32 @@ def _in_app_route(link: str | None) -> str | None:
 @router.post("/v1/notifications", response_model=CreateNotificationResponse)
 async def create_notification(
     body: CreateNotificationRequest,
-    plugin_id: str | None = Header(default=None, alias="X-Valuz-Plugin-Id"),
+    plugin_id: str | None = Header(default=None, alias="X-Valuz-App-Plugin-Id"),
+    legacy_plugin_id: str | None = Header(
+        default=None, alias="X-Valuz-Plugin-Id", include_in_schema=False
+    ),
     user_id: str = Depends(get_current_user_id),
 ) -> CreateNotificationResponse:
     """Post a notification into the caller's own ledger (``ctx.valuz.notifications``).
 
-    A third-party plugin sends ``X-Valuz-Plugin-Id``: the entry is ``kind=extension``
+    A third-party plugin sends ``X-Valuz-App-Plugin-Id``: the entry is ``kind=app_plugin``
     with the plugin id in its payload, and every post is its own entry (random
     dedup key). Permission (the plugin's ``notifications`` grant) is checked by
     the plugin-request middleware, not here.
     """
+    plugin_id = plugin_id if plugin_id is not None else legacy_plugin_id
     payload: dict[str, object] = {}
     if body.link:
         payload["link"] = body.link
     if plugin_id is not None:
         if not _PLUGIN_ID_RE.fullmatch(plugin_id) or len(plugin_id) > 100:
             raise HTTPException(status_code=400, detail={"code": "invalid_plugin_id"})
-        kind = "extension"
-        payload["plugin_id"] = plugin_id
-        dedup_key = f"ext:{plugin_id}:{uuid.uuid4()}"
+        kind = "app_plugin"
+        payload["app_plugin_id"] = plugin_id
+        dedup_key = f"app-plugin:{plugin_id}:{uuid.uuid4()}"
         if len(dedup_key) > _DEDUP_KEY_MAX:
             digest = hashlib.sha256(plugin_id.encode()).hexdigest()[:16]
-            dedup_key = f"ext:{digest}:{uuid.uuid4().hex}"
+            dedup_key = f"app-plugin:{digest}:{uuid.uuid4().hex}"
     else:
         kind = "custom"
         dedup_key = f"api:{uuid.uuid4()}"

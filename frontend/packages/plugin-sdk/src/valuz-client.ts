@@ -157,18 +157,18 @@ const invalid = (message: string): ValuzApiError =>
 
 /**
  * ``ctx.valuz`` (doc 12 §5). Every call goes through the host's authenticated
- * request layer with ``X-Valuz-Plugin-Id`` set, so the backend can check the
+ * request layer with ``X-Valuz-App-Plugin-Id`` set, so the backend can check the
  * plugin's declared permissions; failures are ``ValuzApiError``.
  */
 export function createValuzClient(options: ValuzClientOptions): ValuzClient {
   const { pluginId, services } = options;
-  const ext = `/v1/extensions/third-party/${encodeURIComponent(pluginId)}`;
+  const appPluginBase = `/v1/app-plugins/${encodeURIComponent(pluginId)}`;
 
   const call = async (request: HostRequest): Promise<unknown> => {
     try {
       return await services.request({
         ...request,
-        headers: { ...request.headers, "X-Valuz-Plugin-Id": pluginId },
+        headers: { ...request.headers, "X-Valuz-App-Plugin-Id": pluginId },
       });
     } catch (error) {
       throw toValuzApiError(error);
@@ -180,7 +180,7 @@ export function createValuzClient(options: ValuzClientOptions): ValuzClient {
     toRun(
       await call({
         method: "GET",
-        path: `${ext}/automation-runs/${seg(runId)}`,
+        path: `${appPluginBase}/automation-runs/${seg(runId)}`,
       }),
     );
 
@@ -409,7 +409,7 @@ export function createValuzClient(options: ValuzClientOptions): ValuzClient {
         const body = asRecord(
           await call({
             method: "POST",
-            path: `${ext}/automations/${seg(name)}/run`,
+            path: `${appPluginBase}/automations/${seg(name)}/run`,
             json: input === undefined ? {} : { input },
           }),
         );
@@ -440,7 +440,7 @@ export function createValuzClient(options: ValuzClientOptions): ValuzClient {
           return toRun(
             await call({
               method: "GET",
-              path: `${ext}/automations/${seg(name)}/runs/latest`,
+              path: `${appPluginBase}/automations/${seg(name)}/runs/latest`,
             }),
           );
         } catch (error) {
@@ -454,7 +454,7 @@ export function createValuzClient(options: ValuzClientOptions): ValuzClient {
       async get<T = unknown>(key: string): Promise<T | null> {
         try {
           const body = asRecord(
-            await call({ method: "GET", path: `${ext}/storage/${seg(key)}` }),
+            await call({ method: "GET", path: `${appPluginBase}/storage/${seg(key)}` }),
           );
           return (body.value ?? null) as T | null;
         } catch (error) {
@@ -465,18 +465,18 @@ export function createValuzClient(options: ValuzClientOptions): ValuzClient {
       async set(key, value) {
         await call({
           method: "PUT",
-          path: `${ext}/storage/${seg(key)}`,
+          path: `${appPluginBase}/storage/${seg(key)}`,
           json: { value },
         });
       },
       async delete(key) {
-        await call({ method: "DELETE", path: `${ext}/storage/${seg(key)}` });
+        await call({ method: "DELETE", path: `${appPluginBase}/storage/${seg(key)}` });
       },
       async list(prefix) {
         const body = asRecord(
           await call({
             method: "GET",
-            path: `${ext}/storage`,
+            path: `${appPluginBase}/storage`,
             query: { prefix: prefix ?? "" },
           }),
         );

@@ -28,6 +28,11 @@ from valuz_agent.integrations.sandbox_credential_hmac import (
 )
 from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 from valuz_agent.ports.agent_lifecycle import AgentLifecycleHook, NoopAgentLifecycleHook
+from valuz_agent.ports.app_plugins import (
+    AllowAllAppPluginPolicy,
+    AppPluginPolicyPort,
+    AppPluginPublisherPort,
+)
 from valuz_agent.ports.automation_code_executor import (
     AutomationCodeExecutor,
     LocalSubprocessCodeExecutor,
@@ -112,11 +117,6 @@ from valuz_agent.ports.skill_runtime import (
     DiscoverAndExecuteExternalSkills,
     ExternalSkillDiscoveryPolicy,
 )
-from valuz_agent.ports.third_party import (
-    AllowAllThirdPartyPolicy,
-    ExtensionPublisherPort,
-    ThirdPartyPolicyPort,
-)
 from valuz_agent.ports.ui_artifact import UiArtifactSinkPort
 from valuz_agent.ports.ui_push_transport import LocalUiPushTransport, UiPushTransport
 from valuz_agent.ports.workspace_sync import NoopWorkspaceSync, WorkspaceSyncPort
@@ -174,8 +174,8 @@ class Extensions:
         # one process; a multi-replica overlay binds a pub/sub transport.
         self.ui_push_transport: UiPushTransport = LocalUiPushTransport()
         # Third-party plugins (ADR-034): org policy gate and catalog publisher.
-        self.third_party_policy: ThirdPartyPolicyPort = AllowAllThirdPartyPolicy()
-        self.extension_publisher: ExtensionPublisherPort | None = None
+        self.app_plugin_policy: AppPluginPolicyPort = AllowAllAppPluginPolicy()
+        self.app_plugin_publisher: AppPluginPublisherPort | None = None
         # One opaque credential authenticates an untrusted sandbox to every
         # trusted host surface (built-in MCP + Data Service). OSS preserves the
         # existing per-owner HMAC tokens; managed editions may bind an async
@@ -331,6 +331,24 @@ class Extensions:
         # order and appends the FIRST returned receipt to its tool result;
         # a failing sink is skipped and never breaks generation.
         self.ui_artifact_sinks: list[UiArtifactSinkPort] = []
+
+    @property
+    def third_party_policy(self) -> AppPluginPolicyPort:
+        """Deprecated alias; use app_plugin_policy."""
+        return self.app_plugin_policy
+
+    @third_party_policy.setter
+    def third_party_policy(self, policy: AppPluginPolicyPort) -> None:
+        self.app_plugin_policy = policy
+
+    @property
+    def extension_publisher(self) -> AppPluginPublisherPort | None:
+        """Deprecated alias; use app_plugin_publisher."""
+        return self.app_plugin_publisher
+
+    @extension_publisher.setter
+    def extension_publisher(self, publisher: AppPluginPublisherPort | None) -> None:
+        self.app_plugin_publisher = publisher
 
     @property
     def instructions(self) -> GlobalInstructionsPort:

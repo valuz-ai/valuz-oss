@@ -436,15 +436,15 @@ exports[`OSS bare registry composition > registers the personal edition's routes
       "label": "settings.tab.network.label",
     },
     {
-      "description": "extensions.navDesc",
+      "description": "pluginSettings.navDesc",
       "edition": "personal",
       "group": {
         "id": "system",
         "label": "settings.group.system",
       },
       "icon": "puzzle",
-      "id": "extensions",
-      "label": "extensions.title",
+      "id": "plugins",
+      "label": "pluginSettings.title",
     },
     {
       "description": "settings.tab.systemLogs.desc",

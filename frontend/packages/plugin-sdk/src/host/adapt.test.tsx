@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { definePlugin, pageRoute, settingsPage, sidebarItem, slotComponent } from "../define";
 import { createTestHost, PluginContractError } from "../testing";
 import type { PluginDefinition } from "../types";
-import { adaptThirdPartyPlugin, isPublicSlot } from "./adapt";
+import { adaptAppPlugin, isPublicSlot } from "./adapt";
 import type { HostServices } from "../services";
 
 const Noop = () => <span>noop</span>;
@@ -175,7 +175,7 @@ describe("the restricted context", () => {
     ]);
   });
 
-  it("puts settings sections in the Extensions group", async () => {
+  it("puts settings sections in the Plugins group", async () => {
     const host = createTestHost();
     await host.load(
       plugin((ctx) => {
@@ -185,7 +185,7 @@ describe("the restricted context", () => {
     expect(host.capture().settings).toEqual([
       expect.objectContaining({
         id: "x:acme.dashboard:prefs",
-        group: { id: "extensions", label: "extensions.title" },
+        group: { id: "plugins", label: "pluginSettings.title" },
       }),
     ]);
   });
@@ -223,7 +223,7 @@ describe("the restricted context", () => {
           }),
         ),
         method,
-      ).rejects.toThrow(/not available to third-party plugins/);
+      ).rejects.toThrow(/not available to app plugins/);
     }
     const host = createTestHost();
     await expect(
@@ -315,7 +315,7 @@ describe("the restricted context", () => {
   });
 });
 
-describe("adaptThirdPartyPlugin", () => {
+describe("adaptAppPlugin", () => {
   const services = {
     request: async () => ({}),
     registerLocales: () => {},
@@ -331,7 +331,7 @@ describe("adaptThirdPartyPlugin", () => {
   } as unknown as HostServices;
 
   it("builds a first-party plugin with the manifest id", () => {
-    const adapted = adaptThirdPartyPlugin(
+    const adapted = adaptAppPlugin(
       plugin(() => {}),
       { id: "acme.dashboard" },
       services,

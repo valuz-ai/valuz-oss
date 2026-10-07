@@ -6,7 +6,7 @@ import { initParserPlugins } from "@valuz/parser-plugins";
 import { hydrateOverlayIfPresent, hydrateTheme } from "@valuz/core";
 import {
   loadOssPlugins,
-  markThirdPartyBootSettled,
+  markAppPluginBootSettled,
   renderOssBootFailure,
   settleOssPlugins,
 } from "@valuz/app/plugins";
@@ -67,7 +67,7 @@ loadOssPlugins()
           <App />
         </StrictMode>,
       );
-      markThirdPartyBootSettled();
+      markAppPluginBootSettled();
     },
     (error: unknown) => renderOssBootFailure(rootElement, error),
   );

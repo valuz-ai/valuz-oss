@@ -254,7 +254,7 @@ class PluginHost:
         providers = self._providers()
         configs = configs or {}
         # Never honour a request to switch off a locked plugin (a hand-edited
-        # extensions.json must not turn into a startup failure).
+        # plugins.json must not turn into a startup failure).
         disabled = self.effective_disabled(disabled)
         for pid in order:
             record = self._records[pid]

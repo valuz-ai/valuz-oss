@@ -7,12 +7,12 @@
 | `valuz-plugin create <目录> --id <发布者.名字>` | 在工作区生成插件脚手架（清单、`src/`、`locales/`、测试、`AGENTS.md`）。生成后先 `ls` 看内容 |
 | `valuz-plugin build` | 构建前端到清单的 `frontend.entry`（ESM；`react`、`react-dom`、`@valuz/plugin-sdk` 改写为取宿主共享模块；自带 CSS 加作用域；拷贝清单 / 文案 / 自动化脚本；检查产物只 import 了共享模块） |
 | `valuz-plugin test` | 在测试宿主里加载插件，检查注册内容、是否越过公开扩展面，并跑你写的测试 |
-| `valuz-plugin validate` | 校验清单与包结构（与安装时、控制面、`extension_manager validate` 同一套规则） |
+| `valuz-plugin validate` | 校验清单与包结构（与安装时、控制面、`app_plugin_manager validate` 同一套规则） |
 | `valuz-plugin pack` | 打成 zip（不含符号链接 / `..` / 绝对路径） |
 
 命令都在插件目录里执行（或按 `--help` 指定）。`valuz-plugin` 缺失时不要自己造替代品，告诉用户。
 
-## `extension_manager` 动作与确认
+## `app_plugin_manager` 动作与确认
 
 | 动作 | 要用户确认？ | 说明 |
 |---|---|---|
@@ -52,14 +52,14 @@
 ## 发布与分享
 
 1. 版本号递增（SemVer）；`valuz-plugin build && test && validate` 全过。
-2. `valuz-plugin pack`（或 `extension_manager pack`）得到 zip。
-3. `extension_manager publish {path: zip 或目录, scope: "personal" | "org" | "global", distribution_ids?, notes?}`：
+2. `valuz-plugin pack`（或 `app_plugin_manager pack`）得到 zip。
+3. `app_plugin_manager publish {path: zip 或目录, scope: "personal" | "org" | "global", distribution_ids?, notes?}`：
    - `personal`：只有用户本人可见可装，只做自动检查；
    - `org`：本组织成员可见，需组织审核人通过；
    - `global`：进指定发行版的市场，需平台审核；第一次全局发布前用户要先填开发者资料；
    - 同一个版本号上架后不可变；改了代码必须升版本再提交。
 4. 用户在卡片上确认后由 Valuz 用当前登录态上传；提交记录里会附"由 Valuz 会话生成"和会话 id。
-5. `extension_manager submissions` 看自动检查 / 审核结果（被拒时有原因）；按原因修改、升版本、重新提交。
+5. `app_plugin_manager submissions` 看自动检查 / 审核结果（被拒时有原因）；按原因修改、升版本、重新提交。
 
 ## 给用户的话术要点
 

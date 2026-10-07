@@ -1,6 +1,6 @@
 import {
   ApiError,
-  extensionsApi,
+  builtinPluginsApi,
   pluginHost,
   type PluginHost,
 } from "@valuz/core";
@@ -31,7 +31,7 @@ export class RequiredOssPluginError extends Error {
 }
 
 /**
- * What a read of ``GET /v1/extensions/backend/state`` came to.
+ * What a read of ``GET /v1/builtin-plugins/state`` came to.
  *
  * - ``known`` — the backend answered; ``inactive`` are its plugins that are off.
  * - ``unreachable`` — no answer yet (connection refused, timeout): the backend
@@ -47,7 +47,7 @@ export type BackendStateRead =
 
 export async function readBackendState(): Promise<BackendStateRead> {
   try {
-    const state = await extensionsApi.backendState();
+    const state = await builtinPluginsApi.backendState();
     if (!Array.isArray(state?.inactive)) return { kind: "unsupported" };
     return {
       kind: "known",
@@ -75,7 +75,7 @@ export async function readInactiveBackendPlugins(): Promise<string[] | null> {
 export interface LoadOssPluginsOptions {
   /**
    * Backend plugin ids known to be off. Omit to read them from the backend
-   * (``GET /v1/extensions/backend/state``).
+   * (``GET /v1/builtin-plugins/state``).
    */
   inactive?: readonly string[];
   /** The plugins to load; the OSS set by default. */

@@ -52,7 +52,7 @@ def _build_lifespan(
 
 def _compose_bare_host() -> PluginHost:
     """A bare OSS app composes its own host: the OSS plugins, with the persisted
-    extension prefs (``<data root>/extensions.json``) applied, recorded as the
+    plugin prefs (``<data root>/plugins.json``) applied, recorded as the
     process's active host so ``/v1/extensions`` can report it."""
     from valuz_agent.features import compose_oss_host
     from valuz_agent.plugin_host import load_host_with_prefs, set_active_plugin_host
@@ -91,7 +91,7 @@ def create_app(
     (``valuz_agent.features.oss_plugins()``): each registers the routers, boot steps,
     internal mounts and harness tools it owns, and this factory *assembles* them
     from the host's registry. ``None`` (bare OSS) composes the OSS plugins itself
-    and applies the extension prefs; a caller that composed a host -- the commercial
+    and applies the plugin prefs; a caller that composed a host -- the commercial
     overlay builds ``oss_plugins()`` + its own + the edition's -- passes it already
     loaded (and calls ``plugin_host.attach_app(app)`` afterwards).
     """

@@ -49,7 +49,7 @@ Everything edition-specific flows through **`packages/core/src/edition/`**:
 - `registries/{layers,slots}.ts` — the layered-list algebra (placement, removal) and the slot types. The pages themselves are registered by the OSS plugins (see below).
 - `resolve.ts` — `resolveEdition()` / `getActiveProfile()` (build-time).
 - `registry-store.ts` — **runtime** mutable store (Zustand) seeded from the active profile.
-- `plugin.ts` — `PluginManifest` + `registerPlugin()` (the pre-plugin-host manifest model, kept for in-process use; third-party plugins load through `@valuz/plugin-sdk` and the `oss-third-party` plugin, not by URL).
+- `plugin.ts` — `PluginManifest` + `registerPlugin()` (the pre-plugin-host manifest model, kept for in-process use; App Plugins load through `@valuz/plugin-sdk` and the `oss-app-plugins` plugin, not by URL).
 
 ### The OSS app is itself a set of plugins
 
@@ -57,7 +57,7 @@ Every OSS route, settings section, sidebar item and project panel is registered 
 
 | Plugin | Registers |
 |---|---|
-| `oss-core` (required) | conversations, projects, settings shell + model / network / extensions / logs / about, onboarding, developer galleries, the 设置 nav item, project panels |
+| `oss-core` (required) | conversations, projects, settings shell + model / network / plugins / logs / about, onboarding, developer galleries, the 设置 nav item, project panels |
 | `oss-agents` (required) | agents list + detail, the Agents nav item |
 | `oss-tasks` | task detail |
 | `oss-automations` | automations + playbooks pages, the 自动化 nav item |
@@ -70,10 +70,10 @@ Every OSS route, settings section, sidebar item and project panel is registered 
 | `oss-backup` | backup settings |
 | `oss-marketplace` | marketplace page |
 | `oss-agent-plugins` | the `/plugins` page + nav item |
-| `oss-dsh-plugins` | the DSH block of Settings → 扩展 |
+| `oss-dsh-plugins` | the DSH block of Settings → 插件 |
 | `oss-plugin-ui` | nothing up front: mounts backend plugins' UI-bus surfaces (`/v1/ui`) in the slots the backend announces, plus toast / status / log / notice pushes |
 
-The **id of a frontend plugin is the id of its backend counterpart** (`oss-automations` here is `oss-automations` there). That is the whole pairing: at boot `loadOssPlugins()` reads `GET /v1/extensions/backend/state` (`{"inactive": [ids]}`, public) and does not load an optional plugin whose backend namesake is inactive; the extensions list shows it as 后端已停用. A read that fails (older backend, offline, 401) loads everything. On the desktop the backend usually is not up yet at that point, so `settleOssPlugins()` keeps asking and applies the state when it answers. Embedded surfaces with no registry entry of their own (notifications, citations, feedback, the IM-channel bindings in the agent page) stay in `oss-core`.
+The **id of a frontend plugin is the id of its backend counterpart** (`oss-automations` here is `oss-automations` there). That is the whole pairing: at boot `loadOssPlugins()` reads `GET /v1/builtin-plugins/state` (`{"inactive": [ids]}`, public) and does not load an optional plugin whose backend namesake is inactive; the built-in plugins list shows it as 后端已停用. A read that fails (older backend, offline, 401) loads everything. On the desktop the backend usually is not up yet at that point, so `settleOssPlugins()` keeps asking and applies the state when it answers. Embedded surfaces with no registry entry of their own (notifications, citations, feedback, the IM-channel bindings in the agent page) stay in `oss-core`.
 
 Hosts load `ossPlugins` BEFORE the edition overlay's plugins (overlay pages are placed relative to the OSS ones), and before React mounts: `loadOssPlugins()` then `hydrateOverlayIfPresent()`. `oss-core` / `oss-agents` failing is a boot failure (`renderOssBootFailure`); an optional plugin that fails is left `failed` and the rest load.
 
@@ -85,7 +85,7 @@ Hosts load `ossPlugins` BEFORE the edition overlay's plugins (overlay pages are 
    - Anything else through `ctx.registry.*` (`projectPanel`, `service`, `capabilities`, `slot` …).
 2. Add the id to the canonical order tables in `plugins/layout.ts` (`OSS_ROUTE_ORDER`, `OSS_SETTINGS_SECTION_ORDER`, `OSS_NAV_ITEM_ORDER`). The order is part of what the user sees and is pinned by the golden snapshot; placement makes it independent of plugin load order and of plugins that are off. Overlays anchor on these ids, so renaming one is a contract change.
 3. Add the plugin to `ossPluginSpecs` (`plugins/specs.ts`). Its id must be the backend plugin's id if there is one.
-4. Never put a `component` on a registry entry from an OSS plugin: registry entries stay serializable data (the composition snapshots compare them across editions). Components go through `pageRoute` / `settingsPage` / `registerExtensionsBlock`.
+4. Never put a `component` on a registry entry from an OSS plugin: registry entries stay serializable data (the composition snapshots compare them across editions). Components go through `pageRoute` / `settingsPage` / `registerPluginSettingsBlock`.
 
 Tests: `composeOss()` (`plugins/testing/compose-oss.ts`) composes the OSS plugins into the shared registry for a test that renders a page; `plugins/composition.snapshot.test.ts` pins the bare personal registry and must not change when a feature moves into a plugin.
 
@@ -113,7 +113,7 @@ await registerPlugin({
 })
 ```
 
-There is no load-by-URL entry point any more: third-party plugins are installed on the backend and loaded by the `oss-third-party` plugin through a restricted context (see `packages/plugin-sdk`).
+There is no load-by-URL entry point any more: App Plugins are installed on the backend and loaded by the `oss-app-plugins` plugin through a restricted context (see `packages/plugin-sdk`).
 
 ### Edition hot-swap
 

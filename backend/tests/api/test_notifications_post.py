@@ -44,11 +44,11 @@ async def client(
     await engine.dispose()
 
 
-async def test_plugin_post_is_an_extension_entry(client: httpx.AsyncClient) -> None:
+async def test_plugin_post_is_an_app_plugin_entry(client: httpx.AsyncClient) -> None:
     res = await client.post(
         "/v1/notifications",
         json={"title": "Report ready", "body": "Q3 risk summary", "link": "/x/acme.dash/report"},
-        headers={"X-Valuz-Plugin-Id": "acme.dash"},
+        headers={"X-Valuz-App-Plugin-Id": "acme.dash"},
     )
     assert res.status_code == 200, res.text
     notification_id = res.json()["id"]
@@ -57,17 +57,17 @@ async def test_plugin_post_is_an_extension_entry(client: httpx.AsyncClient) -> N
     assert unread == 1
     (entry,) = entries
     assert entry.id == notification_id
-    assert entry.kind == "extension"
+    assert entry.kind == "app_plugin"
     assert entry.title == "Report ready" and entry.body == "Q3 risk summary"
     assert entry.route == "/x/acme.dash/report"
     assert entry.urgency == "info" and entry.action == "none"
-    assert entry.payload == {"plugin_id": "acme.dash", "link": "/x/acme.dash/report"}
+    assert entry.payload == {"app_plugin_id": "acme.dash", "link": "/x/acme.dash/report"}
 
 
-async def test_every_plugin_post_is_its_own_entry_with_an_ext_dedup_key(
+async def test_every_plugin_post_is_its_own_entry_with_an_app_plugin_dedup_key(
     client: httpx.AsyncClient,
 ) -> None:
-    headers = {"X-Valuz-Plugin-Id": "acme.dash"}
+    headers = {"X-Valuz-App-Plugin-Id": "acme.dash"}
     first = await client.post("/v1/notifications", json={"title": "same"}, headers=headers)
     second = await client.post("/v1/notifications", json={"title": "same"}, headers=headers)
     assert first.json()["id"] != second.json()["id"]
@@ -81,7 +81,7 @@ async def test_every_plugin_post_is_its_own_entry_with_an_ext_dedup_key(
     async with async_unit_of_work(commit=False) as db:
         keys = list((await db.scalars(select(NotificationRow.dedup_key))).all())
     assert len(set(keys)) == 2
-    assert all(k.startswith("ext:acme.dash:") for k in keys)
+    assert all(k.startswith("app-plugin:acme.dash:") for k in keys)
 
 
 async def test_without_a_plugin_header_it_is_a_generic_entry(client: httpx.AsyncClient) -> None:
@@ -114,7 +114,7 @@ async def test_validation(client: httpx.AsyncClient) -> None:
     bad_urgency = await client.post("/v1/notifications", json={"title": "t", "urgency": "loud"})
     assert bad_urgency.status_code == 422
     bad_plugin = await client.post(
-        "/v1/notifications", json={"title": "t"}, headers={"X-Valuz-Plugin-Id": "Not A Plugin!"}
+        "/v1/notifications", json={"title": "t"}, headers={"X-Valuz-App-Plugin-Id": "Not A Plugin!"}
     )
     assert bad_plugin.status_code == 400
     assert bad_plugin.json()["detail"]["code"] == "invalid_plugin_id"
@@ -123,7 +123,7 @@ async def test_validation(client: httpx.AsyncClient) -> None:
 async def test_a_long_plugin_id_still_fits_the_dedup_key_column(client: httpx.AsyncClient) -> None:
     plugin_id = f"{'a' * 49}.{'b' * 50}"  # 100 chars: the manifest maximum
     res = await client.post(
-        "/v1/notifications", json={"title": "t"}, headers={"X-Valuz-Plugin-Id": plugin_id}
+        "/v1/notifications", json={"title": "t"}, headers={"X-Valuz-App-Plugin-Id": plugin_id}
     )
     assert res.status_code == 200, res.text
     from sqlalchemy import select
@@ -132,4 +132,4 @@ async def test_a_long_plugin_id_still_fits_the_dedup_key_column(client: httpx.As
 
     async with async_unit_of_work(commit=False) as db:
         key = (await db.scalars(select(NotificationRow.dedup_key))).one()
-    assert len(key) <= 128 and key.startswith("ext:")
+    assert len(key) <= 128 and key.startswith("app-plugin:")

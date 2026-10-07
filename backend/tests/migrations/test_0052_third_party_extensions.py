@@ -27,7 +27,7 @@ def test_upgrade_and_downgrade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     db_path = tmp_path / "host.db"
     cfg = config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0052")
     engine = sa.create_engine(f"sqlite:///{db_path}")
 
     storage = _cols(engine, "valuz_extension_storage")
@@ -75,7 +75,7 @@ def test_upgrade_and_downgrade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         assert conn.execute(sa.text("SELECT id FROM valuz_automation")).scalars().all() == ["a1"]
     engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0052")
     engine = sa.create_engine(f"sqlite:///{db_path}")
     assert "valuz_extension_storage" in sa.inspect(engine).get_table_names()
     assert _cols(engine, "valuz_automation")["extension_id"]["nullable"] is True

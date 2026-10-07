@@ -15,7 +15,7 @@ import {
   ToolCallsPage,
 } from "../pages";
 import { AboutSection } from "../pages/settings/AboutSection";
-import { ExtensionsSection } from "../pages/settings/ExtensionsSection";
+import { PluginSettingsSection } from "../pages/settings/PluginSettingsSection";
 import { GeneralSection } from "../pages/settings/GeneralSection";
 import { ModelSection } from "../pages/settings/ModelSection";
 import { NetworkSection } from "../pages/settings/NetworkSection";
@@ -31,7 +31,7 @@ const A2UIGalleryPage = lazy(() =>
 
 /**
  * The OSS app itself: conversations, projects, the settings shell with the
- * model / network / extensions / logs / about panels, first-run onboarding and
+ * model / network / plugins / logs / about panels, first-run onboarding and
  * the developer galleries. Required — without it there is nothing to open.
  *
  * Loads first, and starts every registry list with an UNPLACED entry (the
@@ -263,15 +263,15 @@ export const ossCorePlugin = definePlugin({
     settingsPage(
       ctx,
       {
-        id: "extensions",
-        label: "extensions.title",
-        description: "extensions.navDesc",
+        id: "plugins",
+        label: "pluginSettings.title",
+        description: "pluginSettings.navDesc",
         icon: "puzzle",
         group: { id: "system", label: "settings.group.system" },
         edition: "personal",
       },
-      ExtensionsSection,
-      settingsSectionPlacement("extensions"),
+      PluginSettingsSection,
+      settingsSectionPlacement("plugins"),
     );
     settingsPage(
       ctx,

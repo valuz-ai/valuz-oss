@@ -15,7 +15,7 @@ const composed: PluginHost[] = [];
  * plugin host (so ``host.unload(id)`` withdraws one feature). For tests that
  * render a page or read the registry and need the OSS pages to be there.
  *
- * ``inactive`` stands in for ``GET /v1/extensions/backend/state``: plugins
+ * ``inactive`` stands in for ``GET /v1/builtin-plugins/state``: plugins
  * named there are skipped. It defaults to "nothing is off" so a test never
  * reaches for the network.
  */

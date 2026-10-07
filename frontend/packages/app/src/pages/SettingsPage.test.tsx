@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
-import { dshPluginsApi, extensionsApi, useRegistryStore } from "@valuz/core";
+import { dshPluginsApi, builtinPluginsApi, useRegistryStore } from "@valuz/core";
 
 vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({ setHideHeader: vi.fn() }),
@@ -138,9 +138,14 @@ describe("SettingsPage slots", () => {
   });
 });
 
-describe("SettingsPage extensions section", () => {
-  it("registers 插件 in the system group and renders it for ?tab=extensions", async () => {
-    vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
+describe("SettingsPage plugin settings", () => {
+  it.each([
+    ["/settings?tab=plugins", null],
+    ["/settings?tab=extensions", null],
+    ["/settings", "extensions"],
+  ])("renders plugin settings for canonical and saved navigation (%s)", async (url, stored) => {
+    if (stored) localStorage.setItem("valuz-settings-tab", stored);
+    vi.spyOn(builtinPluginsApi, "listBuiltinPlugins").mockResolvedValue({
       composed: false,
       editable: true,
       plugins: [],
@@ -156,14 +161,14 @@ describe("SettingsPage extensions section", () => {
       ui_url: null,
     });
     render(
-      <MemoryRouter initialEntries={["/settings?tab=extensions"]}>
+      <MemoryRouter initialEntries={[url]}>
         <SettingsPage />
       </MemoryRouter>,
     );
     expect(
       useRegistryStore
         .getState()
-        .settingsSections.find((s) => s.id === "extensions")?.group?.id,
+        .settingsSections.find((s) => s.id === "plugins")?.group?.id,
     ).toBe("system");
     expect(screen.getByRole("heading", { name: "插件" })).not.toBeNull();
     expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();

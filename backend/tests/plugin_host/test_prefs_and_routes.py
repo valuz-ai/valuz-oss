@@ -8,7 +8,7 @@ from valuz_agent.plugin_host import (
     BackendPluginBase,
     PluginHost,
     effective_disabled,
-    load_extension_prefs,
+    load_plugin_prefs,
     save_config,
     save_enabled,
 )
@@ -34,14 +34,14 @@ class _Plugin(BackendPluginBase):
 
 def test_prefs_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "extensions.json"
-    assert load_extension_prefs(path).disabled == frozenset()
+    assert load_plugin_prefs(path).disabled == frozenset()
     save_enabled("sites", False, path)
     save_config("sites", {"mode": "x"}, path)
-    prefs = load_extension_prefs(path)
+    prefs = load_plugin_prefs(path)
     assert prefs.disabled == {"sites"}
     assert prefs.configs == {"sites": {"mode": "x"}}
     save_enabled("sites", True, path)
-    assert load_extension_prefs(path).disabled == frozenset()
+    assert load_plugin_prefs(path).disabled == frozenset()
 
 
 def test_a_disabled_optional_plugin_is_not_loaded_but_required_ones_are(tmp_path: Path) -> None:
@@ -50,7 +50,7 @@ def test_a_disabled_optional_plugin_is_not_loaded_but_required_ones_are(tmp_path
     save_enabled("core", False, path)  # a stale or hand-edited entry
     optional, core = _Plugin("optional"), _Plugin("core", required=True)
     host = PluginHost([core, optional])
-    prefs = load_extension_prefs(path)
+    prefs = load_plugin_prefs(path)
     host.load_all(disabled=effective_disabled(prefs, {"core"}))
     assert core.applied is True
     assert optional.applied is False

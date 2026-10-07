@@ -21,7 +21,7 @@ function setup(respond: (request: HostRequest) => unknown = () => ({})) {
   return { valuz, requests, confirm, draftConversation };
 }
 
-const HEADER = { "X-Valuz-Plugin-Id": "acme.dashboard" };
+const HEADER = { "X-Valuz-App-Plugin-Id": "acme.dashboard" };
 
 describe("ctx.valuz request shapes", () => {
   it("projects", async () => {
@@ -235,11 +235,11 @@ describe("ctx.valuz request shapes", () => {
 
     expect(requests[0]).toEqual({
       method: "POST",
-      path: "/v1/extensions/third-party/acme.dashboard/automations/risk-summary/run",
+      path: "/v1/app-plugins/acme.dashboard/automations/risk-summary/run",
       json: { input: { portfolioId: "p" } },
       headers: HEADER,
     });
-    expect(requests[1]?.path).toBe("/v1/extensions/third-party/acme.dashboard/automation-runs/run1");
+    expect(requests[1]?.path).toBe("/v1/app-plugins/acme.dashboard/automation-runs/run1");
   });
 
   it("waitRun times out", async () => {
@@ -260,7 +260,7 @@ describe("ctx.valuz request shapes", () => {
     await valuz.storage.delete("k");
     expect(await valuz.storage.list("pre")).toEqual([{ key: "k", size: 3, updatedAt: 7 }]);
 
-    const base = "/v1/extensions/third-party/acme.dashboard/storage";
+    const base = "/v1/app-plugins/acme.dashboard/storage";
     expect(requests.map((r) => [r.method, r.path, r.json ?? r.query])).toEqual([
       ["GET", `${base}/k`, undefined],
       ["PUT", `${base}/k`, { value: { a: 2 } }],

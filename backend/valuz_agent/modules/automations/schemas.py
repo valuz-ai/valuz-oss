@@ -378,8 +378,8 @@ class AutomationItemResponse(BaseModel):
     event_refs: list[str] | None = None
     # Set when a third-party plugin declared this automation in its manifest
     # (created on install, deleted on uninstall); ``None`` otherwise.
-    extension_id: str | None = None
-    extension_name: str | None = None
+    app_plugin_id: str | None = None
+    app_plugin_name: str | None = None
 
     status: str
     next_run_at: int | None

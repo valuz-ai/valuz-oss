@@ -32,6 +32,8 @@ import { sectionComponents } from "./settings/section-components";
 const SETTINGS_TAB_STORAGE_KEY = "valuz-settings-tab";
 
 const SETTINGS_TAB_ALIASES: Record<string, string> = {
+  // Existing bookmarks and saved settings tabs resolve to the canonical entry.
+  extensions: "plugins",
   appearance: "general",
   shortcuts: "general",
   memory: "personalization",

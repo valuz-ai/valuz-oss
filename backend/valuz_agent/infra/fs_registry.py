@@ -29,8 +29,12 @@ via ``project_cwd()``.
 
 from __future__ import annotations
 
+import json
+import os
 import secrets
 import tempfile
+import threading
+import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -66,6 +70,69 @@ KB_KIND_DEFAULT = "normal"
 
 # ``(user_id, kind) -> root directory``. See ``FsRegistry.set_kb_root_resolver``.
 KbRootResolver = Callable[[str, str], Path | str]
+
+_APP_PLUGIN_PATH_LOCK = threading.RLock()
+
+
+def _merge_app_plugin_registry(legacy: Path, current: Path) -> bool:
+    """Merge two valid registries without overwriting canonical installations.
+
+    The old file is archived by the caller, so conflicting records and corrupt
+    input remain recoverable. Only the canonical installed.json stays active.
+    """
+    try:
+        old = json.loads(legacy.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(old, dict) or not isinstance(old.get("plugins"), dict):
+        return False
+    try:
+        new = json.loads(current.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        new = None
+    if not isinstance(new, dict) or not isinstance(new.get("plugins"), dict):
+        # A valid legacy registry must not disappear behind a corrupt canonical
+        # file. Keep the corrupt bytes for recovery before replacing them.
+        current.rename(current.with_name(f"{current.name}.{uuid.uuid4().hex}.corrupt"))
+        new = {"plugins": {}, "generation": 0}
+    merged = {**old, **new}
+    merged["plugins"] = {**old["plugins"], **new["plugins"]}
+    merged["generation"] = max(int(old.get("generation") or 0), int(new.get("generation") or 0)) + 1
+    tmp = current.with_name(f".{current.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, current)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
+
+
+def _migrate_app_plugin_tree(legacy: Path, current: Path, archive: Path) -> None:
+    """Move a legacy tree once; preserve collisions in an inactive archive.
+
+    A rename is the usual case. When both names already exist, missing files and
+    registry entries are merged and conflicting originals are retained. Removing
+    the old directory prevents creating a second installation registry later.
+    """
+    if not legacy.exists():
+        current.mkdir(parents=True, exist_ok=True)
+        return
+    if not current.exists():
+        current.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(current)
+        return
+    for child in legacy.iterdir():
+        target = current / child.name
+        if not target.exists():
+            child.rename(target)
+        elif child.is_dir() and target.is_dir():
+            _migrate_app_plugin_tree(child, target, archive)
+        else:
+            if child.name == "installed.json":
+                _merge_app_plugin_registry(child, target)
+            archive.mkdir(parents=True, exist_ok=True)
+            child.rename(archive / f"{child.name}.{uuid.uuid4().hex}.legacy")
+    legacy.rmdir()
 
 
 def _to_async_url(url: str) -> str:
@@ -766,10 +833,10 @@ class FsRegistry:
 
     # ---- FS-17 — third-party plugins (ADR-034; docs task card 04 §A) ----
     #
-    #   extensions/installed.json        the install registry (one per device)
-    #   extensions/<id>/<version>/       an unpacked package, immutable once installed
-    #   extensions-data/<id>/            the plugin's writable data (kept on uninstall)
-    #   logs/extensions/<id>.log         JSON lines written for / by the plugin
+    #   app-plugins/installed.json        the install registry (one per device)
+    #   app-plugins/<id>/<version>/       an unpacked package, immutable once installed
+    #   app-plugin-data/<id>/            the plugin's writable data (kept on uninstall)
+    #   logs/app-plugins/<id>.log         JSON lines written for / by the plugin
     #
     # Shared (device-wide) roots, like ``plugins`` models: the packages are stored
     # once per device, which of them LOAD is decided per account. ``plugin_id`` is
@@ -777,7 +844,7 @@ class FsRegistry:
     # segments; the guards below are defensive.
 
     @staticmethod
-    def _extension_segment(value: str, what: str) -> str:
+    def _app_plugin_segment(value: str, what: str) -> str:
         if (
             not value
             or "/" in value
@@ -786,34 +853,52 @@ class FsRegistry:
             or ".." in value
             or "\x00" in value
         ):
-            raise ValueError(f"invalid extension {what}: {value!r}")
+            raise ValueError(f"invalid application plugin {what}: {value!r}")
         return value
 
-    def extensions_root(self) -> Path:
-        path = self._shared_root() / "extensions"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+    def _migrate_app_plugin_paths(self) -> None:
+        root = self._shared_root()
+        with _APP_PLUGIN_PATH_LOCK:
+            archive = root / "app-plugins" / ".legacy-migration"
+            _migrate_app_plugin_tree(root / "extensions", root / "app-plugins", archive)
+            _migrate_app_plugin_tree(root / "extensions-data", root / "app-plugin-data", archive)
+            _migrate_app_plugin_tree(
+                root / "logs" / "extensions", root / "logs" / "app-plugins", archive
+            )
 
-    def extension_version_dir(self, plugin_id: str, version: str) -> Path:
-        """Where one installed version is unpacked (NOT created — the installer
-        moves a finished tree into place atomically)."""
+    def app_plugins_root(self) -> Path:
+        self._migrate_app_plugin_paths()
+        return self._shared_root() / "app-plugins"
+
+    def app_plugin_version_dir(self, plugin_id: str, version: str) -> Path:
+        """Unpacked immutable version (created by the installer, not here)."""
         return (
-            self.extensions_root()
-            / self._extension_segment(plugin_id, "id")
-            / self._extension_segment(version, "version")
+            self.app_plugins_root()
+            / self._app_plugin_segment(plugin_id, "id")
+            / self._app_plugin_segment(version, "version")
         )
 
-    def extensions_data_dir(self, plugin_id: str) -> Path:
-        """The plugin's writable data directory (created)."""
-        path = self._shared_root() / "extensions-data" / self._extension_segment(plugin_id, "id")
+    def app_plugin_data_dir(self, plugin_id: str) -> Path:
+        self._migrate_app_plugin_paths()
+        path = self._shared_root() / "app-plugin-data" / self._app_plugin_segment(plugin_id, "id")
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def extension_log_path(self, plugin_id: str) -> Path:
-        """``logs/extensions/<id>.log`` (the parent is created, the file is not)."""
-        parent = self._shared_root() / "logs" / "extensions"
-        parent.mkdir(parents=True, exist_ok=True)
-        return parent / f"{self._extension_segment(plugin_id, 'id')}.log"
+    def app_plugin_log_path(self, plugin_id: str) -> Path:
+        self._migrate_app_plugin_paths()
+        return (
+            self._shared_root()
+            / "logs"
+            / "app-plugins"
+            / f"{self._app_plugin_segment(plugin_id, 'id')}.log"
+        )
+
+    # Deprecated aliases resolve the SAME canonical trees; no second registry.
+    extensions_root = app_plugins_root
+    extension_version_dir = app_plugin_version_dir
+    extensions_data_dir = app_plugin_data_dir
+    extension_log_path = app_plugin_log_path
+    _extension_segment = _app_plugin_segment
 
     # ---- FS-16 — skill version snapshots ----
     #

@@ -5,8 +5,8 @@ import type {
   ValuzPluginContext,
 } from "@valuz/core";
 
-import { adaptThirdPartyPlugin } from "../host/adapt";
-import type { AdaptedPlugin, ThirdPartyPluginItem } from "../host/adapt";
+import { adaptAppPlugin } from "../host/adapt";
+import type { AdaptedPlugin, AppPluginItem } from "../host/adapt";
 import type { HostServices } from "../services";
 import { setHostServices } from "../services";
 import type {
@@ -71,7 +71,7 @@ export interface TestHost {
    * with the plugin's error (``PluginContractError`` for a contract
    * violation) after rolling back what it had registered.
    */
-  load(plugin: PluginDefinition, item?: Partial<ThirdPartyPluginItem>): Promise<void>;
+  load(plugin: PluginDefinition, item?: Partial<AppPluginItem>): Promise<void>;
   unload(): Promise<void>;
   capture(): TestCapture;
   /** Render every contribution to ``name`` (in slot order) to static markup. */
@@ -251,7 +251,7 @@ export function createTestHost(options: TestHostOptions = {}): TestHost {
       if (adapted) throw new Error("the test host already has a plugin loaded");
       setHostServices(services);
       const config = options.config ?? {};
-      const candidate = adaptThirdPartyPlugin(
+      const candidate = adaptAppPlugin(
         plugin,
         {
           id: plugin?.id,

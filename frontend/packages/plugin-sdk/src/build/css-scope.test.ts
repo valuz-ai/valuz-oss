@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { scopeCss, scopeSelector } from "./css-scope.mjs";
 
-const S = '[data-valuz-ext="acme.x"]';
+const S = '[data-valuz-app-plugin="acme.x"]';
 
 describe("scopeCss", () => {
   it("prefixes every selector of a list", () => {

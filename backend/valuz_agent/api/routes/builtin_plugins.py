@@ -1,0 +1,156 @@
+"""``/v1/builtin-plugins`` — what the backend plugin host loaded.
+
+The management view of Valuz's built-in plugins (plugin-architecture
+design §8): every plugin the running process composed — the OSS features
+(``oss-core``, ``oss-tasks``, …) as well as an overlay's — its status (active /
+failed / disabled / skipped), whether it is required, what locks it on, its
+entitlement key and its config schema (JSON Schema 2020-12, the dsh
+``--dump-config-schema`` shape). Toggles and config edits are recorded and take
+effect on the next start (``restart-required``) — FastAPI cannot drop routes from
+a live app.
+
+A plugin is *locked* — it cannot be switched off — when it is required, or when a
+locked plugin needs something only it provides (``requiredBy`` names them).
+
+``GET /v1/builtin-plugins/state`` is public: the renderer reads it before any
+session exists to decide which frontend plugins to load.
+"""
+
+from __future__ import annotations
+
+import copy
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from valuz_agent.api.deps import get_current_user_id
+from valuz_agent.plugin_host import active_plugin_host, load_plugin_prefs, save_enabled
+from valuz_agent.plugin_host.errors import PluginHostError
+
+_builtin_router = APIRouter(prefix="/v1/builtin-plugins", tags=["builtin-plugins"])
+_legacy_router = APIRouter(prefix="/v1/extensions", include_in_schema=False)
+
+
+class EnabledChange(BaseModel):
+    enabled: bool
+
+
+@_builtin_router.get("/state")
+async def builtin_plugins_state() -> dict[str, list[str]]:
+    """Ids of the backend plugins that are not active in this process.
+
+    Deliberately unauthenticated (no ``get_current_user_id``) and deliberately
+    minimal: ids only, nothing about why or how.
+    """
+    host = active_plugin_host()
+    return {"inactive": [] if host is None else host.inactive_ids()}
+
+
+@_builtin_router.get("")
+async def list_builtin_plugins(
+    _user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    from valuz_agent.infra.config import settings
+
+    host = active_plugin_host()
+    editable = getattr(settings, "deployment_type", "local") == "local"
+    if host is None:
+        return {"composed": False, "editable": editable, "plugins": [], "config_schemas": {}}
+    disabled = load_plugin_prefs().disabled
+    plugins = []
+    for info in host.list(disabled=disabled):
+        row = info.to_dict()
+        # The persisted desire (applied at the next start), not just this boot's.
+        row["desiredEnabled"] = info.id not in disabled
+        plugins.append(row)
+    return {
+        "composed": True,
+        "editable": editable,
+        "plugins": plugins,
+        "config_schemas": host.config_schemas(),
+    }
+
+
+def _legacy_ids() -> dict[str, str]:
+    from valuz_agent.plugin_host.prefs import PLUGIN_ID_ALIASES
+
+    # Explicitly registered built-in aliases only; authored plugin IDs and
+    # configuration contents are never rewritten by string substitution.
+    return {canonical: legacy for legacy, canonical in PLUGIN_ID_ALIASES.items()}
+
+
+@_legacy_router.get("/backend/state", name="builtin_plugins_state")
+async def legacy_builtin_plugins_state() -> dict[str, list[str]]:
+    """Preserve IDs understood by an older frontend during boot composition."""
+    state = await builtin_plugins_state()
+    aliases = _legacy_ids()
+    inactive = sorted(aliases.get(plugin_id, plugin_id) for plugin_id in state["inactive"])
+    return {"inactive": inactive}
+
+
+@_legacy_router.get("/backend", name="list_builtin_plugins")
+async def list_legacy_builtin_plugins(
+    _user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """A compatibility projection of the same host, prefs and owner checks."""
+    result = copy.deepcopy(await list_builtin_plugins(_user_id))
+    aliases = _legacy_ids()
+    capabilities = {"oss.app-plugins": "oss.third-party"}
+    for row in result["plugins"]:
+        row["id"] = aliases.get(row["id"], row["id"])
+        row["requiredBy"] = [aliases.get(plugin_id, plugin_id) for plugin_id in row["requiredBy"]]
+        for field in ("needs", "provides"):
+            row[field] = [capabilities.get(capability, capability) for capability in row[field]]
+    result["config_schemas"] = {
+        aliases.get(plugin_id, plugin_id): schema
+        for plugin_id, schema in result["config_schemas"].items()
+    }
+    return result
+
+
+@_legacy_router.post("/backend/{plugin_id}/enabled")
+@_builtin_router.post("/{plugin_id}/enabled")
+async def set_builtin_plugin_enabled(
+    plugin_id: str,
+    body: EnabledChange,
+    _user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    from valuz_agent.infra.config import settings
+    from valuz_agent.plugin_host.prefs import PLUGIN_ID_ALIASES
+
+    plugin_id = PLUGIN_ID_ALIASES.get(plugin_id, plugin_id)
+    if getattr(settings, "deployment_type", "local") != "local":
+        # A cloud backend is shared: a deployment-wide toggle is an operator
+        # change, not a user action (org-level entitlements gate features there).
+        raise HTTPException(status_code=403, detail="plugins are managed by the operator here")
+    host = active_plugin_host()
+    if host is None:
+        raise HTTPException(status_code=404, detail="no backend plugin host in this deployment")
+    try:
+        record = host.get(plugin_id)
+    except PluginHostError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not body.enabled:
+        if record.plugin.required:
+            raise HTTPException(status_code=409, detail=f"{plugin_id!r} is required")
+        # Locked by a dependency: a required (or locked) plugin needs what only this
+        # one provides. Judged against what is already switched off for the next start.
+        required_by = host.locks(load_plugin_prefs().disabled).get(plugin_id)
+        if required_by:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{plugin_id!r} is required by {', '.join(required_by)}",
+            )
+    save_enabled(plugin_id, body.enabled)
+    return {"application": host.set_enabled(plugin_id, body.enabled)}
+
+
+router = APIRouter()
+router.include_router(_builtin_router)
+router.include_router(_legacy_router)
+
+# Deprecated function imports resolve the same canonical handlers.
+backend_extensions_state = legacy_builtin_plugins_state
+list_backend_extensions = list_legacy_builtin_plugins
+set_backend_extension_enabled = set_builtin_plugin_enabled

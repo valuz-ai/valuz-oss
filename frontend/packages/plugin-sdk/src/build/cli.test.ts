@@ -256,7 +256,7 @@ describe("valuz-plugin CLI", () => {
           auth: req.headers.authorization,
         });
         res.setHeader("content-type", "application/json");
-        if (req.url === "/v1/extensions/third-party/dev-link") {
+        if (req.url === "/v1/app-plugins/dev-link") {
           res.end(
             JSON.stringify({
               plugin: {
@@ -267,7 +267,7 @@ describe("valuz-plugin CLI", () => {
               },
             }),
           );
-        } else if (req.url === "/v1/extensions/third-party/acme.devup/reload") {
+        } else if (req.url === "/v1/app-plugins/acme.devup/reload") {
           revision += 1;
           res.end(JSON.stringify({ plugin: { id: "acme.devup", revision } }));
         } else {
@@ -299,13 +299,13 @@ describe("valuz-plugin CLI", () => {
       expect(output).toMatch(/reloaded acme\.devup \(revision 2\)/);
       expect(calls[0]).toEqual({
         method: "POST",
-        url: "/v1/extensions/third-party/dev-link",
+        url: "/v1/app-plugins/dev-link",
         body: { path: realpathSync(dir) },
         auth: "Bearer t0k",
       });
       expect(calls[1]).toMatchObject({
         method: "POST",
-        url: "/v1/extensions/third-party/acme.devup/reload",
+        url: "/v1/app-plugins/acme.devup/reload",
       });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

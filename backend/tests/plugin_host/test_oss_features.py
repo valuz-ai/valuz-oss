@@ -53,7 +53,7 @@ OPTIONAL = [
     "oss-citations",
     "oss-notifications",
     "oss-feedback",
-    "oss-third-party",
+    "oss-app-plugins",
 ]
 
 
@@ -254,7 +254,7 @@ def test_the_app_boots_with_every_optional_plugin_off() -> None:
     ]
     assert out["startup"][-1] == "mark_boot_complete()"
     assert "/v1/sessions" in "\n".join(out["routes"])
-    assert "/v1/extensions/backend/state" in "\n".join(out["routes"])
+    assert "/v1/builtin-plugins/state" in "\n".join(out["routes"])
 
 
 # -- toggle safety -----------------------------------------------------------------
@@ -344,10 +344,10 @@ def test_requiredby_is_reported_in_the_plugin_listing() -> None:
 
 
 @pytest.fixture
-def extensions_client(
+def builtin_plugins_client(
     monkeypatch: pytest.MonkeyPatch, isolated_host_state: None
 ) -> Iterator[tuple[TestClient, PluginHost, dict[str, Any]]]:
-    from valuz_agent.api.routes import extensions
+    from valuz_agent.api.routes import builtin_plugins
 
     host = _host_with(_Needy("commercial-kb", ("oss.knowledge",)))
     host.load_all(disabled={"oss-browser"})
@@ -360,63 +360,63 @@ def extensions_client(
         def disabled(self) -> set[str]:
             return set(saved["disabled"])
 
-    monkeypatch.setattr(extensions, "load_extension_prefs", lambda: _Prefs())
+    monkeypatch.setattr(builtin_plugins, "load_plugin_prefs", lambda: _Prefs())
     monkeypatch.setattr(
-        extensions, "save_enabled", lambda pid, enabled: saved["writes"].append((pid, enabled))
+        builtin_plugins, "save_enabled", lambda pid, enabled: saved["writes"].append((pid, enabled))
     )
     app = FastAPI()
-    app.include_router(extensions.router)
+    app.include_router(builtin_plugins.router)
     yield TestClient(app), host, saved
     host.unload_all()
 
 
 def test_state_is_public_and_lists_only_ids(
-    extensions_client: tuple[TestClient, PluginHost, dict[str, Any]],
+    builtin_plugins_client: tuple[TestClient, PluginHost, dict[str, Any]],
 ) -> None:
-    client, _host, _saved = extensions_client
+    client, _host, _saved = builtin_plugins_client
     # No auth override, no token: the owner dependency would 401, this must not.
-    response = client.get("/v1/extensions/backend/state")
+    response = client.get("/v1/builtin-plugins/state")
     assert response.status_code == 200
     assert response.json() == {"inactive": ["oss-browser"]}
 
 
 def test_state_without_a_host_reports_nothing_inactive(isolated_host_state: None) -> None:
-    from valuz_agent.api.routes import extensions
+    from valuz_agent.api.routes import builtin_plugins
 
     set_active_plugin_host(None)
     app = FastAPI()
-    app.include_router(extensions.router)
-    assert TestClient(app).get("/v1/extensions/backend/state").json() == {"inactive": []}
+    app.include_router(builtin_plugins.router)
+    assert TestClient(app).get("/v1/builtin-plugins/state").json() == {"inactive": []}
 
 
 def test_the_listing_needs_an_owner(
-    extensions_client: tuple[TestClient, PluginHost, dict[str, Any]],
+    builtin_plugins_client: tuple[TestClient, PluginHost, dict[str, Any]],
 ) -> None:
-    client, _host, _saved = extensions_client
+    client, _host, _saved = builtin_plugins_client
     client.app.dependency_overrides[get_current_user_id] = lambda: "u1"  # type: ignore[attr-defined]
-    rows = {p["id"]: p for p in client.get("/v1/extensions/backend").json()["plugins"]}
+    rows = {p["id"]: p for p in client.get("/v1/builtin-plugins").json()["plugins"]}
     assert rows["oss-knowledge"]["requiredBy"] == ["commercial-kb"]
     assert rows["oss-browser"]["desiredEnabled"] is False
 
 
 def test_switching_off_a_locked_plugin_is_a_409_naming_who_needs_it(
-    extensions_client: tuple[TestClient, PluginHost, dict[str, Any]],
+    builtin_plugins_client: tuple[TestClient, PluginHost, dict[str, Any]],
 ) -> None:
-    client, _host, saved = extensions_client
+    client, _host, saved = builtin_plugins_client
     client.app.dependency_overrides[get_current_user_id] = lambda: "u1"  # type: ignore[attr-defined]
 
-    locked = client.post("/v1/extensions/backend/oss-knowledge/enabled", json={"enabled": False})
+    locked = client.post("/v1/builtin-plugins/oss-knowledge/enabled", json={"enabled": False})
     assert locked.status_code == 409
     assert "commercial-kb" in locked.json()["detail"]
 
-    required = client.post("/v1/extensions/backend/oss-core/enabled", json={"enabled": False})
+    required = client.post("/v1/builtin-plugins/oss-core/enabled", json={"enabled": False})
     assert required.status_code == 409 and "required" in required.json()["detail"]
     assert saved["writes"] == []  # nothing was persisted
 
-    free = client.post("/v1/extensions/backend/oss-memory/enabled", json={"enabled": False})
+    free = client.post("/v1/builtin-plugins/oss-memory/enabled", json={"enabled": False})
     assert free.status_code == 200 and free.json() == {"application": "restart-required"}
     assert saved["writes"] == [("oss-memory", False)]
 
     # turning a locked plugin ON is never refused
-    on = client.post("/v1/extensions/backend/oss-knowledge/enabled", json={"enabled": True})
+    on = client.post("/v1/builtin-plugins/oss-knowledge/enabled", json={"enabled": True})
     assert on.status_code == 200

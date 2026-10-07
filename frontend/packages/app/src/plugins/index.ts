@@ -21,12 +21,12 @@ export {
   type OssSettingsSectionId,
 } from "./layout";
 export {
-  getThirdPartyRuntime,
-  markThirdPartyBootSettled,
-  setThirdPartyOrgIdProvider,
-  useThirdPartyRuntime,
-  type ThirdPartyPluginPhase,
-  type ThirdPartyPluginState,
-  type ThirdPartyRuntimeSnapshot,
-  type ThirdPartyRuntimeStatus,
-} from "./third-party-runtime";
+  getAppPluginRuntime,
+  markAppPluginBootSettled,
+  setAppPluginOrgIdProvider,
+  useAppPluginRuntime,
+  type AppPluginPhase,
+  type AppPluginState,
+  type AppPluginRuntimeSnapshot,
+  type AppPluginRuntimeStatus,
+} from "./app-plugins-runtime";

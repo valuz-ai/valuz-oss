@@ -2396,7 +2396,7 @@
     "executing": "Executing",
     "failed": "Failed",
     "running": "Running",
-    "extensionManager": {
+    "appPluginManager": {
       "title": {
         "install": "Install app plugin",
         "dev_link": "Link an app plugin dev folder",
@@ -3547,7 +3547,7 @@
     "overlays": "Overlays",
     "playbookDetail": "Playbook detail"
   },
-  "extensions": {
+  "pluginSettings": {
     "title": "Plugins",
     "navDesc": "App Plugins, built-in plugins and DSH plugins",
     "desc": "Manage App Plugins, built-in plugins that ship with Valuz, and standard DSH (DeepSeek Harness) plugins.",
@@ -3696,7 +3696,7 @@
         "entitlement": "Entitlement: {key}"
       }
     },
-    "thirdParty": {
+    "appPlugins": {
       "title": "App Plugins",
       "desc": "Install and manage App Plugins that extend the Valuz interface and features. An app plugin runs on this computer with your permissions, so only install sources you trust.",
       "loadFailed": "Could not read the app plugins",

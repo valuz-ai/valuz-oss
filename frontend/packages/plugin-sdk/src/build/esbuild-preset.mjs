@@ -36,7 +36,7 @@ const ASSET_LOADERS = {
 /**
  * The esbuild plugin: shared modules → virtual modules reading
  * ``globalThis.__VALUZ_PLUGIN_SHARED__``; internal ``@valuz/*`` packages →
- * build error; ``.css`` → scoped to ``[data-valuz-ext="<pluginId>"]``.
+ * build error; ``.css`` → scoped to ``[data-valuz-app-plugin="<pluginId>"]``.
  */
 export function valuzEsbuildPlugin(options = {}) {
   const { pluginId, scopeStyles = true } = options;

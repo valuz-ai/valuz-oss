@@ -195,10 +195,10 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
 
     # ── Plugin ownership ──────────────────────────────────────────────
     # Set on the code automations a third-party plugin declares in its manifest
-    # (created on install, deleted on uninstall — modules/third_party). NULL for
+    # (created on install, deleted on uninstall — modules/app_plugins). NULL for
     # every automation a user or an agent made.
-    extension_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    extension_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    app_plugin_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    app_plugin_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     # ── Schedule state ────────────────────────────────────────────────
     status: Mapped[str] = mapped_column(String(32), default="enabled")

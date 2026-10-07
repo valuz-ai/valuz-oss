@@ -4815,15 +4815,15 @@ paths:
       summary: Post a notification into the caller's ledger
       description: |
         Writes one entry into the caller's own notification ledger. A request that
-        carries `X-Valuz-Plugin-Id` (a third-party plugin, `ctx.valuz.notifications.post`)
-        creates `kind: extension` with the plugin id in `payload.plugin_id`; every
+        carries `X-Valuz-App-Plugin-Id` (a third-party plugin, `ctx.valuz.notifications.post`)
+        creates `kind: app_plugin` with the plugin id in `payload.app_plugin_id`; every
         post is a separate entry. `link` becomes the entry's `route` only when it
         is an in-app path (`/…`); anything else stays in `payload.link`. The plugin's
         `notifications` permission is enforced by the plugin-request middleware.
       operationId: createNotification
       tags: [notifications]
       parameters:
-        - name: X-Valuz-Plugin-Id
+        - name: X-Valuz-App-Plugin-Id
           in: header
           required: false
           schema: {type: string}
@@ -5420,31 +5420,31 @@ paths:
                     additionalProperties: {$ref: "#/components/schemas/Operation"}
 
   # ── Third-party plugins (ADR-034; local deployments only) ────────────────────
-  # Every /v1/extensions/third-party* and /v1/ext-assets route answers
-  # 403 {detail: {code: third_party_unavailable}} on a cloud deployment. Errors are
-  # {detail: ThirdPartyError}. Requests a plugin makes carry X-Valuz-Plugin-Id and are
+  # Every /v1/app-plugins* and /v1/app-plugin-assets route answers
+  # 403 {detail: {code: app_plugins_unavailable}} on a cloud deployment. Errors are
+  # {detail: AppPluginError}. Requests a plugin makes carry X-Valuz-App-Plugin-Id and are
   # held to its manifest permissions by the plugin-request middleware.
-  /v1/extensions/third-party:
+  /v1/app-plugins:
     get:
       summary: Installed third-party plugins
-      operationId: listThirdPartyPlugins
-      tags: [extensions]
+      operationId: listAppPlugins
+      tags: [app-plugins]
       responses:
         "200":
           description: The install registry as the renderer loads it
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/ThirdPartyList"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/watch:
+              schema: {$ref: "#/components/schemas/AppPluginList"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/watch:
     get:
       summary: Long-poll for a change of the install registry
       description: |
         Returns as soon as `generation` differs from `since` (install, enable /
         disable, uninstall, dev-directory rebuild, config edit), else after `timeout`
         seconds with the current generation.
-      operationId: watchThirdPartyPlugins
-      tags: [extensions]
+      operationId: watchAppPlugins
+      tags: [app-plugins]
       parameters:
         - {name: since, in: query, required: false, schema: {type: integer, default: 0}}
         - {name: timeout, in: query, required: false, schema: {type: number, default: 25, maximum: 60}}
@@ -5457,12 +5457,12 @@ paths:
                 type: object
                 required: [generation]
                 properties: {generation: {type: integer}}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/safe-mode:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/safe-mode:
     post:
       summary: Switch plugin safe mode (the renderer then loads no third-party plugin)
-      operationId: setThirdPartySafeMode
-      tags: [extensions]
+      operationId: setAppPluginSafeMode
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
@@ -5475,33 +5475,33 @@ paths:
                 reason: {type: string, nullable: true}
       responses:
         "200":
-          description: Resulting state (VALUZ_EXTENSIONS_SAFE_MODE=1 keeps it on)
+          description: Resulting state (VALUZ_APP_PLUGINS_SAFE_MODE=1 keeps it on)
           content:
             application/json:
               schema:
                 type: object
                 required: [safe_mode]
                 properties: {safe_mode: {type: boolean}}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/inspect:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/inspect:
     post:
       summary: What installing this package would do (manifest, sha256, permissions, problems)
-      operationId: inspectThirdPartyPlugin
-      tags: [extensions]
+      operationId: inspectAppPlugin
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
           application/json:
-            schema: {$ref: "#/components/schemas/ThirdPartySource"}
+            schema: {$ref: "#/components/schemas/AppPluginSource"}
       responses:
         "200":
           description: Install confirmation data
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/ThirdPartyInspection"}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/install:
+              schema: {$ref: "#/components/schemas/AppPluginInspection"}
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/install:
     post:
       summary: Install (or update) a plugin from a zip, a directory or an https URL
       description: |
@@ -5509,15 +5509,15 @@ paths:
         The package must satisfy the manifest schema (400 `invalid_manifest` with
         `errors`) and `expected_sha256` when given (422 `sha256_mismatch`).
         Plugin-declared automations are created for the calling user.
-      operationId: installThirdPartyPlugin
-      tags: [extensions]
+      operationId: installAppPlugin
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               allOf:
-                - {$ref: "#/components/schemas/ThirdPartySource"}
+                - {$ref: "#/components/schemas/AppPluginSource"}
                 - type: object
                   properties:
                     expected_sha256: {type: string, nullable: true}
@@ -5531,18 +5531,18 @@ paths:
                 type: object
                 required: [plugin, updated_from]
                 properties:
-                  plugin: {$ref: "#/components/schemas/ThirdPartyPlugin"}
+                  plugin: {$ref: "#/components/schemas/AppPlugin"}
                   updated_from: {type: string, nullable: true}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "409": {$ref: "#/components/responses/ThirdPartyError"}
-        "413": {$ref: "#/components/responses/ThirdPartyError"}
-        "422": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/dev-link:
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "409": {$ref: "#/components/responses/AppPluginError"}
+        "413": {$ref: "#/components/responses/AppPluginError"}
+        "422": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/dev-link:
     post:
       summary: Link a plugin source directory for development (read in place, reloaded on change)
-      operationId: devLinkThirdPartyPlugin
-      tags: [extensions]
+      operationId: devLinkAppPlugin
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
@@ -5559,14 +5559,14 @@ paths:
               schema:
                 type: object
                 required: [plugin]
-                properties: {plugin: {$ref: "#/components/schemas/ThirdPartyPlugin"}}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/validate:
+                properties: {plugin: {$ref: "#/components/schemas/AppPlugin"}}
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/validate:
     post:
       summary: Validate a plugin source directory
-      operationId: validateThirdPartyPlugin
-      tags: [extensions]
+      operationId: validateAppPlugin
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
@@ -5588,16 +5588,16 @@ paths:
                   errors: {type: array, items: {type: string}}
                   warnings: {type: array, items: {type: string}}
                   manifest: {type: object, additionalProperties: true, nullable: true}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/pack:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/pack:
     post:
       summary: Pack a plugin source directory into its deterministic zip
       description: |
         Writes `<out_dir>/<id>-<version>.zip` (default `<path>/dist`): sorted entries,
         fixed timestamps, mode 0644; only valuz-plugin.json, frontend/, the locales
         directory, automations/, the icon, README.md and LICENSE* are packed.
-      operationId: packThirdPartyPlugin
-      tags: [extensions]
+      operationId: packAppPlugin
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
@@ -5624,13 +5624,13 @@ paths:
                   version: {type: string}
                   files: {type: array, items: {type: string}}
                   warnings: {type: array, items: {type: string}}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}:
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}:
     delete:
       summary: Uninstall a plugin (deletes the automations it created)
-      operationId: uninstallThirdPartyPlugin
-      tags: [extensions]
+      operationId: uninstallAppPlugin
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - name: purge_data
@@ -5649,47 +5649,47 @@ paths:
                 properties:
                   removed: {type: boolean}
                   automations_deleted: {type: integer}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/reload:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/reload:
     post:
       summary: Reload a dev-linked plugin (revision + 1)
-      operationId: reloadThirdPartyPlugin
-      tags: [extensions]
+      operationId: reloadAppPlugin
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       responses:
-        "200": {$ref: "#/components/responses/ThirdPartyPluginResult"}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/enable:
+        "200": {$ref: "#/components/responses/AppPluginResult"}
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/enable:
     post:
       summary: Enable a plugin
-      operationId: enableThirdPartyPlugin
-      tags: [extensions]
+      operationId: enableAppPlugin
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       responses:
-        "200": {$ref: "#/components/responses/ThirdPartyPluginResult"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/disable:
+        "200": {$ref: "#/components/responses/AppPluginResult"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/disable:
     post:
       summary: Disable a plugin
-      operationId: disableThirdPartyPlugin
-      tags: [extensions]
+      operationId: disableAppPlugin
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       responses:
-        "200": {$ref: "#/components/responses/ThirdPartyPluginResult"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/logs:
+        "200": {$ref: "#/components/responses/AppPluginResult"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/logs:
     get:
       summary: The plugin's log, newest last
-      operationId: getThirdPartyPluginLogs
-      tags: [extensions]
+      operationId: getAppPluginLogs
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - {name: limit, in: query, required: false, schema: {type: integer, default: 200, minimum: 1, maximum: 1000}}
@@ -5712,12 +5712,12 @@ paths:
                         level: {type: string, enum: [debug, info, warn, error]}
                         message: {type: string}
                         source: {type: string, enum: [frontend, backend, audit]}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
     post:
       summary: Write a line to the plugin's log (ctx.log; source frontend)
-      operationId: writeThirdPartyPluginLog
-      tags: [extensions]
+      operationId: writeAppPluginLog
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -5732,23 +5732,23 @@ paths:
                 message: {type: string}
       responses:
         "204": {description: Written}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/config:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/config:
     get:
       summary: The plugin's settings for the calling user (schema defaults filled in)
-      operationId: getThirdPartyPluginConfig
-      tags: [extensions]
+      operationId: getAppPluginConfig
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       responses:
-        "200": {$ref: "#/components/responses/ThirdPartyConfig"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
+        "200": {$ref: "#/components/responses/AppPluginConfig"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
     put:
       summary: Save the plugin's settings (validated against the manifest `config` schema)
-      operationId: putThirdPartyPluginConfig
-      tags: [extensions]
+      operationId: putAppPluginConfig
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -5760,15 +5760,15 @@ paths:
               required: [values]
               properties: {values: {type: object, additionalProperties: true}}
       responses:
-        "200": {$ref: "#/components/responses/ThirdPartyConfig"}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/storage:
+        "200": {$ref: "#/components/responses/AppPluginConfig"}
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/storage:
     get:
       summary: Keys of the plugin's key-value store (per user and plugin)
-      operationId: listThirdPartyPluginStorage
-      tags: [extensions]
+      operationId: listAppPluginStorage
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - {name: prefix, in: query, required: false, schema: {type: string, default: ""}}
@@ -5790,16 +5790,16 @@ paths:
                         key: {type: string}
                         size: {type: integer}
                         updated_at: {type: integer}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/storage/{key}:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/storage/{key}:
     parameters:
       - {name: plugin_id, in: path, required: true, schema: {type: string}}
       - {name: key, in: path, required: true, description: "1-200 characters; may contain /", schema: {type: string}}
     get:
       summary: Read one stored value
-      operationId: getThirdPartyPluginStorage
-      tags: [extensions]
+      operationId: getAppPluginStorage
+      tags: [app-plugins]
       responses:
         "200":
           description: The value
@@ -5811,11 +5811,11 @@ paths:
                 properties:
                   key: {type: string}
                   value: {}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
     put:
       summary: Store a JSON value (<= 256 KiB; <= 10 MiB per plugin and user)
-      operationId: putThirdPartyPluginStorage
-      tags: [extensions]
+      operationId: putAppPluginStorage
+      tags: [app-plugins]
       requestBody:
         required: true
         content:
@@ -5835,19 +5835,19 @@ paths:
                 properties:
                   key: {type: string}
                   size: {type: integer}
-        "400": {$ref: "#/components/responses/ThirdPartyError"}
-        "413": {$ref: "#/components/responses/ThirdPartyError"}
+        "400": {$ref: "#/components/responses/AppPluginError"}
+        "413": {$ref: "#/components/responses/AppPluginError"}
     delete:
       summary: Delete a stored value
-      operationId: deleteThirdPartyPluginStorage
-      tags: [extensions]
+      operationId: deleteAppPluginStorage
+      tags: [app-plugins]
       responses:
         "204": {description: Deleted}
-  /v1/extensions/third-party/{plugin_id}/automations:
+  /v1/app-plugins/{plugin_id}/automations:
     get:
       summary: The automations the manifest declares, with the calling user's rows and latest runs
-      operationId: listThirdPartyPluginAutomations
-      tags: [extensions]
+      operationId: listAppPluginAutomations
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
       responses:
@@ -5871,14 +5871,14 @@ paths:
                         trigger: {description: "'manual', {cron, timezone?} or {intervalSec}"}
                         status: {type: string, nullable: true}
                         latest_run: {type: object, additionalProperties: true, nullable: true}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/automations/{name}/run:
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/automations/{name}/run:
     post:
       summary: Run one of the plugin's declared automations by name
       description: 409 `automation_already_running` while a run is queued or running.
-      operationId: runThirdPartyPluginAutomation
-      tags: [extensions]
+      operationId: runAppPluginAutomation
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - {name: name, in: path, required: true, schema: {type: string}}
@@ -5904,14 +5904,14 @@ paths:
                   run_id: {type: string}
                   status: {type: string}
                   run: {type: object, additionalProperties: true}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-        "409": {$ref: "#/components/responses/ThirdPartyError"}
-        "422": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/automations/{name}/runs/latest:
+        "404": {$ref: "#/components/responses/AppPluginError"}
+        "409": {$ref: "#/components/responses/AppPluginError"}
+        "422": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/automations/{name}/runs/latest:
     get:
       summary: The latest run of a declared automation (same shape as /v1/automations/{id}/runs/{run_id})
-      operationId: getThirdPartyPluginLatestRun
-      tags: [extensions]
+      operationId: getAppPluginLatestRun
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - {name: name, in: path, required: true, schema: {type: string}}
@@ -5921,12 +5921,12 @@ paths:
           content:
             application/json:
               schema: {type: object, additionalProperties: true}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/extensions/third-party/{plugin_id}/automation-runs/{run_id}:
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugins/{plugin_id}/automation-runs/{run_id}:
     get:
       summary: One run of one of this plugin's automations
-      operationId: getThirdPartyPluginAutomationRun
-      tags: [extensions]
+      operationId: getAppPluginAutomationRun
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - {name: run_id, in: path, required: true, schema: {type: string}}
@@ -5936,16 +5936,16 @@ paths:
           content:
             application/json:
               schema: {type: object, additionalProperties: true}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
-  /v1/ext-assets/{plugin_id}/{revision}/{path}:
+        "404": {$ref: "#/components/responses/AppPluginError"}
+  /v1/app-plugin-assets/{plugin_id}/{revision}/{path}:
     get:
       summary: A file of a plugin's current version (or its dev directory)
       description: |
         Only the current `revision` resolves (404 otherwise); the path is confined to the
         plugin's own directory. `.js` / `.mjs` are `text/javascript`. Cache-Control is
         `no-cache` for a dev-linked plugin, `public, max-age=31536000, immutable` otherwise.
-      operationId: getThirdPartyPluginAsset
-      tags: [extensions]
+      operationId: getAppPluginAsset
+      tags: [app-plugins]
       parameters:
         - {name: plugin_id, in: path, required: true, schema: {type: string}}
         - {name: revision, in: path, required: true, schema: {type: integer}}
@@ -5956,25 +5956,83 @@ paths:
           content:
             "*/*":
               schema: {type: string, format: binary}
-        "403": {$ref: "#/components/responses/ThirdPartyError"}
-        "404": {$ref: "#/components/responses/ThirdPartyError"}
+        "403": {$ref: "#/components/responses/AppPluginError"}
+        "404": {$ref: "#/components/responses/AppPluginError"}
+
+  # Built-in plugins are composed into the running application. Toggles persist
+  # for the next start; legacy /v1/extensions/backend routes remain hidden aliases.
+  /v1/builtin-plugins/state:
+    get:
+      summary: Inactive built-in plugin IDs (public boot-time view)
+      operationId: getBuiltinPluginState
+      tags: [builtin-plugins]
+      responses:
+        "200":
+          description: Inactive plugin IDs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [inactive]
+                properties:
+                  inactive: {type: array, items: {type: string}}
+  /v1/builtin-plugins:
+    get:
+      summary: Built-in plugins and their composition state
+      operationId: listBuiltinPlugins
+      tags: [builtin-plugins]
+      responses:
+        "200":
+          description: Plugins, configuration schemas, and whether this deployment is editable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BuiltinPluginList"}
+  /v1/builtin-plugins/{plugin_id}/enabled:
+    post:
+      summary: Record a built-in plugin's enabled state for the next start
+      operationId: setBuiltinPluginEnabled
+      tags: [builtin-plugins]
+      parameters:
+        - {name: plugin_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+      responses:
+        "200":
+          description: Application state of the change
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [application]
+                properties:
+                  application: {type: string}
+        "403": {description: Plugins are managed by the deployment operator}
+        "404": {description: Plugin or plugin host not found}
+        "409": {description: A required plugin cannot be disabled}
 
 components:
   responses:
-    ThirdPartyError:
+    AppPluginError:
       description: Error (`detail.code` is the stable code)
       content:
         application/json:
-          schema: {$ref: "#/components/schemas/ThirdPartyError"}
-    ThirdPartyPluginResult:
+          schema: {$ref: "#/components/schemas/AppPluginError"}
+    AppPluginResult:
       description: The plugin after the change
       content:
         application/json:
           schema:
             type: object
             required: [plugin]
-            properties: {plugin: {$ref: "#/components/schemas/ThirdPartyPlugin"}}
-    ThirdPartyConfig:
+            properties: {plugin: {$ref: "#/components/schemas/AppPlugin"}}
+    AppPluginConfig:
       description: The plugin's settings and the schema they follow
       content:
         application/json:
@@ -5999,7 +6057,28 @@ components:
         type: string
         examples: [zh-CN, en-US]
   schemas:
-    ThirdPartyError:
+    BuiltinPlugin:
+      type: object
+      required: [id, status, required, desiredEnabled]
+      additionalProperties: true
+      properties:
+        id: {type: string}
+        status: {type: string}
+        required: {type: boolean}
+        desiredEnabled: {type: boolean}
+        needs: {type: array, items: {type: string}}
+        provides: {type: array, items: {type: string}}
+        entitlement: {type: string, nullable: true}
+        error: {type: string, nullable: true}
+    BuiltinPluginList:
+      type: object
+      required: [composed, editable, plugins, config_schemas]
+      properties:
+        composed: {type: boolean}
+        editable: {type: boolean}
+        plugins: {type: array, items: {$ref: "#/components/schemas/BuiltinPlugin"}}
+        config_schemas: {type: object, additionalProperties: {type: object, additionalProperties: true}}
+    AppPluginError:
       type: object
       required: [detail]
       properties:
@@ -6014,18 +6093,18 @@ components:
                 invalid_config, invalid_storage_key, version_not_newer,
                 automation_already_running, sha256_mismatch, not_found,
                 automation_not_found, run_not_found, storage_quota_exceeded,
-                invalid_input, third_party_unavailable (and, from the permission
+                invalid_input, app_plugins_unavailable (and, from the permission
                 middleware, plugin_permission_denied with `permission`)
             message: {type: string}
             errors: {type: array, items: {type: string}}
             permission: {type: string, nullable: true}
-    ThirdPartySource:
+    AppPluginSource:
       type: object
       description: Exactly one of `source_path` (a zip file or a directory) or `url` (https zip).
       properties:
         source_path: {type: string}
         url: {type: string}
-    ThirdPartyPlugin:
+    AppPlugin:
       type: object
       required: [id, version, name, status, enabled, permissions, requires, unmet_requires, entry_url, style_urls, locales, revision]
       properties:
@@ -6050,7 +6129,7 @@ components:
         requires: {type: array, items: {type: string}}
         unmet_requires: {type: array, items: {type: string}}
         engines: {type: object, additionalProperties: {type: string}}
-        entry_url: {type: string, nullable: true, description: "/v1/ext-assets/<id>/<revision>/<path>"}
+        entry_url: {type: string, nullable: true, description: "/v1/app-plugin-assets/<id>/<revision>/<path>"}
         style_urls: {type: array, items: {type: string}}
         locales: {type: object, additionalProperties: {type: object, additionalProperties: true}}
         config_schema: {type: object, additionalProperties: true, nullable: true}
@@ -6068,7 +6147,7 @@ components:
         dev_path: {type: string, nullable: true}
         sha256: {type: string, nullable: true}
         installed_at: {type: integer, nullable: true, description: Epoch milliseconds}
-    ThirdPartyList:
+    AppPluginList:
       type: object
       required: [api_version, safe_mode, generation, plugins]
       properties:
@@ -6076,8 +6155,8 @@ components:
         safe_mode: {type: boolean}
         safe_mode_reason: {type: string, nullable: true}
         generation: {type: integer}
-        plugins: {type: array, items: {$ref: "#/components/schemas/ThirdPartyPlugin"}}
-    ThirdPartyInspection:
+        plugins: {type: array, items: {$ref: "#/components/schemas/AppPlugin"}}
+    AppPluginInspection:
       type: object
       required: [manifest, sha256, size, permissions, requires, unmet_requires, errors, warnings, has_backend, existing, added_permissions]
       properties:

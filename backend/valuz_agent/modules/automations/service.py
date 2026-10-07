@@ -446,8 +446,8 @@ class AutomationService:
             trigger_human_readable=self._trigger_human(row),
             event_source=row.event_source,
             event_refs=row.event_refs,
-            extension_id=row.extension_id,
-            extension_name=row.extension_name,
+            app_plugin_id=row.app_plugin_id,
+            app_plugin_name=row.app_plugin_name,
             status=row.status,
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
@@ -1099,13 +1099,13 @@ class AutomationService:
         calling_session_project_id: str | None = None,
         origin_tool_call_id: str | None = None,
         user_id: str | None = None,
-        extension_id: str | None = None,
-        extension_name: str | None = None,
+        app_plugin_id: str | None = None,
+        app_plugin_name: str | None = None,
     ) -> AutomationDetailResponse:
         """Create a new automation row.
 
-        ``extension_id`` / ``extension_name`` mark a row a third-party plugin
-        declared in its manifest (``modules/third_party``); ``None`` for every
+        ``app_plugin_id`` / ``app_plugin_name`` mark a row a third-party plugin
+        declared in its manifest (``modules/app_plugins``); ``None`` for every
         other automation.
 
         ``calling_session_project_id`` is the project of the kernel
@@ -1175,8 +1175,8 @@ class AutomationService:
             next_run_at=None,
             last_run_at=None,
             origin_tool_call_id=origin_tool_call_id,
-            extension_id=extension_id,
-            extension_name=extension_name,
+            app_plugin_id=app_plugin_id,
+            app_plugin_name=app_plugin_name,
             event_source=payload.event_source,
             event_refs=payload.event_refs,
             created_at=now,
@@ -1296,8 +1296,8 @@ class AutomationService:
             trigger_human_readable=self._trigger_human(row),
             event_source=row.event_source,
             event_refs=row.event_refs,
-            extension_id=row.extension_id,
-            extension_name=row.extension_name,
+            app_plugin_id=row.app_plugin_id,
+            app_plugin_name=row.app_plugin_name,
             status=row.status,
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,

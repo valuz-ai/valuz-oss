@@ -24,7 +24,7 @@ import {
 
 afterAll(cleanupTempDirs);
 
-const SCOPE = '[data-valuz-ext="acme.fixture"]';
+const SCOPE = '[data-valuz-app-plugin="acme.fixture"]';
 
 
 describe("shared modules", () => {
@@ -77,7 +77,7 @@ describe("buildPlugin", () => {
     expect(css).toContain(`${SCOPE} .card,`);
     expect(css).toContain(`${SCOPE} .card > .title`);
     expect(css).toMatch(
-      /@media \(min-width: 600px\) {\s+\[data-valuz-ext="acme\.fixture"\] \.card/,
+      /@media \(min-width: 600px\) {\s+\[data-valuz-app-plugin="acme\.fixture"\] \.card/,
     );
     expect(css).toMatch(/@keyframes pulse {\s+from {/);
 

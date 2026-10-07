@@ -15,7 +15,7 @@ interface State {
  * Keeps a crashing plugin component from taking its host surface with it: the
  * contribution renders nothing and the error goes to the plugin's log.
  */
-export class ExtensionBoundary extends Component<Props, State> {
+export class AppPluginBoundary extends Component<Props, State> {
   state: State = { failed: false };
 
   static getDerivedStateFromError(): State {

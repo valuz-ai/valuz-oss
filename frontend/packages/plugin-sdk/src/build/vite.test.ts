@@ -43,7 +43,7 @@ describe("valuzPlugin (Vite)", () => {
     expectFixtureBundleRuns(js);
 
     const css = readFileSync(path.join(dir, "frontend/index.css"), "utf8");
-    expect(css).toContain('[data-valuz-ext="acme.fixture"] .card');
+    expect(css).toContain('[data-valuz-app-plugin="acme.fixture"] .card');
     expect(css).not.toMatch(/(^|[^\w-]):root/);
   }, 60_000);
 });

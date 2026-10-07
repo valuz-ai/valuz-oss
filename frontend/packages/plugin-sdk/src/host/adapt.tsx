@@ -25,10 +25,11 @@ import {
   type ValuzClient,
 } from "../types";
 import { createValuzClient } from "../valuz-client";
-import { ExtensionBoundary } from "./boundary";
+import { AppPluginBoundary } from "./boundary";
+import { legacyAppPluginAttributes } from "./compat";
 import { adaptSlotProps } from "./convert";
 
-/** The third-party plugin went outside the public extension surface. */
+/** The app plugin went outside the public extension surface. */
 export class PluginContractError extends Error {
   constructor(message: string) {
     super(message);
@@ -36,8 +37,8 @@ export class PluginContractError extends Error {
   }
 }
 
-/** What the adapter needs of an entry of ``GET /v1/extensions/third-party``. */
-export interface ThirdPartyPluginItem {
+/** What the adapter needs of an entry of ``GET /v1/app-plugins``. */
+export interface AppPluginItem {
   id: string;
   version?: string;
   name?: string | Record<string, string>;
@@ -59,10 +60,10 @@ export interface AdaptedPlugin extends ValuzPlugin {
   readonly scope: PluginScope;
 }
 
-/** Settings sections of third-party plugins live in this group. */
-export const EXTENSIONS_SETTINGS_GROUP = {
-  id: "extensions",
-  label: "extensions.title",
+/** Settings sections of app plugins live in this group. */
+export const APP_PLUGIN_SETTINGS_GROUP = {
+  id: "plugins",
+  label: "pluginSettings.title",
 } as const;
 
 const RESOURCE_ACTIONS_SLOT = /^resource\.[a-z0-9_-]+\.actions$/i;
@@ -90,7 +91,7 @@ const FIRST_PARTY_ONLY = [
 ] as const;
 
 const localizedName = (
-  name: ThirdPartyPluginItem["name"],
+  name: AppPluginItem["name"],
   locale: string,
   fallback: string,
 ): string => {
@@ -110,19 +111,19 @@ const BASE_HOST_CONTEXT: HostContextValue = {
 };
 
 /**
- * Turn a third-party plugin definition into a first-party ``ValuzPlugin`` whose
+ * Turn a app plugin definition into a first-party ``ValuzPlugin`` whose
  * ``apply`` builds the restricted context (doc 02 §3, doc 12 §3):
  *
  * - only the 12 public slots, routes under ``/x/<id>/``, settings sections in
- *   the Extensions group, nav items to the plugin's own pages — anything else
+ *   the Plugins group, nav items to the plugin's own pages — anything else
  *   throws ``PluginContractError``, so only this plugin fails and rolls back;
  * - ids are namespaced ``x:<plugin id>:<local id>``;
  * - every contributed component is wrapped in an error boundary and a scope
  *   (plugin id, ``t``, config, ``valuz``) the SDK hooks read.
  */
-export function adaptThirdPartyPlugin(
+export function adaptAppPlugin(
   definition: PluginDefinition,
-  item: ThirdPartyPluginItem,
+  item: AppPluginItem,
   services: HostServices,
   options: AdaptOptions = {},
 ): AdaptedPlugin {
@@ -188,7 +189,7 @@ export function adaptThirdPartyPlugin(
     key === undefined || key === ""
       ? ""
       : hasLocaleKey(locales, key)
-        ? `ext.${rootId}.${key}`
+        ? `appPlugin.${rootId}.${key}`
         : key;
 
   const ownPath = (kind: string, path: string): void => {
@@ -213,20 +214,20 @@ export function adaptThirdPartyPlugin(
     const Wrapped = (hostProps: Record<string, unknown>) => {
       const props = (convert ? convert(hostProps) : {}) as P;
       return (
-        <ExtensionBoundary
+        <AppPluginBoundary
           pluginId={rootId}
           where={where}
           onError={(message) => log.error(message)}
         >
           <PluginScopeProvider scope={scope}>
-            <div data-valuz-ext={rootId} style={{ display: "contents" }}>
+            <div data-valuz-app-plugin={rootId} {...legacyAppPluginAttributes(rootId)} style={{ display: "contents" }}>
               <Component {...props} />
             </div>
           </PluginScopeProvider>
-        </ExtensionBoundary>
+        </AppPluginBoundary>
       );
     };
-    Wrapped.displayName = `Extension(${rootId}:${where})`;
+    Wrapped.displayName = `AppPlugin(${rootId}:${where})`;
     return Wrapped;
   };
 
@@ -306,7 +307,7 @@ export function adaptThirdPartyPlugin(
           label: text(section.title),
           description: text(section.description || section.title),
           icon: section.icon ?? "puzzle",
-          group: { ...EXTENSIONS_SETTINGS_GROUP },
+          group: { ...APP_PLUGIN_SETTINGS_GROUP },
           component: wrap(component, `settings ${section.id}`),
           edition: "personal",
         });
@@ -334,7 +335,7 @@ export function adaptThirdPartyPlugin(
         enumerable: false,
         value: () => {
           throw new PluginContractError(
-            `registry.${method} is not available to third-party plugins`,
+            `registry.${method} is not available to app plugins`,
           );
         },
       });
@@ -367,7 +368,7 @@ export function adaptThirdPartyPlugin(
     Object.defineProperty(context, "legacy", {
       enumerable: false,
       value: () => {
-        throw new PluginContractError("ctx.legacy is not available to third-party plugins");
+        throw new PluginContractError("ctx.legacy is not available to app plugins");
       },
     });
     return context;

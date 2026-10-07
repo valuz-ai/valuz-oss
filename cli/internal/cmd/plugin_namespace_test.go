@@ -39,13 +39,13 @@ func TestLegacyAppCommandPreservesJSON(t *testing.T) {
 	if !json.Valid([]byte(out)) || !strings.Contains(stderr, "valuz plugin app list") {
 		t.Fatalf("JSON stdout and migration warning required: stdout=%q stderr=%q", out, stderr)
 	}
-	if reqs := f.calls(); len(reqs) != 1 || reqs[0].Path != thirdPartyAPI {
+	if reqs := f.calls(); len(reqs) != 1 || reqs[0].Path != appPluginAPI {
 		t.Fatalf("wrong legacy route: %+v", reqs)
 	}
 }
 
 func TestLegacyExtCommandPreservesJSON(t *testing.T) {
-	useFakeExtBackend(t, "applied")
+	useFakeBuiltinPluginBackend(t, "applied")
 	for _, tc := range []struct {
 		args []string
 		next string
@@ -61,7 +61,7 @@ func TestLegacyExtCommandPreservesJSON(t *testing.T) {
 }
 
 func TestCanonicalPluginCommandsHaveNoDeprecationNotice(t *testing.T) {
-	useFakeExtBackend(t, "applied")
+	useFakeBuiltinPluginBackend(t, "applied")
 	for _, args := range [][]string{
 		{"plugin", "builtin", "list", "-o", "json"},
 		{"plugin", "dsh", "list", "-o", "json"},

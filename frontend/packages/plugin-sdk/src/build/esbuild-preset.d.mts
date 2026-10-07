@@ -1,7 +1,7 @@
 import type { BuildOptions, Plugin } from "esbuild";
 
 export interface ValuzEsbuildPluginOptions {
-  /** Plugin id; CSS is scoped to ``[data-valuz-ext="<pluginId>"]``. */
+  /** Plugin id; CSS is scoped to ``[data-valuz-app-plugin="<pluginId>"]``. */
   pluginId?: string;
   /** Default true. */
   scopeStyles?: boolean;

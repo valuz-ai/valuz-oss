@@ -2,14 +2,14 @@ import {
   ApiError,
   createPluginHost,
   definePlugin,
-  extensionsApi,
+  builtinPluginsApi,
   useRegistryStore,
   type PluginHost,
 } from "@valuz/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sectionComponents } from "../pages/settings/section-components";
-import { extensionsBlocks } from "../pages/settings/extensions/blocks";
+import { pluginSettingsBlocks } from "../pages/settings/plugins/blocks";
 import {
   RequiredOssPluginError,
   loadOssPlugins,
@@ -39,7 +39,7 @@ const lists = () => ({
   panels: ids(state().projectPanels),
   services: state().services.map((service) => service.name),
 });
-const blockKeys = () => extensionsBlocks.entries().map((entry) => entry.key);
+const blockKeys = () => pluginSettingsBlocks.entries().map((entry) => entry.key);
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -67,7 +67,7 @@ describe("the OSS plugin set", () => {
       "oss-agent-plugins",
       "oss-dsh-plugins",
       "oss-plugin-ui",
-      "oss-third-party",
+      "oss-app-plugins",
     ]);
     expect(
       ossPluginSpecs.filter((spec) => spec.required).map((s) => s.plugin.id),
@@ -130,12 +130,12 @@ describe("the OSS plugin set", () => {
 /**
  * Optional plugins that register nothing at load: ``oss-plugin-ui`` mounts UI
  * bus surfaces only once the backend announces plugin UI, and
- * ``oss-third-party`` loads third-party plugins only after the first-party boot
+ * ``oss-app-plugins`` loads third-party plugins only after the first-party boot
  * settled and the backend lists some.
  */
 const ON_DEMAND_IDS: ReadonlySet<string> = new Set([
   "oss-plugin-ui",
-  "oss-third-party",
+  "oss-app-plugins",
 ]);
 
 describe.each(OPTIONAL_IDS)("optional plugin %s", (id) => {
@@ -260,7 +260,7 @@ describe("backend state gating", () => {
 
   it("does not load the optional plugin whose backend counterpart is in `inactive`", async () => {
     const backendState = vi
-      .spyOn(extensionsApi, "backendState")
+      .spyOn(builtinPluginsApi, "backendState")
       .mockResolvedValue({ inactive: ["oss-browser"] });
 
     const { host, result } = await load();
@@ -279,7 +279,7 @@ describe("backend state gating", () => {
 
   it("asks before it loads anything", async () => {
     const order: string[] = [];
-    vi.spyOn(extensionsApi, "backendState").mockImplementation(async () => {
+    vi.spyOn(builtinPluginsApi, "backendState").mockImplementation(async () => {
       order.push("state");
       return { inactive: [] };
     });
@@ -303,7 +303,7 @@ describe("backend state gating", () => {
     ["an offline backend", () => Promise.reject(new TypeError("Failed to fetch"))],
     ["a response that is not the contract", () => Promise.resolve({} as never)],
   ])("loads everything when the state cannot be read: %s", async (_name, answer) => {
-    vi.spyOn(extensionsApi, "backendState").mockImplementation(answer);
+    vi.spyOn(builtinPluginsApi, "backendState").mockImplementation(answer);
 
     const { host, result } = await load();
 
@@ -318,7 +318,7 @@ describe("backend state gating", () => {
   });
 
   it("never skips a required plugin, whatever the backend says", async () => {
-    vi.spyOn(extensionsApi, "backendState").mockResolvedValue({
+    vi.spyOn(builtinPluginsApi, "backendState").mockResolvedValue({
       inactive: ["oss-core", "oss-agents", "oss-tasks"],
     });
 
@@ -331,7 +331,7 @@ describe("backend state gating", () => {
   });
 
   it("is idempotent: loading again leaves loaded plugins alone", async () => {
-    vi.spyOn(extensionsApi, "backendState").mockResolvedValue({ inactive: [] });
+    vi.spyOn(builtinPluginsApi, "backendState").mockResolvedValue({ inactive: [] });
     const { host } = await load();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const before = lists();
@@ -345,10 +345,10 @@ describe("backend state gating", () => {
   });
 
   it("readInactiveBackendPlugins answers null instead of throwing", async () => {
-    vi.spyOn(extensionsApi, "backendState").mockRejectedValue(new Error("x"));
+    vi.spyOn(builtinPluginsApi, "backendState").mockRejectedValue(new Error("x"));
     await expect(readInactiveBackendPlugins()).resolves.toBeNull();
 
-    vi.spyOn(extensionsApi, "backendState").mockResolvedValue({
+    vi.spyOn(builtinPluginsApi, "backendState").mockResolvedValue({
       inactive: ["a", 3 as never, "b"],
     });
     await expect(readInactiveBackendPlugins()).resolves.toEqual(["a", "b"]);
@@ -381,7 +381,7 @@ describe("reconcile against the backend state", () => {
 
     expect(await reconcileOssPlugins(host, { inactive: [] })).toBe(false);
 
-    vi.spyOn(extensionsApi, "backendState").mockRejectedValue(
+    vi.spyOn(builtinPluginsApi, "backendState").mockRejectedValue(
       new TypeError("Failed to fetch"),
     );
     expect(await reconcileOssPlugins(host)).toBe(false);
@@ -404,14 +404,14 @@ describe("loadOssPlugins reports whether it knew the backend state", () => {
     const given = await loadOssPlugins(createPluginHost(), { inactive: [] });
     expect(given.stateKnown).toBe(true);
 
-    vi.spyOn(extensionsApi, "backendState").mockResolvedValue({ inactive: [] });
+    vi.spyOn(builtinPluginsApi, "backendState").mockResolvedValue({ inactive: [] });
     useRegistryStore.getState().clearLayers();
     const read = await loadOssPlugins(createPluginHost());
     expect(read.stateKnown).toBe(true);
   });
 
   it("is not known when the backend could not be asked — everything loaded, to be settled later", async () => {
-    vi.spyOn(extensionsApi, "backendState").mockRejectedValue(
+    vi.spyOn(builtinPluginsApi, "backendState").mockRejectedValue(
       new Error("无法连接到后端服务，请检查应用进程是否运行"),
     );
     useRegistryStore.getState().clearLayers();
@@ -427,7 +427,7 @@ describe("settleOssPlugins (a backend that starts after the UI)", () => {
   it("keeps asking while the backend is unreachable, then applies the state it reports", async () => {
     const host = await composeOss();
     const backendState = vi
-      .spyOn(extensionsApi, "backendState")
+      .spyOn(builtinPluginsApi, "backendState")
       .mockRejectedValueOnce(new Error("无法连接到后端服务"))
       .mockRejectedValueOnce(new Error("无法连接到后端服务"))
       .mockResolvedValue({ inactive: ["oss-backup", "oss-browser"] });
@@ -446,7 +446,7 @@ describe("settleOssPlugins (a backend that starts after the UI)", () => {
     const host = await composeOss();
     const before = captureOssComposition();
     const backendState = vi
-      .spyOn(extensionsApi, "backendState")
+      .spyOn(builtinPluginsApi, "backendState")
       .mockRejectedValue(new ApiError("Not Found", 404));
 
     expect(await settleOssPlugins(host, { intervalMs: 1 })).toBe(false);
@@ -458,7 +458,7 @@ describe("settleOssPlugins (a backend that starts after the UI)", () => {
   it("gives up after the timeout when the backend never answers, leaving everything loaded", async () => {
     const host = await composeOss();
     const before = captureOssComposition();
-    vi.spyOn(extensionsApi, "backendState").mockRejectedValue(
+    vi.spyOn(builtinPluginsApi, "backendState").mockRejectedValue(
       new Error("无法连接到后端服务"),
     );
 
@@ -470,7 +470,7 @@ describe("settleOssPlugins (a backend that starts after the UI)", () => {
 
   it("stops when aborted", async () => {
     const host = await composeOss();
-    const backendState = vi.spyOn(extensionsApi, "backendState");
+    const backendState = vi.spyOn(builtinPluginsApi, "backendState");
     const controller = new AbortController();
     controller.abort();
 

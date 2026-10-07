@@ -1,11 +1,11 @@
 export {
-  EXTENSIONS_SETTINGS_GROUP,
+  APP_PLUGIN_SETTINGS_GROUP,
   PluginContractError,
-  adaptThirdPartyPlugin,
+  adaptAppPlugin,
   isPublicSlot,
   type AdaptOptions,
   type AdaptedPlugin,
-  type ThirdPartyPluginItem,
+  type AppPluginItem,
 } from "./adapt";
 export { adaptSlotProps } from "./convert";
 export {
@@ -21,3 +21,5 @@ export {
   type HostRequest,
   type HostServices,
 } from "../services";
+
+export * from "./compat";

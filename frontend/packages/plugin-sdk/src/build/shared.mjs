@@ -1,4 +1,4 @@
-// Shared modules: what the host provides to every third-party plugin at runtime
+// Shared modules: what the host provides to every app plugin at runtime
 // (task card 04 §E, doc 02 §2.3). A plugin bundle must not carry its own copy
 // of these; the build preset rewrites every import of them to a read of
 // ``globalThis.__VALUZ_PLUGIN_SHARED__[id]``.

@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 # reflects the full host schema at autogenerate time.
 import valuz_agent.infra.execution_lease  # noqa: F401,E402
 import valuz_agent.modules.agents.models  # noqa: F401,E402
+import valuz_agent.modules.app_plugins.models  # noqa: F401,E402
 import valuz_agent.modules.artifacts.models  # noqa: F401,E402
 import valuz_agent.modules.automations.models  # noqa: F401,E402
 import valuz_agent.modules.citations.models  # noqa: F401,E402
@@ -60,7 +61,6 @@ import valuz_agent.modules.sessions.models  # noqa: F401,E402
 import valuz_agent.modules.settings.models  # noqa: F401,E402
 import valuz_agent.modules.skills.models  # noqa: F401,E402
 import valuz_agent.modules.tasks.models  # noqa: F401,E402
-import valuz_agent.modules.third_party.models  # noqa: F401,E402
 from alembic import context  # noqa: E402
 
 # Importing the database module registers every ``Base``-derived model

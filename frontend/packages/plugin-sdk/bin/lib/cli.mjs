@@ -138,7 +138,7 @@ const COMMANDS = {
       "Output: frontend.entry of valuz-plugin.json (default frontend/index.js) and",
       "<entry>.css when the source imports CSS (added to frontend.styles if missing).",
       "react, react-dom and @valuz/plugin-sdk are read from the host at runtime;",
-      "everything else is bundled. CSS is scoped to [data-valuz-ext=\"<id>\"].",
+      "everything else is bundled. CSS is scoped to [data-valuz-app-plugin=\"<id>\"].",
       "",
       "Options:",
       "  --watch   rebuild on every change",
@@ -173,7 +173,7 @@ const COMMANDS = {
     usage: "valuz-plugin dev [dir] [--backend URL] [--token TOKEN] [--minify]",
     help: [
       "Builds with --watch. After the first successful build it links the",
-      "directory into the local Valuz (POST /v1/extensions/third-party/dev-link)",
+      "directory into the local Valuz (POST /v1/app-plugins/dev-link)",
       "and reloads the plugin after every later rebuild.",
       "",
       "Options:",

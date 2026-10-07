@@ -2,7 +2,7 @@
 
 Valuz OSS's own backend is a set of plugins: ``oss-core`` and ``oss-agents`` are
 required, every other feature (``oss-tasks``, ``oss-automations``, ...) is optional and
-can be switched off in the extension prefs (``<data root>/extensions.json``) --
+can be switched off in the plugin prefs (``<data root>/plugins.json``) --
 unless a required plugin needs it (``PluginHost.locks``). A plugin only *registers*
 what it owns -- routers, boot steps, internal mounts / always-on MCP servers,
 harness tool groups; ``create_app`` and the lifespan assemble them, in the canonical
@@ -31,6 +31,7 @@ def oss_plugins() -> list[BackendPlugin]:
     from valuz_agent.features.activity import ActivityPlugin
     from valuz_agent.features.agent_plugins import AgentPluginsPlugin
     from valuz_agent.features.agents import AgentsPlugin
+    from valuz_agent.features.app_plugins import AppPluginsPlugin
     from valuz_agent.features.automations import AutomationsPlugin
     from valuz_agent.features.backup import BackupPlugin
     from valuz_agent.features.browser import BrowserPlugin
@@ -46,7 +47,6 @@ def oss_plugins() -> list[BackendPlugin]:
     from valuz_agent.features.notifications import NotificationsPlugin
     from valuz_agent.features.skills import SkillsPlugin
     from valuz_agent.features.tasks import TasksPlugin
-    from valuz_agent.features.third_party import ThirdPartyPlugin
 
     return [
         CorePlugin(),
@@ -67,7 +67,7 @@ def oss_plugins() -> list[BackendPlugin]:
         NotificationsPlugin(),
         FeedbackPlugin(),
         CitationsPlugin(),  # needs oss.knowledge + oss.feedback: after both
-        ThirdPartyPlugin(),
+        AppPluginsPlugin(),
     ]
 
 

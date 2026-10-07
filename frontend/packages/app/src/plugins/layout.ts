@@ -51,7 +51,7 @@ export const OSS_SETTINGS_SECTION_ORDER = [
   "parsing",
   "backup",
   "network",
-  "extensions",
+  "plugins",
   "system-logs",
   "about",
 ] as const;

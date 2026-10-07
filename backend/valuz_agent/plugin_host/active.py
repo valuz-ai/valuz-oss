@@ -2,7 +2,7 @@
 
 Whoever composes the app through a :class:`PluginHost` (the commercial overlay
 does; a bare OSS app composes directly and registers none) records it here,
-so management surfaces (``/v1/extensions/backend``) can show what is loaded,
+so management surfaces (``/v1/builtin-plugins``) can show what is loaded,
 failed or disabled without importing the composing package.
 """
 

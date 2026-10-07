@@ -56,11 +56,10 @@ ROUTE_REFS: dict[str, str] = {
     "marketplace": f"{_ROUTES}.marketplace:router",
     "plugins": f"{_ROUTES}.plugins:router",
     "dsh_plugins": f"{_ROUTES}.dsh_plugins:router",
-    "extensions": f"{_ROUTES}.extensions:router",
-    # Third-party plugins: after ``extensions`` so ``/v1/extensions/backend*``
-    # keeps precedence over ``/v1/extensions/third-party/{id}`` patterns.
-    "third_party": f"{_ROUTES}.third_party:router",
-    "ext_assets": f"{_ROUTES}.third_party:assets_router",
+    "builtin_plugins": f"{_ROUTES}.builtin_plugins:router",
+    # Application plugin management and immutable frontend assets.
+    "app_plugins": f"{_ROUTES}.app_plugins:router",
+    "app_plugin_assets": f"{_ROUTES}.app_plugins:assets_router",
     "tasks": f"{_ROUTES}.tasks:router",
     "analytics": f"{_ROUTES}.analytics:router",
     "resources": f"{_ROUTES}.resources:router",
@@ -105,5 +104,5 @@ TOOL_SLOTS: tuple[str, ...] = (
     "citation-calculation",
     "genui",
     "browser",
-    "extension-manager",
+    "app-plugin-manager",
 )

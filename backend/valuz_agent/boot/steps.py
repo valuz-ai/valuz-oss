@@ -1270,7 +1270,7 @@ async def start_dsh_manager_if_plugins_installed() -> None:
     asyncio.get_running_loop().create_task(_start())
 
 
-async def cleanup_superseded_extension_versions() -> None:
+async def cleanup_superseded_app_plugin_versions() -> None:
     """Remove third-party plugin version directories an update superseded.
 
     Runs after boot (``POST_BOOT``): the previous version stays on disk while the
@@ -1278,7 +1278,7 @@ async def cleanup_superseded_extension_versions() -> None:
     """
     import asyncio
 
-    from valuz_agent.modules.third_party.maintenance import cleanup_superseded_versions
+    from valuz_agent.modules.app_plugins.maintenance import cleanup_superseded_versions
 
     try:
         await asyncio.to_thread(cleanup_superseded_versions)

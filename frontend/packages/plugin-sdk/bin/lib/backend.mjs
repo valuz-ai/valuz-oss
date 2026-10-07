@@ -1,6 +1,6 @@
 // The local Valuz backend, for ``valuz-plugin dev``: dev-link the plugin
 // directory once, then reload it after every rebuild (task card 04 §D:
-// POST /v1/extensions/third-party/dev-link {path}, POST …/{id}/reload).
+// POST /v1/app-plugins/dev-link {path}, POST …/{id}/reload).
 //
 // Base URL: --backend, else $VALUZ_BACKEND_BASE_URL, else http://127.0.0.1:8000
 // (the Go CLI's convention). A bearer token is sent when --token or
@@ -9,7 +9,7 @@
 import process from "node:process";
 
 export const DEFAULT_BACKEND = "http://127.0.0.1:8000";
-const THIRD_PARTY_API = "/v1/extensions/third-party";
+const APP_PLUGINS_API = "/v1/app-plugins";
 
 export function resolveBackend(flag, env = process.env) {
   const base = flag || env.VALUZ_BACKEND_BASE_URL || DEFAULT_BACKEND;
@@ -66,12 +66,12 @@ async function call(base, method, apiPath, { body, token, timeoutMs = 15000 } = 
   return data;
 }
 
-/** POST /v1/extensions/third-party/dev-link → ``{ plugin }``. */
+/** POST /v1/app-plugins/dev-link → ``{ plugin }``. */
 export function devLink(base, absPath, options = {}) {
-  return call(base, "POST", `${THIRD_PARTY_API}/dev-link`, { ...options, body: { path: absPath } });
+  return call(base, "POST", `${APP_PLUGINS_API}/dev-link`, { ...options, body: { path: absPath } });
 }
 
-/** POST /v1/extensions/third-party/{id}/reload → ``{ plugin }``. */
+/** POST /v1/app-plugins/{id}/reload → ``{ plugin }``. */
 export function reloadPlugin(base, id, options = {}) {
-  return call(base, "POST", `${THIRD_PARTY_API}/${encodeURIComponent(id)}/reload`, options);
+  return call(base, "POST", `${APP_PLUGINS_API}/${encodeURIComponent(id)}/reload`, options);
 }

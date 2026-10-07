@@ -109,7 +109,7 @@ func newAgentPluginListCmd() *cobra.Command {
 			if err := checkOutputFormat(output); err != nil {
 				return err
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -150,7 +150,7 @@ func newAgentPluginShowCmd() *cobra.Command {
 			if err := checkOutputFormat(output); err != nil {
 				return err
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -292,7 +292,7 @@ func newAgentPluginSourceCmd(install bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -393,7 +393,7 @@ func newAgentPluginUpdateCmd() *cobra.Command {
 			if policy != "skip" && policy != "overwrite" {
 				return errs.New(errs.KindUsage, "--on-conflict must be skip or overwrite")
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -432,7 +432,7 @@ func newAgentPluginToggleCmd(verb string) *cobra.Command {
 			if err := checkOutputFormat(output); err != nil {
 				return err
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -459,7 +459,7 @@ func newAgentPluginUninstallCmd() *cobra.Command {
 			if err := checkOutputFormat(output); err != nil {
 				return err
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -526,7 +526,7 @@ func newAgentPluginExportCmd() *cobra.Command {
 					return errs.Wrap(errs.KindUsage, err, "check ZIP destination")
 				}
 			}
-			client, err := extClient(cmd)
+			client, err := pluginClient(cmd)
 			if err != nil {
 				return err
 			}

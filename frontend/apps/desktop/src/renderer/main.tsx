@@ -6,7 +6,7 @@ import { initParserPlugins } from "@valuz/parser-plugins";
 import { hydrateOverlayIfPresent, hydrateTheme } from "@valuz/core";
 import {
   loadOssPlugins,
-  markThirdPartyBootSettled,
+  markAppPluginBootSettled,
   renderOssBootFailure,
   settleOssPlugins,
 } from "@valuz/app/plugins";
@@ -93,7 +93,7 @@ loadOssPlugins()
       );
       // First-party plugins and the overlay are in and the app has rendered:
       // third-party plugins may start loading now.
-      markThirdPartyBootSettled();
+      markAppPluginBootSettled();
     },
     (error: unknown) => renderOssBootFailure(rootElement, error),
   );

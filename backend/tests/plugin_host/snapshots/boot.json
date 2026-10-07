@@ -60,7 +60,7 @@
   "warn_unreachable_plugin_hooks()",
   "mark_boot_complete()",
   "start_post_boot_agent_channels(app)",
-  "cleanup_superseded_extension_versions()",
+  "cleanup_superseded_app_plugin_versions()",
   "start_dsh_manager_if_plugins_installed()"
  ]
 }

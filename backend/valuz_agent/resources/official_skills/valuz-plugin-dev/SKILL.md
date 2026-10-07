@@ -18,7 +18,7 @@ tags: [official, plugin]
 | 工具 | 作用 |
 |---|---|
 | 会话命令 `valuz-plugin` | 在工作区里 `create` / `build` / `test` / `validate` / `pack`（离线可用，SDK 与模板随应用分发） |
-| 工具 `extension_manager` | `validate` / `pack` / `status` / `logs` / `reload`，以及要用户确认的 `dev_link` / `install` / `uninstall` / `publish` |
+| 工具 `app_plugin_manager` | `validate` / `pack` / `status` / `logs` / `reload`，以及要用户确认的 `dev_link` / `install` / `uninstall` / `publish` |
 | 本技能 | 清单规则、SDK 全部接口、12 个公开插槽、验证与排错流程 |
 
 按需读 `references/`：`manifest.md`（清单字段与规则）· `sdk-api.md`（SDK 全部接口与权限）· `slots.md`（12 个公开插槽的位置与 props）· `examples.md`（三个可抄的完整例子）· `workflow.md`（命令、确认卡片、调试、发布的细节）。
@@ -38,14 +38,14 @@ tags: [official, plugin]
 2. **写代码**：`definePlugin({ id, apply(ctx) { … } })`，id 必须与清单一致。所有用户可见的文字走 `locales/<lang>.json` + `useTranslation()`，至少 `en-US` 和 `zh-CN`。样式用设计令牌（`@valuz/plugin-sdk/ui` 的 `tokens`）和 UI 组件，不要写死颜色。
 3. **构建**：`valuz-plugin build`。产物是清单 `frontend.entry`（默认 `frontend/index.js`）。
 4. **测试**：`valuz-plugin test`。至少断言：插件加载成功、注册了你要的插槽 / 页面、关键组件能渲染（`createTestHost` + `mockValuz`，见 `references/examples.md`）。**测试没过不要往下走。**
-5. **校验**：`valuz-plugin validate`（或 `extension_manager validate`）。errors 必须为 0；warnings 读一遍，能修就修。
+5. **校验**：`valuz-plugin validate`（或 `app_plugin_manager validate`）。errors 必须为 0；warnings 读一遍，能修就修。
 6. **装进 Valuz**（需要用户确认，**你不能绕过卡片**）：
-   - 开发中用 `extension_manager dev_link {path}`：弹出确认卡片（插件 id、目录、权限、sha256…）。**调用一次后停下等用户点确认**，不要重复调用，不要用 shell 执行 `valuz plugin app install`。`path` 必须在当前会话工作区内。确认之后，这个目录以后每次重新构建都会自动重载，**不再弹卡片**。
-   - 要固定版本时：`extension_manager pack {path}` 得到 zip，再 `extension_manager install {source_path}`（同样是卡片，对这个固定的 zip 确认一次）。
+   - 开发中用 `app_plugin_manager dev_link {path}`：弹出确认卡片（插件 id、目录、权限、sha256…）。**调用一次后停下等用户点确认**，不要重复调用，不要用 shell 执行 `valuz plugin app install`。`path` 必须在当前会话工作区内。确认之后，这个目录以后每次重新构建都会自动重载，**不再弹卡片**。
+   - 要固定版本时：`app_plugin_manager pack {path}` 得到 zip，再 `app_plugin_manager install {source_path}`（同样是卡片，对这个固定的 zip 确认一次）。
    - 安装类动作只在本地会话（桌面端）可用；云端会话里只能写、校验、打包、发布。
-7. **看结果**：用户确认后 `extension_manager status {id}` 看状态（`enabled` / `broken` / `incompatible` / `requires-unmet` / `blocked`）和原因，`extension_manager logs {id}` 看加载与运行日志。**你看不到界面**：界面好不好看、位置对不对由用户判断，请他描述或截图；你负责读日志排错。
-8. **迭代**：改代码 → `valuz-plugin build` →（界面没变就）`extension_manager reload {id}` → 再看 `logs`。
-9. **分享**（用户要时才做）：`valuz-plugin pack` → `extension_manager publish {path 或 id, scope}`。`scope`：`personal`（只有本人）/ `org`（本组织，需审核）/ `global`（选发行版，需平台审核）。同样是卡片，需要登录 Valuz 账号；用 `extension_manager submissions` 查审核进度。
+7. **看结果**：用户确认后 `app_plugin_manager status {id}` 看状态（`enabled` / `broken` / `incompatible` / `requires-unmet` / `blocked`）和原因，`app_plugin_manager logs {id}` 看加载与运行日志。**你看不到界面**：界面好不好看、位置对不对由用户判断，请他描述或截图；你负责读日志排错。
+8. **迭代**：改代码 → `valuz-plugin build` →（界面没变就）`app_plugin_manager reload {id}` → 再看 `logs`。
+9. **分享**（用户要时才做）：`valuz-plugin pack` → `app_plugin_manager publish {path 或 id, scope}`。`scope`：`personal`（只有本人）/ `org`（本组织，需审核）/ `global`（选发行版，需平台审核）。同样是卡片，需要登录 Valuz 账号；用 `app_plugin_manager submissions` 查审核进度。
 
 ## 3. 铁律
 
@@ -69,4 +69,4 @@ tags: [official, plugin]
 | `status` = `requires-unmet` | 清单 `requires` 里有未满足的项，如缺连接器 `connector:acme-data`：让用户先添加该连接器，满足后自动加载 |
 | `status` = `blocked` | 组织策略禁止，告诉用户，不要试图绕过 |
 | 日志里 `plugin_permission_denied` / 403 | 用了没声明的权限，补进清单 `permissions`、重新 build 与 `reload`（权限变化要用户再确认一次安装） |
-| 改了代码界面没变 | 是否已 `valuz-plugin build`？再 `extension_manager reload {id}`；还不行看 `logs` |
+| 改了代码界面没变 | 是否已 `valuz-plugin build`？再 `app_plugin_manager reload {id}`；还不行看 `logs` |

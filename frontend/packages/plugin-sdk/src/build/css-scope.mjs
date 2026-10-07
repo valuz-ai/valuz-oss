@@ -1,6 +1,6 @@
 // CSS scoping for plugin stylesheets (doc 02 §2.3): every selector of a
 // plugin's own CSS is limited to the plugin's root element
-// ``[data-valuz-ext="<plugin id>"]`` so it cannot restyle the host.
+// ``[data-valuz-app-plugin="<plugin id>"]`` so it cannot restyle the host.
 //
 // A small, forgiving tokenizer rather than a full CSS parser: it understands
 // strings, comments, escapes, parentheses / brackets and blocks, which is all
@@ -34,7 +34,7 @@ const GROUP_AT_RULES = new Set([
 /** The scope selector of plugin ``pluginId``. */
 export function scopeSelector(pluginId) {
   const value = String(pluginId).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `[data-valuz-ext="${value}"]`;
+  return `[data-valuz-app-plugin="${value}"]`;
 }
 
 /** Index just past the comment starting at ``i`` (``/*``). */

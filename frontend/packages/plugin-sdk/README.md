@@ -109,7 +109,7 @@ host.renderSlot("project.detail.tabs", { projectId: "p1", navigate: () => {} });
 
 `valuz plugin app publish dist/<zip> --scope personal|org|global [--distribution <id>]`
 (signed in with `valuz auth login`, or a personal API key `--api-key vzp_…` in
-CI); from a Valuz session, `extension_manager publish` (the user confirms a
+CI); from a Valuz session, `app_plugin_manager publish` (the user confirms a
 card). Every submission goes through automatic checks (package, manifest,
 engines, shared-module imports, secret leaks, malware heuristics); org and
 global scopes are reviewed before they list.

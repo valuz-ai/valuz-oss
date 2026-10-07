@@ -81,8 +81,10 @@ Legacy `valuz ext list/enable/disable` maps to `valuz plugin builtin`, and
 `valuz ext dsh` maps to `valuz plugin dsh`. Legacy unqualified
 `valuz plugin install/list/publish/...` still manages **App Plugins**. These
 compatibility commands are hidden from normal help and emit a migration notice
-on stderr, preserving `-o json` stdout. The existing `/v1/plugins`,
-`/v1/extensions/third-party`, and `/v1/extensions/backend` API paths remain stable.
+on stderr, preserving `-o json` stdout. Agent Plugins use `/v1/plugins`, App
+Plugins use `/v1/app-plugins`, and built-in plugins use `/v1/builtin-plugins`.
+Older application-plugin and built-in API paths are handled by server-side
+compatibility routes; new clients use the canonical paths.
 
 Exit codes follow the stable contract (0 completed / 1 usage / 2 timeout /
 3 agent error / 4 backend unreachable / 5 internal / 6 auth / 7 action

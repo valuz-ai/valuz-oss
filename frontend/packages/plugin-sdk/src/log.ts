@@ -28,7 +28,7 @@ function format(message: string, details: unknown[]): string {
 
 /**
  * ``ctx.log``: to the console, and — best effort, batched — to the plugin's
- * log in Settings → Plugins → App Plugins (``POST /v1/extensions/third-party/{id}/logs``).
+ * log in Settings → Plugins → App Plugins (``POST /v1/app-plugins/{id}/logs``).
  * A failed write is dropped: logging must never break a plugin.
  */
 export function createPluginLog(pluginId: string, send: Sender): PluginLog & {
@@ -45,9 +45,9 @@ export function createPluginLog(pluginId: string, send: Sender): PluginLog & {
       try {
         await send({
           method: "POST",
-          path: `/v1/extensions/third-party/${encodeURIComponent(pluginId)}/logs`,
+          path: `/v1/app-plugins/${encodeURIComponent(pluginId)}/logs`,
           json: entry,
-          headers: { "X-Valuz-Plugin-Id": pluginId },
+          headers: { "X-Valuz-App-Plugin-Id": pluginId },
         });
       } catch {
         // best effort

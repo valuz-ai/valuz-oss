@@ -41,7 +41,7 @@ import {
   renderChatplanStatusPill,
   resolveGenUiHost,
 } from "./tool-card-helpers";
-import { ExtensionOperationCard } from "./ExtensionOperationCard";
+import { AppPluginOperationCard } from "./AppPluginOperationCard";
 import { skillSubmissionView } from "./skill-submission-view";
 import { useToolCallCardActions } from "./useToolCallCardActions";
 
@@ -400,18 +400,22 @@ export function useToolCallCards({
         // user can still inspect the Agent's Playbook call and result.
       }
 
-      // ``extension_manager`` (third-party plugins): ``dev_link`` / ``install`` /
+      // ``app_plugin_manager`` (third-party plugins): ``dev_link`` / ``install`` /
       // ``uninstall`` / ``publish`` return an operation record the user
       // confirms on this card. The read-only actions (list, status, logs,
       // reload, enable, disable, submissions) carry no operation and fall
       // through to the generic tool renderer.
-      if (isToolNamed(name, "extension_manager")) {
+      if (
+        isToolNamed(name, "app_plugin_manager") ||
+        // Persisted cards from earlier releases keep their original tool name.
+        isToolNamed(name, "extension_manager")
+      ) {
         const result = parseOperationToolOutput(tool.output);
         const snapshot = result?.operation;
         if (snapshot) {
           const operation = operationStates[snapshot.id] ?? snapshot;
           return (
-            <ExtensionOperationCard
+            <AppPluginOperationCard
               operation={operation}
               action={result?.action}
               busy={operationBusy[operation.id] ?? null}

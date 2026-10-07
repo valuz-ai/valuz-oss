@@ -35,15 +35,15 @@ describe("createTestHost", () => {
       {
         id: "x:acme.dashboard:home",
         path: "/x/acme.dashboard",
-        label: "ext.acme.dashboard.title",
-        description: "ext.acme.dashboard.title",
+        label: "appPlugin.acme.dashboard.title",
+        description: "appPlugin.acme.dashboard.title",
         layout: "project",
         showInNav: false,
         component: "[fn]",
         edition: "personal",
       },
     ]);
-    expect(capture.settings[0]).toMatchObject({ id: "x:acme.dashboard:prefs", group: { id: "extensions" } });
+    expect(capture.settings[0]).toMatchObject({ id: "x:acme.dashboard:prefs", group: { id: "plugins" } });
     expect(capture.nav[0]).toMatchObject({ id: "x:acme.dashboard:home", href: "/x/acme.dashboard", icon: "plugins" });
   });
 
@@ -55,7 +55,7 @@ describe("createTestHost", () => {
     await host.load(plugin);
 
     expect(host.renderSlot("project.detail.tabs", { projectId: "p1", navigate: () => {} })).toBe(
-      '<div data-valuz-ext="acme.dashboard" style="display:contents"><section>持仓:p1</section></div>',
+      '<div data-valuz-app-plugin="acme.dashboard" data-valuz-ext="acme.dashboard" style="display:contents"><section>持仓:p1</section></div>',
     );
     expect(host.renderRoute("home")).toContain("<h1>持仓</h1>");
     expect(host.renderRoute("/x/acme.dashboard")).toContain("<h1>持仓</h1>");

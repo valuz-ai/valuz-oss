@@ -38,7 +38,7 @@ export interface HostServices {
   subscribeHostContext?(listener: () => void): () => void;
   /**
    * Make the plugin's own locales visible to the host's i18n under
-   * ``ext.<plugin id>`` (tab and page titles are translated by the host).
+   * ``appPlugin.<plugin id>`` (tab and page titles are translated by the host).
    */
   registerLocales?(
     pluginId: string,

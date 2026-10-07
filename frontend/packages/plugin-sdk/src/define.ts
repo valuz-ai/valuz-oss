@@ -45,7 +45,7 @@ export function pageRoute(
   }
 }
 
-/** Add a settings section under the Extensions group. */
+/** Add a settings section under the Plugins group. */
 export function settingsPage(
   ctx: PluginContext,
   section: SettingsSectionSpec,

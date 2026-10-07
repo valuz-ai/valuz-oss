@@ -163,11 +163,11 @@ Plugins: `oss-core` and `oss-agents` are **required**; `oss-tasks`, `oss-automat
 `oss-activity`, `oss-skills`, `oss-connectors`, `oss-knowledge`, `oss-memory`,
 `oss-browser`, `oss-channels`, `oss-backup`, `oss-marketplace`, `oss-agent-plugins`,
 `oss-dsh-plugins`, `oss-citations`, `oss-notifications`, `oss-feedback` are optional
-(`<data root>/extensions.json` switches them off; a disabled plugin contributes
+(`<data root>/plugins.json` switches them off; a disabled plugin contributes
 no routes, steps, mounts or tools). Each provides `oss.<feature>`; a plugin that
 cannot work without one `needs` it, and a plugin a *required* plugin needs is
-**locked** on (`PluginInfo.requiredBy`, `POST /v1/extensions/backend/{id}/enabled`
-answers 409). `GET /v1/extensions/backend/state` (public, ids only) lists the
+**locked** on (`PluginInfo.requiredBy`, `POST /v1/builtin-plugins/{id}/enabled`
+answers 409). `GET /v1/builtin-plugins/state` (public, ids only) lists the
 plugins not active this boot.
 
 `create_app(plugin_host=None)` composes the OSS plugins itself; the commercial overlay

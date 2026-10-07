@@ -72,7 +72,7 @@ class CorePlugin(OssPlugin):
             "attachments",
             "stream",
             "plugin_ui",
-            "extensions",
+            "builtin_plugins",
             "analytics",
             "resources",
             "onboarding",
