@@ -3413,6 +3413,7 @@
     "pluginPreviewing": "Checking for conflicts…"
   },
   "plugin": {
+    "navLabel": "Plugins",
     "title": "Agent Plugins",
     "description": "Installed Agent Plugins: skill suites and bundles of skills and connectors",
     "install": "Install agent plugin",

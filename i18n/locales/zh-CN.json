@@ -3413,6 +3413,7 @@
     "pluginPreviewing": "正在检查冲突…"
   },
   "plugin": {
+    "navLabel": "插件",
     "title": "智能体插件",
     "description": "已安装的智能体插件：技能套件与技能、连接器组合包",
     "install": "安装智能体插件",

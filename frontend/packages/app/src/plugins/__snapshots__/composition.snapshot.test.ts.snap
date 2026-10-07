@@ -289,7 +289,7 @@ exports[`OSS bare registry composition > registers the personal edition's routes
       "edition": "personal",
       "href": "/plugins",
       "id": "plugins",
-      "label": "plugin.title",
+      "label": "plugin.navLabel",
       "navGroup": "library",
       "position": "bottom",
     },
