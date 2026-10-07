@@ -97,6 +97,9 @@ def test_run_turn_sends_payload_and_returns_message_on_idle() -> None:
                     attachments=[{"source_path": "/tmp/a.pdf", "parsed_path": "/tmp/a.md"}],
                     additional_context="ctx-block",
                     runtime_context={"example.runtime": "opaque-value"},
+                    input_metadata={
+                        "background_input": {"input_id": "input", "source": "background"}
+                    },
                 )
             finally:
                 await client.aclose()
@@ -111,6 +114,7 @@ def test_run_turn_sends_payload_and_returns_message_on_idle() -> None:
                 "text": "research AAPL",
                 "attachments": [{"source_path": "/tmp/a.pdf", "parsed_path": "/tmp/a.md"}],
                 "additional_context": "ctx-block",
+                "metadata": {"background_input": {"input_id": "input", "source": "background"}},
             },
             "runtime_context": {"example.runtime": "opaque-value"},
         }

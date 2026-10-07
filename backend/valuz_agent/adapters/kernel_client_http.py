@@ -476,6 +476,7 @@ class HttpKernelClient:
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
         runtime_context: dict[str, str] | None = None,
+        input_metadata: dict[str, Any] | None = None,
     ) -> MessageData:
         import websockets
 
@@ -509,6 +510,7 @@ class HttpKernelClient:
                 "text": text,
                 "attachments": attachments or [],
                 "additional_context": additional_context,
+                **({"metadata": input_metadata} if input_metadata is not None else {}),
             }
         }
         if runtime_context is not None:

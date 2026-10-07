@@ -92,6 +92,7 @@ class SessionLibrary:
         *,
         input_id: str | None = None,
         task_check_config: Any | None = None,
+        presentation: dict[str, str] | None = None,
     ) -> SessionInputReceipt:
         """Idempotently append background work without claiming the human's staged files.
 
@@ -109,10 +110,12 @@ class SessionLibrary:
             SessionNotRunnable,
         )
         from valuz_agent.modules.sessions.models import QueuedInputRow
+        from valuz_agent.modules.sessions.presentation import validate_presentation
         from valuz_agent.modules.sessions.run_orchestrator import schedule_drain
         from valuz_agent.modules.sessions.service import QUEUE_SOFT_CAP
         from valuz_agent.modules.sessions.task_checks import CONFIG_KEY, fresh_config
 
+        presentation = validate_presentation(presentation)
         if not text.strip():
             raise ValueError("background input must not be empty")
         key = input_id or uuid4().hex
@@ -142,6 +145,7 @@ class SessionLibrary:
                         "text": text,
                         "attachments": [],
                         "source": "background",
+                        **({"presentation": presentation} if presentation is not None else {}),
                         CONFIG_KEY: check_config,
                     },
                     status="queued",
@@ -157,6 +161,8 @@ class SessionLibrary:
                 "source"
             ) != "background":
                 raise ValueError("input_id was reused for different content")
+            if (existing.input or {}).get("presentation") != presentation:
+                raise ValueError("input_id was reused for different presentation")
             previous_config = (existing.input or {}).get(CONFIG_KEY) or {}
             stable_config = {
                 k: v for k, v in check_config.items() if k not in {"run_id", "revision"}

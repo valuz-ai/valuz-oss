@@ -368,6 +368,7 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
         pre_turn=None,
         user_id=None,
         host_ref=None,
+        input_metadata=None,
     ):
         assert user_id == OWNER
         # A drained item is a full chat turn, so it must carry the full

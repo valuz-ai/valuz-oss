@@ -300,6 +300,7 @@ class KernelClient(Protocol):
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
         runtime_context: dict[str, str] | None = None,
+        input_metadata: dict[str, Any] | None = None,
     ) -> MessageData: ...
 
     async def runtime_availability(self) -> dict[str, RuntimeAvailability]: ...
@@ -713,6 +714,7 @@ class InProcessKernelClient:
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
         runtime_context: dict[str, str] | None = None,
+        input_metadata: dict[str, Any] | None = None,
     ) -> MessageData:
         # Remote analog: the WS /run channel. The wire shape is
         # {"message": {"text": ..., "attachments": [...],
@@ -731,7 +733,12 @@ class InProcessKernelClient:
         message = await _orchestrator().run_turn(
             user_id,
             session_id,
-            UserMessage(text=text, attachments=atts, additional_context=additional_context),
+            UserMessage(
+                text=text,
+                attachments=atts,
+                additional_context=additional_context,
+                metadata=input_metadata or {},
+            ),
             runtime_context=runtime_context,
         )
         return _message_to_data(message)
@@ -1372,6 +1379,7 @@ async def run_turn(
     additional_context: str = "",
     *,
     pre_turn: Callable[[], Awaitable[None]] | None = None,
+    input_metadata: dict[str, Any] | None = None,
 ) -> MessageData:
     """Drive one turn on the session's execution kernel.
 
@@ -1430,6 +1438,7 @@ async def run_turn(
         attachments,
         additional_context,
         runtime_context=runtime_context,
+        **({"input_metadata": input_metadata} if input_metadata is not None else {}),
     )
 
 

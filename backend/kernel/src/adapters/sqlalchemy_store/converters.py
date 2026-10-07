@@ -425,6 +425,7 @@ def dict_to_mcp(data: dict[str, Any]) -> McpServerConfig:
 def user_message_to_dict(msg: UserMessage) -> dict[str, Any]:
     return {
         "text": msg.text,
+        "metadata": msg.metadata,
         "attachments": [
             {"source_path": a.source_path, "parsed_path": a.parsed_path} for a in msg.attachments
         ],
@@ -447,7 +448,9 @@ def dict_to_user_message(data: dict[str, Any]) -> UserMessage:
         )
         for a in raw_attachments
     )
-    return UserMessage(text=str(data.get("text", "")), attachments=attachments)
+    return UserMessage(
+        text=str(data.get("text", "")), attachments=attachments, metadata=data.get("metadata") or {}
+    )
 
 
 # -- Message --

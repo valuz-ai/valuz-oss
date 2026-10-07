@@ -308,6 +308,18 @@ async def _drain_queue_after_turn(
 
             head_id = head.id
             payload = head.input or {}
+            from valuz_agent.modules.sessions.presentation import validate_presentation
+
+            input_metadata = None
+            if payload.get("source") == "background":
+                display = validate_presentation(payload.get("presentation"))
+                input_metadata = {
+                    "background_input": {
+                        "input_id": head_id,
+                        "source": "background",
+                        **({"presentation": display} if display is not None else {}),
+                    }
+                }
             check_config, host_ref = queued_check_input(payload, head_id)
             text = str(payload.get("text") or "")
             attachments = list(payload.get("attachments") or [])
@@ -424,6 +436,7 @@ async def _drain_queue_after_turn(
                     event_bus,
                     on_message=on_message,
                     queued_attachments=attachments,
+                    **({"input_metadata": input_metadata} if input_metadata is not None else {}),
                     on_outcome=record_outcome,
                     # A queued follow-up is a chat turn like any other, and it
                     # can run arbitrarily long after the send that enqueued it

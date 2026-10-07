@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -50,6 +51,16 @@ class UserMessage:
     text: str
     attachments: tuple[Attachment, ...] = ()
     additional_context: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.metadata, dict):
+            raise ValueError("message metadata must be a JSON object")
+        try:
+            detached = json.loads(json.dumps(self.metadata, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("message metadata must contain only JSON values") from exc
+        object.__setattr__(self, "metadata", detached)
 
 
 # -- Model provider + settings --

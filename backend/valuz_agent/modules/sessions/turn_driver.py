@@ -166,6 +166,7 @@ async def run_session_to_idle(
     pre_turn: PreTurnHook | None = None,
     user_id: str,
     host_ref: HostRef | None = None,
+    input_metadata: dict[str, Any] | None = None,
 ) -> str:
     """Drive one agent turn to completion and return the final session status.
 
@@ -303,6 +304,7 @@ async def run_session_to_idle(
                     for source, parsed in attachment_specs
                 ],
                 additional_context=additional_context,
+                **({"input_metadata": input_metadata} if input_metadata is not None else {}),
                 # Converge capabilities INSIDE run_turn — after the turn's
                 # kernel is allocated, so the write reaches the instance that
                 # runs the turn instead of only the durable.
@@ -349,6 +351,11 @@ async def run_session_to_idle(
                             type="user_message",
                             data={
                                 "message": content,
+                                **(
+                                    {"metadata": input_metadata}
+                                    if input_metadata is not None
+                                    else {}
+                                ),
                                 "attachments": [
                                     {"source_path": source, "parsed_path": parsed}
                                     for source, parsed in attachment_specs

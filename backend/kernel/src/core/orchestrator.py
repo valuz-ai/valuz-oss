@@ -646,7 +646,9 @@ class _MessageObserverSink:
         private_tool_patterns: tuple[str, ...] = (),
         mode_persist: Callable[[str], Awaitable[None]] | None = None,
         session_id: str = "",
+        input_metadata: dict[str, Any] | None = None,
     ) -> None:
+        self._input_metadata = copy.deepcopy(input_metadata or {})
         self._inner = inner
         self._message_id = message_id
         self._session_id = session_id
@@ -748,6 +750,12 @@ class _MessageObserverSink:
         return False
 
     async def emit(self, event: Event) -> None:
+        if event.type == "user_message":
+            # Runtime-authored data cannot forge or erase host presentation.
+            data = {k: v for k, v in event.data.items() if k != "metadata"}
+            if self._input_metadata:
+                data["metadata"] = copy.deepcopy(self._input_metadata)
+            event = Event(type=event.type, data=data, timestamp=event.timestamp)
         # Host-declared private tools (protected-builtins v2 decrypt): the model
         # already consumed the output inside the runtime loop, so dropping the
         # normalized echo here keeps the plaintext off BOTH the transcript
@@ -1948,6 +1956,7 @@ class SessionOrchestrator:
             user_message=user_message,
             started_at=now_ms(),
             status="running",
+            metadata=copy.deepcopy(user_message.metadata),
         )
         # Keep the trusted host snapshot with this message, not just the
         # mutable Session. Later turns can choose another policy without
@@ -2042,6 +2051,7 @@ class SessionOrchestrator:
             message_id=message.id,
             session_id=session.id,
             user_prompt=current_task_prompt,
+            input_metadata=user_message.metadata,
             citation_policy_available=any(Path(path).name == "citation" for path in session.skills),
             citation_quality_policy=citation_policy_snapshot,
             allowed_document_ids=document_scope,

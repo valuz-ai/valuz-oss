@@ -33,6 +33,23 @@ export interface components {
             /** @description Existing owner/project/agent-bound chat session. Incompatible with task, code or worktree execution. Omitted creates a fresh session per run. */
             target_session_id?: string | null;
         };
+        /** @description Trusted host display hint, accepted only by the background session facade. */
+        BackgroundInputPresentation: {
+            /** @enum {string} */
+            kind: "personal_work_result" | "personal_work_attention";
+            work_ref_id: string;
+            project_id?: string;
+            task_id?: string;
+            session_id?: string;
+            target_id?: string;
+            status?: string;
+        };
+        BackgroundInputMetadata: {
+            input_id: string;
+            /** @enum {string} */
+            source: "background";
+            presentation?: components["schemas"]["BackgroundInputPresentation"];
+        };
     };
     responses: never;
     parameters: never;

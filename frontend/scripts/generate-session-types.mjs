@@ -18,7 +18,7 @@ try {
 import json,sys,yaml
 from pathlib import Path
 spec=yaml.safe_load(Path('api/openapi.yaml').read_text())
-parts={name:spec['components']['schemas'][name] for name in ('SessionInputReceipt','AutomationAgentExecution')}
+parts={name:spec['components']['schemas'][name] for name in ('SessionInputReceipt','AutomationAgentExecution','BackgroundInputPresentation','BackgroundInputMetadata')}
 Path(sys.argv[1]).write_text(json.dumps({'openapi':spec['openapi'],'info':spec['info'],'paths':{},'components':{'schemas':parts}}))
 `, contract], repo);
   run("npm", ["exec", "--yes", "--package=openapi-typescript@7.12.0", "--", "openapi-typescript", contract,

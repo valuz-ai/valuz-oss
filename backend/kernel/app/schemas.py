@@ -52,6 +52,7 @@ class AttachmentSchema(BaseModel):
 class UserMessageSchema(BaseModel):
     text: str
     attachments: list[AttachmentSchema] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class McpHttpServerConfigSchema(BaseModel):

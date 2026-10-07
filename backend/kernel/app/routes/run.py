@@ -39,8 +39,10 @@ def _parse_user_message(msg: dict[str, Any]) -> UserMessage:
 
     Accepts the structured shape
     ``{"text": str, "attachments": [{"source_path": str, "parsed_path": str?}],
-    "additional_context": str}``. ``attachments`` and ``additional_context`` are
-    optional; ``parsed_path`` is optional per attachment. The legacy ``filepath``
+    "additional_context": str, "metadata": object}``. ``metadata`` is an
+    optional trusted host envelope (JSON values only), not a user-facing send
+    field. ``attachments`` and ``additional_context`` are optional;
+    ``parsed_path`` is optional per attachment. The legacy ``filepath``
     key is still read (as ``source_path``) for callers mid-migration. The legacy
     string ``message`` form is rejected so callers migrate to the new contract.
     """
@@ -82,6 +84,7 @@ def _parse_user_message(msg: dict[str, Any]) -> UserMessage:
         text=text,
         attachments=tuple(attachments),
         additional_context=raw_additional,
+        metadata=raw.get("metadata", {}),
     )
 
 
@@ -177,10 +180,7 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
             if runtime_context is not None and (
                 not isinstance(runtime_context, dict)
                 or not all(
-                    isinstance(key, str)
-                    and key
-                    and isinstance(value, str)
-                    and value
+                    isinstance(key, str) and key and isinstance(value, str) and value
                     for key, value in runtime_context.items()
                 )
             ):

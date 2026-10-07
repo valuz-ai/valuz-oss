@@ -10726,7 +10726,9 @@ components:
           type: object
           description: >-
             Flat string map. Final message.assistant.delta frames may carry a
-            JSON-encoded CitationBundleV1 under citation_bundle.
+            JSON-encoded CitationBundleV1 under citation_bundle. message.user
+            frames may carry JSON-encoded trusted Message.metadata under
+            metadata; its background_input follows BackgroundInputMetadata.
           additionalProperties:
             type: string
 
@@ -10840,6 +10842,28 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SessionEventEnvelope"
+
+    BackgroundInputPresentation:
+      type: object
+      additionalProperties: false
+      required: [kind, work_ref_id]
+      description: Trusted host display hint, accepted only by the background session facade.
+      properties:
+        kind: {type: string, enum: [personal_work_result, personal_work_attention]}
+        work_ref_id: {type: string, minLength: 1, maxLength: 512}
+        project_id: {type: string, minLength: 1, maxLength: 512}
+        task_id: {type: string, minLength: 1, maxLength: 512}
+        session_id: {type: string, minLength: 1, maxLength: 512}
+        target_id: {type: string, minLength: 1, maxLength: 512}
+        status: {type: string, minLength: 1, maxLength: 512}
+
+    BackgroundInputMetadata:
+      type: object
+      required: [input_id, source]
+      properties:
+        input_id: {type: string, maxLength: 36}
+        source: {type: string, enum: [background]}
+        presentation: {$ref: '#/components/schemas/BackgroundInputPresentation'}
 
     # ── Session input queue ────────────────────────────────────────
 
