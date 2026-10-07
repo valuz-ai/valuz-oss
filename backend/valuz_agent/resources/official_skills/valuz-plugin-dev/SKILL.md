@@ -1,15 +1,17 @@
 ---
 name: valuz-plugin-dev
-description: 在会话里从零开发一个第三方 Valuz 插件（给界面加页面、标签页、按钮、工具卡片、设置分区，读项目 / 产物 / 知识库 / 连接器的数据，跑代码自动化），构建、测试、装进用户本机的 Valuz 并排错，最后打包发布。Use when the user wants to build, extend, debug, install or publish a Valuz plugin / extension — e.g. "在项目页加一个显示 XX 数据的标签页", "给会话标题栏加个导出按钮", "做一个插件把连接器的数据展示出来", "把这个插件发布给团队".
+description: 在会话里从零开发一个Valuz 应用插件（给界面加页面、标签页、按钮、工具卡片、设置分区，读项目 / 产物 / 知识库 / 连接器的数据，跑代码自动化），构建、测试、装进用户本机的 Valuz 并排错，最后打包发布。Use when the user wants to build, extend, debug, install or publish a Valuz App Plugin — e.g. "在项目页加一个显示 XX 数据的标签页", "给会话标题栏加个导出按钮", "做一个插件把连接器的数据展示出来", "把这个插件发布给团队".
 version: 1
 tags: [official, plugin]
 ---
 
-# Valuz 插件开发
+# Valuz 应用插件开发
 
-你要为用户写一个**第三方 Valuz 插件**：一个 zip 包，里面是清单 `valuz-plugin.json` + 构建好的前端 `frontend/index.js`（ESM）+ 可选的样式、文案、自动化脚本。
+你要为用户写一个**Valuz 应用插件**：一个 zip 包，里面是清单 `valuz-plugin.json` + 构建好的前端 `frontend/index.js`（ESM）+ 可选的样式、文案、自动化脚本。
 插件跑在用户本机的 Valuz 界面里，只能通过公开的扩展面做事：**新增**页面 / 插槽内容 / 设置分区 / 侧栏入口，用 `ctx.valuz` 调 Valuz 自带的后端能力。
 它**不能**删除或替换第一方界面，没有自己的后端进程（插件 API 1.x 不支持 `backend`）。
+
+应用插件（App Plugin）扩展 Valuz 的界面与功能；智能体插件（Agent Plugin）打包技能和 MCP 连接器，由 `valuz plugin agent …` 管理。官方 / 第三方是来源维度，与插件类型独立。
 
 三件工具，缺一不可，各管一段：
 
@@ -38,7 +40,7 @@ tags: [official, plugin]
 4. **测试**：`valuz-plugin test`。至少断言：插件加载成功、注册了你要的插槽 / 页面、关键组件能渲染（`createTestHost` + `mockValuz`，见 `references/examples.md`）。**测试没过不要往下走。**
 5. **校验**：`valuz-plugin validate`（或 `extension_manager validate`）。errors 必须为 0；warnings 读一遍，能修就修。
 6. **装进 Valuz**（需要用户确认，**你不能绕过卡片**）：
-   - 开发中用 `extension_manager dev_link {path}`：弹出确认卡片（插件 id、目录、权限、sha256…）。**调用一次后停下等用户点确认**，不要重复调用，不要用 shell 执行 `valuz plugin install`。`path` 必须在当前会话工作区内。确认之后，这个目录以后每次重新构建都会自动重载，**不再弹卡片**。
+   - 开发中用 `extension_manager dev_link {path}`：弹出确认卡片（插件 id、目录、权限、sha256…）。**调用一次后停下等用户点确认**，不要重复调用，不要用 shell 执行 `valuz plugin app install`。`path` 必须在当前会话工作区内。确认之后，这个目录以后每次重新构建都会自动重载，**不再弹卡片**。
    - 要固定版本时：`extension_manager pack {path}` 得到 zip，再 `extension_manager install {source_path}`（同样是卡片，对这个固定的 zip 确认一次）。
    - 安装类动作只在本地会话（桌面端）可用；云端会话里只能写、校验、打包、发布。
 7. **看结果**：用户确认后 `extension_manager status {id}` 看状态（`enabled` / `broken` / `incompatible` / `requires-unmet` / `blocked`）和原因，`extension_manager logs {id}` 看加载与运行日志。**你看不到界面**：界面好不好看、位置对不对由用户判断，请他描述或截图；你负责读日志排错。

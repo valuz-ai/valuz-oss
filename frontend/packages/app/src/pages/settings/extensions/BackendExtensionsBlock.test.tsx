@@ -120,7 +120,7 @@ describe("BackendExtensionsBlock — list", () => {
       ]),
     );
 
-    expect(screen.getByRole("heading", { name: "后端扩展" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "后端插件" })).not.toBeNull();
 
     const sites = rowEl(container, "commercial-sites");
     expect(within(sites).getByText("commercial-sites")).not.toBeNull();
@@ -321,7 +321,7 @@ describe("BackendExtensionsBlock — read-only deployment", () => {
     const set = vi.spyOn(extensionsApi, "setBackendExtensionEnabled");
 
     expect(
-      screen.getAllByText("此部署的扩展由运营方统一管理，无法在这里更改。"),
+      screen.getAllByText("此部署的插件由运营方统一管理，无法在这里更改。"),
     ).toHaveLength(1);
     for (const id of ["a", "b"]) {
       const toggle = switchOf(container, id);
@@ -451,7 +451,7 @@ describe("BackendExtensionsBlock — toggling", () => {
         "p：extensions are managed by the operator here",
       ),
     );
-    await screen.findByText("此部署的扩展由运营方统一管理，无法在这里更改。");
+    await screen.findByText("此部署的插件由运营方统一管理，无法在这里更改。");
     expect(switchOf(container, "p").disabled).toBe(true);
     expect(screen.queryByText(RESTART_HINT)).toBeNull();
   });
@@ -471,7 +471,7 @@ describe("BackendExtensionsBlock — toggling", () => {
 describe("BackendExtensionsBlock — states", () => {
   it("shows a short 'no backend extensions' state, not an error, when no plugin host is composed", async () => {
     const { container } = await renderBlock(listOf([], { composed: false }));
-    expect(screen.getByText("此构建没有后端扩展")).not.toBeNull();
+    expect(screen.getByText("此构建没有后端插件")).not.toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(container.querySelector('[role="switch"]')).toBeNull();
     expect(screen.queryByText(RESTART_HINT)).toBeNull();
@@ -479,7 +479,7 @@ describe("BackendExtensionsBlock — states", () => {
 
   it("says so when a plugin host composed nothing", async () => {
     await renderBlock(listOf([]));
-    expect(screen.getByText("后端没有装配任何扩展")).not.toBeNull();
+    expect(screen.getByText("后端没有装配任何插件")).not.toBeNull();
   });
 
   it("treats a missing route (404) as 'no backend extensions'", async () => {
@@ -487,7 +487,7 @@ describe("BackendExtensionsBlock — states", () => {
       new ApiError("API 404: Not Found", 404),
     );
     render(<BackendExtensionsBlock />);
-    await screen.findByText("此构建没有后端扩展");
+    await screen.findByText("此构建没有后端插件");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -497,7 +497,7 @@ describe("BackendExtensionsBlock — states", () => {
     );
     render(<BackendExtensionsBlock />);
     expect(screen.getByRole("status", { name: "Loading" })).not.toBeNull();
-    expect(screen.getByRole("heading", { name: "后端扩展" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "后端插件" })).not.toBeNull();
   });
 
   it("offers a retry when the list cannot be read", async () => {
@@ -507,7 +507,7 @@ describe("BackendExtensionsBlock — states", () => {
       .mockResolvedValue(listOf([row({ id: "recovered" })]));
     render(<BackendExtensionsBlock />);
 
-    await screen.findByText("无法读取后端扩展");
+    await screen.findByText("无法读取后端插件");
     expect(screen.getByText("API 500: kaboom")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
 

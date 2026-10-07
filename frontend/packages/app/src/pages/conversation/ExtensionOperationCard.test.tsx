@@ -79,7 +79,7 @@ describe("ExtensionOperationCard", () => {
         onCancel={onCancel}
       />,
     );
-    expect(screen.getByText("安装第三方插件")).toBeTruthy();
+    expect(screen.getByText("安装应用插件")).toBeTruthy();
     expect(screen.getByText("Acme 看板")).toBeTruthy();
     expect(screen.getByText("v1.2.0")).toBeTruthy();
     expect(screen.getByText("更新自 v1.0.0")).toBeTruthy();
@@ -115,7 +115,7 @@ describe("ExtensionOperationCard", () => {
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.getByText("链接插件开发目录")).toBeTruthy();
+    expect(screen.getByText("链接应用插件开发目录")).toBeTruthy();
     expect(screen.getByText("/work/acme")).toBeTruthy();
     expect(screen.getByText("未声明任何权限")).toBeTruthy();
     expect(screen.getByText(/之后每次重新构建都会直接重载/)).toBeTruthy();
@@ -140,7 +140,7 @@ describe("ExtensionOperationCard", () => {
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.getByText("发布插件")).toBeTruthy();
+    expect(screen.getByText("发布应用插件")).toBeTruthy();
     expect(screen.getByText("组织")).toBeTruthy();
     expect(screen.getByText("dist-1")).toBeTruthy();
     expect(screen.getByText("dist-2")).toBeTruthy();
@@ -161,7 +161,7 @@ describe("ExtensionOperationCard", () => {
     );
     const confirm = screen.getByRole("button", { name: "卸载" });
     expect(confirm.getAttribute("data-variant")).toBe("destructive");
-    expect(screen.getByText("同时删除插件数据")).toBeTruthy();
+    expect(screen.getByText("同时删除应用插件数据")).toBeTruthy();
     // An uninstall has no permissions to list.
     expect(screen.queryByText("权限")).toBeNull();
   });
@@ -174,7 +174,7 @@ describe("ExtensionOperationCard", () => {
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.getByText("插件操作已完成")).toBeTruthy();
+    expect(screen.getByText("应用插件操作已完成")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
     rerender(
       <ExtensionOperationCard

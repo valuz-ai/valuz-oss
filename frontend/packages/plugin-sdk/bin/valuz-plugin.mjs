@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // valuz-plugin — the @valuz/plugin-sdk command line: create, build, dev, test,
-// validate and pack third-party Valuz plugins (task card 04, doc 12 §7).
+// validate and pack Valuz App Plugins (task card 04, doc 12 §7).
 //
 // Plain Node ESM, no build step. esbuild and React are resolved from the SDK's
 // own dependencies (createRequire relative to the SDK, not the working

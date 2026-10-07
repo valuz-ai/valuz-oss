@@ -1,11 +1,11 @@
 # @valuz/plugin-sdk
 
-The SDK for **third-party Valuz plugins**: a frontend module that adds buttons,
+The SDK for **Valuz App Plugins**: a frontend module that adds buttons,
 cards, tabs, pages and settings sections to the Valuz desktop app, and uses
 Valuz's own backend (projects, artifacts, knowledge, conversations, connector
 tools, code automations, plugin storage) instead of shipping one.
 
-Third-party plugins run on local deployments (desktop / local backend) only;
+Third-party App Plugins run on local deployments (desktop / local backend) only;
 the cloud does not load them. They are installed at runtime into the data
 directory, are always optional, and can only add to Valuz — never remove or
 replace its own surfaces.
@@ -18,11 +18,13 @@ cd acme-dashboard
 valuz-plugin build && valuz-plugin test && valuz-plugin validate
 valuz-plugin dev            # watch + link this directory into the running Valuz
 valuz-plugin pack           # dist/acme.dashboard-0.1.0.zip (+ sha256)
-valuz plugin install dist/acme.dashboard-0.1.0.zip       # or Settings → Extensions → Third-party plugins
+valuz plugin app install dist/acme.dashboard-0.1.0.zip       # or Settings → Plugins → App Plugins
 ```
 
 `valuz-plugin` is this package's bin (`bin/valuz-plugin.mjs`); inside a Valuz
-session it is on the agent's PATH. `valuz plugin …` is the Valuz CLI.
+session it is on the agent's PATH. `valuz plugin app …` manages App Plugins through the Valuz CLI.
+Agent Plugins bundle skills and MCP connectors and use `valuz plugin agent …`;
+plugin origin (official or third-party) is independent of the plugin type.
 
 ## Package layout
 
@@ -61,7 +63,7 @@ export default definePlugin({
 ```
 
 - **Imports**: only `react`, `react-dom`, `@valuz/plugin-sdk` and `@valuz/plugin-sdk/ui` come from the host (the build rewrites them to `globalThis.__VALUZ_PLUGIN_SHARED__`); other npm packages are bundled; internal Valuz packages fail the build.
-- **Ids** are local; Valuz namespaces them as `x:<plugin id>:<id>`. Pages live under `/x/<plugin id>/`; settings sections land in the Extensions group; sidebar icon ids: `assistant`, `knowledge`, `skills`, `scheduled`, `playbooks`, `activity`, `settings`, `agents`, `connectors`, `plugins`, `marketplace`, `projectTasks`, `star`, `compass`, `watchlist`, `portfolio`, `dashboard`, `globe`.
+- **Ids** are local; Valuz namespaces them as `x:<plugin id>:<id>`. Pages live under `/x/<plugin id>/`; settings sections land in the Plugins group; sidebar icon ids: `assistant`, `knowledge`, `skills`, `scheduled`, `playbooks`, `activity`, `settings`, `agents`, `connectors`, `plugins`, `marketplace`, `projectTasks`, `star`, `compass`, `watchlist`, `portfolio`, `dashboard`, `globe`.
 - **Public slots** (props in `src/types.ts`, `SlotProps<"…">`): `conversation.title.actions`, `conversation.header.badges`, `conversation.turn.actions`, `conversation.tool-card.{tool}` (bare tool name; `input` parsed, `outputText`, `outputJson`), `conversation.composer.plus.menu-items`, `conversation.empty.extra`, `context-panel.tabs` (keyed), `project.detail.tabs` (keyed), `project.detail.header.actions`, `resource.{type}.actions`, `shell.topbar.actions`, `task.detail.sections`.
 - **React hooks**: `useTranslation()`, `useValuz()`, `usePluginConfig()`, `useHostContext()`. **Host actions**: `host.navigate / openSession / openProject / toast / confirm / openExternal / copyText / draftConversation`.
 
@@ -105,7 +107,7 @@ host.renderSlot("project.detail.tabs", { projectId: "p1", navigate: () => {} });
 
 ## Publishing
 
-`valuz plugin publish dist/<zip> --scope personal|org|global [--distribution <id>]`
+`valuz plugin app publish dist/<zip> --scope personal|org|global [--distribution <id>]`
 (signed in with `valuz auth login`, or a personal API key `--api-key vzp_…` in
 CI); from a Valuz session, `extension_manager publish` (the user confirms a
 card). Every submission goes through automatic checks (package, manifest,

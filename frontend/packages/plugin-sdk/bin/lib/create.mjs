@@ -160,8 +160,8 @@ export function createPlugin(dir, options) {
       version: "0.1.0",
       name: { "zh-CN": name, "en-US": name },
       description: {
-        "zh-CN": `${name}：一个 Valuz 插件`,
-        "en-US": `${name}: a Valuz plugin`,
+        "zh-CN": `${name}：一个 Valuz 应用插件`,
+        "en-US": `${name}: a Valuz App Plugin`,
       },
       publisher: { name: publisher },
       engines: { "valuz-plugin-api": "^1.0.0" },

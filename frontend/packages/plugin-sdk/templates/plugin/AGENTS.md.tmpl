@@ -1,10 +1,12 @@
-# __PLUGIN_NAME__ — a Valuz plugin
+# __PLUGIN_NAME__ — a Valuz App Plugin
 
-This directory is a third-party **Valuz plugin** (`__PLUGIN_ID__`). Valuz loads
+This directory is a **Valuz App Plugin** (`__PLUGIN_ID__`). Valuz loads
 its frontend bundle into the desktop app and gives it a restricted context: it
 can add buttons, cards, tabs and pages in public places of the UI, and use
 Valuz's own backend (projects, artifacts, knowledge, conversations, connector
 tools, code automations, storage). It has no backend of its own.
+
+Agent Plugins bundle skills and MCP connectors and use `valuz plugin agent …`; this App Plugin uses `valuz plugin app …`.
 
 ## Layout
 
@@ -30,10 +32,10 @@ tools, code automations, storage). It has no backend of its own.
 | `valuz-plugin validate` | Check the manifest, files and the built bundle |
 | `valuz-plugin pack` | Validate and zip into `dist/<id>-<version>.zip` (prints the sha256) |
 
-Install into Valuz: `valuz-plugin dev` (watch + link), or `valuz plugin dev <dir>`
+Install into Valuz: `valuz-plugin dev` (watch + link), or `valuz plugin app dev <dir>`
 (link only; Valuz picks up every later `valuz-plugin build` by itself), or
-`valuz-plugin pack` then `valuz plugin install dist/<zip>`.
-Check it with `valuz plugin status __PLUGIN_ID__` / `valuz plugin logs __PLUGIN_ID__`.
+`valuz-plugin pack` then `valuz plugin app install dist/<zip>`.
+Check it with `valuz plugin app status __PLUGIN_ID__` / `valuz plugin app logs __PLUGIN_ID__`.
 
 After every change run `valuz-plugin test` and `valuz-plugin validate`. Tests
 passing is not "done": the developer confirms the UI inside Valuz.
@@ -145,7 +147,7 @@ Errors are `ValuzApiError { status, code, message }`.
 
 - **Config**: declare `"config"` in the manifest as a JSON Schema
   (`{"type": "object", "properties": {…}}`); Valuz renders the form in
-  Settings → Extensions; read it with `usePluginConfig()` / `ctx.config`.
+  Settings → Plugins; read it with `usePluginConfig()` / `ctx.config`.
 - **Storage**: per user × plugin JSON key-value store (key ≤ 200 chars, value
   ≤ 256 KiB, 10 MiB total), on this device only.
 - **Automations**: computation runs as a code automation the manifest declares;

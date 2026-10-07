@@ -107,7 +107,7 @@ func useFakeExtBackend(t *testing.T, installApplication string) *fakeExtBackend 
 
 func TestExtListShowsStatusAndPendingRestart(t *testing.T) {
 	useFakeExtBackend(t, "applied")
-	out, _, err := runCmd(t, Root(), "ext", "list")
+	out, _, err := runCmd(t, Root(), "plugin", "builtin", "list")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestExtListShowsStatusAndPendingRestart(t *testing.T) {
 
 func TestExtListJSONIsTheBackendShape(t *testing.T) {
 	useFakeExtBackend(t, "applied")
-	out, _, err := runCmd(t, Root(), "ext", "list", "-o", "json")
+	out, _, err := runCmd(t, Root(), "plugin", "builtin", "list", "-o", "json")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestExtListJSONIsTheBackendShape(t *testing.T) {
 
 func TestExtEnableRecordsTheDesire(t *testing.T) {
 	f := useFakeExtBackend(t, "applied")
-	out, _, err := runCmd(t, Root(), "ext", "enable", "commercial.sites")
+	out, _, err := runCmd(t, Root(), "plugin", "builtin", "enable", "commercial.sites")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestExtEnableRecordsTheDesire(t *testing.T) {
 
 func TestExtDisableRequiredSurfacesTheServerDetail(t *testing.T) {
 	useFakeExtBackend(t, "applied")
-	_, _, err := runCmd(t, Root(), "ext", "disable", "commercial.identity")
+	_, _, err := runCmd(t, Root(), "plugin", "builtin", "disable", "commercial.identity")
 	if err == nil || !strings.Contains(err.Error(), "is required") {
 		t.Fatalf("want the 409 detail, got %v", err)
 	}
@@ -159,7 +159,7 @@ func TestExtDisableRequiredSurfacesTheServerDetail(t *testing.T) {
 
 func TestExtDshListGoesThroughPluginManager(t *testing.T) {
 	f := useFakeExtBackend(t, "applied")
-	out, _, err := runCmd(t, Root(), "ext", "dsh", "list")
+	out, _, err := runCmd(t, Root(), "plugin", "dsh", "list")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestExtDshListGoesThroughPluginManager(t *testing.T) {
 
 func TestExtDshAddInspectsAndStopsWithoutYes(t *testing.T) {
 	f := useFakeExtBackend(t, "applied")
-	out, _, err := runCmd(t, Root(), "ext", "dsh", "add", "dsh-hello-tool")
+	out, _, err := runCmd(t, Root(), "plugin", "dsh", "add", "dsh-hello-tool")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestExtDshAddInspectsAndStopsWithoutYes(t *testing.T) {
 
 func TestExtDshAddInstallsTheInspectedSpec(t *testing.T) {
 	f := useFakeExtBackend(t, "restart-required")
-	out, _, err := runCmd(t, Root(), "ext", "dsh", "add", "dsh-hello-tool", "--yes")
+	out, _, err := runCmd(t, Root(), "plugin", "dsh", "add", "dsh-hello-tool", "--yes")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestExtDshAddInstallsTheInspectedSpec(t *testing.T) {
 
 func TestExtDshFailedInstallExitsNonZero(t *testing.T) {
 	useFakeExtBackend(t, "failed")
-	_, _, err := runCmd(t, Root(), "ext", "dsh", "add", "dsh-hello-tool", "--yes")
+	_, _, err := runCmd(t, Root(), "plugin", "dsh", "add", "dsh-hello-tool", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "registry unreachable") {
 		t.Fatalf("want the dsh diagnostic, got %v", err)
 	}

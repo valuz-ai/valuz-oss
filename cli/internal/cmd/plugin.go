@@ -19,7 +19,42 @@ import (
 	"code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/pluginpkg"
 )
 
-// newPluginCmd builds `valuz plugin ...` — third-party plugins
+// newPluginCmd is the single public entry point for all plugin families.
+// Manifest formats and HTTP endpoints belong to each family; they are not
+// interchangeable even though lifecycle verbs share the same names.
+func newPluginCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "plugin",
+		Short: "Manage agent, app, built-in and DSH plugins",
+		Long: "Choose the plugin family:\n\n" +
+			"  agent    skills and MCP connectors (Agent Plugins)\n" +
+			"  app      application pages, panels and automations (valuz-plugin.json)\n" +
+			"  builtin  built-in backend plugins (changes may need a restart)\n" +
+			"  dsh      native plugins of the managed DSH profile",
+	}
+	cmd.AddCommand(newAgentPluginCmd(), newAppPluginCmd(), newBuiltinPluginCmd(), newExtDshCmd())
+	// The unqualified verbs previously managed app plugins. Preserve scripts
+	// while keeping the help/completion surface unambiguous.
+	for _, legacy := range newAppPluginCommands() {
+		legacy.Hidden = true
+		warnLegacyPluginCommand(legacy, "valuz plugin app "+legacy.Name())
+		cmd.AddCommand(legacy)
+	}
+	return cmd
+}
+
+// warnLegacyPluginCommand writes compatibility notices to stderr. Cobra's
+// Deprecated field writes to stdout, which would break `-o json` consumers.
+func warnLegacyPluginCommand(cmd *cobra.Command, replacement string) {
+	if run := cmd.RunE; run != nil {
+		cmd.RunE = func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Deprecated: use `%s` instead of `%s`.\n", replacement, cmd.CommandPath())
+			return run(cmd, args)
+		}
+	}
+}
+
+// newAppPluginCmd builds `valuz plugin app ...` — application plugins
 // (docs/design/plugin-architecture/plugin-development 03/04/09, task card
 // 04 §D/§F). Three groups:
 //
@@ -29,16 +64,21 @@ import (
 //     list, status, logs, enable, disable, reload, uninstall;
 //   - the control plane (<cloud>/v1/extensions/submissions): publish,
 //     submissions — no local Valuz needed.
-func newPluginCmd() *cobra.Command {
+func newAppPluginCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "plugin",
-		Short: "Develop, install and publish third-party Valuz plugins",
-		Long: "Third-party Valuz plugins (valuz-plugin.json, plugin API " + pluginpkg.PluginAPIVersion + ").\n\n" +
+		Use:   "app",
+		Short: "Develop, install and publish application plugins",
+		Long: "Application plugins (valuz-plugin.json, plugin API " + pluginpkg.PluginAPIVersion + ").\n\n" +
 			"  validate, pack           check and zip a plugin directory (offline)\n" +
 			"  dev, install, list, …    manage the plugins of the local Valuz\n" +
 			"  publish, submissions     publish to your personal / org / global catalog",
 	}
-	cmd.AddCommand(
+	cmd.AddCommand(newAppPluginCommands()...)
+	return cmd
+}
+
+func newAppPluginCommands() []*cobra.Command {
+	return []*cobra.Command{
 		newPluginValidateCmd(),
 		newPluginPackCmd(),
 		newPluginDevCmd(),
@@ -52,8 +92,7 @@ func newPluginCmd() *cobra.Command {
 		newPluginUninstallCmd(),
 		newPluginPublishCmd(),
 		newPluginSubmissionsCmd(),
-	)
-	return cmd
+	}
 }
 
 const (
@@ -499,7 +538,7 @@ func newPluginStatusCmd() *cobra.Command {
 				printPluginDetail(out, p, list)
 				return nil
 			}
-			return errs.New(errs.KindUsage, "plugin %q is not installed (see `valuz plugin list`)", args[0])
+			return errs.New(errs.KindUsage, "app plugin %q is not installed (see `valuz plugin app list`)", args[0])
 		},
 	}
 	cmd.Flags().StringVarP(&output, flagOutput, "o", "", "output format: human|json")

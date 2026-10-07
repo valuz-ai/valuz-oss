@@ -1,6 +1,6 @@
 # __PLUGIN_NAME__
 
-A Valuz plugin (`__PLUGIN_ID__`).
+A Valuz App Plugin (`__PLUGIN_ID__`).
 
 ## Develop
 
@@ -16,9 +16,9 @@ valuz-plugin pack       # dist/__PLUGIN_ID__-<version>.zip + sha256
 
 ## Install
 
-- Development: `valuz plugin dev .` (or `valuz-plugin dev`) links this
+- Development: `valuz plugin app dev .` (or `valuz-plugin dev`) links this
   directory; every rebuild reloads the plugin in Valuz.
-- Package: `valuz-plugin pack`, then `valuz plugin install dist/<zip>` or
-  Settings → Extensions → Third-party plugins → Install.
+- Package: `valuz-plugin pack`, then `valuz plugin app install dist/<zip>` or
+  Settings → Plugins → App Plugins → Install.
 
 See `AGENTS.md` for the plugin rules, the public slots and the `ctx.valuz` API.

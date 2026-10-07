@@ -144,7 +144,7 @@ describe("renderToolCall — extension_manager", () => {
       output: envelope({ operation: operationRecord }),
       status: "success",
     });
-    expect(screen.getByText("插件操作已完成")).toBeTruthy();
+    expect(screen.getByText("应用插件操作已完成")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
   });
 

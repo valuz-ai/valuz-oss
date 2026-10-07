@@ -111,7 +111,7 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   vi.restoreAllMocks();
-  // A bare OSS app: the backend half of 「Valuz 扩展」 has its own tests.
+  // A bare OSS app: the backend half of 「内置插件」 has its own tests.
   vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
     composed: false,
     editable: true,
@@ -131,16 +131,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ExtensionsSection — Valuz extensions", () => {
+describe("ExtensionsSection — built-in plugins", () => {
   // Order matters: ``pluginHost`` is a process-wide singleton, so the empty
   // state has to be asserted before any test loads a plugin.
   it("shows an empty state while no Valuz extension is loaded", async () => {
     vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
     render(<ExtensionsSection />);
     // Let the backend half settle so its state update lands inside the test.
-    await screen.findByText("此构建没有后端扩展");
-    expect(screen.getByRole("heading", { name: "扩展" })).not.toBeNull();
-    expect(screen.getByText("当前没有已加载的界面扩展")).not.toBeNull();
+    await screen.findByText("此构建没有后端插件");
+    expect(screen.getByRole("heading", { name: "插件" })).not.toBeNull();
+    expect(screen.getByText("当前没有已加载的界面插件")).not.toBeNull();
   });
 
   it("lists plugin-host records live with status, error and legacy count", async () => {
@@ -206,7 +206,7 @@ describe("ExtensionsSection — backend-disabled extensions", () => {
 
     expect(within(row).getByText("后端已停用")).not.toBeNull();
     expect(within(row).queryByText("运行中")).toBeNull();
-    await screen.findByText("此构建没有后端扩展");
+    await screen.findByText("此构建没有后端插件");
   });
 });
 
@@ -216,10 +216,10 @@ describe("ExtensionsSection — oss-dsh-plugins", () => {
     await dshHost.unload("oss-dsh-plugins");
     try {
       render(<ExtensionsSection />);
-      await screen.findByText("此构建没有后端扩展");
+      await screen.findByText("此构建没有后端插件");
       expect(screen.queryByRole("heading", { name: "DSH 插件" })).toBeNull();
       // The page itself is core: its own list is still there.
-      expect(screen.getByRole("heading", { name: "Valuz 扩展" })).not.toBeNull();
+      expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();
     } finally {
       await dshHost.load(ossDshPluginsPlugin);
     }
@@ -232,7 +232,7 @@ describe("ExtensionsSection — oss-dsh-plugins", () => {
 });
 
 describe("ExtensionsSection — backend extensions", () => {
-  it("lists the backend plugins under 「Valuz 扩展」, beside the UI extensions", async () => {
+  it("lists the backend plugins under 「内置插件」, beside the UI plugins", async () => {
     vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
     vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
       composed: true,
@@ -256,10 +256,10 @@ describe("ExtensionsSection — backend extensions", () => {
     const { container } = render(<ExtensionsSection />);
     await screen.findByText("commercial-sites");
     const valuz = screen
-      .getByRole("heading", { name: "Valuz 扩展" })
+      .getByRole("heading", { name: "内置插件" })
       .closest("section")!;
-    expect(within(valuz).getByRole("heading", { name: "界面扩展" })).not.toBeNull();
-    expect(within(valuz).getByRole("heading", { name: "后端扩展" })).not.toBeNull();
+    expect(within(valuz).getByRole("heading", { name: "界面插件" })).not.toBeNull();
+    expect(within(valuz).getByRole("heading", { name: "后端插件" })).not.toBeNull();
     expect(
       valuz.contains(
         container.querySelector('[data-backend-extension="commercial-sites"]'),

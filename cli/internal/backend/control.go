@@ -61,6 +61,45 @@ func (c *ControlClient) Delete(ctx context.Context, path string, out any) error 
 	return c.do(ctx, http.MethodDelete, path, nil, out)
 }
 
+// Download writes a bounded binary response to dst. It uses the same bearer,
+// identity headers and typed backend errors as the JSON control requests. The
+// caller owns dst and should discard partial output when this returns an error.
+func (c *ControlClient) Download(ctx context.Context, path string, dst io.Writer, maxBytes int64) (int64, error) {
+	if maxBytes <= 0 {
+		return 0, errs.New(errs.KindUsage, "download size limit must be positive")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return 0, errs.Wrap(errs.KindInternal, err, "build GET %s request", path)
+	}
+	c.setHeaders(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return 0, errs.New(errs.KindTimeout, "GET %s timed out", path)
+		}
+		return 0, errs.Wrap(errs.KindUnreachable, err, "could not reach backend at %s", c.BaseURL)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return 0, c.classifyError(resp, http.MethodGet, path)
+	}
+	if resp.ContentLength > maxBytes {
+		return 0, errs.New(errs.KindUsage, "download exceeds the %d-byte package limit", maxBytes)
+	}
+	n, err := io.Copy(dst, io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return n, errs.New(errs.KindTimeout, "GET %s timed out", path)
+		}
+		return n, errs.Wrap(errs.KindInternal, err, "write %s download", path)
+	}
+	if n > maxBytes {
+		return n, errs.New(errs.KindUsage, "download exceeds the %d-byte package limit", maxBytes)
+	}
+	return n, nil
+}
+
 // MultipartField is one form field; a name may repeat (e.g. list values).
 type MultipartField struct {
 	Name  string
@@ -150,12 +189,7 @@ func (c *ControlClient) do(ctx context.Context, method, path string, body, out a
 // response into out (nil = discard) or classifies the error body.
 func (c *ControlClient) send(httpClient *http.Client, req *http.Request, path string, out any) error {
 	method := req.Method
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	for k, v := range c.ExtraHeaders {
-		req.Header.Set(k, v)
-	}
+	c.setHeaders(req)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -185,6 +219,15 @@ func (c *ControlClient) send(httpClient *http.Client, req *http.Request, path st
 	}
 
 	return c.classifyError(resp, method, path)
+}
+
+func (c *ControlClient) setHeaders(req *http.Request) {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	for k, v := range c.ExtraHeaders {
+		req.Header.Set(k, v)
+	}
 }
 
 // classifyError parses the known backend error shapes and maps them to

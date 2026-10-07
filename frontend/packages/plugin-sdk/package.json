@@ -2,7 +2,7 @@
   "name": "@valuz/plugin-sdk",
   "private": true,
   "version": "1.0.0",
-  "description": "SDK for third-party Valuz plugins: definePlugin, public slots, host bridge, Valuz client, build preset, test host",
+  "description": "SDK for Valuz App Plugins: definePlugin, public slots, host bridge, Valuz client, build preset, test host",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

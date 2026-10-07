@@ -87,6 +87,9 @@ describe("valuz-plugin CLI", () => {
     const dir = tempDir();
     const main = cli(["--help"], dir);
     expect(main.code).toBe(0);
+    expect(main.stdout).toContain("Valuz App Plugins");
+    expect(main.stdout).toContain("valuz plugin app dev <dir>");
+    expect(main.stdout).toContain("valuz plugin app install <zip>");
     for (const command of [
       "create",
       "build",
@@ -148,6 +151,13 @@ describe("valuz-plugin CLI", () => {
       locales: "locales",
     });
     expect(existsSync(manifest.$schema)).toBe(true);
+    const readme = readFileSync(path.join(dir, "README.md"), "utf8");
+    expect(readme).toContain("Valuz App Plugin");
+    expect(readme).toContain("valuz plugin app install");
+    expect(readme).toContain("Settings → Plugins → App Plugins");
+    const guidance = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+    expect(guidance).toContain("valuz plugin app status acme.hello");
+    expect(guidance).toContain("valuz plugin agent …");
     expect(readFileSync(path.join(dir, "CLAUDE.md"), "utf8").trim()).toBe(
       "@AGENTS.md",
     );

@@ -126,7 +126,7 @@ const renderBlock = async (
     .mockResolvedValue(listOf(plugins, over));
   const watch = vi.spyOn(thirdPartyApi, "watch").mockImplementation(never);
   const view = render(<ThirdPartyBlock />);
-  await screen.findByRole("heading", { name: "第三方插件" });
+  await screen.findByRole("heading", { name: "应用插件" });
   return { ...view, list, watch };
 };
 
@@ -173,16 +173,16 @@ describe("ThirdPartyBlock — availability", () => {
       .mockResolvedValue(listOf([]));
     vi.spyOn(thirdPartyApi, "watch").mockImplementation(never);
     render(<ThirdPartyBlock />);
-    await screen.findByText("无法读取第三方插件");
+    await screen.findByText("无法读取应用插件");
     expect(screen.getByText("backend down")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "重试" }));
-    await screen.findByText("还没有安装第三方插件");
+    await screen.findByText("还没有安装应用插件");
     expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("shows the empty state", async () => {
     await renderBlock([]);
-    expect(screen.getByText("还没有安装第三方插件")).toBeTruthy();
+    expect(screen.getByText("还没有安装应用插件")).toBeTruthy();
   });
 });
 
@@ -420,14 +420,14 @@ describe("ThirdPartyBlock — install", () => {
   const openFile = async () => {
     await userEvent.click(screen.getByRole("button", { name: "从文件安装" }));
     await userEvent.type(
-      await screen.findByLabelText("插件包路径（.zip 或目录）"),
+      await screen.findByLabelText("应用插件包路径（.zip 或目录）"),
       "/tmp/acme.zip",
     );
     await userEvent.click(screen.getByRole("button", { name: "检查" }));
   };
   const risk = () =>
     screen.findByRole("checkbox", {
-      name: "我了解该插件将以我的权限在本机运行第三方代码",
+      name: "我了解该应用插件将以我的权限在本机运行第三方代码",
     });
 
   it("inspects first, shows the details, and installs only after the risk checkbox", async () => {
@@ -541,7 +541,7 @@ describe("ThirdPartyBlock — install", () => {
     await renderBlock([]);
     await userEvent.click(screen.getByRole("button", { name: "从 URL 安装" }));
     await userEvent.type(
-      await screen.findByLabelText("插件包地址"),
+      await screen.findByLabelText("应用插件包地址"),
       "https://example.com/acme.zip",
     );
     await userEvent.click(screen.getByRole("button", { name: "检查" }));
@@ -566,7 +566,7 @@ describe("ThirdPartyBlock — install", () => {
     await renderBlock([]);
     await userEvent.click(screen.getByRole("button", { name: "链接开发目录" }));
     await userEvent.type(
-      await screen.findByLabelText("插件目录"),
+      await screen.findByLabelText("应用插件目录"),
       "/work/acme",
     );
     await userEvent.click(screen.getByRole("button", { name: "检查" }));

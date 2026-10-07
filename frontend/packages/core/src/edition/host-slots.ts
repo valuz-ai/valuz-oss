@@ -562,7 +562,7 @@ export const HOST_SLOTS: readonly SlotSpec[] = [
     kind: "keyed",
     region: "settings",
     description:
-      "Extra tabs in Settings → Extensions → Third-party plugins, after Installed (key = tab id; label via the registration).",
+      "Extra tabs in Settings → Plugins → App Plugins, after Installed (key = tab id; label via the registration).",
     context: ["refresh"],
   },
   {

@@ -278,7 +278,7 @@ export interface PluginContext {
   readonly valuz: ValuzClient;
   /** The plugin's configuration as of now (``config`` of the manifest). */
   readonly config: Readonly<Record<string, unknown>>;
-  /** Writes to the plugin's log in Settings → Extensions. */
+  /** Writes to the plugin's log in Settings → Plugins → App Plugins. */
   readonly log: PluginLog;
 }
 

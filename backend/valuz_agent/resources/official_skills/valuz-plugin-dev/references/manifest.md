@@ -38,7 +38,7 @@
 | `description` | 同 `name` 的写法 |
 | `permissions` | 权限数组（不能重复）：`projects:read` `artifacts:read` `knowledge:read` `conversations:read` `conversations:write` `connectors:read` `connectors:call` `connectors:write` `automations:run` `storage` `notifications`。安装与更新时展示给用户；更新新增权限会单独提示 |
 | `requires` | 依赖的环境，数组，写法 `edition:<id>` / `deployment:local` / `deployment:cloud` / `connector:<slug>` / `capability:<name>`。`connector:` 不满足时可安装但不加载（状态 `requires-unmet`），添加连接器后自动加载；其余不满足时安装被拒 |
-| `config` | JSON Schema（`type: "object"`），宿主据此在「扩展」页生成设置表单并校验；插件用 `ctx.config` / `usePluginConfig()` 读 |
+| `config` | JSON Schema（`type: "object"`），宿主据此在「插件」页生成设置表单并校验；插件用 `ctx.config` / `usePluginConfig()` 读 |
 | `automations` | 随插件声明的代码自动化，≤20 个，见下 |
 | `locales` | 文案目录，相对路径，默认 `locales`（里面 `en-US.json`、`zh-CN.json`…） |
 | `icon` | 图标相对路径 |

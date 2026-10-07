@@ -1,4 +1,4 @@
-// @valuz/plugin-sdk/build — the build preset for third-party Valuz plugins
+// @valuz/plugin-sdk/build — the build preset for Valuz App Plugins
 // (doc 12 §7, task card 04 §E).
 //
 // The implementation is plain ESM (``*.mjs`` + ``*.d.mts``) so the

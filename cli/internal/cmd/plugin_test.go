@@ -232,7 +232,7 @@ func writeSamplePlugin(t *testing.T) string {
 func TestPluginValidateOK(t *testing.T) {
 	isolatePluginEnv(t, "http://127.0.0.1:1")
 	dir := writeSamplePlugin(t)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "validate", dir)
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "validate", dir)
 	if err != nil {
 		t.Fatalf("execute: %v\n%s", err, out)
 	}
@@ -249,7 +249,7 @@ func TestPluginValidateJSONAndFailureExit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, pluginpkg.ManifestFile), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "validate", dir, "-o", "json")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "validate", dir, "-o", "json")
 	if err == nil || !strings.Contains(err.Error(), "plugin is invalid") {
 		t.Fatalf("want a non-zero exit, got %v", err)
 	}
@@ -272,7 +272,7 @@ func TestPluginPackPrintsPathAndSHA(t *testing.T) {
 	isolatePluginEnv(t, "http://127.0.0.1:1")
 	dir := writeSamplePlugin(t)
 	outDir := t.TempDir()
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "pack", dir, "--out", outDir, "-o", "json")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "pack", dir, "--out", outDir, "-o", "json")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestPluginPackPrintsPathAndSHA(t *testing.T) {
 	if err != nil || pluginpkg.SHA256Hex(data) != res.SHA256 {
 		t.Fatalf("zip/sha mismatch: %v", err)
 	}
-	human, _, err := runPluginCmd(t, nil, "", "plugin", "pack", dir, "--out", outDir)
+	human, _, err := runPluginCmd(t, nil, "", "plugin", "app", "pack", dir, "--out", outDir)
 	if err != nil || !strings.Contains(human, "sha256  "+res.SHA256) || !strings.Contains(human, res.Path) {
 		t.Fatalf("human output: %v\n%s", err, human)
 	}
@@ -299,7 +299,7 @@ func TestPluginInstallShowsSummaryAndStopsOnNo(t *testing.T) {
 	if err := os.WriteFile(zipPath, []byte("zip"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := runPluginCmd(t, nil, "n\n", "plugin", "install", zipPath)
+	out, _, err := runPluginCmd(t, nil, "n\n", "plugin", "app", "install", zipPath)
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("want cancellation, got %v", err)
 	}
@@ -331,7 +331,7 @@ func TestPluginInstallConfirmedSendsExpectedSHA(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
 	dir := writeSamplePlugin(t)
-	out, _, err := runPluginCmd(t, nil, "y\n", "plugin", "install", dir)
+	out, _, err := runPluginCmd(t, nil, "y\n", "plugin", "app", "install", dir)
 	if err != nil {
 		t.Fatalf("execute: %v\n%s", err, out)
 	}
@@ -348,7 +348,7 @@ func TestPluginInstallURLWithYesAndJSON(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
 	const u = "https://plugins.example/acme.hello-1.2.0.zip"
-	out, stderr, err := runPluginCmd(t, nil, "", "plugin", "install", u, "--yes", "-o", "json")
+	out, stderr, err := runPluginCmd(t, nil, "", "plugin", "app", "install", u, "--yes", "-o", "json")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestPluginInstallAbortsOnInspectErrors(t *testing.T) {
 	f.inspectErrors = []any{"backend: " + pluginpkg.ErrBackendUnsupported, map[string]any{"path": "id", "message": "reserved"}}
 	isolatePluginEnv(t, f.URL)
 	dir := writeSamplePlugin(t)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "install", dir, "--yes")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "install", dir, "--yes")
 	if err == nil || !strings.Contains(err.Error(), "cannot be installed: 2 error(s)") {
 		t.Fatalf("want an abort, got %v", err)
 	}
@@ -391,7 +391,7 @@ func TestPluginInstallSurfacesServerErrors(t *testing.T) {
 		"errors": []any{"id: is required", map[string]any{"path": "version", "message": "not SemVer"}},
 	}}
 	isolatePluginEnv(t, f.URL)
-	_, _, err := runPluginCmd(t, nil, "", "plugin", "install", writeSamplePlugin(t), "--yes")
+	_, _, err := runPluginCmd(t, nil, "", "plugin", "app", "install", writeSamplePlugin(t), "--yes")
 	if err == nil || !strings.Contains(err.Error(), "invalid manifest: id: is required; version: not SemVer") {
 		t.Fatalf("want the server findings, got %v", err)
 	}
@@ -400,7 +400,7 @@ func TestPluginInstallSurfacesServerErrors(t *testing.T) {
 func TestPluginInstallMissingPath(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
-	_, _, err := runPluginCmd(t, nil, "", "plugin", "install", filepath.Join(t.TempDir(), "nope.zip"))
+	_, _, err := runPluginCmd(t, nil, "", "plugin", "app", "install", filepath.Join(t.TempDir(), "nope.zip"))
 	if err == nil || len(f.calls()) != 0 {
 		t.Fatalf("want a local error before any request: %v %v", err, f.calls())
 	}
@@ -410,7 +410,7 @@ func TestPluginDevValidatesThenLinks(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
 	dir := writeSamplePlugin(t)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "dev", dir)
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "dev", dir)
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestPluginDevRefusesInvalidDir(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "frontend", "index.js")); err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "dev", dir)
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "dev", dir)
 	if err == nil || !strings.Contains(out, "frontend.entry") || len(f.calls()) != 0 {
 		t.Fatalf("want a local validation failure: %v\n%s", err, out)
 	}
@@ -441,7 +441,7 @@ func TestPluginDevRefusesInvalidDir(t *testing.T) {
 func TestPluginListAndStatus(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "list")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "list")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestPluginListAndStatus(t *testing.T) {
 		t.Fatalf("row = %q\n%s", row, out)
 	}
 
-	out, _, err = runPluginCmd(t, nil, "", "plugin", "status", "acme.hello")
+	out, _, err = runPluginCmd(t, nil, "", "plugin", "app", "status", "acme.hello")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -472,13 +472,13 @@ func TestPluginListAndStatus(t *testing.T) {
 		}
 	}
 
-	out, _, err = runPluginCmd(t, nil, "", "plugin", "status", "acme.hello", "-o", "json")
+	out, _, err = runPluginCmd(t, nil, "", "plugin", "app", "status", "acme.hello", "-o", "json")
 	var item map[string]any
 	if err != nil || json.Unmarshal([]byte(out), &item) != nil || item["id"] != "acme.hello" {
 		t.Fatalf("json status: %v\n%s", err, out)
 	}
 
-	_, _, err = runPluginCmd(t, nil, "", "plugin", "status", "acme.other")
+	_, _, err = runPluginCmd(t, nil, "", "plugin", "app", "status", "acme.other")
 	if err == nil || !strings.Contains(err.Error(), `"acme.other" is not installed`) {
 		t.Fatalf("want not-installed, got %v", err)
 	}
@@ -487,7 +487,7 @@ func TestPluginListAndStatus(t *testing.T) {
 func TestPluginLogs(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "logs", "acme.hello", "-n", "2")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "logs", "acme.hello", "-n", "2")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestPluginLogsFollowPrintsOnlyNewEntries(t *testing.T) {
 	t.Cleanup(func() { pluginLogsPollInterval = old })
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
-	out, _, err := runPluginCmd(t, ctx, "", "plugin", "logs", "acme.hello", "-f")
+	out, _, err := runPluginCmd(t, ctx, "", "plugin", "app", "logs", "acme.hello", "-f")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestPluginEnableDisableReload(t *testing.T) {
 		"disable": "acme.hello: disabled (status disabled)",
 		"reload":  "acme.hello: reloaded (revision 4, status enabled)",
 	} {
-		out, _, err := runPluginCmd(t, nil, "", "plugin", verb, "acme.hello")
+		out, _, err := runPluginCmd(t, nil, "", "plugin", "app", verb, "acme.hello")
 		if err != nil || !strings.Contains(out, want) {
 			t.Fatalf("%s: %v\n%s", verb, err, out)
 		}
@@ -538,7 +538,7 @@ func TestPluginEnableDisableReload(t *testing.T) {
 			t.Fatalf("%s: no request", verb)
 		}
 	}
-	_, _, err := runPluginCmd(t, nil, "", "plugin", "enable", "acme.missing")
+	_, _, err := runPluginCmd(t, nil, "", "plugin", "app", "enable", "acme.missing")
 	if err == nil || !strings.Contains(err.Error(), "plugin not found") {
 		t.Fatalf("want the 404 message, got %v", err)
 	}
@@ -547,14 +547,14 @@ func TestPluginEnableDisableReload(t *testing.T) {
 func TestPluginUninstall(t *testing.T) {
 	f := newFakePluginBackend(t)
 	isolatePluginEnv(t, f.URL)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "uninstall", "acme.hello")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "uninstall", "acme.hello")
 	if err == nil || !strings.Contains(out, "Uninstall acme.hello? Its data is kept. [y/N]") {
 		t.Fatalf("want a refused prompt: %v\n%s", err, out)
 	}
 	if f.find(http.MethodDelete, "/v1/extensions/third-party/acme.hello") != nil {
 		t.Fatal("uninstalled without confirmation")
 	}
-	out, _, err = runPluginCmd(t, nil, "", "plugin", "uninstall", "acme.hello", "--purge-data", "--yes")
+	out, _, err = runPluginCmd(t, nil, "", "plugin", "app", "uninstall", "acme.hello", "--purge-data", "--yes")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestPluginPublishWithAPIKey(t *testing.T) {
 	isolatePluginEnv(t, "http://127.0.0.1:1")
 	zipPath, sha := packSample(t)
 	const key = "vzp_test_key_123456"
-	out, stderr, err := runPluginCmd(t, nil, "", "plugin", "publish", zipPath,
+	out, stderr, err := runPluginCmd(t, nil, "", "plugin", "app", "publish", zipPath,
 		"--scope", "org", "--notes", "first release", "--api-key", key, "--yes", "--cloud-url", cp.URL+"/cloud")
 	if err != nil {
 		t.Fatalf("execute: %v\n%s", err, out)
@@ -710,7 +710,7 @@ func TestPluginPublishGlobalSendsRepeatedDistributions(t *testing.T) {
 	t.Setenv("VALUZ_CLOUD_URL", cp.URL+"/cloud")
 	t.Setenv("VALUZ_API_KEY", "vzp_env_key_123456")
 	zipPath, _ := packSample(t)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "publish", zipPath,
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "publish", zipPath,
 		"--scope", "global", "--distribution", "dist_a", "--distribution", "dist_b", "--yes", "-o", "json")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -732,7 +732,7 @@ func TestPluginPublishConfirmation(t *testing.T) {
 	t.Setenv("VALUZ_CLOUD_URL", cp.URL+"/cloud")
 	t.Setenv("VALUZ_API_KEY", "vzp_env_key_123456")
 	zipPath, _ := packSample(t)
-	out, _, err := runPluginCmd(t, nil, "no\n", "plugin", "publish", zipPath, "--scope", "personal")
+	out, _, err := runPluginCmd(t, nil, "no\n", "plugin", "app", "publish", zipPath, "--scope", "personal")
 	if err == nil || !strings.Contains(err.Error(), "publish cancelled") ||
 		!strings.Contains(out, "Publish acme.hello 1.2.0 to your personal catalog? [y/N]") {
 		t.Fatalf("want a refused prompt: %v\n%s", err, out)
@@ -740,7 +740,7 @@ func TestPluginPublishConfirmation(t *testing.T) {
 	if len(cp.recorded()) != 0 {
 		t.Fatal("uploaded without confirmation")
 	}
-	if _, _, err := runPluginCmd(t, nil, "y\n", "plugin", "publish", zipPath, "--scope", "personal"); err != nil {
+	if _, _, err := runPluginCmd(t, nil, "y\n", "plugin", "app", "publish", zipPath, "--scope", "personal"); err != nil {
 		t.Fatalf("confirmed publish: %v", err)
 	}
 	if len(cp.recorded()) != 1 {
@@ -764,7 +764,7 @@ func TestPluginPublishFlagValidation(t *testing.T) {
 		{[]string{"--scope", "org", "--api-key", "sk-not-personal", "--yes"}, "must be a personal API key"},
 		{[]string{"--scope", "org", "--yes"}, "not logged in to Valuz"},
 	} {
-		args := append([]string{"plugin", "publish", zipPath}, tc.args...)
+		args := append([]string{"plugin", "app", "publish", zipPath}, tc.args...)
 		_, _, err := runPluginCmd(t, nil, "", args...)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%v: want %q, got %v", tc.args, tc.want, err)
@@ -784,7 +784,7 @@ func TestPluginPublishRefusesInvalidZip(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("not a zip"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := runPluginCmd(t, nil, "", "plugin", "publish", bad, "--scope", "org", "--yes")
+	_, _, err := runPluginCmd(t, nil, "", "plugin", "app", "publish", bad, "--scope", "org", "--yes")
 	if err == nil || len(cp.recorded()) != 0 {
 		t.Fatalf("want a local failure without upload, got %v", err)
 	}
@@ -797,7 +797,7 @@ func TestPluginPublishRejectedExitsNonZero(t *testing.T) {
 	t.Setenv("VALUZ_CLOUD_URL", cp.URL+"/cloud")
 	t.Setenv("VALUZ_API_KEY", "vzp_env_key_123456")
 	zipPath, _ := packSample(t)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "publish", zipPath, "--scope", "personal", "--yes")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "publish", zipPath, "--scope", "personal", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "rejected") || !strings.Contains(out, "reason     manifest uses a reserved id") {
 		t.Fatalf("want a rejected exit: %v\n%s", err, out)
 	}
@@ -822,7 +822,7 @@ func TestPluginPublishUsesStoredLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	zipPath, _ := packSample(t)
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "publish", zipPath, "--scope", "org", "--yes")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "publish", zipPath, "--scope", "org", "--yes")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -843,7 +843,7 @@ func TestPluginSubmissions(t *testing.T) {
 	isolatePluginEnv(t, "http://127.0.0.1:1")
 	t.Setenv("VALUZ_CLOUD_URL", cp.URL+"/cloud")
 	t.Setenv("VALUZ_API_KEY", "vzp_env_key_123456")
-	out, _, err := runPluginCmd(t, nil, "", "plugin", "submissions")
+	out, _, err := runPluginCmd(t, nil, "", "plugin", "app", "submissions")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -856,7 +856,7 @@ func TestPluginSubmissions(t *testing.T) {
 	if strings.Join(strings.Fields(row), " ") != "sub_1 acme.hello 1.2.0 org pending 2026-10-07T10:00:00Z" {
 		t.Fatalf("row = %q\n%s", row, out)
 	}
-	out, _, err = runPluginCmd(t, nil, "", "plugin", "submissions", "-o", "json")
+	out, _, err = runPluginCmd(t, nil, "", "plugin", "app", "submissions", "-o", "json")
 	var doc map[string]any
 	if err != nil || json.Unmarshal([]byte(out), &doc) != nil || doc["total"] == nil {
 		t.Fatalf("json: %v\n%s", err, out)

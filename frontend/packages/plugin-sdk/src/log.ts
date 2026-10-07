@@ -28,7 +28,7 @@ function format(message: string, details: unknown[]): string {
 
 /**
  * ``ctx.log``: to the console, and — best effort, batched — to the plugin's
- * log in Settings → Extensions (``POST /v1/extensions/third-party/{id}/logs``).
+ * log in Settings → Plugins → App Plugins (``POST /v1/extensions/third-party/{id}/logs``).
  * A failed write is dropped: logging must never break a plugin.
  */
 export function createPluginLog(pluginId: string, send: Sender): PluginLog & {

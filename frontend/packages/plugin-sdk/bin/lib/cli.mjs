@@ -215,7 +215,7 @@ const COMMANDS = {
           if (error instanceof BackendError && error.unreachable) {
             err(`${error.message}.`);
             err("Is Valuz running? Start it, or pass --backend / set VALUZ_BACKEND_BASE_URL;");
-            err("then restart `valuz-plugin dev` (or run `valuz plugin dev <dir>`). Still watching.");
+            err("then restart `valuz-plugin dev` (or run `valuz plugin app dev <dir>`). Still watching.");
           } else {
             err(`dev-link failed: ${error.message}`);
             err("Still watching; fix the problem and restart `valuz-plugin dev`.");
@@ -327,7 +327,7 @@ function waitForever() {
 }
 
 function printMainHelp() {
-  out("valuz-plugin — build, test and package third-party Valuz plugins");
+  out("valuz-plugin — build, test and package Valuz App Plugins");
   out("");
   out("Usage: valuz-plugin <command> [options]");
   out("");
@@ -335,7 +335,7 @@ function printMainHelp() {
   for (const [name, command] of Object.entries(COMMANDS)) out(`  ${name.padEnd(9)} ${command.summary}`);
   out("");
   out("Run `valuz-plugin <command> --help` for a command's options.");
-  out("Install into Valuz with `valuz plugin dev <dir>` or `valuz plugin install <zip>`.");
+  out("Install into Valuz with `valuz plugin app dev <dir>` or `valuz plugin app install <zip>`.");
 }
 
 function printCommandHelp(name) {

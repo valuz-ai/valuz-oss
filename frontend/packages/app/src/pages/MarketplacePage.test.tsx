@@ -123,7 +123,7 @@ describe("MarketplacePage", () => {
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "智能体",
-      "插件",
+      "智能体插件",
       "技能",
       "连接器",
     ]);

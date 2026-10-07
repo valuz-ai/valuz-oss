@@ -1,8 +1,8 @@
 """``extension_manager`` harness tool (R3; docs plugin-development/05).
 
 One action-dispatch tool, like ``plugin`` (``tools_plugin.py``), through which an
-agent builds, installs, debugs and publishes a THIRD-PARTY Valuz plugin (the
-``Extensions`` page and ``valuz plugin`` do the same through the same
+agent builds, installs, debugs and publishes a Valuz App Plugin (the
+``Plugins`` page and ``valuz plugin app`` do the same through the same
 ``third_party_service`` — there is no extra channel).
 
 Read-only actions (``status`` / ``validate`` / ``pack`` / ``logs`` / ``reload`` /
@@ -64,9 +64,12 @@ _LOG_LIMIT_MAX = 500
 _NOTES_MAX = 2000
 
 EXTENSION_MANAGER_DESCRIPTION = (
-    "Build, install, debug and publish third-party Valuz plugins — the same operations "
-    "as the Extensions page.\n"
-    'Flow for "build me a plugin": (1) load the `valuz-plugin-dev` skill and write the plugin '
+    "Build, install, debug and publish Valuz App Plugins — the same operations "
+    "as the App Plugins section of the Plugins page.\n"
+    "App Plugins extend the application interface and features; Agent Plugins bundle skills "
+    "and MCP connectors and are managed separately through `valuz plugin agent`.\n"
+    'Flow for "build me an app plugin": (1) load the `valuz-plugin-dev` skill '
+    "and write the plugin "
     "in the workspace with the `valuz-plugin` command (create / build / test / validate); "
     "(2) `validate` the directory and fix every error; (3) `dev_link` {path} to try it live, "
     "or `pack` then `install` {source_path: the zip} for a fixed version — BOTH show the user "

@@ -90,10 +90,10 @@ describe("PluginsPage", () => {
   it("shows the empty state with market + install actions when nothing is installed", async () => {
     vi.spyOn(pluginsApi, "list").mockResolvedValue({ items: [] });
     renderPage();
-    expect(await screen.findByText("还没有安装插件")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "浏览插件市场" })).toBeTruthy();
+    expect(await screen.findByText("还没有安装智能体插件")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "浏览智能体插件市场" })).toBeTruthy();
     expect(
-      screen.getAllByRole("button", { name: "安装插件" }).length,
+      screen.getAllByRole("button", { name: "安装智能体插件" }).length,
     ).toBeGreaterThan(0);
   });
 
@@ -161,7 +161,7 @@ describe("PluginsPage", () => {
     renderPage();
     await screen.findAllByTestId("plugin-list-card");
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-    fireEvent.change(screen.getByPlaceholderText("搜索插件…"), {
+    fireEvent.change(screen.getByPlaceholderText("搜索智能体插件…"), {
       target: { value: "writing" },
     });
     await waitFor(() => {

@@ -42,11 +42,47 @@ The connect-only headless surface talks to a running backend over HTTP:
 - `valuz env` — use local|cloud · list · show · set (custom backend URL)
 - `valuz model` — list (runtime/provider filters) · use (pin default)
 - `valuz agent` — list / show / use (pin default)
-- `valuz ext` — Settings → 扩展 on the command line: list / enable / disable
-  Valuz backend extensions (applied at the next start); `ext dsh` status /
-  list / inspect / add (inspects first, installs only with `--yes`) / remove /
-  enable / disable / open — dsh plugins in the managed dsh profile, through
-  dsh's own PluginManager
+- `valuz plugin` — a single entry point with explicit plugin families:
+  - `agent` — Agent Plugins: skills and MCP connectors packaged together.
+    list / show / preview / install / update / enable / disable / uninstall / export.
+  - `app` — App Plugins: pages, panels and automations using `valuz-plugin.json`.
+    validate / pack / dev / install / list / status / logs / enable / disable /
+    reload / uninstall / publish / submissions.
+  - `builtin` — built-in backend plugins: list / enable / disable. Changes
+    take effect at the next start; required plugins cannot be disabled.
+  - `dsh` — native plugins in Valuz's managed DSH profile, through DSH's own
+    PluginManager: status / list / inspect / add (inspects first, installs only
+    with `--yes`) / remove / enable / disable / open.
+
+### Plugin examples and compatibility
+
+```bash
+valuz plugin agent preview ./research.zip
+valuz plugin agent install ./research.zip
+valuz plugin agent list -o json
+valuz plugin app dev ./watchlist
+valuz plugin app pack ./watchlist
+valuz plugin app publish ./watchlist/dist/acme.watchlist-1.0.0.zip --scope personal
+valuz plugin builtin list
+valuz plugin dsh list
+```
+
+Agent plugin ZIP files are uploaded from the CLI machine. Directory paths are
+resolved on the backend machine; use ZIP upload when connecting to a remote
+backend. `--market-item <id>` selects a marketplace package. Member conflicts
+default to `--on-conflict skip`; overwriting requires `--on-conflict overwrite`.
+Install shows a preview and asks for confirmation; `--yes` supports scripts.
+
+The SDK's `valuz-plugin create/build/test/validate/pack` is an **App Plugin build
+helper**, separate from the Go management CLI. Agent Plugins use their own
+`plugin.json`/ecosystem layouts, not `valuz-plugin.json`.
+
+Legacy `valuz ext list/enable/disable` maps to `valuz plugin builtin`, and
+`valuz ext dsh` maps to `valuz plugin dsh`. Legacy unqualified
+`valuz plugin install/list/publish/...` still manages **App Plugins**. These
+compatibility commands are hidden from normal help and emit a migration notice
+on stderr, preserving `-o json` stdout. The existing `/v1/plugins`,
+`/v1/extensions/third-party`, and `/v1/extensions/backend` API paths remain stable.
 
 Exit codes follow the stable contract (0 completed / 1 usage / 2 timeout /
 3 agent error / 4 backend unreachable / 5 internal / 6 auth / 7 action

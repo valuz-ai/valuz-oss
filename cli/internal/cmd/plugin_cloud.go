@@ -80,8 +80,8 @@ func newPluginPublishCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "publish <zip>",
-		Short: "Publish a packed plugin to your personal, org or global catalog",
-		Long: "Upload a packed plugin (see `valuz plugin pack`) to the control plane.\n" +
+		Short: "Publish a packed app plugin to your personal, org or global catalog",
+		Long: "Upload a packed app plugin (see `valuz plugin app pack`) to the control plane.\n" +
 			"Personal publishes go live after the automatic checks; org and global\n" +
 			"submissions wait for review. Uses the `valuz auth login` state, or a\n" +
 			"personal API key (--api-key / VALUZ_API_KEY, vzp_…) e.g. in CI.",
@@ -308,7 +308,7 @@ func newPluginSubmissionsCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "submissions",
-		Short: "List your plugin submissions and their review status",
+		Short: "List your app plugin submissions and their review status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := checkOutputFormat(output); err != nil {

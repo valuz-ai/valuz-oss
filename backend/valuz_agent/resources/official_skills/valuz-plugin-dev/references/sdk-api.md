@@ -17,7 +17,7 @@ export default definePlugin({
     // ctx.plugin(child)         挂子插件（生命周期随本插件）
     // ctx.valuz                 Valuz 内置后端能力（见 §5）
     // ctx.config                插件配置的当前值（清单 config 的值）
-    // ctx.log                   写到「扩展」页该插件的日志：debug/info/warn/error(message, ...details)
+    // ctx.log                   写到「插件」页该插件的日志：debug/info/warn/error(message, ...details)
   },
 });
 ```
@@ -31,7 +31,7 @@ export default definePlugin({
 |---|---|
 | `ctx.registry.slot(name, { id, component, priority?, key?, label? })` | 往公开插槽贡献组件。`id` 是本地 id（宿主加 `x:<插件 id>:` 前缀）；`priority` 小的先渲染；**keyed 插槽**（`context-panel.tabs`、`project.detail.tabs`）必须给 `key`，`label` 是标签标题（locales 的键或纯文本，默认插件名） |
 | `pageRoute(ctx, { id, path, title, description?, icon? }, Component, { nav? })` | 新页面。`path` 必须是 `/x/<插件 id>` 或其子路径；`nav: true` 同时加侧栏入口；`title` 是 locales 的键或纯文本；`icon` 是侧栏图标 id，可用：assistant、knowledge、skills、scheduled、playbooks、activity、settings、agents、connectors、plugins、marketplace、projectTasks、star、compass、watchlist、portfolio、dashboard、globe（未知 id 显示齿轮，默认 plugins） |
-| `settingsPage(ctx, { id, title, description?, icon? }, Component)` | 新设置分区，放在「扩展」分组下 |
+| `settingsPage(ctx, { id, title, description?, icon? }, Component)` | 新设置分区，放在「插件」分组下 |
 | `sidebarItem(ctx, { id, label, icon?, path })` | 单独加一个侧栏入口，`path` 必须指向插件自己的页面 |
 | `slotComponent(Component)` | 把普通组件当插槽组件用（只是类型适配） |
 | `ctx.registry.route / settingsSection / navItem` | 上面三个 helper 的底层方法 |
@@ -101,7 +101,7 @@ await host.draftConversation({ projectId?, agent?, text });   // 开新对话并
 
 ## 6. 配置、文案、样式
 
-- **配置**：清单 `config`（JSON Schema）→ 宿主在「扩展」页生成表单 → `ctx.config` / `usePluginConfig()`。只有用户级配置。别把密钥放配置默认值里。
+- **配置**：清单 `config`（JSON Schema）→ 宿主在「插件」页生成表单 → `ctx.config` / `usePluginConfig()`。只有用户级配置。别把密钥放配置默认值里。
 - **文案**：`locales/en-US.json`、`locales/zh-CN.json` 等，嵌套对象即可（`{ "report": { "title": "…" } }` → `t("report.title")`）。清单的 `name` / `description`、`pageRoute.title`、`settingsPage.title`、`sidebarItem.label`、keyed 插槽的 `label` 都可以直接写 locales 的键。
 - **样式**：优先用 `@valuz/plugin-sdk/ui` 的组件；自带 CSS 写在 `frontend.styles` 里，颜色 / 圆角 / 字号取设计令牌 CSS 变量（`var(--color-primary)` 等），构建预设会给自带 CSS 加插件根元素的作用域。
 

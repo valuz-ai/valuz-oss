@@ -14,7 +14,8 @@ import (
 	errs "code.xiaobangtouzi.com/valuz/valuz-oss/cli/internal/errors"
 )
 
-// newExtCmd builds `valuz ext ...` — the CLI face of Settings → 扩展
+// newExtCmd retains the old `valuz ext ...` spelling as a hidden compatibility
+// entry. Canonical commands are `valuz plugin builtin ...` and `plugin dsh ...`.
 // (plugin-architecture design §8). Two halves, both through the backend so
 // the CLI never needs to know the data directory or the dsh launcher:
 //
@@ -26,16 +27,36 @@ import (
 //     and kept as generic JSON here, so an upstream field never breaks the CLI.
 func newExtCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "ext",
-		Short: "Manage extensions (Valuz backend extensions and dsh plugins)",
+		Use:    "ext",
+		Short:  "Compatibility entry for plugin builtin and plugin dsh",
+		Long:   "Use `valuz plugin builtin` for built-in backend plugins and `valuz plugin dsh` for native DSH plugins.",
+		Hidden: true,
 	}
-	cmd.AddCommand(
-		newExtListCmd(),
-		newExtToggleCmd("enable", true),
-		newExtToggleCmd("disable", false),
-		newExtDshCmd(),
-	)
+	for _, child := range newBuiltinPluginCommands() {
+		warnLegacyPluginCommand(child, "valuz plugin builtin "+child.Name())
+		cmd.AddCommand(child)
+	}
+	dsh := newExtDshCmd()
+	for _, child := range dsh.Commands() {
+		warnLegacyPluginCommand(child, "valuz plugin dsh "+child.Name())
+	}
+	cmd.AddCommand(dsh)
 	return cmd
+}
+
+func newBuiltinPluginCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "builtin",
+		Short: "View and toggle built-in backend plugins",
+		Long: "Built-in backend plugins ship with Valuz. Enable/disable changes\n" +
+			"take effect at the next start; required plugins cannot be disabled.",
+	}
+	cmd.AddCommand(newBuiltinPluginCommands()...)
+	return cmd
+}
+
+func newBuiltinPluginCommands() []*cobra.Command {
+	return []*cobra.Command{newExtListCmd(), newExtToggleCmd("enable", true), newExtToggleCmd("disable", false)}
 }
 
 type backendExtension struct {
@@ -72,7 +93,7 @@ func newExtListCmd() *cobra.Command {
 	var output string
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List Valuz backend extensions and their status",
+		Short: "List built-in backend plugins and their status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := checkOutputFormat(output); err != nil {
 				return err
@@ -98,11 +119,11 @@ func newExtListCmd() *cobra.Command {
 
 func printBackendExtensions(out io.Writer, resp backendExtensions) {
 	if !resp.Composed {
-		fmt.Fprintln(out, "(this build has no backend extensions)")
+		fmt.Fprintln(out, "(this build has no built-in backend plugins)")
 		return
 	}
 	if len(resp.Plugins) == 0 {
-		fmt.Fprintln(out, "(no backend extensions)")
+		fmt.Fprintln(out, "(no built-in backend plugins)")
 		return
 	}
 	pending := false
@@ -130,7 +151,7 @@ func printBackendExtensions(out io.Writer, resp backendExtensions) {
 		}
 	}
 	if !resp.Editable {
-		fmt.Fprintln(out, "\nExtensions on this deployment are managed by its operator.")
+		fmt.Fprintln(out, "\nBuilt-in plugins on this deployment are managed by its operator.")
 	} else if pending {
 		fmt.Fprintln(out, "\nRecorded changes take effect after `valuz restart`.")
 	}
@@ -139,7 +160,7 @@ func printBackendExtensions(out io.Writer, resp backendExtensions) {
 func newExtToggleCmd(verb string, enabled bool) *cobra.Command {
 	return &cobra.Command{
 		Use:   verb + " <id>",
-		Short: strings.ToUpper(verb[:1]) + verb[1:] + " a Valuz backend extension (applied at the next start)",
+		Short: strings.ToUpper(verb[:1]) + verb[1:] + " a built-in backend plugin (applied at the next start)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := extClient(cmd)
@@ -431,7 +452,7 @@ func printDshChange(out io.Writer, value any) error {
 			names = append(names, fmt.Sprint(p))
 		}
 		sort.Strings(names)
-		fmt.Fprintf(out, "build scripts awaiting approval (approve in `valuz ext dsh open`): %s\n",
+		fmt.Fprintf(out, "build scripts awaiting approval (approve in `valuz plugin dsh open`): %s\n",
 			strings.Join(names, ", "))
 	}
 	if change["application"] == "failed" {

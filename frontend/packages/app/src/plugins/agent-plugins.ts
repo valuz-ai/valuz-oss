@@ -7,7 +7,7 @@ import { navItemPlacement, routePlacement } from "./layout";
 /**
  * Agent Plugins (skill suites and skills + connectors bundles): the ``/plugins``
  * page and its Library entry. Not the extensions of the app itself — those are
- * Settings → 扩展.
+ * Settings → 插件.
  */
 export const ossAgentPluginsPlugin = definePlugin({
   id: "oss-agent-plugins",

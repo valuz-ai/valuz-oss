@@ -139,7 +139,7 @@ describe("SettingsPage slots", () => {
 });
 
 describe("SettingsPage extensions section", () => {
-  it("registers 扩展 in the system group and renders it for ?tab=extensions", async () => {
+  it("registers 插件 in the system group and renders it for ?tab=extensions", async () => {
     vi.spyOn(extensionsApi, "listBackendExtensions").mockResolvedValue({
       composed: false,
       editable: true,
@@ -165,8 +165,8 @@ describe("SettingsPage extensions section", () => {
         .getState()
         .settingsSections.find((s) => s.id === "extensions")?.group?.id,
     ).toBe("system");
-    expect(screen.getByRole("heading", { name: "扩展" })).not.toBeNull();
-    expect(screen.getByRole("heading", { name: "Valuz 扩展" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "插件" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();
     expect(screen.getByRole("heading", { name: "DSH 插件" })).not.toBeNull();
     expect(await screen.findByText("DSH 插件在此环境不可用")).not.toBeNull();
   });
