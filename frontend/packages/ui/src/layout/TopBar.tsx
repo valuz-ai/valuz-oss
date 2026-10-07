@@ -77,9 +77,9 @@ export const TopBar = ({
     <div
       className={`flex h-[36px] min-w-0 shrink-0 items-center pl-4 ${windowControls ? "pr-0" : "pr-4"}`}
     >
-      {/* Left: traffic light spacer + brand logo + collapse toggle */}
+      {/* Left: native button space, then a small gutter before the brand. */}
       <div
-        className={`flex shrink-0 items-center gap-2 pt-[4px] ${trafficLightPad ? "ml-[58px]" : ""}`}
+        className={`flex shrink-0 items-center gap-2 pt-[4px] ${trafficLightPad ? "ml-[58px] pl-1" : ""}`}
       >
         {logo}
         {onToggleSidebar && (
