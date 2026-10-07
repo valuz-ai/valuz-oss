@@ -405,14 +405,10 @@ export function useToolCallCards({
       // confirms on this card. The read-only actions (list, status, logs,
       // reload, enable, disable, submissions) carry no operation and fall
       // through to the generic tool renderer.
-      if (
-        isToolNamed(name, "app_plugin_manager") ||
-        // Persisted cards from earlier releases keep their original tool name.
-        isToolNamed(name, "extension_manager")
-      ) {
+      if (isToolNamed(name, "app_plugin_manager")) {
         const result = parseOperationToolOutput(tool.output);
         const snapshot = result?.operation;
-        if (snapshot) {
+        if (snapshot?.operation_type.startsWith("app_plugin.")) {
           const operation = operationStates[snapshot.id] ?? snapshot;
           return (
             <AppPluginOperationCard

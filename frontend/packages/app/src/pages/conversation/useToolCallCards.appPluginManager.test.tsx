@@ -92,19 +92,28 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("renderToolCall — app_plugin_manager", () => {
+  it.each([
+    ["extension_manager", "app_plugin.install"],
+    ["mcp__harness__extension_manager", "app_plugin.install"],
+    ["app_plugin_manager", "extension.install"],
+  ])("ignores unsupported tool and operation aliases (%s / %s)", (title, operation_type) => {
+    const { container } = view({
+      id: "t1", title, status: "success",
+      output: envelope({ operation: { ...operationRecord, operation_type } }),
+    });
+    expect(container.querySelector('[data-slot="app-plugin-operation-card"]')).toBeNull();
+  });
   it("renders the confirmation card for an operation proposal, under any runtime namespacing", async () => {
     for (const title of [
       "app_plugin_manager",
       "mcp__harness__app_plugin_manager",
       "harness/app_plugin_manager",
-      "extension_manager",
-      "mcp__harness__extension_manager",
     ]) {
       const { container, unmount } = view({
         id: "t1",
         title,
         input: JSON.stringify({ action: "install" }),
-        output: envelope({ operation: { ...operationRecord, operation_type: title.includes("extension_manager") ? "extension.install" : "app_plugin.install" } }),
+        output: envelope({ operation: operationRecord }),
         status: "success",
       });
       const card = container.querySelector(

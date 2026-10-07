@@ -5960,7 +5960,7 @@ paths:
         "404": {$ref: "#/components/responses/AppPluginError"}
 
   # Built-in plugins are composed into the running application. Toggles persist
-  # for the next start; legacy /v1/extensions/backend routes remain hidden aliases.
+  # for the next start. Only the canonical built-in plugin API is available.
   /v1/builtin-plugins/state:
     get:
       summary: Inactive built-in plugin IDs (public boot-time view)
@@ -6094,7 +6094,8 @@ components:
                 automation_already_running, sha256_mismatch, not_found,
                 automation_not_found, run_not_found, storage_quota_exceeded,
                 invalid_input, app_plugins_unavailable (and, from the permission
-                middleware, plugin_permission_denied with `permission`)
+                middleware, plugin_permission_denied with `permission` or
+                unsupported_app_plugin_header)
             message: {type: string}
             errors: {type: array, items: {type: string}}
             permission: {type: string, nullable: true}

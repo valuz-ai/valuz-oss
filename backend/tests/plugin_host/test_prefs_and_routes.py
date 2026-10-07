@@ -1,4 +1,4 @@
-"""Persisted extension prefs (the backend profile-patch layer) and /v1/extensions."""
+"""Persisted extension prefs (the backend profile-patch layer) and /v1/builtin-plugins."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class _Plugin(BackendPluginBase):
 
 
 def test_prefs_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "extensions.json"
+    path = tmp_path / "plugins.json"
     assert load_plugin_prefs(path).disabled == frozenset()
     save_enabled("sites", False, path)
     save_config("sites", {"mode": "x"}, path)
@@ -45,7 +45,7 @@ def test_prefs_round_trip(tmp_path: Path) -> None:
 
 
 def test_a_disabled_optional_plugin_is_not_loaded_but_required_ones_are(tmp_path: Path) -> None:
-    path = tmp_path / "extensions.json"
+    path = tmp_path / "plugins.json"
     save_enabled("optional", False, path)
     save_enabled("core", False, path)  # a stale or hand-edited entry
     optional, core = _Plugin("optional"), _Plugin("core", required=True)

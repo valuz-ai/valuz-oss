@@ -72,7 +72,9 @@ export const appPluginAction = (
   operation: AppPluginOperationLike,
   toolAction?: string | null,
 ): AppPluginAction => {
-  const fromType = (operation.operation_type ?? "").split(/[./]/).pop() ?? "";
+  const fromType = operation.operation_type?.startsWith("app_plugin.")
+    ? operation.operation_type.slice("app_plugin.".length)
+    : "";
   const candidates = [
     fromType,
     asText(operation.preview?.action),
@@ -108,7 +110,7 @@ export const appPluginOperationView = (
   };
 
   const locale = getLocale();
-  const id = asText(pick("id", "app_plugin_id", "extension_id", "plugin_id"));
+  const id = asText(pick("id", "app_plugin_id"));
   const name = localizedText(pick("name") as LocalizedText | undefined, locale);
 
   const publisherRaw = pick("publisher");

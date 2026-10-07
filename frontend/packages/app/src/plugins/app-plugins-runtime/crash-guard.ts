@@ -1,5 +1,3 @@
-import { migrateLegacyAppPluginCrashState } from "./compat";
-
 /**
  * Crash protection for app plugins (doc 04 §6).
  *
@@ -74,7 +72,6 @@ export function createCrashGuard(
 
   return {
     evaluateStartup() {
-      migrateLegacyAppPluginCrashState(storage);
       const left = read(LOADING_MARKER_KEY) !== null;
       const crashes = left ? Number(read(CRASH_COUNT_KEY) ?? "0") + 1 : 0;
       if (!left) {

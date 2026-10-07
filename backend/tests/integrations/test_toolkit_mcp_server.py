@@ -75,19 +75,20 @@ def test_build_server_drops_declarations_and_keeps_schemas() -> None:
     assert echo.inputSchema == {"type": "object", "properties": {"text": {"type": "string"}}}
 
 
-def test_legacy_app_plugin_tool_is_callable_without_duplicate_catalog_entry() -> None:
+def test_only_canonical_app_plugin_tool_is_available() -> None:
     tk.install_toolkit_toolsets(base=(_echo_tool("app_plugin_manager"),), lead=())
     server = tk._build_server("base")
     assert {tool.name for tool in asyncio.run(_list_tools(server))} == {"app_plugin_manager"}
     token = _mcp_asgi.set_current_mcp_context(session_id="sess-1", user_id="u1")
     try:
-        result = asyncio.run(_call_tool(server, "extension_manager", {"text": "legacy"}))
+        removed = asyncio.run(_call_tool(server, "extension_manager", {}))
+        canonical = asyncio.run(_call_tool(server, "app_plugin_manager", {"text": "current"}))
     finally:
         _mcp_asgi.reset_current_mcp_context(token)
-    assert (
-        not result.root.isError
-        and result.root.content[0].text == "app_plugin_manager:legacy@sess-1"
-    )
+    assert removed.root.isError
+    assert "unknown tool: extension_manager" in removed.root.content[0].text
+    assert not canonical.root.isError
+    assert canonical.root.content[0].text == "app_plugin_manager:current@sess-1"
 
 
 async def _list_tools(server: Any) -> list[Any]:

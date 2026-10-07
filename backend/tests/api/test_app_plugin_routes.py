@@ -86,27 +86,41 @@ async def test_install_list_and_shapes(http: httpx.AsyncClient, tmp_path: Path) 
     assert listing["plugins"][0]["automations"][0]["name"] == "run-me"
 
 
-async def test_legacy_routes_share_state_and_still_enforce_permissions(
+async def test_old_http_paths_are_not_mounted(http: httpx.AsyncClient, tmp_path: Path) -> None:
+    item = (await install(http, tmp_path))["plugin"]
+    for method, path in [
+        ("GET", "/v1/extensions/third-party"),
+        ("POST", "/v1/extensions/third-party/install"),
+        ("GET", f"/v1/ext-assets/{PID}/{item['revision']}/frontend/index.js"),
+    ]:
+        result = await http.request(
+            method, path, json={"source_path": str(plugin_src(tmp_path, name="old"))}
+        )
+        assert result.status_code == 404, result.text
+    assert [plugin["id"] for plugin in (await http.get(BASE)).json()["plugins"]] == [PID]
+
+
+async def test_old_identity_header_is_rejected_instead_of_bypassing_permissions(
     http: httpx.AsyncClient,
     tmp_path: Path,
 ) -> None:
-    legacy = "/v1/extensions/third-party"
-    result = await http.post(f"{legacy}/install", json={"source_path": str(plugin_src(tmp_path))})
-    assert result.status_code == 200, result.text
-    assert (await http.get(BASE)).json() == (await http.get(legacy)).json()
-    revision = result.json()["plugin"]["revision"]
-    assert (await http.get(f"/v1/ext-assets/{PID}/{revision}/frontend/index.js")).text == INDEX_JS
-    for base in (BASE, legacy):
-        for header in ("X-Valuz-App-Plugin-Id", "X-Valuz-Plugin-Id"):
-            ok = await http.put(f"{base}/{PID}/storage/k", json={"value": 1}, headers={header: PID})
-            assert ok.status_code == 200, ok.text
-            denied = await http.get(f"{base}/other.plugin/storage/k", headers={header: PID})
-            assert (
-                denied.status_code == 403
-                and denied.json()["detail"]["code"] == "plugin_permission_denied"
-            )
-            manage = await http.get(base, headers={header: PID})
-            assert manage.status_code == 403
+    await install(http, tmp_path)
+    for headers in [
+        {"X-Valuz-Plugin-Id": PID},
+        {"X-Valuz-Plugin-Id": PID, "X-Valuz-App-Plugin-Id": PID},
+        {"X-Valuz-Plugin-Id": ""},
+    ]:
+        result = await http.put(
+            f"{BASE}/{PID}/storage/rejected", json={"value": 99}, headers=headers
+        )
+        assert result.status_code == 403
+        assert result.json()["detail"]["code"] == "unsupported_app_plugin_header"
+    missing = await http.get(f"{BASE}/{PID}/storage/rejected")
+    assert missing.status_code == 404
+    canonical = await http.put(
+        f"{BASE}/{PID}/storage/canonical", json={"value": 1}, headers={"X-Valuz-App-Plugin-Id": PID}
+    )
+    assert canonical.status_code == 200
 
 
 def test_only_canonical_plugin_routes_are_published_in_openapi() -> None:

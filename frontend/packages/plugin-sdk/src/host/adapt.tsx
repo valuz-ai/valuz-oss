@@ -26,7 +26,6 @@ import {
 } from "../types";
 import { createValuzClient } from "../valuz-client";
 import { AppPluginBoundary } from "./boundary";
-import { legacyAppPluginAttributes } from "./compat";
 import { adaptSlotProps } from "./convert";
 
 /** The app plugin went outside the public extension surface. */
@@ -220,7 +219,7 @@ export function adaptAppPlugin(
           onError={(message) => log.error(message)}
         >
           <PluginScopeProvider scope={scope}>
-            <div data-valuz-app-plugin={rootId} {...legacyAppPluginAttributes(rootId)} style={{ display: "contents" }}>
+            <div data-valuz-app-plugin={rootId} style={{ display: "contents" }}>
               <Component {...props} />
             </div>
           </PluginScopeProvider>

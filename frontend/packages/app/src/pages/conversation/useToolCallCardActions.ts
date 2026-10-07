@@ -393,8 +393,7 @@ export function useToolCallCardActions({
           toast.success(
             next.operation_type === "skill.submit"
               ? t("skill.savedToLib")
-              : (next.operation_type.startsWith("app_plugin.") ||
-                  next.operation_type.startsWith("extension."))
+              : next.operation_type.startsWith("app_plugin.")
                 ? t("toolCall.appPluginManager.succeeded")
                 : t(
                     next.preview.change === "delete"

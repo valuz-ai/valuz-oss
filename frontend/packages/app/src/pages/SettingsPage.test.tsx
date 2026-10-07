@@ -140,11 +140,15 @@ describe("SettingsPage slots", () => {
 
 describe("SettingsPage plugin settings", () => {
   it.each([
-    ["/settings?tab=plugins", null],
     ["/settings?tab=extensions", null],
     ["/settings", "extensions"],
-  ])("renders plugin settings for canonical and saved navigation (%s)", async (url, stored) => {
+  ])("does not alias unsupported plugin navigation (%s)", (url, stored) => {
     if (stored) localStorage.setItem("valuz-settings-tab", stored);
+    render(<MemoryRouter initialEntries={[url]}><SettingsPage /></MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "通用" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "插件" })).toBeNull();
+  });
+  it("renders plugin settings at the canonical tab", async () => {
     vi.spyOn(builtinPluginsApi, "listBuiltinPlugins").mockResolvedValue({
       composed: false,
       editable: true,
@@ -161,7 +165,7 @@ describe("SettingsPage plugin settings", () => {
       ui_url: null,
     });
     render(
-      <MemoryRouter initialEntries={[url]}>
+      <MemoryRouter initialEntries={["/settings?tab=plugins"]}>
         <SettingsPage />
       </MemoryRouter>,
     );

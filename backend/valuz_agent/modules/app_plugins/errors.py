@@ -166,7 +166,3 @@ __all__ = [
     "AppPluginsUnavailable",
     "VersionNotNewer",
 ]
-
-# Deprecated class names remain aliases for older imports.
-ThirdPartyError = AppPluginError
-ThirdPartyUnavailable = AppPluginsUnavailable

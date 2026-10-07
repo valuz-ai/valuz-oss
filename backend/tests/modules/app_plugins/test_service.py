@@ -322,7 +322,7 @@ async def test_safe_mode(svc: Svc, monkeypatch: pytest.MonkeyPatch) -> None:
     assert listing["safe_mode"] is True and listing["safe_mode_reason"] == "crashed twice"
     assert listing["generation"] > before
     assert await svc.set_safe_mode(False) == {"safe_mode": False}
-    monkeypatch.setenv("VALUZ_EXTENSIONS_SAFE_MODE", "1")
+    monkeypatch.setenv("VALUZ_APP_PLUGINS_SAFE_MODE", "1")
     assert (await svc.list(USER))["safe_mode"] is True
 
 

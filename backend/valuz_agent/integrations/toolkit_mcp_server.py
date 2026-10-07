@@ -163,9 +163,7 @@ def _build_server(toolset: str) -> Server:
 
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
-        # Saved sessions may still call the old name; keep it out of list_tools.
-        canonical_name = "app_plugin_manager" if tool_name == "extension_manager" else tool_name
-        tdef = by_name.get(canonical_name)
+        tdef = by_name.get(tool_name)
         if tdef is None or tdef.handler is None:
             raise ValueError(f"unknown tool: {tool_name}")
         ctx = HostExecContext(

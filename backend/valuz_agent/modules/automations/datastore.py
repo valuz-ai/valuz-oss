@@ -48,8 +48,6 @@ class AutomationDatastore:
         )
         return list((await self._db.execute(stmt)).scalars().all())
 
-    list_by_extension = list_by_app_plugin  # deprecated method alias
-
     async def get_automation(self, user_id: str, automation_id: str) -> AutomationRow | None:
         return (
             (

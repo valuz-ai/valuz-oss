@@ -21,5 +21,3 @@ export {
   type HostRequest,
   type HostServices,
 } from "../services";
-
-export * from "./compat";

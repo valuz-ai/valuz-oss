@@ -20,12 +20,13 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("createCrashGuard", () => {
-  it("preserves safe mode protection across the App Plugin naming migration", () => {
+  it("reads only canonical App Plugin crash protection state", () => {
     const storage = memoryStorage();
     storage.setItem("valuz.thirdParty.loading", "1");
     storage.setItem("valuz.thirdParty.crashes", "1");
-    expect(createCrashGuard(storage).evaluateStartup()).toEqual({ crashes: 2, safeMode: true });
-    expect(storage.data.size).toBe(0);
+    expect(createCrashGuard(storage).evaluateStartup()).toEqual({ crashes: 0, safeMode: false });
+    expect(storage.data.get("valuz.thirdParty.loading")).toBe("1");
+    expect(storage.data.get("valuz.thirdParty.crashes")).toBe("1");
   });
   it("a clean start is not a crash", () => {
     const storage = memoryStorage();

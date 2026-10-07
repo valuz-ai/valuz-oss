@@ -103,7 +103,6 @@ func Root() *cobra.Command {
 		newEnvCmd(),
 		newModelCmd(),
 		newAgentCmd(),
-		newExtCmd(),
 		newPluginCmd(),
 	)
 	return root

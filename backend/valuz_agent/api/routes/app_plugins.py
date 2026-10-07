@@ -44,7 +44,7 @@ def _require_local() -> None:
         raise AppPluginsUnavailable()
 
 
-_app_router = APIRouter(
+router = APIRouter(
     prefix="/v1/app-plugins",
     tags=["app-plugins"],
     route_class=AppPluginRoute,
@@ -52,25 +52,11 @@ _app_router = APIRouter(
 )
 
 #: ``GET /v1/app-plugin-assets/{id}/{revision}/{path}`` — a plugin's frontend files.
-_asset_router = APIRouter(
+assets_router = APIRouter(
     prefix="/v1/app-plugin-assets",
     tags=["app-plugins"],
     route_class=AppPluginRoute,
     dependencies=[Depends(_require_local)],
-)
-
-
-_legacy_router = APIRouter(
-    prefix="/v1/extensions/third-party",
-    route_class=AppPluginRoute,
-    dependencies=[Depends(_require_local)],
-    include_in_schema=False,
-)
-_legacy_asset_router = APIRouter(
-    prefix="/v1/ext-assets",
-    route_class=AppPluginRoute,
-    dependencies=[Depends(_require_local)],
-    include_in_schema=False,
 )
 
 
@@ -130,22 +116,19 @@ class PathBody(BaseModel):
 # ---- the list, watch and safe mode -------------------------------------------------
 
 
-@_legacy_router.get("")
-@_app_router.get("")
+@router.get("")
 async def list_app_plugin(user_id: str = Depends(get_current_user_id)) -> dict[str, Any]:
     return await app_plugin_service.list(user_id)
 
 
-@_legacy_router.get("/watch")
-@_app_router.get("/watch")
+@router.get("/watch")
 async def watch_app_plugin(
     since: int = Query(0), timeout: float = Query(25.0, ge=0, le=60)
 ) -> dict[str, Any]:
     return await app_plugin_service.watch(since, timeout)
 
 
-@_legacy_router.post("/safe-mode")
-@_app_router.post("/safe-mode")
+@router.post("/safe-mode")
 async def set_safe_mode(body: SafeModeBody) -> dict[str, Any]:
     return await app_plugin_service.set_safe_mode(body.enabled, body.reason)
 
@@ -153,16 +136,14 @@ async def set_safe_mode(body: SafeModeBody) -> dict[str, Any]:
 # ---- install and development -------------------------------------------------------
 
 
-@_legacy_router.post("/inspect")
-@_app_router.post("/inspect")
+@router.post("/inspect")
 async def inspect_app_plugin(
     body: SourceBody, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.inspect(body.spec(), user_id=user_id)
 
 
-@_legacy_router.post("/install")
-@_app_router.post("/install")
+@router.post("/install")
 async def install_app_plugin(
     body: InstallBody, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
@@ -171,22 +152,19 @@ async def install_app_plugin(
     )
 
 
-@_legacy_router.post("/dev-link")
-@_app_router.post("/dev-link")
+@router.post("/dev-link")
 async def dev_link_app_plugin(
     body: DevLinkBody, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.dev_link(user_id, body.path)
 
 
-@_legacy_router.post("/validate")
-@_app_router.post("/validate")
+@router.post("/validate")
 async def validate_app_plugin(body: PathBody) -> dict[str, Any]:
     return await asyncio.to_thread(app_plugin_service.validate, body.path)
 
 
-@_legacy_router.post("/pack")
-@_app_router.post("/pack")
+@router.post("/pack")
 async def pack_app_plugin(body: PathBody) -> dict[str, Any]:
     return await asyncio.to_thread(app_plugin_service.pack, body.path, body.out_dir)
 
@@ -194,32 +172,28 @@ async def pack_app_plugin(body: PathBody) -> dict[str, Any]:
 # ---- one plugin --------------------------------------------------------------------
 
 
-@_legacy_router.post("/{plugin_id}/reload")
-@_app_router.post("/{plugin_id}/reload")
+@router.post("/{plugin_id}/reload")
 async def reload_app_plugin(
     plugin_id: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.reload(plugin_id, user_id=user_id)
 
 
-@_legacy_router.post("/{plugin_id}/enable")
-@_app_router.post("/{plugin_id}/enable")
+@router.post("/{plugin_id}/enable")
 async def enable_app_plugin(
     plugin_id: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.set_enabled(user_id, plugin_id, True)
 
 
-@_legacy_router.post("/{plugin_id}/disable")
-@_app_router.post("/{plugin_id}/disable")
+@router.post("/{plugin_id}/disable")
 async def disable_app_plugin(
     plugin_id: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.set_enabled(user_id, plugin_id, False)
 
 
-@_legacy_router.delete("/{plugin_id}")
-@_app_router.delete("/{plugin_id}")
+@router.delete("/{plugin_id}")
 async def uninstall_app_plugin(
     plugin_id: str,
     purge_data: bool = Query(False),
@@ -228,29 +202,25 @@ async def uninstall_app_plugin(
     return await app_plugin_service.uninstall(user_id, plugin_id, purge_data=purge_data)
 
 
-@_legacy_router.get("/{plugin_id}/logs")
-@_app_router.get("/{plugin_id}/logs")
+@router.get("/{plugin_id}/logs")
 async def read_app_plugin_logs(plugin_id: str, limit: int = Query(200, ge=1, le=1000)) -> Any:
     return app_plugin_service.read_logs(plugin_id, limit)
 
 
-@_legacy_router.post("/{plugin_id}/logs", status_code=204)
-@_app_router.post("/{plugin_id}/logs", status_code=204)
+@router.post("/{plugin_id}/logs", status_code=204)
 async def write_app_plugin_log(plugin_id: str, body: LogBody) -> Response:
     app_plugin_service.write_log(plugin_id, body.level, body.message, "frontend")
     return Response(status_code=204)
 
 
-@_legacy_router.get("/{plugin_id}/config")
-@_app_router.get("/{plugin_id}/config")
+@router.get("/{plugin_id}/config")
 async def get_app_plugin_config(
     plugin_id: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.get_config(user_id, plugin_id)
 
 
-@_legacy_router.put("/{plugin_id}/config")
-@_app_router.put("/{plugin_id}/config")
+@router.put("/{plugin_id}/config")
 async def put_app_plugin_config(
     plugin_id: str, body: ConfigBody, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
@@ -260,32 +230,28 @@ async def put_app_plugin_config(
 # ---- storage -----------------------------------------------------------------------
 
 
-@_legacy_router.get("/{plugin_id}/storage")
-@_app_router.get("/{plugin_id}/storage")
+@router.get("/{plugin_id}/storage")
 async def list_app_plugin_storage(
     plugin_id: str, prefix: str = Query(""), user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.storage_list(user_id, plugin_id, prefix)
 
 
-@_legacy_router.get("/{plugin_id}/storage/{key:path}")
-@_app_router.get("/{plugin_id}/storage/{key:path}")
+@router.get("/{plugin_id}/storage/{key:path}")
 async def get_app_plugin_storage(
     plugin_id: str, key: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.storage_get(user_id, plugin_id, key)
 
 
-@_legacy_router.put("/{plugin_id}/storage/{key:path}")
-@_app_router.put("/{plugin_id}/storage/{key:path}")
+@router.put("/{plugin_id}/storage/{key:path}")
 async def put_app_plugin_storage(
     plugin_id: str, key: str, body: StorageBody, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.storage_put(user_id, plugin_id, key, body.value)
 
 
-@_legacy_router.delete("/{plugin_id}/storage/{key:path}", status_code=204)
-@_app_router.delete("/{plugin_id}/storage/{key:path}", status_code=204)
+@router.delete("/{plugin_id}/storage/{key:path}", status_code=204)
 async def delete_app_plugin_storage(
     plugin_id: str, key: str, user_id: str = Depends(get_current_user_id)
 ) -> Response:
@@ -296,16 +262,14 @@ async def delete_app_plugin_storage(
 # ---- plugin-declared automations ---------------------------------------------------
 
 
-@_legacy_router.get("/{plugin_id}/automations")
-@_app_router.get("/{plugin_id}/automations")
+@router.get("/{plugin_id}/automations")
 async def list_app_plugin_automations(
     plugin_id: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.automations(user_id, plugin_id)
 
 
-@_legacy_router.post("/{plugin_id}/automations/{name}/run")
-@_app_router.post("/{plugin_id}/automations/{name}/run")
+@router.post("/{plugin_id}/automations/{name}/run")
 async def run_app_plugin_automation(
     plugin_id: str,
     name: str,
@@ -318,16 +282,14 @@ async def run_app_plugin_automation(
     )
 
 
-@_legacy_router.get("/{plugin_id}/automations/{name}/runs/latest")
-@_app_router.get("/{plugin_id}/automations/{name}/runs/latest")
+@router.get("/{plugin_id}/automations/{name}/runs/latest")
 async def latest_app_plugin_automation_run(
     plugin_id: str, name: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
     return await app_plugin_service.latest_automation_run(user_id, plugin_id, name)
 
 
-@_legacy_router.get("/{plugin_id}/automation-runs/{run_id}")
-@_app_router.get("/{plugin_id}/automation-runs/{run_id}")
+@router.get("/{plugin_id}/automation-runs/{run_id}")
 async def get_app_plugin_automation_run(
     plugin_id: str, run_id: str, user_id: str = Depends(get_current_user_id)
 ) -> dict[str, Any]:
@@ -365,9 +327,8 @@ def _media_type(name: str) -> str:
     return _MIME.get(suffix) or mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
-@_legacy_asset_router.get("/{plugin_id}/{revision}/{path:path}")
-@_asset_router.get("/{plugin_id}/{revision}/{path:path}")
-async def get_ext_asset(plugin_id: str, revision: int, path: str) -> FileResponse:
+@assets_router.get("/{plugin_id}/{revision}/{path:path}")
+async def get_app_plugin_asset(plugin_id: str, revision: int, path: str) -> FileResponse:
     file, dev = app_plugin_service.asset_path(plugin_id, revision, path)
     cache = "no-cache" if dev else "public, max-age=31536000, immutable"
     return FileResponse(
@@ -375,12 +336,3 @@ async def get_ext_asset(plugin_id: str, revision: int, path: str) -> FileRespons
         media_type=_media_type(file.name),
         headers={"Cache-Control": cache, "X-Content-Type-Options": "nosniff"},
     )
-
-
-# Canonical and legacy URLs execute the same endpoints and permission checks.
-router = APIRouter()
-router.include_router(_app_router)
-router.include_router(_legacy_router)
-assets_router = APIRouter()
-assets_router.include_router(_asset_router)
-assets_router.include_router(_legacy_asset_router)

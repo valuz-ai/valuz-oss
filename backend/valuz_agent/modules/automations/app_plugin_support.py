@@ -375,7 +375,3 @@ __all__ = [
     "origin_key",
     "row_name",
 ]
-
-# Deprecated type imports.
-ExtensionAutomations = AppPluginAutomations
-ExtensionAutomationSpec = AppPluginAutomationSpec

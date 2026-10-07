@@ -25,7 +25,6 @@ from valuz_agent.modules.app_plugins.permissions import api_path, classify
 from valuz_agent.modules.app_plugins.service import app_plugin_service
 
 PLUGIN_HEADER = b"x-valuz-app-plugin-id"
-LEGACY_PLUGIN_HEADER = b"x-valuz-plugin-id"
 MAX_INSPECTED_BODY = 1024 * 1024
 
 
@@ -36,6 +35,19 @@ class PluginPermissionMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
+            return
+        if any(name == b"x-valuz-plugin-id" for name, _ in scope.get("headers") or []):
+            response = JSONResponse(
+                {
+                    "detail": {
+                        "code": "unsupported_app_plugin_header",
+                        "message": "Use X-Valuz-App-Plugin-Id for application plugin requests",
+                    }
+                },
+                status_code=403,
+                headers={"access-control-allow-origin": "*"},
+            )
+            await response(scope, receive, send)
             return
         plugin_id = _plugin_header(scope)
         if not plugin_id or scope["method"] == "OPTIONS":  # preflight carries no identity
@@ -103,9 +115,7 @@ class PluginPermissionMiddleware:
 
 def _plugin_header(scope: Scope) -> str:
     headers = dict(scope.get("headers") or [])
-    value = headers.get(PLUGIN_HEADER)
-    if value is None:
-        value = headers.get(LEGACY_PLUGIN_HEADER, b"")
+    value = headers.get(PLUGIN_HEADER, b"")
     return str(value.decode("latin-1")).strip()
 
 

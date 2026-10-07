@@ -16,14 +16,14 @@ from valuz_agent.modules.app_plugins.store import InstalledStore
 
 @pytest.fixture
 def data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the shared data root (extensions/, extensions.json, logs) at a tmp dir."""
+    """Point the shared data root (app-plugins/, plugins.json, logs) at a tmp dir."""
     from valuz_agent.infra.config import settings
 
     root = tmp_path / "data"
     root.mkdir()
     monkeypatch.setattr(settings, "data_dir", root)
     monkeypatch.setattr(settings, "user_project_root", tmp_path / "projects")
-    monkeypatch.delenv("VALUZ_EXTENSIONS_SAFE_MODE", raising=False)
+    monkeypatch.delenv("VALUZ_APP_PLUGINS_SAFE_MODE", raising=False)
     return root
 
 

@@ -76,15 +76,6 @@ _RISK = {
 }
 
 
-_LEGACY_OPERATION_TYPES = {
-    "extension.install": APP_PLUGIN_INSTALL_OPERATION,
-    "extension.dev_link": APP_PLUGIN_DEV_LINK_OPERATION,
-    "extension.uninstall": APP_PLUGIN_UNINSTALL_OPERATION,
-    "extension.publish": APP_PLUGIN_PUBLISH_OPERATION,
-}
-_RISK.update({legacy: _RISK[canonical] for legacy, canonical in _LEGACY_OPERATION_TYPES.items()})
-
-
 # ── Proposing ────────────────────────────────────────────────────────────
 
 
@@ -360,21 +351,13 @@ def register_app_plugin_operations() -> None:
         (APP_PLUGIN_UNINSTALL_OPERATION, _uninstall_handler),
         (APP_PLUGIN_PUBLISH_OPERATION, _publish_handler),
     ):
-        for name in (
-            operation_type,
-            *(
-                legacy
-                for legacy, canonical in _LEGACY_OPERATION_TYPES.items()
-                if canonical == operation_type
-            ),
-        ):
-            operation_registry.register(
-                OperationRegistration(
-                    operation_type=name,
-                    version=APP_PLUGIN_OPERATION_VERSION,
-                    handler=handler,
-                )
+        operation_registry.register(
+            OperationRegistration(
+                operation_type=operation_type,
+                version=APP_PLUGIN_OPERATION_VERSION,
+                handler=handler,
             )
+        )
 
 
 register_app_plugin_operations()
@@ -391,13 +374,3 @@ __all__ = [
     "propose_app_plugin_operation",
     "register_app_plugin_operations",
 ]
-
-# Deprecated proposal functions/constants are compatibility entry points only.
-EXTENSION_INSTALL_OPERATION = "extension.install"
-EXTENSION_DEV_LINK_OPERATION = "extension.dev_link"
-EXTENSION_UNINSTALL_OPERATION = "extension.uninstall"
-EXTENSION_PUBLISH_OPERATION = "extension.publish"
-EXTENSION_OPERATION_VERSION = APP_PLUGIN_OPERATION_VERSION
-build_extension_proposal = build_app_plugin_proposal
-propose_extension_operation = propose_app_plugin_operation
-register_third_party_operations = register_app_plugin_operations

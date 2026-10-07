@@ -340,7 +340,7 @@ def test_requiredby_is_reported_in_the_plugin_listing() -> None:
     assert rows["oss-core"]["required"] is True
 
 
-# -- /v1/extensions ------------------------------------------------------------------
+# -- /v1/builtin-plugins ------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -378,6 +378,33 @@ def test_state_is_public_and_lists_only_ids(
     response = client.get("/v1/builtin-plugins/state")
     assert response.status_code == 200
     assert response.json() == {"inactive": ["oss-browser"]}
+
+
+def test_old_builtin_http_paths_and_ids_are_unavailable(
+    builtin_plugins_client: tuple[TestClient, PluginHost, dict[str, Any]],
+) -> None:
+    client, host, saved = builtin_plugins_client
+    client.app.dependency_overrides[get_current_user_id] = lambda: "u1"  # type: ignore[attr-defined]
+    assert client.get("/v1/builtin-plugins").status_code == 200
+    for path in ("/v1/extensions/backend", "/v1/extensions/backend/state"):
+        assert client.get(path).status_code == 404
+    assert (
+        client.post(
+            "/v1/extensions/backend/oss-third-party/enabled", json={"enabled": False}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/v1/builtin-plugins/oss-third-party/enabled", json={"enabled": False}
+        ).status_code
+        == 404
+    )
+    assert saved["writes"] == []
+    assert host.get("oss-app-plugins").desired_enabled is True
+    current = client.post("/v1/builtin-plugins/oss-app-plugins/enabled", json={"enabled": False})
+    assert current.status_code == 200
+    assert saved["writes"] == [("oss-app-plugins", False)]
 
 
 def test_state_without_a_host_reports_nothing_inactive(isolated_host_state: None) -> None:

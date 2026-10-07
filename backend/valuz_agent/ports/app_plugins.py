@@ -1,7 +1,7 @@
 """Ports of third-party plugins (ADR-034, docs task card 04).
 
 * ``AppPluginPolicyPort`` — may this user load this installed plugin? OSS lets
-  everything through; a commercial overlay applies the organization's extension
+  everything through; a commercial overlay applies the organization's application plugin
   policy (blocked sources, blocked versions, revoked catalog versions).
 * ``AppPluginPublisherPort`` — upload a packed plugin to a catalog. OSS has no
   catalog, so the port is unbound (``None``) and publishing reports that it
@@ -56,8 +56,3 @@ __all__ = [
     "PolicyVerdict",
     "AppPluginPolicyPort",
 ]
-
-# Deprecated protocol aliases for older overlays.
-ThirdPartyPolicyPort = AppPluginPolicyPort
-AllowAllThirdPartyPolicy = AllowAllAppPluginPolicy
-ExtensionPublisherPort = AppPluginPublisherPort

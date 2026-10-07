@@ -57,7 +57,7 @@ class PluginRecord:
 
 @dataclass(frozen=True)
 class PluginInfo:
-    """Read-only projection for management surfaces (P3 ``/v1/extensions``)."""
+    """Read-only projection for management surfaces (P3 ``/v1/builtin-plugins``)."""
 
     id: str
     status: PluginStatus

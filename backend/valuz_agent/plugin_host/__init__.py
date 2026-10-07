@@ -32,13 +32,10 @@ from valuz_agent.plugin_host.plugin import (
     PluginStatus,
 )
 from valuz_agent.plugin_host.prefs import (
-    ExtensionPrefs,
     PluginPrefs,
     effective_disabled,
-    load_extension_prefs,
     load_host_with_prefs,
     load_plugin_prefs,
-    register_plugin_id_alias,
     save_config,
     save_enabled,
 )
@@ -54,12 +51,9 @@ from valuz_agent.plugin_host.registry import (
 __all__ = [
     "BUNDLE_ENTRY_POINT_GROUP",
     "PluginPrefs",
-    "ExtensionPrefs",
     "active_plugin_host",
     "effective_disabled",
     "load_plugin_prefs",
-    "load_extension_prefs",
-    "register_plugin_id_alias",
     "load_host_with_prefs",
     "save_config",
     "save_enabled",

@@ -283,9 +283,6 @@ class AppPluginService:
             elif kind == "deployment":
                 ok = env.deployment == value
             elif kind == "capability":
-                value = {"third-party": "app-plugins", "oss.third-party": "oss.app-plugins"}.get(
-                    value, value
-                )
                 ok = value in env.capabilities or f"oss.{value}" in env.capabilities
             elif kind == "connector":
                 slugs = await self._connectors(env)
@@ -1282,7 +1279,3 @@ __all__ = [
     "AppPluginService",
     "app_plugin_service",
 ]
-
-# Deprecated aliases share the canonical service and installed store.
-ThirdPartyService = AppPluginService
-third_party_service = app_plugin_service

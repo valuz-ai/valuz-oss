@@ -103,9 +103,6 @@ def _in_app_route(link: str | None) -> str | None:
 async def create_notification(
     body: CreateNotificationRequest,
     plugin_id: str | None = Header(default=None, alias="X-Valuz-App-Plugin-Id"),
-    legacy_plugin_id: str | None = Header(
-        default=None, alias="X-Valuz-Plugin-Id", include_in_schema=False
-    ),
     user_id: str = Depends(get_current_user_id),
 ) -> CreateNotificationResponse:
     """Post a notification into the caller's own ledger (``ctx.valuz.notifications``).
@@ -115,7 +112,6 @@ async def create_notification(
     dedup key). Permission (the plugin's ``notifications`` grant) is checked by
     the plugin-request middleware, not here.
     """
-    plugin_id = plugin_id if plugin_id is not None else legacy_plugin_id
     payload: dict[str, object] = {}
     if body.link:
         payload["link"] = body.link

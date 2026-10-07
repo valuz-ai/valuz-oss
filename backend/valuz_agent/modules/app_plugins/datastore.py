@@ -134,6 +134,3 @@ class AppPluginDatastore:
 
 
 __all__ = ["AppPluginDatastore"]
-
-# Deprecated import aliases use the canonical implementation.
-ExtensionDatastore = AppPluginDatastore

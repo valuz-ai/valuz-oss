@@ -1,4 +1,3 @@
-import { legacyAppPluginLocaleNamespace } from "@valuz/plugin-sdk/host";
 import { toast } from "sonner";
 import {
   getAppPluginsApiBase,
@@ -175,7 +174,6 @@ export function createAppPluginHostServices(): HostServices {
     registerLocales(pluginId, locales) {
       for (const [locale, tree] of Object.entries(locales)) {
         registerLocaleNamespace(`appPlugin.${pluginId}`, locale as LocaleCode, tree);
-        registerLocaleNamespace(legacyAppPluginLocaleNamespace(pluginId), locale as LocaleCode, tree);
       }
     },
   };

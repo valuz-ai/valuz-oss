@@ -507,7 +507,8 @@ export interface components {
                  *     automation_already_running, sha256_mismatch, not_found,
                  *     automation_not_found, run_not_found, storage_quota_exceeded,
                  *     invalid_input, app_plugins_unavailable (and, from the permission
-                 *     middleware, plugin_permission_denied with `permission`)
+                 *     middleware, plugin_permission_denied with `permission` or
+                 *     unsupported_app_plugin_header)
                  */
                 code: string;
                 message: string;

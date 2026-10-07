@@ -55,11 +55,7 @@ def api_path(path: str) -> str | None:
     prefix = path[:index].rstrip("/")
     if prefix.endswith("/kernel") or prefix == "/kernel" or "/_internal" in prefix:
         return None
-    rel = path[index:]
-    legacy = "/v1/extensions/third-party"
-    if rel == legacy or rel.startswith(legacy + "/"):
-        rel = "/v1/app-plugins" + rel[len(legacy) :]
-    return rel
+    return path[index:]
 
 
 def classify(method: str, path: str, plugin_id: str) -> Rule | None:

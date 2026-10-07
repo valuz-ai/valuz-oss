@@ -24,15 +24,6 @@ if TYPE_CHECKING:
     from valuz_agent.plugin_host.host import PluginHost
 
 PREFS_FILENAME = "plugins.json"
-LEGACY_PREFS_FILENAME = "extensions.json"
-PLUGIN_ID_ALIASES = {"oss-third-party": "oss-app-plugins"}
-
-
-def register_plugin_id_alias(legacy: str, canonical: str) -> None:
-    """Register an embedding host's renamed plugin before loading preferences."""
-    if not legacy or not canonical or legacy == canonical:
-        raise ValueError("a plugin alias needs two different non-empty IDs")
-    PLUGIN_ID_ALIASES[legacy] = canonical
 
 
 @dataclass(frozen=True)
@@ -62,66 +53,17 @@ def _normalise(raw: dict[str, Any]) -> PluginPrefs:
     for plugin_id, value in source_configs.items():
         if not isinstance(plugin_id, str) or not isinstance(value, dict):
             continue
-        canonical = PLUGIN_ID_ALIASES.get(plugin_id, plugin_id)
-        if canonical != plugin_id and canonical in source_configs:
-            continue
-        configs[canonical] = value
+        configs[plugin_id] = value
     return PluginPrefs(
         disabled=frozenset(
-            PLUGIN_ID_ALIASES.get(pid, pid)
-            for pid in (disabled if isinstance(disabled, list) else [])
-            if isinstance(pid, str)
+            pid for pid in (disabled if isinstance(disabled, list) else []) if isinstance(pid, str)
         ),
         configs=configs,
     )
 
 
-def _migrate_prefs(target: Path) -> None:
-    if target.name != PREFS_FILENAME:
-        return
-    legacy = target.with_name(LEGACY_PREFS_FILENAME)
-    if not legacy.exists():
-        return
-    if not target.exists():
-        os.replace(legacy, target)
-        return
-    old, current = _read(legacy), _read(target)
-    if old is not None:
-        if current is None:
-            import shutil
-            import uuid
-
-            shutil.copy2(target, target.with_name(f".plugins-prefs.{uuid.uuid4().hex}.corrupt"))
-        old_prefs = _normalise(old)
-        new_prefs = _normalise(current or {})
-        _write(
-            PluginPrefs(
-                disabled=old_prefs.disabled | new_prefs.disabled,
-                configs={**old_prefs.configs, **new_prefs.configs},
-            ),
-            target,
-        )
-    # Preserve the original for recovery; it is no longer an active preference
-    # source, so enabling a migrated plugin will not restore a stale disable.
-    import uuid
-
-    os.replace(legacy, legacy.with_name(f".extensions-prefs.{uuid.uuid4().hex}.migrated"))
-
-
 def load_plugin_prefs(path: Path | None = None) -> PluginPrefs:
-    target = path or prefs_path()
-    _migrate_prefs(target)
-    raw = _read(target) or {}
-    prefs = _normalise(raw)
-    # Rewrite IDs once, including when an overlay registers its own rename.
-    disabled, configs = raw.get("disabled"), raw.get("configs")
-    if any(
-        pid in PLUGIN_ID_ALIASES
-        for pid in (disabled if isinstance(disabled, list) else [])
-        if isinstance(pid, str)
-    ) or any(pid in PLUGIN_ID_ALIASES for pid in (configs if isinstance(configs, dict) else {})):
-        _write(prefs, target)
-    return prefs
+    return _normalise(_read(path or prefs_path()) or {})
 
 
 def _write(prefs: PluginPrefs, path: Path) -> None:
@@ -133,7 +75,6 @@ def _write(prefs: PluginPrefs, path: Path) -> None:
 
 def save_enabled(plugin_id: str, enabled: bool, path: Path | None = None) -> PluginPrefs:
     target = path or prefs_path()
-    plugin_id = PLUGIN_ID_ALIASES.get(plugin_id, plugin_id)
     current = load_plugin_prefs(target)
     disabled = set(current.disabled)
     if enabled:
@@ -147,7 +88,6 @@ def save_enabled(plugin_id: str, enabled: bool, path: Path | None = None) -> Plu
 
 def save_config(plugin_id: str, values: dict[str, Any], path: Path | None = None) -> PluginPrefs:
     target = path or prefs_path()
-    plugin_id = PLUGIN_ID_ALIASES.get(plugin_id, plugin_id)
     current = load_plugin_prefs(target)
     updated = PluginPrefs(disabled=current.disabled, configs={**current.configs, plugin_id: values})
     _write(updated, target)
@@ -170,8 +110,3 @@ def load_host_with_prefs(host: PluginHost) -> None:
     edits apply."""
     prefs = load_plugin_prefs()
     host.load_all(configs=prefs.configs, disabled=prefs.disabled)
-
-
-# Deprecated names remain aliases to the single canonical preference source.
-ExtensionPrefs = PluginPrefs
-load_extension_prefs = load_plugin_prefs

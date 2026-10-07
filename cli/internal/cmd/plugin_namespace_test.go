@@ -24,39 +24,28 @@ func TestPluginHelpSeparatesFamilies(t *testing.T) {
 	}
 	out, _, err = runCmd(t, Root(), "--help")
 	if err != nil || strings.Contains(out, "  ext ") {
-		t.Fatalf("ext must be hidden from root help: %v\n%s", err, out)
+		t.Fatalf("ext must be absent from root help: %v\n%s", err, out)
 	}
 }
 
-func TestLegacyAppCommandPreservesJSON(t *testing.T) {
+func TestRemovedPluginCommandsFailWithoutCallingBackend(t *testing.T) {
 	f := newFakePluginBackend(t)
 	defer f.Close()
 	isolatePluginEnv(t, f.URL)
-	out, stderr, err := runPluginCmd(t, nil, "", "plugin", "list", "-o", "json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !json.Valid([]byte(out)) || !strings.Contains(stderr, "valuz plugin app list") {
-		t.Fatalf("JSON stdout and migration warning required: stdout=%q stderr=%q", out, stderr)
-	}
-	if reqs := f.calls(); len(reqs) != 1 || reqs[0].Path != appPluginAPI {
-		t.Fatalf("wrong legacy route: %+v", reqs)
-	}
-}
-
-func TestLegacyExtCommandPreservesJSON(t *testing.T) {
-	useFakeBuiltinPluginBackend(t, "applied")
-	for _, tc := range []struct {
-		args []string
-		next string
-	}{
-		{[]string{"ext", "list", "-o", "json"}, "valuz plugin builtin list"},
-		{[]string{"ext", "dsh", "list", "-o", "json"}, "valuz plugin dsh list"},
+	for _, args := range [][]string{
+		{"ext", "list"}, {"ext", "dsh", "list"},
+		{"plugin", "list"}, {"plugin", "install", "./plugin.zip"},
+		{"plugin", "publish", "./plugin.zip"}, {"plugin", "validate", "."},
 	} {
-		out, stderr, err := runCmd(t, Root(), tc.args...)
-		if err != nil || !json.Valid([]byte(out)) || !strings.Contains(stderr, tc.next) {
-			t.Fatalf("legacy %v: err=%v stdout=%q stderr=%q", tc.args, err, out, stderr)
-		}
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, _, err := runPluginCmd(t, nil, "", args...)
+			if err == nil || !strings.Contains(err.Error(), "unknown command") {
+				t.Fatalf("removed command should be unknown: args=%v err=%v stdout=%q", args, err, out)
+			}
+			if calls := f.calls(); len(calls) != 0 {
+				t.Fatalf("removed command contacted backend: %+v", calls)
+			}
+		})
 	}
 }
 

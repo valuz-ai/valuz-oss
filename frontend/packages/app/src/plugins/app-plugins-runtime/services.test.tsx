@@ -113,7 +113,7 @@ describe("host actions", () => {
     });
     expect(t("appPlugin.acme.dashboard.title" as Parameters<typeof t>[0])).toBe("Positions");
     expect(t("appPlugin.acme.dashboard.nested.key" as Parameters<typeof t>[0])).toBe("Nested");
-    expect(t("ext.acme.dashboard.title" as Parameters<typeof t>[0])).toBe("Positions");
+    expect(t("ext.acme.dashboard.title" as Parameters<typeof t>[0])).toBe("ext.acme.dashboard.title");
   });
 
   it("tells plugins the host context", () => {

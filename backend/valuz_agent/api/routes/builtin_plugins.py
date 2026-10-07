@@ -18,7 +18,6 @@ session exists to decide which frontend plugins to load.
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,15 +27,14 @@ from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.plugin_host import active_plugin_host, load_plugin_prefs, save_enabled
 from valuz_agent.plugin_host.errors import PluginHostError
 
-_builtin_router = APIRouter(prefix="/v1/builtin-plugins", tags=["builtin-plugins"])
-_legacy_router = APIRouter(prefix="/v1/extensions", include_in_schema=False)
+router = APIRouter(prefix="/v1/builtin-plugins", tags=["builtin-plugins"])
 
 
 class EnabledChange(BaseModel):
     enabled: bool
 
 
-@_builtin_router.get("/state")
+@router.get("/state")
 async def builtin_plugins_state() -> dict[str, list[str]]:
     """Ids of the backend plugins that are not active in this process.
 
@@ -47,7 +45,7 @@ async def builtin_plugins_state() -> dict[str, list[str]]:
     return {"inactive": [] if host is None else host.inactive_ids()}
 
 
-@_builtin_router.get("")
+@router.get("")
 async def list_builtin_plugins(
     _user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
@@ -72,54 +70,14 @@ async def list_builtin_plugins(
     }
 
 
-def _legacy_ids() -> dict[str, str]:
-    from valuz_agent.plugin_host.prefs import PLUGIN_ID_ALIASES
-
-    # Explicitly registered built-in aliases only; authored plugin IDs and
-    # configuration contents are never rewritten by string substitution.
-    return {canonical: legacy for legacy, canonical in PLUGIN_ID_ALIASES.items()}
-
-
-@_legacy_router.get("/backend/state", name="builtin_plugins_state")
-async def legacy_builtin_plugins_state() -> dict[str, list[str]]:
-    """Preserve IDs understood by an older frontend during boot composition."""
-    state = await builtin_plugins_state()
-    aliases = _legacy_ids()
-    inactive = sorted(aliases.get(plugin_id, plugin_id) for plugin_id in state["inactive"])
-    return {"inactive": inactive}
-
-
-@_legacy_router.get("/backend", name="list_builtin_plugins")
-async def list_legacy_builtin_plugins(
-    _user_id: str = Depends(get_current_user_id),
-) -> dict[str, Any]:
-    """A compatibility projection of the same host, prefs and owner checks."""
-    result = copy.deepcopy(await list_builtin_plugins(_user_id))
-    aliases = _legacy_ids()
-    capabilities = {"oss.app-plugins": "oss.third-party"}
-    for row in result["plugins"]:
-        row["id"] = aliases.get(row["id"], row["id"])
-        row["requiredBy"] = [aliases.get(plugin_id, plugin_id) for plugin_id in row["requiredBy"]]
-        for field in ("needs", "provides"):
-            row[field] = [capabilities.get(capability, capability) for capability in row[field]]
-    result["config_schemas"] = {
-        aliases.get(plugin_id, plugin_id): schema
-        for plugin_id, schema in result["config_schemas"].items()
-    }
-    return result
-
-
-@_legacy_router.post("/backend/{plugin_id}/enabled")
-@_builtin_router.post("/{plugin_id}/enabled")
+@router.post("/{plugin_id}/enabled")
 async def set_builtin_plugin_enabled(
     plugin_id: str,
     body: EnabledChange,
     _user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
     from valuz_agent.infra.config import settings
-    from valuz_agent.plugin_host.prefs import PLUGIN_ID_ALIASES
 
-    plugin_id = PLUGIN_ID_ALIASES.get(plugin_id, plugin_id)
     if getattr(settings, "deployment_type", "local") != "local":
         # A cloud backend is shared: a deployment-wide toggle is an operator
         # change, not a user action (org-level entitlements gate features there).
@@ -144,13 +102,3 @@ async def set_builtin_plugin_enabled(
             )
     save_enabled(plugin_id, body.enabled)
     return {"application": host.set_enabled(plugin_id, body.enabled)}
-
-
-router = APIRouter()
-router.include_router(_builtin_router)
-router.include_router(_legacy_router)
-
-# Deprecated function imports resolve the same canonical handlers.
-backend_extensions_state = legacy_builtin_plugins_state
-list_backend_extensions = list_legacy_builtin_plugins
-set_backend_extension_enabled = set_builtin_plugin_enabled

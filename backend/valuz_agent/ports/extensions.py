@@ -333,24 +333,6 @@ class Extensions:
         self.ui_artifact_sinks: list[UiArtifactSinkPort] = []
 
     @property
-    def third_party_policy(self) -> AppPluginPolicyPort:
-        """Deprecated alias; use app_plugin_policy."""
-        return self.app_plugin_policy
-
-    @third_party_policy.setter
-    def third_party_policy(self, policy: AppPluginPolicyPort) -> None:
-        self.app_plugin_policy = policy
-
-    @property
-    def extension_publisher(self) -> AppPluginPublisherPort | None:
-        """Deprecated alias; use app_plugin_publisher."""
-        return self.app_plugin_publisher
-
-    @extension_publisher.setter
-    def extension_publisher(self, publisher: AppPluginPublisherPort | None) -> None:
-        self.app_plugin_publisher = publisher
-
-    @property
     def instructions(self) -> GlobalInstructionsPort:
         """Deprecated attribute alias for overlays migrating to the new name."""
         return self.global_instructions

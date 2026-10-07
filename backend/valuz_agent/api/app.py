@@ -53,7 +53,7 @@ def _build_lifespan(
 def _compose_bare_host() -> PluginHost:
     """A bare OSS app composes its own host: the OSS plugins, with the persisted
     plugin prefs (``<data root>/plugins.json``) applied, recorded as the
-    process's active host so ``/v1/extensions`` can report it."""
+    process's active host so ``/v1/builtin-plugins`` can report it."""
     from valuz_agent.features import compose_oss_host
     from valuz_agent.plugin_host import load_host_with_prefs, set_active_plugin_host
 

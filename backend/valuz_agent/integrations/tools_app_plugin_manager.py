@@ -810,10 +810,3 @@ def build_app_plugin_manager_tool_defs() -> tuple[ToolDef, ...]:
             read_only=False,
         ),
     )
-
-
-# Deprecated import aliases; the toolkit only advertises app_plugin_manager.
-EXTENSION_MANAGER_TOOL_NAME = "extension_manager"
-EXTENSION_MANAGER_DESCRIPTION = APP_PLUGIN_MANAGER_DESCRIPTION
-EXTENSION_MANAGER_PARAMETERS = APP_PLUGIN_MANAGER_PARAMETERS
-build_extension_manager_tool_defs = build_app_plugin_manager_tool_defs

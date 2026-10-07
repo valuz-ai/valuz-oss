@@ -28,7 +28,3 @@ class AppPluginsPlugin(OssPlugin):
         ctx.middleware.add(PluginPermissionMiddleware, MiddlewareOrder.RBAC)
         # A superseded version directory is kept until the next start, then dropped.
         startup(ctx, BootPhase.POST_BOOT, step("cleanup_superseded_app_plugin_versions"))
-
-
-# Deprecated import aliases use the canonical implementation.
-ThirdPartyPlugin = AppPluginsPlugin

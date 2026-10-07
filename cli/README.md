@@ -54,7 +54,7 @@ The connect-only headless surface talks to a running backend over HTTP:
     PluginManager: status / list / inspect / add (inspects first, installs only
     with `--yes`) / remove / enable / disable / open.
 
-### Plugin examples and compatibility
+### Plugin examples
 
 ```bash
 valuz plugin agent preview ./research.zip
@@ -77,14 +77,10 @@ The SDK's `valuz-plugin create/build/test/validate/pack` is an **App Plugin buil
 helper**, separate from the Go management CLI. Agent Plugins use their own
 `plugin.json`/ecosystem layouts, not `valuz-plugin.json`.
 
-Legacy `valuz ext list/enable/disable` maps to `valuz plugin builtin`, and
-`valuz ext dsh` maps to `valuz plugin dsh`. Legacy unqualified
-`valuz plugin install/list/publish/...` still manages **App Plugins**. These
-compatibility commands are hidden from normal help and emit a migration notice
-on stderr, preserving `-o json` stdout. Agent Plugins use `/v1/plugins`, App
-Plugins use `/v1/app-plugins`, and built-in plugins use `/v1/builtin-plugins`.
-Older application-plugin and built-in API paths are handled by server-side
-compatibility routes; new clients use the canonical paths.
+Plugin commands require an explicit family (`agent`, `app`, `builtin`, or
+`dsh`). Unqualified application-plugin verbs and `valuz ext` are unsupported.
+Agent Plugins use `/v1/plugins`, App Plugins use `/v1/app-plugins`, and built-in
+plugins use `/v1/builtin-plugins`; no old application-plugin routes are exposed.
 
 Exit codes follow the stable contract (0 completed / 1 usage / 2 timeout /
 3 agent error / 4 backend unreachable / 5 internal / 6 auth / 7 action

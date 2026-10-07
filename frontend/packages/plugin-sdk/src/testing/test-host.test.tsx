@@ -55,7 +55,7 @@ describe("createTestHost", () => {
     await host.load(plugin);
 
     expect(host.renderSlot("project.detail.tabs", { projectId: "p1", navigate: () => {} })).toBe(
-      '<div data-valuz-app-plugin="acme.dashboard" data-valuz-ext="acme.dashboard" style="display:contents"><section>持仓:p1</section></div>',
+      '<div data-valuz-app-plugin="acme.dashboard" style="display:contents"><section>持仓:p1</section></div>',
     );
     expect(host.renderRoute("home")).toContain("<h1>持仓</h1>");
     expect(host.renderRoute("/x/acme.dashboard")).toContain("<h1>持仓</h1>");

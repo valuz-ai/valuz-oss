@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 INSTALLED_FILENAME = "installed.json"
 SAFE_MODE_FILENAME = "safe-mode.json"
 SAFE_MODE_ENV = "VALUZ_APP_PLUGINS_SAFE_MODE"
-LEGACY_SAFE_MODE_ENV = "VALUZ_EXTENSIONS_SAFE_MODE"
 STATE_VERSION = 1
 
 State = dict[str, Any]
@@ -159,9 +158,8 @@ class InstalledStore:
     # -- safe mode -----------------------------------------------------------------
 
     def safe_mode(self) -> tuple[bool, str | None]:
-        for name in (SAFE_MODE_ENV, LEGACY_SAFE_MODE_ENV):
-            if os.environ.get(name, "").strip() in ("1", "true", "TRUE", "yes"):
-                return True, f"{name}=1"
+        if os.environ.get(SAFE_MODE_ENV, "").strip() in ("1", "true", "TRUE", "yes"):
+            return True, f"{SAFE_MODE_ENV}=1"
         try:
             raw = json.loads(self.safe_mode_path().read_text(encoding="utf-8"))
         except (OSError, ValueError):

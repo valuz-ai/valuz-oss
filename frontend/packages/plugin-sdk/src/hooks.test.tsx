@@ -164,7 +164,7 @@ describe("contribution wrapper", () => {
       />,
     );
     expect(container.innerHTML).toBe(
-      '<div data-valuz-app-plugin="acme.dashboard" data-valuz-ext="acme.dashboard" style="display: contents;"><b>1</b></div>',
+      '<div data-valuz-app-plugin="acme.dashboard" style="display: contents;"><b>1</b></div>',
     );
     expect(seen[0]).toMatchObject({
       sessionId: "s1",

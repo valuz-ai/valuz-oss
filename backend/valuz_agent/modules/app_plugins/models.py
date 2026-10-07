@@ -37,8 +37,3 @@ class AppPluginConfigRow(Base):
     app_plugin_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     values_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-
-
-# Deprecated import aliases use the canonical implementation.
-ExtensionStorageRow = AppPluginStorageRow
-ExtensionConfigRow = AppPluginConfigRow
