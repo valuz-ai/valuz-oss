@@ -1,8 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
-import { dshPluginsApi, builtinPluginsApi, useRegistryStore } from "@valuz/core";
+import { appPluginsApi, dshPluginsApi, builtinPluginsApi, useRegistryStore } from "@valuz/core";
 
 vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({ setHideHeader: vi.fn() }),
@@ -146,9 +146,16 @@ describe("SettingsPage plugin settings", () => {
     if (stored) localStorage.setItem("valuz-settings-tab", stored);
     render(<MemoryRouter initialEntries={[url]}><SettingsPage /></MemoryRouter>);
     expect(screen.getByRole("heading", { name: "通用" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "插件" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "插件分类" })).toBeNull();
   });
   it("renders plugin settings at the canonical tab", async () => {
+    vi.spyOn(appPluginsApi, "list").mockResolvedValue({
+      generation: 0,
+      plugins: [],
+      api_version: "1.0",
+      safe_mode: false,
+      safe_mode_reason: null,
+    });
     vi.spyOn(builtinPluginsApi, "listBuiltinPlugins").mockResolvedValue({
       composed: false,
       editable: true,
@@ -174,8 +181,15 @@ describe("SettingsPage plugin settings", () => {
         .getState()
         .settingsSections.find((s) => s.id === "plugins")?.group?.id,
     ).toBe("system");
-    expect(screen.getByRole("heading", { name: "插件" })).not.toBeNull();
+    const categories = within(screen.getByRole("group", { name: "插件分类" }));
+    expect(
+      categories.getByRole("button", { name: "应用插件" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    await screen.findByRole("button", { name: "从文件安装" });
+    fireEvent.click(categories.getByRole("button", { name: "内置插件" }));
     expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();
+    await screen.findByText("此构建没有后端插件");
+    fireEvent.click(categories.getByRole("button", { name: "DSH 插件" }));
     expect(screen.getByRole("heading", { name: "DSH 插件" })).not.toBeNull();
     expect(await screen.findByText("DSH 插件在此环境不可用")).not.toBeNull();
   });

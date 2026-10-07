@@ -3548,6 +3548,7 @@
     "playbookDetail": "Playbook detail"
   },
   "pluginSettings": {
+    "tabsLabel": "Plugin categories",
     "title": "Plugins",
     "navDesc": "App Plugins, built-in plugins and DSH plugins",
     "desc": "Manage App Plugins, built-in plugins that ship with Valuz, and standard DSH (DeepSeek Harness) plugins.",

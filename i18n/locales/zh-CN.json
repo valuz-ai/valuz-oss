@@ -3548,6 +3548,7 @@
     "playbookDetail": "手册详情"
   },
   "pluginSettings": {
+    "tabsLabel": "插件分类",
     "title": "插件",
     "navDesc": "应用插件、内置插件与 DSH 插件",
     "desc": "管理应用插件、随 Valuz 发行的内置插件，以及标准 DSH（DeepSeek Harness）插件。",

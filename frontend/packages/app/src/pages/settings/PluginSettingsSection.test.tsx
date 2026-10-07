@@ -91,12 +91,18 @@ const rowOf = (container: HTMLElement, name: string): HTMLElement => {
   return row;
 };
 
+const renderTab = (name: string) => {
+  const view = render(<PluginSettingsSection />);
+  fireEvent.click(within(view.container).getByRole("button", { name }));
+  return view;
+};
+
 const renderReady = async (bundles: DshBundleInfo[]) => {
   vi.spyOn(dshPluginsApi, "status").mockResolvedValue(STATUS);
   const listBundles = vi
     .spyOn(dshPluginsApi, "listBundles")
     .mockResolvedValue(bundles);
-  const view = render(<PluginSettingsSection />);
+  const view = renderTab("DSH 插件");
   await screen.findByText("已安装的 Bundle");
   return { ...view, listBundles };
 };
@@ -131,15 +137,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("PluginSettingsSection — categories", () => {
+  it("opens App Plugins first and shows each category separately", async () => {
+    vi.spyOn(appPluginsApi, "list").mockResolvedValue({
+      generation: 0,
+      plugins: [],
+      api_version: "1.0",
+      safe_mode: false,
+      safe_mode_reason: null,
+    });
+    vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
+    render(<PluginSettingsSection />);
+    const group = screen.getByRole("group", { name: "插件分类" });
+    const choices = within(group).getAllByRole("button");
+    expect(choices.map((choice) => choice.textContent)).toEqual([
+      "应用插件",
+      "内置插件",
+      "DSH 插件",
+    ]);
+    expect(choices[0].getAttribute("aria-pressed")).toBe("true");
+    await screen.findByRole("button", { name: "从文件安装" });
+    expect(screen.queryByRole("heading", { name: "内置插件" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "DSH 插件" })).toBeNull();
+    fireEvent.click(choices[1]);
+    await screen.findByText("此构建没有后端插件");
+    expect(screen.queryByRole("button", { name: "从文件安装" })).toBeNull();
+    fireEvent.click(choices[2]);
+    expect(screen.getByRole("heading", { name: "DSH 插件" })).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "内置插件" })).toBeNull();
+  });
+});
+
 describe("PluginSettingsSection — built-in plugins", () => {
   // Order matters: ``pluginHost`` is a process-wide singleton, so the empty
   // state has to be asserted before any test loads a plugin.
   it("shows an empty state while no built-in frontend plugin is loaded", async () => {
     vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
-    render(<PluginSettingsSection />);
+    renderTab("内置插件");
     // Let the backend half settle so its state update lands inside the test.
     await screen.findByText("此构建没有后端插件");
-    expect(screen.getByRole("heading", { name: "插件" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "插件分类" })).not.toBeNull();
     expect(screen.getByText("当前没有已加载的界面插件")).not.toBeNull();
   });
 
@@ -163,7 +200,7 @@ describe("PluginSettingsSection — built-in plugins", () => {
       }),
     );
 
-    const { container } = render(<PluginSettingsSection />);
+    const { container } = renderTab("内置插件");
     const active = container.querySelector<HTMLElement>(
       '[data-builtin-plugin-id="ext-active"]',
     )!;
@@ -199,7 +236,7 @@ describe("PluginSettingsSection — backend-disabled plugins", () => {
     vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
     pluginHost.skip("oss-browser", "backend-disabled");
 
-    const { container } = render(<PluginSettingsSection />);
+    const { container } = renderTab("内置插件");
     const row = container.querySelector<HTMLElement>(
       '[data-builtin-plugin-id="oss-browser"]',
     )!;
@@ -215,16 +252,17 @@ describe("PluginSettingsSection — oss-dsh-plugins", () => {
     vi.spyOn(dshPluginsApi, "status").mockReturnValue(new Promise(() => {}));
     await dshHost.unload("oss-dsh-plugins");
     try {
-      render(<PluginSettingsSection />);
+      const view = renderTab("内置插件");
       await screen.findByText("此构建没有后端插件");
       expect(screen.queryByRole("heading", { name: "DSH 插件" })).toBeNull();
       // The page itself is core: its own list is still there.
       expect(screen.getByRole("heading", { name: "内置插件" })).not.toBeNull();
+      view.unmount();
     } finally {
       await dshHost.load(ossDshPluginsPlugin);
     }
 
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
     expect(
       (await screen.findAllByRole("heading", { name: "DSH 插件" })).length,
     ).toBeGreaterThan(0);
@@ -253,7 +291,7 @@ describe("PluginSettingsSection — built-in backend plugins", () => {
       ],
       config_schemas: {},
     });
-    const { container } = render(<PluginSettingsSection />);
+    const { container } = renderTab("内置插件");
     await screen.findByText("commercial-sites");
     const valuz = screen
       .getByRole("heading", { name: "内置插件" })
@@ -280,7 +318,7 @@ describe("PluginSettingsSection — DSH plugins unavailable", () => {
     });
     const listBundles = vi.spyOn(dshPluginsApi, "listBundles");
 
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
 
     await screen.findByText("DSH 插件在此环境不可用");
     expect(screen.getByText(/云端和共享部署默认关闭 DSH 插件/)).not.toBeNull();
@@ -302,7 +340,7 @@ describe("PluginSettingsSection — DSH plugins unavailable", () => {
       running: false,
       unavailable_reason: "node (>= 22.19) not found",
     });
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
     await screen.findByText("DSH 插件在此环境不可用");
     expect(
       screen.getByText("此部署没有可用的 DSH 插件管理服务。"),
@@ -314,7 +352,7 @@ describe("PluginSettingsSection — DSH plugins unavailable", () => {
     vi.spyOn(dshPluginsApi, "status").mockRejectedValue(
       new ApiError("API 404: Not Found", 404),
     );
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
     await screen.findByText("DSH 插件在此环境不可用");
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -324,7 +362,7 @@ describe("PluginSettingsSection — DSH plugins unavailable", () => {
     vi.spyOn(dshPluginsApi, "listBundles").mockRejectedValue(
       new ApiError("manager failed to start", 409),
     );
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
     await screen.findByText("DSH 插件在此环境不可用");
     expect(screen.getByText("原因：manager failed to start")).not.toBeNull();
   });
@@ -334,7 +372,7 @@ describe("PluginSettingsSection — DSH plugins unavailable", () => {
       .spyOn(dshPluginsApi, "status")
       .mockRejectedValueOnce(new ApiError("API 500: kaboom", 500))
       .mockResolvedValue({ ...STATUS, enabled: false, available: false });
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
     await screen.findByText("无法连接 DSH 插件管理服务");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByText("DSH 插件在此环境不可用");
@@ -346,7 +384,7 @@ describe("PluginSettingsSection — DSH plugins unavailable", () => {
     vi.spyOn(dshPluginsApi, "listBundles").mockReturnValue(
       new Promise(() => {}),
     );
-    render(<PluginSettingsSection />);
+    renderTab("DSH 插件");
     await screen.findByText(/正在连接 DSH 插件管理服务/);
     expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
   });

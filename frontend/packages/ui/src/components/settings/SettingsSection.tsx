@@ -3,7 +3,7 @@ import { cn } from "../../lib/cn";
 
 export interface SettingsSectionProps {
   kicker?: string;
-  title: string;
+  title: ReactNode;
   desc?: string;
   children: ReactNode;
   contentClassName?: string;
