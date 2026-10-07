@@ -35,6 +35,19 @@ def _as_async(fn):
     return _f
 
 
+@pytest.fixture(autouse=True)
+def _isolated_local_read_seam(monkeypatch):
+    """These tests inject the local kernel witness, never a previous app's durable reader.
+
+    Task finalization/probing reads through DataReader. With no composed host,
+    its supported local fallback delegates to the kernel facade patched below;
+    a reader retained by an earlier real-app test would bypass those witnesses.
+    """
+    from valuz_agent.adapters import data_reader as readers
+
+    monkeypatch.setattr(readers, "_reader", None)
+
+
 
 
 def _make_task(db_factory, tmp_path, *, project_id="w1", task_id="t1") -> str:
@@ -1679,7 +1692,6 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
         "collect_manifest",
         _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
     )
-    orch = TaskOrchestrator()
 
     out = asyncio.run(
         member_probe.heartbeat_pending(

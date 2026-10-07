@@ -11,6 +11,7 @@ self-heals.
 
 from __future__ import annotations
 
+import pytest
 from app.schemas import (  # type: ignore[import-not-found]
     AgentConfigSchema,
     McpHttpServerConfigSchema,
@@ -19,6 +20,19 @@ from app.schemas import (  # type: ignore[import-not-found]
 
 import valuz_agent.boot.kernel  # noqa: F401 — kernel sys.path side-effect
 from valuz_agent.modules.sessions import capabilities
+
+
+@pytest.fixture(autouse=True)
+def _real_local_always_on_composition(monkeypatch):
+    """Pin the enabled OSS MCP composition rather than inherit a previous app's ports."""
+    from valuz_agent.features.mounts import dsh_plugins_mount
+    from valuz_agent.infra.config import settings
+    from valuz_agent.ports import mcp_always_on
+    from valuz_agent.ports.extensions import ext
+
+    monkeypatch.setattr(ext, "always_on_mcp_specs", [dsh_plugins_mount().spec])
+    monkeypatch.setattr(mcp_always_on, "_enabled_builtin_servers", None)
+    monkeypatch.setattr(settings, "backend_base_url", "http://127.0.0.1:8000")
 
 
 def _make_session(*, mcp_servers):
@@ -62,7 +76,15 @@ def _always_on_set(token: str, *, base: str, tool_timeout_sec: float | None = No
         headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
         tool_timeout_sec=tool_timeout_sec,
     )
-    return (*servers, harness)
+    dsh_bridge = McpHttpServerConfigSchema(
+        name="valuz-dsh-plugins",
+        url=f"{base}/dsh-plugins/mcp",
+        transport="http",
+        headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
+        tool_timeout_sec=tool_timeout_sec,
+    )
+    # Edition/spec servers follow the reserved built-ins in the real resolver.
+    return (*servers, harness, dsh_bridge)
 
 
 def _stale_trio(token: str):
@@ -190,6 +212,7 @@ async def test_restamp_drops_the_pre_rename_spelling(monkeypatch):
             "valuz-automations",
             "valuz-playbooks",
             "valuz-connectors",
+            "valuz-dsh-plugins",
             "harness",
         ]
     )
