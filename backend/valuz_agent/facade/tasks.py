@@ -55,6 +55,7 @@ class TaskDetailRef:
     runs: tuple[TaskRunRef, ...]
     latest_summary: str
     event_sequence: int
+    latest_attention: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +187,23 @@ class TaskLibrary:
             summaries = [
                 str(e.payload["summary"]) for e in detail.events if e.payload.get("summary")
             ]
+            attention = [
+                e
+                for e in detail.events
+                if e.type in {"task_blocked", "blocked", "paused", "task_paused"}
+            ]
+            latest_attention = None
+            if detail.task.status in {"blocked", "paused"} and attention:
+                latest = max(attention, key=lambda e: e.sequence)
+                latest_attention = {
+                    "event_type": latest.type,
+                    "sequence": latest.sequence,
+                    **{
+                        key: deepcopy(latest.payload[key])
+                        for key in ("reason", "category", "error", "summary")
+                        if key in latest.payload
+                    },
+                }
             return TaskDetailRef(
                 task=_ref(detail.task),
                 runs=tuple(
@@ -201,6 +219,7 @@ class TaskLibrary:
                 ),
                 latest_summary=summaries[-1] if summaries else "",
                 event_sequence=max((e.sequence for e in detail.events), default=0),
+                latest_attention=latest_attention,
             )
 
     async def create(

@@ -360,3 +360,49 @@ async def test_owner_instruction_without_a_local_source_uses_user_actor(store):
         assert event.actor == "user" and event.type == "user_inject"
         message = db.scalars(select(TaskMailboxRow)).one()
         assert message.from_session == "user"
+
+
+async def test_blocked_detail_exposes_attention_from_real_owner_scoped_events(store):
+    seed_task(store, status="blocked")
+    with store() as db:
+        db.add(
+            TaskEventRow(
+                user_id=OWNER,
+                project_id="project",
+                task_id="t1",
+                type="task_blocked",
+                actor="lead",
+                sequence=1,
+                payload={
+                    "reason": "lead_turn_error",
+                    "error": "Provider needs authorization",
+                    "category": "execution_error",
+                    "internal_unused": "not projected",
+                },
+            )
+        )
+        db.add(
+            TaskEventRow(
+                user_id=OWNER,
+                project_id="project",
+                task_id="t1",
+                type="user_note",
+                actor="user",
+                sequence=2,
+                payload={"text": "acknowledged"},
+            )
+        )
+        db.commit()
+    detail = await TaskLibrary().get(OWNER, "t1")
+    assert detail.latest_attention == {
+        "event_type": "task_blocked",
+        "sequence": 1,
+        "reason": "lead_turn_error",
+        "error": "Provider needs authorization",
+        "category": "execution_error",
+    }
+    assert await TaskLibrary().get("other-owner", "t1") is None
+    with store() as db:
+        db.get(TaskRow, "t1").status = "active"
+        db.commit()
+    assert (await TaskLibrary().get(OWNER, "t1")).latest_attention is None
