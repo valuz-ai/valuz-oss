@@ -218,39 +218,20 @@ else
 fi
 
 # ============================================================
-# Phase A1: Override bundled Claude Code CLI (Linux only)
+# Phase A1: Restore SDK-paired Claude CLI (Linux only)
 # ============================================================
-# PyInstaller stages whatever `claude` ships inside the `claude_agent_sdk`
-# Python package (~220 MB) at `_internal/claude_agent_sdk/_bundled/claude`.
-# On Linux we overwrite that with the pinned official Claude Code release from
-# github.com/anthropics/claude-code — the SDK's bundled binary is not what we
-# want shipped. macOS/Windows keep the SDK's binary. No --skip flag: this is
-# a no-op on non-Linux hosts and when the bundled binary wasn't staged
-# (--skip-backend, or claude_agent_sdk changes its layout).
+# Restore original native bytes from the SDK installed in the selected uv
+# project after PyInstaller rewrites/strips ELF files. Keep the SDK/CLI pair;
+# missing binaries or unsuccessful bounded startup must fail the build.
 
 if [ "$PLATFORM_TAG" = "linux" ] && ! $SKIP_BACKEND; then
-  log "=== Phase A1: Override bundled Claude Code CLI (Linux only) ==="
-
-  # Map Valuz dist arch → Claude Code release-asset token. The amd64→x64
-  # rename is the same one download-node.sh applies for the Node binary.
-  case "$ARCH_TAG" in
-    amd64) CLAUDE_TARGET="linux-x64" ;;
-    arm64) CLAUDE_TARGET="linux-arm64" ;;
-    *)     die "No Claude Code release asset for arch=$ARCH_TAG on Linux" ;;
-  esac
-
+  log "=== Phase A1: Restore original SDK-paired Linux CLI ==="
   CLAUDE_BIN="$RESOURCES_LIBEXEC/_internal/claude_agent_sdk/_bundled/claude"
-  if [ ! -f "$CLAUDE_BIN" ]; then
-    warn "Expected PyInstaller-staged claude not found at $CLAUDE_BIN — skipping override"
-  else
-    log "Overriding Linux Claude Code CLI → v${CLAUDE_CODE_VERSION:-2.1.185} ($CLAUDE_TARGET)"
-    bash "$SCRIPT_DIR/download-claude-code.sh" \
-      --target="$CLAUDE_TARGET" \
-      --out="$CLAUDE_BIN"
-    log "Claude Code override complete: $CLAUDE_BIN ($(du -h "$CLAUDE_BIN" | cut -f1))"
-  fi
+  uv run --project "$BACKEND_DIR" python "$SCRIPT_DIR/stage-sdk-claude.py" \
+    --destination "$CLAUDE_BIN"
+  log "SDK-paired Linux CLI bytes and startup verified"
 else
-  log "=== Phase A1: Skipping Claude Code override (non-Linux or --skip-backend) ==="
+  log "=== Phase A1: Skipping SDK CLI restoration (non-Linux or --skip-backend) ==="
 fi
 
 # ============================================================
