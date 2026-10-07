@@ -381,6 +381,17 @@ exports[`OSS bare registry composition > registers the personal edition's routes
       "label": "settings.tab.personalization.label",
     },
     {
+      "description": "pluginSettings.navDesc",
+      "edition": "personal",
+      "group": {
+        "id": "personal",
+        "label": "settings.group.personal",
+      },
+      "icon": "puzzle",
+      "id": "plugins",
+      "label": "pluginSettings.title",
+    },
+    {
       "description": "settings.tab.model.desc",
       "edition": "personal",
       "group": {
@@ -434,17 +445,6 @@ exports[`OSS bare registry composition > registers the personal edition's routes
       "icon": "network",
       "id": "network",
       "label": "settings.tab.network.label",
-    },
-    {
-      "description": "pluginSettings.navDesc",
-      "edition": "personal",
-      "group": {
-        "id": "system",
-        "label": "settings.group.system",
-      },
-      "icon": "puzzle",
-      "id": "plugins",
-      "label": "pluginSettings.title",
     },
     {
       "description": "settings.tab.systemLogs.desc",

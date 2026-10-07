@@ -267,7 +267,7 @@ export const ossCorePlugin = definePlugin({
         label: "pluginSettings.title",
         description: "pluginSettings.navDesc",
         icon: "puzzle",
-        group: { id: "system", label: "settings.group.system" },
+        group: { id: "personal", label: "settings.group.personal" },
         edition: "personal",
       },
       PluginSettingsSection,

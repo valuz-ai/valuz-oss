@@ -180,7 +180,7 @@ describe("SettingsPage plugin settings", () => {
       useRegistryStore
         .getState()
         .settingsSections.find((s) => s.id === "plugins")?.group?.id,
-    ).toBe("system");
+    ).toBe("personal");
     const categories = within(screen.getByRole("group", { name: "插件分类" }));
     expect(
       categories.getByRole("button", { name: "应用插件" }).getAttribute("aria-pressed"),

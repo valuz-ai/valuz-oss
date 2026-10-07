@@ -46,12 +46,12 @@ export const OSS_ROUTE_ORDER = [
 export const OSS_SETTINGS_SECTION_ORDER = [
   "general",
   "personalization",
+  "plugins",
   "model",
   "browser",
   "parsing",
   "backup",
   "network",
-  "plugins",
   "system-logs",
   "about",
 ] as const;
