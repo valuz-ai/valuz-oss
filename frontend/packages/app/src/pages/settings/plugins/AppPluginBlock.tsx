@@ -208,7 +208,7 @@ export const AppPluginBlock = () => {
             {installed}
           </TabsContent>
           {extraTabs.map(({ id, registration }) => (
-            <TabsContent key={id} value={id} className="mt-3 min-w-0">
+            <TabsContent key={id} value={id} className="mt-3 min-w-0 px-3">
               <SlotContribution
                 name={TABS_SLOT}
                 registration={registration}
