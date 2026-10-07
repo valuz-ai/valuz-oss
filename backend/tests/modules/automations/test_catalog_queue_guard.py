@@ -224,3 +224,73 @@ async def test_completed_receipt_recovers_when_manifest_changed_back_to_code(mon
         assert (await db.get(AutomationRunRow, "run")).status == "success"
     authorize.assert_not_awaited()
     code.assert_not_awaited()
+
+
+async def change_manifest(*, original_kind="conversation", legacy=False):
+    from valuz_agent.modules.automations.in_process_runner import (
+        _automation_check_config,
+        _frame_agent_prompt,
+    )
+
+    async with async_unit_of_work() as db:
+        row, run = await db.get(AutomationRow, "automation"), await db.get(AutomationRunRow, "run")
+        receipt = await db.get(QueuedInputRow, "run")
+        row.result_kind = original_kind
+        config = _automation_check_config(row, run).model_dump(mode="json")
+        if legacy:
+            config["configuration"].pop("result_kind")
+        receipt.input = {
+            **receipt.input,
+            "text": _frame_agent_prompt(row, run, "original work", None),
+            CONFIG_KEY: config,
+        }
+        row.execution_kind, row.code_entry, row.code_runtime, row.target_session_id = (
+            "code",
+            "job.py",
+            "python",
+            None,
+        )
+        row.result_kind = "artifact" if original_kind == "conversation" else "conversation"
+
+
+@pytest.mark.parametrize("entry", ["startup", "shutdown", "execute"])
+async def test_receipt_survives_startup_shutdown_manifest_artifact_rewrite(monkeypatch, entry):
+    await seed(input_status="completed")
+    await change_manifest(legacy=entry == "startup")
+    runner = InProcessAutomationRunner()
+    runner._triggers = Mock(next_fire_at=Mock(return_value=None))
+    enqueue = AsyncMock()
+    monkeypatch.setattr(runner, "enqueue", enqueue)
+    code = AsyncMock(side_effect=AssertionError("must never rerun original completed work"))
+    monkeypatch.setattr(runner, "_start_code_run", code)
+    if entry == "startup":
+        await runner._reconcile_stranded_runs()
+        enqueue.assert_awaited_once_with("automation", "run", OWNER)
+    elif entry == "shutdown":
+        runner._active_ids["automation"] = OWNER
+        await runner._mark_active_runs_interrupted()
+    # All three entry points keep the durable receipt, then settle it accurately.
+    await runner._execute_run(
+        OWNER, "automation", "run", lease=NoopAutomationExecutionLease(), detach_chat=False
+    )
+    async with async_unit_of_work(commit=False) as db:
+        run = await db.get(AutomationRunRow, "run")
+        assert run.status == "success" and run.result_summary == "real output"
+    code.assert_not_awaited()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_original_artifact_contract_is_not_relaxed_after_manifest_change(monkeypatch, legacy):
+    await seed(input_status="completed")
+    await change_manifest(original_kind="artifact", legacy=legacy)
+    runner = InProcessAutomationRunner()
+    runner._triggers = Mock(next_fire_at=Mock(return_value=None))
+    code = AsyncMock(side_effect=AssertionError("must never rerun original work"))
+    monkeypatch.setattr(runner, "_start_code_run", code)
+    await runner._execute_run(
+        OWNER, "automation", "run", lease=NoopAutomationExecutionLease(), detach_chat=False
+    )
+    async with async_unit_of_work(commit=False) as db:
+        run = await db.get(AutomationRunRow, "run")
+        assert run.status == "failed" and "declared artifact" in run.error_message
+    code.assert_not_awaited()

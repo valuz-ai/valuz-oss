@@ -81,12 +81,50 @@ def _automation_check_config(
         playbook_run_id=getattr(run, "playbook_run_id", None),
         configuration={
             "action_kind": row.action_kind,
+            "result_kind": getattr(row, "result_kind", "conversation"),
             "trigger_type": run.trigger_type,
             "playbook_version": (
                 playbook_run.definition_version if playbook_run is not None else None
             ),
         },
     )
+
+
+def _admitted_result_kind(receipt: Any, automation_id: str) -> str | None:
+    """Read the frozen result contract. Legacy inputs may carry the original
+    system-generated envelope; only its exact owned automation/run preamble
+    is recognized, never user text, model output, or presentation hints.
+    Ambiguous legacy inputs return None and cannot relax an artifact contract.
+    """
+    from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+
+    payload = receipt.input or {}
+    config = payload.get(CONFIG_KEY) or {}
+    configuration = config.get("configuration") or {}
+    kind = configuration.get("result_kind")
+    if isinstance(kind, str) and kind in {"conversation", "artifact"}:
+        return str(kind)
+    if (
+        payload.get("source") != "background"
+        or config.get("origin") != "automation"
+        or config.get("automation_id") != automation_id
+        or config.get("run_id") != receipt.id
+    ):
+        return None
+    lines = str(payload.get("text") or "").splitlines()
+    prefix = f'<automation-run automation_id="{automation_id}" run_id="{receipt.id}" '
+    if len(lines) < 5 or not lines[0].startswith(prefix) or not lines[0].endswith(">"):
+        return None
+    # The result rule is one fixed service-generated line before the user task.
+    # Quoted/newline names make the envelope ambiguous and are not inferred.
+    if lines[4] != "</automation-run>":
+        return None
+    for locale in ("en-US", "zh-CN"):
+        if lines[2] == t("backend.automation.runPreambleArtifact", locale=locale):
+            return "artifact"
+        if lines[2] == t("backend.automation.runPreambleConversation", locale=locale):
+            return "conversation"
+    return None
 
 
 def _automation_trigger_meta(
@@ -337,7 +375,14 @@ class InProcessAutomationRunner:
             now = now_ms()
             for run in stranded:
                 row = await ds.get_automation(run.user_id, run.automation_id)
-                if getattr(row, "target_session_id", None):
+                from valuz_agent.facade.sessions import SessionLibrary
+
+                receipt = (
+                    await SessionLibrary(run.user_id).get_input(run.session_id, run.id)
+                    if run.session_id
+                    else None
+                )
+                if receipt is not None or getattr(row, "target_session_id", None):
                     # A durable input owns the outcome. Re-enter admission with
                     # the same run/input id; it never duplicates the message.
                     await self.enqueue(run.automation_id, run.id, run.user_id)
@@ -373,7 +418,14 @@ class InProcessAutomationRunner:
             for automation_id, owner in list(self._active_ids.items()):
                 last_run = await ds.last_run(owner, automation_id)
                 row = await ds.get_automation(owner, automation_id)
-                if getattr(row, "target_session_id", None):
+                from valuz_agent.facade.sessions import SessionLibrary
+
+                receipt = (
+                    await SessionLibrary(owner).get_input(last_run.session_id, last_run.id)
+                    if last_run is not None and last_run.session_id
+                    else None
+                )
+                if receipt is not None or getattr(row, "target_session_id", None):
                     continue
                 if last_run and last_run.status == "running":
                     last_run.status = "interrupted_by_shutdown"
@@ -599,22 +651,23 @@ class InProcessAutomationRunner:
             recovery_store = AutomationDatastore(recovery_db)
             recovery_row = await recovery_store.get_automation(user_id, automation_id)
             recovery_run = await recovery_store.last_run(user_id, automation_id)
+        recovery_session_id = recovery_run.session_id if recovery_run is not None else None
         if (
             recovery_row is not None
             and recovery_run is not None
             and recovery_run.id == run_id
             and recovery_run.status in ACTIVE_RUN_STATUSES
-            and getattr(recovery_run, "session_id", None)
+            and recovery_session_id
         ):
             from valuz_agent.facade.sessions import SessionLibrary
 
-            receipt = await SessionLibrary(user_id).get_input(recovery_run.session_id, run_id)
+            receipt = await SessionLibrary(user_id).get_input(recovery_session_id, run_id)
             if receipt is not None and receipt.status != "queued":
                 finish_existing = self._finish_existing_chat_run(
                     user_id=user_id,
                     automation_id=automation_id,
                     run_id=run_id,
-                    session_id=recovery_run.session_id,
+                    session_id=recovery_session_id,
                     rendered_prompt=str(receipt.input.get("text") or ""),
                     lease=execution_lease,
                 )
@@ -1199,6 +1252,7 @@ class InProcessAutomationRunner:
 
         assert self._triggers is not None
         status, error, summary = "failed", None, None
+        admitted_result_kind: str | None = None
         try:
             library = SessionLibrary(user_id)
             receipt = await library.get_input(session_id, run_id)
@@ -1219,6 +1273,7 @@ class InProcessAutomationRunner:
                     input_id=run_id,
                     task_check_config=stored_config,
                 )
+            admitted_result_kind = _admitted_result_kind(receipt, automation_id)
             polls = 0
             while receipt.status not in TERMINAL_INPUT_STATUSES:
                 polls += 1
@@ -1270,7 +1325,8 @@ class InProcessAutomationRunner:
             row = await ds.get_automation(user_id, automation_id)
             if run is None or row is None or run.status not in ACTIVE_RUN_STATUSES:
                 return
-            if status == "success" and row.result_kind == "artifact" and run.artifact_json is None:
+            result_kind = admitted_result_kind or row.result_kind
+            if status == "success" and result_kind == "artifact" and run.artifact_json is None:
                 status, error = "failed", "The run ended without producing its declared artifact"
             run.status, run.error_message = status, error
             run.error_code = "SessionError" if status == "failed" else None
