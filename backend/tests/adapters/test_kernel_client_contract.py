@@ -51,6 +51,11 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "cleanup_runtime": None,
     "runtime_availability": ("GET", "/kernel/v1/runtimes/availability"),
     "bg_busy_session_ids": ("GET", "/kernel/v1/runtimes/bg-busy-sessions"),
+    # Desktop capability-token control is deliberately process-local: it
+    # reconfigures/interrupts this host's networking coordinator, never an
+    # owner-scoped remote kernel selected for an arbitrary project/session.
+    "reconfigure_desktop_network_egress": None,
+    "interrupt_desktop_network_egress_activity": None,
 }
 
 # Streaming subscriptions are async-generator functions (not coroutine

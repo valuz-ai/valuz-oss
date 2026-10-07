@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import time
 from copy import deepcopy
-from typing import Literal
+from typing import Any, Literal, cast
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,7 +111,7 @@ class DurableEvidenceService:
             .values(status=status)
             .execution_options(synchronize_session="fetch")
         )
-        if result.rowcount != 1:
+        if cast(CursorResult[Any], result).rowcount != 1:
             raise ValueError("evidence_status_conflict_or_unavailable")
 
     async def append_provenance(self, owner: str, value: ProvenanceInput) -> ProvenanceRecord:
@@ -268,5 +269,5 @@ class DurableEvidenceService:
             .values(status=status)
             .execution_options(synchronize_session="fetch")
         )
-        if result.rowcount != 1:
+        if cast(CursorResult[Any], result).rowcount != 1:
             raise ValueError("evidence_seal_conflict_or_unavailable")

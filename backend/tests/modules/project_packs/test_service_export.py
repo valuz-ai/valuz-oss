@@ -274,3 +274,30 @@ async def test_export_strips_connector_secrets(env) -> None:
     assert "headers_json" not in c.model_dump()
     assert "params_json" not in c.model_dump()
     assert "env_json" not in c.model_dump()
+
+
+async def test_export_rejects_code_automation_without_losing_it(env) -> None:
+    svc, session, _ = env
+    project = await _seed_project(env)
+    automation = AutomationRow(
+        id="code-run",
+        user_id=USER,
+        name="Code task",
+        project_id=project.id,
+        execution_kind="code",
+        code_runtime="python",
+        code_entry="job.py",
+        agent_kind=None,
+        agent_slug=None,
+        prompt_template="",
+        action_kind="chat",
+        trigger_kind="manual",
+        status="enabled",
+        result_kind="artifact",
+    )
+    session.add(automation)
+    await session.commit()
+    with pytest.raises(ProjectNotExportable, match="Code automations"):
+        await svc.export_project(USER, project.id)
+    await session.refresh(automation)
+    assert automation.execution_kind == "code" and automation.status == "enabled"

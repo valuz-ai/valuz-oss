@@ -30,7 +30,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, Self
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
@@ -45,7 +45,7 @@ from mcp.shared.auth import (
 from mcp.shared.auth import OAuthMetadata as _OAuthMetadata
 from mcp.shared.auth_utils import check_resource_allowed, resource_url_from_server_url
 from mcp.types import LATEST_PROTOCOL_VERSION
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, create_model
 
 from valuz_agent.integrations.mcp_http import MCP_USER_AGENT
 
@@ -59,8 +59,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class McpOAuthMetadata(_OAuthMetadata):
+class _McpOAuthMetadataShape(Protocol):
+    """The consumed metadata fields; the SDK model owns all runtime validation."""
+
     issuer: str
+    authorization_endpoint: AnyHttpUrl
+    token_endpoint: AnyHttpUrl
+    registration_endpoint: AnyHttpUrl | None
+    scopes_supported: list[str] | None
+    response_types_supported: list[str]
+    grant_types_supported: list[str] | None
+    token_endpoint_auth_methods_supported: list[str] | None
+
+    @classmethod
+    def model_validate_json(cls, json_data: str | bytes | bytearray) -> Self: ...
+
+
+if TYPE_CHECKING:
+    McpOAuthMetadata = _McpOAuthMetadataShape
+else:
+    # Preserve the existing legacy string-issuer compatibility while inheriting
+    # every current SDK metadata field and validator. The static boundary is
+    # structural rather than an incompatible override of AnyHttpUrl.
+    McpOAuthMetadata = create_model("McpOAuthMetadata", __base__=_OAuthMetadata, issuer=(str, ...))
 
 
 class OauthMetadata(BaseModel):
@@ -134,7 +155,7 @@ def build_client_metadata_document(
 # ---------------------------------------------------------------------------
 
 
-def _url_with_params(url: str, params: dict) -> str:
+def _url_with_params(url: str, params: dict[str, Any]) -> str:
     """Merge ``params`` into ``url``'s query string."""
     parts = list(urlparse(url))
     existing = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parts[4]).items()}
@@ -194,7 +215,7 @@ class OAuthDiscoverHelper:
         if origin_meta is None:
             return None
 
-        values: dict = {
+        values: dict[str, Any] = {
             "authorization_endpoint": str(origin_meta.authorization_endpoint),
             "token_endpoint": str(origin_meta.token_endpoint),
             "scopes_supported": origin_meta.scopes_supported or [],
@@ -468,6 +489,12 @@ class McpOauthHelper:
         except ValidationError as exc:
             raise ValueError(f"Invalid registration response: {exc}") from exc
 
+    def _redirect_uri(self) -> str:
+        uris = self.client_metadata.redirect_uris
+        if not uris:
+            raise ValueError("OAuth client metadata requires a redirect URI")
+        return str(uris[0])
+
     async def get_authorization_url(self) -> tuple[str, str, str]:
         """Return ``(authorization_url, state, code_verifier)``."""
         import secrets as _secrets
@@ -478,7 +505,7 @@ class McpOauthHelper:
         params: dict[str, str] = {
             "response_type": "code",
             "client_id": self.client_id or "",
-            "redirect_uri": str(self.client_metadata.redirect_uris[0]),
+            "redirect_uri": self._redirect_uri(),
             "state": state,
             "code_challenge": pkce.code_challenge,
             "code_challenge_method": "S256",
@@ -494,7 +521,7 @@ class McpOauthHelper:
         token_data: dict[str, str] = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": str(self.client_metadata.redirect_uris[0]),
+            "redirect_uri": self._redirect_uri(),
             "code_verifier": code_verifier,
             "resource": self._get_resource_url(),
         }

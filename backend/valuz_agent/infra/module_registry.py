@@ -67,7 +67,7 @@ class ModuleRegistry:
         ``include_router(router, prefix=, tags=)`` signature.
         """
         for entry in self._modules:
-            target.include_router(entry.router, prefix=entry.prefix, tags=entry.tags)
+            target.include_router(entry.router, prefix=entry.prefix, tags=[*entry.tags])
 
     @property
     def registered_names(self) -> list[str]:

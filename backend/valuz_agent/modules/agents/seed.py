@@ -90,7 +90,7 @@ async def seed_official_agents(db: AsyncSession, owner: str) -> None:
     # system Agent, even when the bundled official seed list is empty.
     from valuz_agent.modules.agents.service import AgentService
 
-    await AgentService(db).ensure_builtin_agent(owner)  # type: ignore[arg-type]
+    await AgentService(db).ensure_builtin_agent(owner)
 
 
 __all__ = [

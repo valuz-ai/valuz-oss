@@ -8,10 +8,6 @@
  * -- a skill written in any non-Latin script simply could not be previewed.
  */
 
-/** C0 controls that never appear in prose, i.e. everything except tab, LF and
- *  CR. Their density is what actually separates bytes from text. */
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
-
 /** The Unicode replacement character, i.e. a byte the decode gave up on. */
 const REPLACEMENT_CHARS = /\uFFFD/g;
 
@@ -23,6 +19,11 @@ export function isBinaryContent(content: string): boolean {
   if (!content) return false;
   if (content.includes("\u0000")) return true;
   const replacements = content.match(REPLACEMENT_CHARS)?.length ?? 0;
-  const controls = content.match(CONTROL_CHARS)?.length ?? 0;
+  // Count C0 controls except prose whitespace (tab, LF and CR).
+  let controls = 0;
+  for (let index = 0; index < content.length; index++) {
+    const code = content.charCodeAt(index);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13) controls++;
+  }
   return (replacements + controls) / content.length > UNDECODABLE_LIMIT;
 }

@@ -9,11 +9,18 @@ kernel storage models or queries kernel tables directly.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from valuz_agent.adapters import kernel_client
+
+if TYPE_CHECKING:
+    from app.schemas import UsageRollupData
 
 
 class AnalyticsDatastore:
-    async def monthly_usage_rows(self, user_id: str, start_ms: int, end_ms: int) -> list:
+    async def monthly_usage_rows(
+        self, user_id: str, start_ms: int, end_ms: int
+    ) -> list[UsageRollupData]:
         """Per-(day, model) usage rollup for completed messages in a half-open
         ``[start_ms, end_ms)`` window (Unix epoch milliseconds).
 

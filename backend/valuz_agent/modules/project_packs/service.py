@@ -175,6 +175,10 @@ class ProjectPackService:
             project_row.id, user_id=user_id
         ):
             detail = await self._automations.get_automation_detail(a.automation_id, user_id=user_id)
+            if detail.agent_kind is None or detail.agent_slug is None:
+                raise ProjectNotExportable(
+                    "Code automations are not supported by the project pack format"
+                )
             trigger = detail.trigger
             cron_expr: str | None = None
             timezone: str | None = None

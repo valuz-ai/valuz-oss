@@ -10,6 +10,7 @@ Revises: 0041
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0042"

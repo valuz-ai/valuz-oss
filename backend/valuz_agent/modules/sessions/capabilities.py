@@ -13,6 +13,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from app.schemas import McpHttpServerConfigSchema, McpStdioServerConfigSchema
+
+if TYPE_CHECKING:
+    from valuz_agent.modules.projects.models import ProjectRow
 
 from app.schemas import UpdateSessionRequest
 
@@ -311,7 +317,7 @@ async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -
     # empty results when the project has no KB bindings, so chat
     # sessions trivially short-circuit at the tool layer.
     #
-    async def _load_project():  # type: ignore[no-untyped-def]
+    async def _load_project() -> ProjectRow | None:
         async with async_unit_of_work(commit=False) as db:
             return await ProjectDatastore(db).get_by_id(session.user_id, project_id)
 
@@ -473,7 +479,9 @@ async def refresh_bundled_skills_for_session(session_id: str, user_id: str) -> b
     return True
 
 
-async def _refresh_external_connector_entries(user_id: str, entries: list) -> list:
+async def _refresh_external_connector_entries(
+    user_id: str, entries: list[McpHttpServerConfigSchema | McpStdioServerConfigSchema]
+) -> list[McpHttpServerConfigSchema | McpStdioServerConfigSchema]:
     """Re-resolve user-attached connector entries with CURRENT credentials.
 
     Each entry's ``name`` is the connector slug (``mcp_resolver`` names configs
@@ -500,10 +508,10 @@ async def _refresh_external_connector_entries(user_id: str, entries: list) -> li
     except Exception:  # noqa: BLE001
         logger.exception("re-stamp: external connector re-resolve failed")
         return entries
-    by_name: dict = {}
+    by_name: dict[str, McpHttpServerConfigSchema | McpStdioServerConfigSchema] = {}
     for cfg in fresh:
         by_name.setdefault(cfg.name, cfg)
-    return [by_name.get(getattr(m, "name", None), m) for m in entries]
+    return [by_name.get(m.name, m) for m in entries]
 
 
 async def refresh_always_on_mcp_for_session(session_id: str, user_id: str) -> bool:

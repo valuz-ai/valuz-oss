@@ -55,7 +55,9 @@ def run_ptc_exec(argv: list[str]) -> int:
     # killed program should not lose everything it printed.
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(line_buffering=True)
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                reconfigure(line_buffering=True)
         except (AttributeError, ValueError, OSError):
             pass
 

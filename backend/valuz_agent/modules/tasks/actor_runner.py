@@ -125,11 +125,13 @@ class ActorCoordinator(Protocol):
         """Has this member's work already been dealt with (or the task ended)?"""
         ...
 
-    async def recover_crashed_members(
-        self, *, task_id: str, project_id: str, user_id: str
-    ) -> list[InboxMsg]:
-        """Members that finished without their ``member_done`` reaching us."""
+    async def recover_crashed_members(self, *, task_id: str, project_id: str, user_id: str) -> int:
+        """Count of reconciled members, whose results were queued durably."""
         ...
+
+    async def actor_still_wanted(
+        self, *, session_id: str, role: str, task_id: str, project_id: str, user_id: str
+    ) -> bool: ...
 
     async def session_still_working(self, session_id: str) -> bool:
         """True when the session is doing work THIS loop cannot see.
@@ -479,6 +481,8 @@ class ActorRunner:
 
                 if stop:
                     break
+                if wake is None:
+                    break
                 msg = wake
 
                 if role == "lead" and not task_goal:
@@ -622,8 +626,7 @@ class ActorRunner:
             return []
         if messages:
             logger.info(
-                "actor loop %s: %d message(s) from the durable inbox — "
-                "written by another process",
+                "actor loop %s: %d message(s) from the durable inbox — written by another process",
                 session_id,
                 len(messages),
             )
@@ -702,9 +705,7 @@ class ActorRunner:
             # away. Nothing re-creates a user instruction: crash recovery only
             # re-synthesises member results from run rows. Leave it pending for
             # whoever comes up after the deploy.
-            durable = (
-                [] if is_draining() else await self._drain_durable_inbox(session_id)
-            )
+            durable = [] if is_draining() else await self._drain_durable_inbox(session_id)
             if durable:
                 return durable[0]
             # Everything below only applies to a lead, and only settles a
@@ -723,20 +724,20 @@ class ActorRunner:
             ):
                 next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
                 try:
-                    recovered = await coordinator.recover_crashed_members(
+                    recovered_count = await coordinator.recover_crashed_members(
                         task_id=task_id, project_id=project_id, user_id=user_id
                     )
                 except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
                     logger.exception(
                         "actor loop %s: crash recovery failed, still waiting", session_id
                     )
-                    recovered = 0
-                if recovered:
+                    recovered_count = 0
+                if recovered_count:
                     logger.info(
                         "actor loop %s (lead): %d member(s) recovered — their processes "
                         "died before recording that they finished",
                         session_id,
-                        recovered,
+                        recovered_count,
                     )
                     # It enqueued them; the next pass drains one, like any
                     # other message. Nothing is handed back for us to park.
@@ -820,9 +821,7 @@ class ActorRunner:
                 # can no longer prove ownership. Anything else is a bug here;
                 # log it loudly and keep renewing rather than leave a live
                 # driver silently unrenewed.
-                logger.exception(
-                    "task lease renewal iteration failed for %s; retrying", lease.key
-                )
+                logger.exception("task lease renewal iteration failed for %s; retrying", lease.key)
                 continue
 
     @staticmethod

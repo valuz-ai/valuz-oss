@@ -776,7 +776,7 @@ async def list_events_after(
     kernel's per-call cap returns the full set (not a silently truncated
     first page) over both transports.
     """
-    items: list = []
+    items: list[Any] = []
     cursor = after_seq
     while len(items) < limit:
         want = min(_EVENTS_PAGE, limit - len(items))
@@ -883,7 +883,7 @@ async def iter_events_sse(
     user_id: str,
     *,
     after_seq: int = 0,
-    is_disconnected: callable[[], bool] | None = None,
+    is_disconnected: Callable[[], bool] | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield ``EventSourceResponse``-shaped dicts (``{"data": ...}``) forever.
 

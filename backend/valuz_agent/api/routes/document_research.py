@@ -8,7 +8,7 @@ the ordinary sessions/messages/SSE APIs.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -67,7 +67,7 @@ async def create_or_restore_research_session(
     documents: DocumentLibraryService = Depends(get_document_service),
     sessions: SessionService = Depends(get_session_service),
     db: AsyncSession = Depends(get_async_session),
-) -> dict:
+) -> dict[str, Any]:
     try:
         value = await _service(
             documents=documents,
@@ -94,7 +94,7 @@ async def get_document_summary(
     documents: DocumentLibraryService = Depends(get_document_service),
     sessions: SessionService = Depends(get_session_service),
     db: AsyncSession = Depends(get_async_session),
-) -> dict | None:
+) -> dict[str, Any] | None:
     try:
         value = await _service(
             documents=documents,
@@ -118,7 +118,7 @@ async def generate_document_summary(
     documents: DocumentLibraryService = Depends(get_document_service),
     sessions: SessionService = Depends(get_session_service),
     db: AsyncSession = Depends(get_async_session),
-) -> dict:
+) -> dict[str, Any]:
     try:
         value = await _service(
             documents=documents,
@@ -144,7 +144,7 @@ async def share_research_message_to_origin(
     documents: DocumentLibraryService = Depends(get_document_service),
     sessions: SessionService = Depends(get_session_service),
     db: AsyncSession = Depends(get_async_session),
-) -> dict:
+) -> dict[str, Any]:
     try:
         value = await _service(
             documents=documents,

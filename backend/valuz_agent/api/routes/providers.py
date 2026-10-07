@@ -1,15 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.engine import Connection
 
 from valuz_agent.api.deps import get_current_user_id, get_provider_service
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.discover import ModelDiscoveryError
 from valuz_agent.modules.providers.errors import ProviderNotFound
+from valuz_agent.modules.providers.schemas import LLMChannel, LLMChannelDetail
 from valuz_agent.modules.providers.service import (
     ConnectionTestResult,
-    LLMChannel,
-    LLMChannelDetail,
     ProviderDescriptor,
     ProviderService,
     reset_providers,
@@ -219,7 +219,7 @@ async def ping_compatible(
     try:
         batch = await svc.ping_compatible_batch(
             api_key=effective_key,
-            base_url=_normalize_base_url(body.base_url),
+            base_url=_normalize_base_url(body.base_url) or "",
             protocol=body.protocol,
             models=body.models,
         )
@@ -475,9 +475,10 @@ async def reset(
         if payload.drop_table:
             # DDL drop/recreate runs through the async connection's
             # ``run_sync`` bridge — ``ProviderRow.__table__`` DDL is sync.
-            def _recreate(connection: object) -> None:
-                ProviderRow.__table__.drop(bind=connection, checkfirst=True)
-                ProviderRow.__table__.create(bind=connection, checkfirst=True)
+            def _recreate(connection: Connection) -> None:
+                table = ProviderRow.metadata.tables[ProviderRow.__tablename__]
+                table.drop(bind=connection, checkfirst=True)
+                table.create(bind=connection, checkfirst=True)
 
             await db.run_sync(lambda s: _recreate(s.connection()))
         providers = await reset_providers(ds, user_id, drop_table=False)

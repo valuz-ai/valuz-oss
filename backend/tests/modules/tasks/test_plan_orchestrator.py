@@ -3110,12 +3110,13 @@ def test_recover_crashed_members_is_quiet_when_nothing_is_pending(
     monkeypatch.setattr(kernel_client_mod, "get_session", _get_session)
     orch = TaskOrchestrator()
 
-    msgs = asyncio.run(
+    recovered_count = asyncio.run(
         orch.coordination.recover_crashed_members(
             task_id="t1", project_id="w1", user_id=OWNER
         )
     )
-    assert msgs == []
+    assert recovered_count == 0
+    assert isinstance(recovered_count, int)
     assert probes == []
 
 

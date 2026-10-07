@@ -10,11 +10,13 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 import yaml
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.frontmatter import (
     is_placeholder_description,
@@ -33,7 +35,7 @@ from valuz_agent.integrations.skills_filesystem import (
 from valuz_agent.modules.projects.service import (
     ProjectService,
 )
-from valuz_agent.modules.skills.contracts import SkillResolvePurpose
+from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest, SkillResolvePurpose
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.modules.skills.errors import SkillProtected
 from valuz_agent.modules.skills.models import (
@@ -66,6 +68,7 @@ from valuz_agent.modules.skills.models import (
     SkillView,
 )
 from valuz_agent.modules.skills.versioning import RecordedVersion
+from valuz_agent.ports.skill_registry import SkillRegistryPort
 from valuz_agent.ports.workspace_sync import ensure_readable, notify_written
 
 logger = logging.getLogger(__name__)
@@ -80,6 +83,20 @@ _IMPORT_PREVIEW_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 # per-request, so an instance lock wouldn't be shared.
 _scan_lock = asyncio.Lock()
 CreationOrigin = Literal["created", "imported", "discovered"]
+
+
+class SkillSource(Protocol):
+    def list_skills(
+        self, ctx: RuntimeContext, *, compute_content_hash: bool = True
+    ) -> list[SkillManifest]: ...
+
+
+class SkillEntitlements(Protocol):
+    async def get_entitlements(self) -> Iterable[str]: ...
+
+
+def _frontmatter_tags(value: object, fallback: list[str] | None = None) -> list[str] | None:
+    return [str(tag) for tag in value] if isinstance(value, list) else fallback
 
 
 def _tags_from_index_row(row: Any) -> list[str]:
@@ -320,8 +337,14 @@ async def _upsert_skill_row(user_id: str, ds: SkillDatastore, manifest) -> None:
 
 
 async def _index_manifests(
-    user_id: str, db, ds: SkillDatastore, manifests, *, scope: str, label: str
-) -> int:  # type: ignore[no-untyped-def]
+    user_id: str,
+    db: AsyncSession,
+    ds: SkillDatastore,
+    manifests: Iterable[SkillManifest],
+    *,
+    scope: str,
+    label: str,
+) -> int:
     """Upsert each ``scope`` manifest, isolating per-skill failures.
 
     One bad/conflicting skill (e.g. a stale-owner row already holding the global
@@ -455,9 +478,9 @@ class SkillLibraryService:
         datastore: SkillDatastore,
         skill_source: FilesystemSkillSource,
         project_service: ProjectService,
-        extra_sources: list | None = None,
-        auth_facade: object | None = None,
-        remote_registry: object | None = None,
+        extra_sources: list[SkillSource] | None = None,
+        auth_facade: SkillEntitlements | None = None,
+        remote_registry: SkillRegistryPort | None = None,
     ) -> None:
         self._ds = datastore
         self._source = skill_source
@@ -492,9 +515,9 @@ class SkillLibraryService:
         index_rows = await self._ds.list_skills(user_id)
         rows_by_slug = {row.slug: row for row in index_rows}
 
-        def _origin(slug: str) -> str:
+        def _origin(slug: str) -> CreationOrigin:
             row = rows_by_slug.get(slug)
-            return (row.creation_origin if row is not None else None) or "discovered"
+            return _creation_origin_from_index_row(row)
 
         # ``enabled`` is per-project (project-config.json), not in the index — a
         # small read, still kept off the event loop.
@@ -590,7 +613,7 @@ class SkillLibraryService:
         if self._remote_registry is not None:
             try:
                 for manifest in self._remote_registry.list_remote_skills(ctx):
-                    view = SkillView(**manifest.model_dump(), creation_origin="remote")
+                    view = SkillView(**manifest.model_dump(), creation_origin="discovered")
                     view.enabled = project.kind == "chat" or view.path in enabled_paths
                     skills.append(view)
             except Exception:
@@ -605,6 +628,7 @@ class SkillLibraryService:
         # the same directory (e.g. surfaced by two sources), preferring the
         # official / built-in view when that rare collision happens.
         seen: dict[str, int] = {}
+        removed: set[int] = set()
         for idx, s in enumerate(skills):
             key = s.path
             if not key:
@@ -619,11 +643,11 @@ class SkillLibraryService:
             )
             cur_rank = 0 if s.origin_label == "Built-in" else 1 if s.scope == "official" else 2
             if cur_rank < prev_rank:
-                skills[prev] = None  # type: ignore[assignment]
+                removed.add(prev)
                 seen[key] = idx
             else:
-                skills[idx] = None  # type: ignore[assignment]
-        skills = [s for s in skills if s is not None]
+                removed.add(idx)
+        skills = [s for idx, s in enumerate(skills) if idx not in removed]
 
         # Sort: folder birthtime DESC (newest folder first), name ASC as
         # tiebreaker. NULL birthtime sorts last so legacy / unreadable
@@ -666,7 +690,7 @@ class SkillLibraryService:
     async def _startup_scan_unlocked(self, user_id: str) -> int:
         from valuz_agent.modules.skills.contracts import RuntimeContext
 
-        all_manifests: list = []
+        all_manifests: list[SkillManifest] = []
         ctx = RuntimeContext(user_id=user_id)
         # Every ``list_skills`` below walks a skill tree off disk — synchronous,
         # and on a cloud owner's network-mounted root a stat costs tens of
@@ -964,7 +988,7 @@ class SkillLibraryService:
                 name=next_name,
                 description=next_description,
                 instructions_markdown=next_body,
-                tags=metadata.get("tags") if isinstance(metadata.get("tags"), list) else skill.tags,
+                tags=_frontmatter_tags(metadata.get("tags"), skill.tags),
             ),
             encoding="utf-8",
         )
@@ -997,11 +1021,7 @@ class SkillLibraryService:
                     name=payload.new_name,
                     description=str(metadata.get("description") or source_skill.description),
                     instructions_markdown=body.strip() or "Skill copied by Valuz.",
-                    tags=(
-                        metadata.get("tags")
-                        if isinstance(metadata.get("tags"), list)
-                        else source_skill.tags
-                    ),
+                    tags=_frontmatter_tags(metadata.get("tags"), source_skill.tags),
                 ),
                 encoding="utf-8",
             )
@@ -1196,7 +1216,7 @@ class SkillLibraryService:
                     name=payload.name,
                     description=str(metadata.get("description") or "Imported local skill"),
                     instructions_markdown=body.strip() or "Imported local skill.",
-                    tags=metadata.get("tags") if isinstance(metadata.get("tags"), list) else None,
+                    tags=_frontmatter_tags(metadata.get("tags")),
                 ),
                 encoding="utf-8",
             )
@@ -1325,7 +1345,7 @@ class SkillLibraryService:
         manifest_path = None if skill.protected else _detect_manifest(skill_dir)
         instructions_md: str | None = None
         manifest_filename: str | None = None
-        metadata: dict = {}
+        metadata: dict[str, object] = {}
         if manifest_path is not None:
             manifest_filename = manifest_path.name
             meta, body = _extract_frontmatter(_read_text(manifest_path))
@@ -1468,6 +1488,8 @@ class SkillLibraryService:
                 return None
             created_at = record.get("created_at")
             try:
+                if not isinstance(created_at, (int, float, str)):
+                    return None
                 created = float(created_at)
             except (TypeError, ValueError):
                 return None
@@ -1693,7 +1715,7 @@ class SkillLibraryService:
                     name=payload.name,
                     description=str(metadata.get("description") or "Imported URL skill"),
                     instructions_markdown=body.strip() or "Imported URL skill.",
-                    tags=metadata.get("tags") if isinstance(metadata.get("tags"), list) else None,
+                    tags=_frontmatter_tags(metadata.get("tags")),
                 ),
                 encoding="utf-8",
             )
@@ -2369,7 +2391,7 @@ class SkillLibraryService:
         if self._auth is None:
             return False
         try:
-            entitlements = await self._auth.get_entitlements()  # type: ignore[union-attr]
+            entitlements = await self._auth.get_entitlements()
             return entitlement in entitlements
         except Exception:
             return False
@@ -2496,8 +2518,8 @@ class SkillLibraryService:
         if project_id is None:
             raise ValueError("project_id is required for project-scoped skills")
         project = await self._projects.get_project(user_id, project_id)
-        if project.kind != "project":
-            raise ValueError("project-scoped skills require a project")
+        if project.kind != "project" or not project.root_path:
+            raise ValueError("project-scoped skills require a project with a root_path")
         return Path(project.root_path) / ".claude" / "skills"
 
     def _write_manifest(
@@ -2725,7 +2747,7 @@ class SkillLibraryService:
         metadata, _body = _extract_frontmatter(_read_text(manifest_path))
         name = str(metadata.get("name") or skill_root.name)
         description = str(metadata.get("description") or "Imported local skill")
-        tags = metadata.get("tags") if isinstance(metadata.get("tags"), list) else []
+        tags = _frontmatter_tags(metadata.get("tags")) or []
         target_root = await self._scope_root(
             user_id, target_scope=target_scope, project_id=project_id
         )
@@ -2811,8 +2833,8 @@ class SkillLibraryService:
         # archive/directory import: (skill_root, managed_temp). A managed temp
         # extraction lives one level above the skill root.
         preview_root, managed_temp = preview
-        cleanup_root = record.get("cleanup_root") if record is not None else None
-        if isinstance(cleanup_root, str):
-            shutil.rmtree(cleanup_root, ignore_errors=True)
+        archive_cleanup_root = record.get("cleanup_root") if record is not None else None
+        if isinstance(archive_cleanup_root, str):
+            shutil.rmtree(archive_cleanup_root, ignore_errors=True)
         elif managed_temp:
             shutil.rmtree(preview_root.parent, ignore_errors=True)

@@ -85,6 +85,7 @@ from valuz_agent.ports.instructions import (
 from valuz_agent.ports.llm_provider import LLMProvider, NoopLLMProvider
 from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
 from valuz_agent.ports.message_context import MessageContextProviderPort
+from valuz_agent.ports.middleware import MiddlewareFactory
 from valuz_agent.ports.model_defaults import ModelDefaultsPort, SettingsModelDefaults
 from valuz_agent.ports.parser_routing_policy import (
     ParserRoutingPolicyPort,
@@ -287,7 +288,7 @@ class Extensions:
         # (e.g. one that publishes extra per-request ContextVars with a reset
         # boundary). The app factory mounts ``cls`` — instantiated by Starlette
         # as ``cls(app, **kwargs)`` — so ``kwargs`` carries any constructor deps.
-        self.auth_middleware: tuple[type, dict[str, Any]] = (AuthMiddleware, {})
+        self.auth_middleware: tuple[MiddlewareFactory, dict[str, Any]] = (AuthMiddleware, {})
         # Optional runtime-availability override. OSS asks the kernel; managed
         # deployments may bind a provider for their controlled runtime image.
         self.runtime_availability: RuntimeAvailabilityPort | None = None

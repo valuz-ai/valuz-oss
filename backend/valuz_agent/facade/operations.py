@@ -80,23 +80,18 @@ class OperationLibrary:
 
     async def _views(self, user_id: str, rows: list[OperationRecordRow]) -> list[OperationView]:
         decisions = await self._service.latest_decisions(user_id, [row.id for row in rows])
-        attempts = (
-            dict(
-                (
-                    await self._db.execute(
-                        select(ConfirmationDecisionRow.operation_id, func.count())
-                        .where(
-                            ConfirmationDecisionRow.user_id == user_id,
-                            ConfirmationDecisionRow.operation_id.in_([row.id for row in rows]),
-                            ConfirmationDecisionRow.decision == "approve",
-                        )
-                        .group_by(ConfirmationDecisionRow.operation_id)
-                    )
-                ).all()
+        attempts: dict[str, int] = {}
+        if rows:
+            result = await self._db.execute(
+                select(ConfirmationDecisionRow.operation_id, func.count())
+                .where(
+                    ConfirmationDecisionRow.user_id == user_id,
+                    ConfirmationDecisionRow.operation_id.in_([row.id for row in rows]),
+                    ConfirmationDecisionRow.decision == "approve",
+                )
+                .group_by(ConfirmationDecisionRow.operation_id)
             )
-            if rows
-            else {}
-        )
+            attempts = {operation_id: count for operation_id, count in result.all()}
         views = []
         for row in rows:
             decision = decisions.get(row.id)

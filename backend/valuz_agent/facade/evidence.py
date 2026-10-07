@@ -48,7 +48,7 @@ class SealedMessageEvidence:
 
 
 def canonical_citation_hash(citation: dict[str, Any]) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "source": citation.get("source") if isinstance(citation.get("source"), dict) else {},
         "evidence": (
             citation.get("evidence") if isinstance(citation.get("evidence"), dict) else {}

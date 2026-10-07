@@ -345,15 +345,15 @@ def _monotonic_merge(base: Any, addition: Any, path: tuple[str, ...] = ()) -> An
         # Source tiers are ordered matchers: a distribution's more-specific
         # match must run before the commercial generic fallback while both
         # definitions remain in the effective snapshot.
-        result = copy.deepcopy(addition if path == ("source_tiers",) else base)
+        merged_items = copy.deepcopy(addition if path == ("source_tiers",) else base)
         candidates = base if path == ("source_tiers",) else addition
-        seen = {_stable_json(item) for item in result}
+        seen = {_stable_json(item) for item in merged_items}
         for item in candidates:
             marker = _stable_json(item)
             if marker not in seen:
-                result.append(copy.deepcopy(item))
+                merged_items.append(copy.deepcopy(item))
                 seen.add(marker)
-        return result
+        return merged_items
     if isinstance(base, bool) and isinstance(addition, bool):
         return base or addition
     return copy.deepcopy(addition)

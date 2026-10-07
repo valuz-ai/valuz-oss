@@ -34,7 +34,7 @@ import logging
 import pkgutil
 from collections.abc import Iterator
 from importlib.metadata import EntryPoint, entry_points
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from valuz_agent.ports.parser_plugin import ParserPlugin, ParserPluginDescriptor
 
@@ -54,6 +54,10 @@ VALUZ_OCR_PLUGIN_ID = "valuz_ocr"
 
 if TYPE_CHECKING:  # pragma: no cover
     from valuz_agent.modules.parser.polling import PollingScheduler
+
+
+class _BuiltinParserFactory(Protocol):
+    def __call__(self, *, scheduler: PollingScheduler | None) -> ParserPlugin: ...
 
 
 class UnknownPluginError(KeyError):
@@ -276,7 +280,7 @@ def _load_builtin(
     except Exception:
         logger.warning("parser plugin %r failed to import — skipping", mod_name, exc_info=True)
         return None
-    factory = getattr(module, "make_plugin", None)
+    factory: _BuiltinParserFactory | None = getattr(module, "make_plugin", None)
     if not callable(factory):
         logger.warning(
             "parser plugin %r has no callable ``make_plugin`` — skipping",

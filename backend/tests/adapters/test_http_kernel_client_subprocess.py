@@ -261,9 +261,21 @@ def test_http_client_covers_the_full_protocol_surface() -> None:
         "reset_stranded_session",
         "run_ephemeral_review_in_scope",
         "cleanup_runtime",
+        # Desktop capability-token control always stays in the host process;
+        # it must not be projected onto a remote project/session transport.
+        "reconfigure_desktop_network_egress",
+        "interrupt_desktop_network_egress_activity",
     }
     for name in (set(EXPECTED_ROUTES) | set(EXPECTED_STREAMS)) - in_process_only:
         assert hasattr(HttpKernelClient, name), f"HttpKernelClient lacks {name}"
+
+
+def test_desktop_control_operations_are_not_remote_http_methods() -> None:
+    for name in (
+        "reconfigure_desktop_network_egress",
+        "interrupt_desktop_network_egress_activity",
+    ):
+        assert not hasattr(HttpKernelClient, name)
 
 
 @pytest.mark.asyncio

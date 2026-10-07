@@ -330,7 +330,8 @@ class DshManagerHost:
             for bundle in bundles if isinstance(bundles, list) else []:
                 if not isinstance(bundle, dict) or bundle.get("name") != VALUZ_BUNDLE:
                     continue
-                rows = bundle.get("rows") if isinstance(bundle.get("rows"), list) else []
+                raw_rows = bundle.get("rows")
+                rows = raw_rows if isinstance(raw_rows, list) else []
                 if any(isinstance(r, dict) and r.get("entryId") == args.get("id") for r in rows):
                     raise DshManagedBundleError(
                         f"{args.get('id')!r} wires Valuz's dsh sessions and cannot be switched off"

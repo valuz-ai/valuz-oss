@@ -172,7 +172,7 @@ async def list_connected_mcp() -> str:
         return json.dumps({"ok": False, "error": str(exc)})
 
 
-def _recommended_requires(entry: dict) -> dict:
+def _recommended_requires(entry: dict[str, Any]) -> dict[str, Any]:
     """Normalize a recommended-connector entry's credential declaration
     into one hint the agent can act on without parsing three schemas:
 
@@ -723,7 +723,7 @@ async def _invoke(
             # via header_schema/param_schema. The tool's
             # `bearer_token` arg fills the declared secret field — gate on
             # it so the agent collects the credential before installing.
-            fields_decl: list[dict] = (entry.get("header_schema") or []) + (
+            fields_decl: list[dict[str, Any]] = (entry.get("header_schema") or []) + (
                 entry.get("param_schema") or []
             )
             if (
@@ -754,7 +754,7 @@ async def _invoke(
                 )
             # OAuth recommended connectors (e.g. GitHub) still declare
             # client_id/client_secret via oauth_credentials_schema.
-            schema: list[dict] = entry.get("oauth_credentials_schema", [])
+            schema: list[dict[str, Any]] = entry.get("oauth_credentials_schema", [])
             if schema:
                 # Map tool params to oauth_credentials_schema keys for
                 # validation. client_id→client_id; client_secret→
@@ -824,19 +824,21 @@ async def _invoke(
                     if _mapped:
                         break
 
-            body = CreateConnectorRequest(
-                slug=slug,
-                display_name=entry_display or display_name,
-                transport=entry.get("transport", "http"),
-                description=entry_desc,
-                connector_type="recommended",
-                url=entry.get("url"),
-                auth_type=recommended_auth_type,
-                credentials=credentials,
-                headers=parsed_headers or None,
-                params=(parsed_params + recommended_params) or None,
-                oauth_authorization_endpoint=oauth_authorization_endpoint or None,
-                oauth_token_endpoint=oauth_token_endpoint or None,
+            body = CreateConnectorRequest.model_validate(
+                dict(
+                    slug=slug,
+                    display_name=entry_display or display_name,
+                    transport=entry.get("transport", "http"),
+                    description=entry_desc,
+                    connector_type="recommended",
+                    url=entry.get("url"),
+                    auth_type=recommended_auth_type,
+                    credentials=credentials,
+                    headers=parsed_headers or None,
+                    params=(parsed_params + recommended_params) or None,
+                    oauth_authorization_endpoint=oauth_authorization_endpoint or None,
+                    oauth_token_endpoint=oauth_token_endpoint or None,
+                )
             )
         else:
             # ── Custom connector (slug ignored if not a recommended one) ──────
@@ -872,21 +874,23 @@ async def _invoke(
             if client_secret:
                 custom_credentials["client_secret"] = client_secret
 
-            body = CreateConnectorRequest(
-                display_name=display_name,
-                transport=transport,
-                description=description,
-                url=url,
-                auth_type=auth_type,
-                headers=parsed_headers or None,
-                params=parsed_params or None,
-                credentials=custom_credentials,
-                oauth_authorization_endpoint=oauth_authorization_endpoint or None,
-                oauth_token_endpoint=oauth_token_endpoint or None,
-                command=command,
-                args=parsed_args or [],
-                working_dir=working_dir,
-                env=parsed_env,
+            body = CreateConnectorRequest.model_validate(
+                dict(
+                    display_name=display_name,
+                    transport=transport,
+                    description=description,
+                    url=url,
+                    auth_type=auth_type,
+                    headers=parsed_headers or None,
+                    params=parsed_params or None,
+                    credentials=custom_credentials,
+                    oauth_authorization_endpoint=oauth_authorization_endpoint or None,
+                    oauth_token_endpoint=oauth_token_endpoint or None,
+                    command=command,
+                    args=parsed_args or [],
+                    working_dir=working_dir,
+                    env=parsed_env,
+                )
             )
 
         result = await create_connector(body=body, svc=svc, user_id=user_id)

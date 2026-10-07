@@ -44,7 +44,10 @@ from valuz_agent.modules.artifacts.service import (
     DeliveryResult,
     DeliveryStatus,
     deliver_artifact,
-    get_head_revision,
+    find_artifact_id,
+)
+from valuz_agent.modules.artifacts.service import (
+    get_head_revision as get_head_revision,
 )
 from valuz_agent.modules.skills.staging import STAGING_META_FILENAME
 
@@ -325,13 +328,8 @@ async def resolve_artifact_id(
     """
     if artifact_id is not None:
         return artifact_id
-    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
-
     name = archive_name(slug)
-    row = await ArtifactDatastore(db).find_by_keys(
-        library_scope(user_id), rel_path=name, display_name=name
-    )
-    return row.id if row is not None else None
+    return await find_artifact_id(library_scope(user_id), rel_path=name, display_name=name, db=db)
 
 
 async def record_dir_version(

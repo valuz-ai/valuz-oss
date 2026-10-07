@@ -23,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import uuid4
 
 from app.schemas import (
@@ -31,6 +32,8 @@ from app.schemas import (
     EventPayload,
     FinalizeSessionRequest,
     ForkSessionRequest,
+    McpHttpServerConfigSchema,
+    McpStdioServerConfigSchema,
     ModelSettingsSchema,
     SubmitActionRequest,
     UpdateSessionRequest,
@@ -132,9 +135,23 @@ from valuz_agent.token_usage import read_session_token_usage
 if TYPE_CHECKING:
     from src.core.types import Session as KernelSessionT
 
+    from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest
     from valuz_agent.modules.worktrees.service import ProjectRowLike, WorktreeHandle
 
 logger = logging.getLogger(__name__)
+
+
+def _require_user_id(user_id: str | None) -> str:
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id is required")
+    return user_id
+
+
+class SessionSkillSource(Protocol):
+    def list_skills(
+        self, ctx: RuntimeContext, *, compute_content_hash: bool = True
+    ) -> list[SkillManifest]: ...
+
 
 # Soft cap on still-``queued`` follow-up inputs per session (input queue). A
 # guard against accidental flooding, not a hard product limit. See
@@ -218,12 +235,12 @@ def mint_session_id() -> str:
     return uuid4().hex
 
 
-
 def _workspace_trust(project_row: object) -> str:
     """The session's workspace trust, from its project (``NULL`` = trusted)."""
     from valuz_agent.modules.projects.workspace_trust import effective_trust
 
     return effective_trust(getattr(project_row, "workspace_trust", None))
+
 
 class SessionService:
     """Business façade over the V5 kernel session machinery.
@@ -260,7 +277,7 @@ class SessionService:
         # alongside ``skill_source`` for chat projects. Each source's
         # manifests are filtered by scope inside the resolver. Optional —
         # tests that only care about user skills can omit it.
-        extra_skill_sources: list | None = None,
+        extra_skill_sources: Iterable[SessionSkillSource] | None = None,
         # Auth facade used to look up the user's entitlements (e.g.
         # ``skills:official``). When ``None``, official skills are gated to
         # bundled built-ins only.
@@ -279,7 +296,7 @@ class SessionService:
         self._connectors = connectors
         self._docs = docs
         self._skill_source = skill_source
-        self._extra_skill_sources = extra_skill_sources or []
+        self._extra_skill_sources = list(extra_skill_sources or ())
         self._auth = auth_facade
 
     async def _resolve_all_available_resources(
@@ -316,6 +333,7 @@ class SessionService:
     async def _auto_default_mcp_slugs(
         self, project_id: str, user_id: str | None = None
     ) -> list[str]:
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
 
@@ -367,6 +385,7 @@ class SessionService:
         Returns ``None`` only when the project has neither a usable chat nor
         any task (caller falls back to the global Settings → Default tuple).
         """
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
         uid = user_id
@@ -417,6 +436,7 @@ class SessionService:
         query: str | None = None,
         user_id: str | None = None,
     ) -> list[SessionListItem]:
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
         await project_index.ensure_legacy_session_index(user_id)
@@ -451,6 +471,7 @@ class SessionService:
         return items
 
     async def get_session(self, session_id: str, user_id: str | None = None) -> SessionDetail:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -568,12 +589,12 @@ class SessionService:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _resolve_session_cwd(user_id: str, row) -> str:  # noqa: ANN001
+    def _resolve_session_cwd(user_id: str, row: ProjectRowLike) -> str:
         """Required session cwd — the kernel no longer has a project to fall
         back to, so every create path must pass an absolute directory."""
         from valuz_agent.infra.fs_registry import fs_registry
 
-        kind = row.kind if row.kind in ("chat", "project") else "chat"
+        kind: Literal["chat", "project"] = "project" if row.kind == "project" else "chat"
         return str(fs_registry.project_cwd(user_id, row.id, kind, row.root_path))
 
     @staticmethod
@@ -584,6 +605,7 @@ class SessionService:
     ) -> WorktreeHandle:
         """Materialize the session's worktree; raises WorktreeNotAvailable
         (422) when the project isn't a git repo — no silent fallback."""
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
         from valuz_agent.modules.worktrees.service import worktree_service
@@ -620,6 +642,7 @@ class SessionService:
         snapshot = meta.get("worktree")
         if not isinstance(snapshot, dict):
             return None
+        user_id = _require_user_id(_session_owner_user_id(session, user_id))
         from valuz_agent.modules.worktrees.service import worktree_service
 
         return await worktree_service.heal_from_snapshot(
@@ -659,6 +682,7 @@ class SessionService:
         Either way the config is built in memory from the library AgentRow's
         current fields and embedded into the session as its snapshot.
         """
+        user_id = _require_user_id(user_id)
         from valuz_agent.modules.agents.datastore import (
             AgentDatastore,
             ProjectMemberDatastore,
@@ -729,6 +753,7 @@ class SessionService:
         or to a global library agent (the seeded default-assistant) for temp /
         quick-chat conversations — see ``_resolve_bound_agent``.
         """
+        user_id = _require_user_id(user_id)
         from valuz_agent.adapters.provider_resolver import (
             ProviderNotResolvable,
             resolve_model_input_modalities,
@@ -1088,6 +1113,7 @@ class SessionService:
         OVERRIDES the agent's default for this one session only — the agent row
         is never modified, and the values are frozen for the session (ADR-006).
         """
+        user_id = _require_user_id(user_id)
         if agent_slug:
             return await self._create_agent_bound_session(
                 project_id=project_id,
@@ -1278,7 +1304,7 @@ class SessionService:
             )
         except KeyError:
             caps_skills: tuple[str, ...] = ()
-            caps_mcp: tuple = ()
+            caps_mcp: tuple[McpHttpServerConfigSchema | McpStdioServerConfigSchema, ...] = ()
         else:
             caps_skills = caps.skills
             caps_mcp = caps.mcp_servers
@@ -1492,6 +1518,7 @@ class SessionService:
         inclusive at that message, without it the whole session forks at
         its tail.
         """
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
         session = await data_reader().get_session(user_id, session_id)
@@ -1577,6 +1604,7 @@ class SessionService:
         list; on any listing hiccup fall back to `` (2)`` — a duplicate
         display name is cosmetic, not a correctness problem.
         """
+        user_id = _require_user_id(user_id)
         base = re.sub(r"\s\(\d+\)$", "", source_name).strip() or source_name
         taken: set[int] = set()
         try:
@@ -1604,6 +1632,7 @@ class SessionService:
         task_check_config: TaskCheckConfig | None = None,
     ) -> SessionDetail:
         """Kick off an async agent turn in the background.  Returns immediately."""
+        user_id = _require_user_id(user_id)
         task_check_config = fresh_config(task_check_config)
         # Capability convergence (citation policy / docs caps / always-on MCP
         # re-stamp) is NOT done here. It rides the turn as ``pre_turn`` — see
@@ -1689,6 +1718,7 @@ class SessionService:
         task_check_config: TaskCheckConfig | None = None,
     ) -> SessionRunResponse:
         """Block until the agent turn completes.  Used by the schedule runner."""
+        user_id = _require_user_id(user_id)
         # Mirror ``send_message``: convergence rides the turn, not this call —
         # see ``sessions/pre_turn``. The citation overrides are bound into the
         # hook below so an internal document-summary run keeps its policy.
@@ -1879,6 +1909,7 @@ class SessionService:
         a stranded ``running`` row wedges the session forever (same
         failure mode ``recover_running_sessions`` cleans up at boot).
         """
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -1962,6 +1993,7 @@ class SessionService:
     # ---- Session input queue (docs/design/session-input-queue.md) ----
 
     async def list_queue(self, session_id: str, user_id: str | None = None) -> QueuedInputList:
+        user_id = _require_user_id(user_id)
         uid = user_id
         # Snapshot BEFORE the reads: if the head flips to ``dispatched`` while
         # we query, we'd rather show it in both ``items`` and ``dispatching``
@@ -2005,6 +2037,7 @@ class SessionService:
         item only (no carry-over, see §8.6). If the session is idle, kicks an
         immediate drain; otherwise the post-turn drain picks it up.
         """
+        user_id = _require_user_id(user_id)
         task_check_config = fresh_config(task_check_config)
         uid = user_id
         session = await data_reader().get_session(uid, session_id)
@@ -2067,6 +2100,7 @@ class SessionService:
     async def edit_queued(
         self, session_id: str, queue_id: str, content: str, user_id: str | None = None
     ) -> QueuedInputList:
+        user_id = _require_user_id(user_id)
         uid = user_id
         async with async_unit_of_work() as db:
             ds = SessionDatastore(db)
@@ -2086,6 +2120,7 @@ class SessionService:
     async def delete_queued(
         self, session_id: str, queue_id: str, user_id: str | None = None
     ) -> QueuedInputList:
+        user_id = _require_user_id(user_id)
         uid = user_id
         async with async_unit_of_work() as db:
             deleted = await SessionDatastore(db).delete_queued(uid, session_id, queue_id)
@@ -2094,6 +2129,7 @@ class SessionService:
         return await self.list_queue(session_id, user_id=user_id)
 
     async def resume_queue(self, session_id: str, user_id: str | None = None) -> QueuedInputList:
+        user_id = _require_user_id(user_id)
         uid = user_id
         session = await data_reader().get_session(uid, session_id)
         if session is None:
@@ -2119,6 +2155,7 @@ class SessionService:
         turn's partial progress is discarded. Runtime-agnostic stand-in for Codex
         ``turn/steer`` (see docs/design/session-input-queue.md §11).
         """
+        user_id = _require_user_id(user_id)
         uid = user_id
         session = await data_reader().get_session(uid, session_id)
         if session is None:
@@ -2154,6 +2191,7 @@ class SessionService:
         return await self.list_queue(session_id, user_id=user_id)
 
     async def cancel(self, session_id: str, user_id: str | None = None) -> SessionDetail:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2173,6 +2211,7 @@ class SessionService:
         return _session_to_detail(updated)
 
     async def regenerate(self, session_id: str, user_id: str | None = None) -> SessionDetail:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2191,6 +2230,7 @@ class SessionService:
     async def rename_session(
         self, session_id: str, name: str, user_id: str | None = None
     ) -> SessionDetail:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2206,6 +2246,7 @@ class SessionService:
         return _session_to_detail(updated)
 
     async def delete_session(self, session_id: str, user_id: str | None = None) -> None:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2263,6 +2304,7 @@ class SessionService:
         user_id: str | None,
     ) -> None:
         """Best-effort clean-teardown; never raises out of a delete."""
+        user_id = _require_user_id(user_id)
         try:
             name = str(snapshot.get("name") or "")
             if not name:
@@ -2290,6 +2332,7 @@ class SessionService:
             )
 
     async def get_extra_skills(self, session_id: str, user_id: str | None = None) -> list[str]:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2302,6 +2345,7 @@ class SessionService:
     async def set_extra_skills(
         self, session_id: str, skill_ids: list[str], user_id: str | None = None
     ) -> SessionDetail:
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2336,6 +2380,7 @@ class SessionService:
 
         A turn already in flight keeps the mode it started with.
         """
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2372,13 +2417,14 @@ class SessionService:
         runtimes) propagate to the route layer, which re-surfaces them
         verbatim as HTTP errors.
         """
+        user_id = _require_user_id(user_id)
         # ``user_id: str | None`` matches every sibling lever in this file;
         # the reader/client protocols are annotated stricter than their
         # owner-scoping runtime behavior — same shape as the sibling calls.
-        session = await data_reader().get_session(user_id, session_id)  # type: ignore[arg-type]
+        session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
-        updated = await kernel_client.set_mode(user_id, session_id, mode)  # type: ignore[arg-type]
+        updated = await kernel_client.set_mode(user_id, session_id, mode)
         return _session_to_detail(updated)
 
     async def set_session_effort(
@@ -2401,6 +2447,7 @@ class SessionService:
         ``ValueError`` on an unknown effort value so the route layer
         can 400.
         """
+        user_id = _require_user_id(user_id)
         session = await data_reader().get_session(user_id, session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -2453,6 +2500,7 @@ class SessionService:
             returns the new ``rule_id`` on the result.
           - ``auto_approved`` — kernel-only; never sent here.
         """
+        user_id = _require_user_id(user_id)
         # Verify session exists so we raise our own 404 before reaching
         # the orchestrator (which would also 404 but with a kernel-shaped
         # error message). Keeping host errors host-flavoured.
@@ -2465,7 +2513,7 @@ class SessionService:
             session_id,
             SubmitActionRequest(
                 pending_id=pending_id,
-                decision=decision,  # type: ignore[arg-type]
+                decision=decision,
                 message=message,
                 answers=answers,
                 modified_input=modified_input,
@@ -2475,12 +2523,14 @@ class SessionService:
 
     async def count_sessions_for_project(self, project_id: str, user_id: str | None = None) -> int:
         """Return the number of kernel sessions recorded for this project."""
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
         return await project_index.count_for_project(project_id, user_id=user_id)
 
     async def delete_sessions_for_project(self, project_id: str, user_id: str | None = None) -> int:
         """Delete all kernel sessions (and their events) for this project."""
+        user_id = _require_user_id(user_id)
         if user_id is None:
             raise ValueError("user_id is required")
         ids = await project_index.remove_for_project(project_id, user_id=user_id)

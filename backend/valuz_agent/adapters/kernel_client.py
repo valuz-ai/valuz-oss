@@ -41,6 +41,11 @@ it to ``/kernel`` (ADR-013; the kernel's own upstream default is ``/api`` — se
 | run_turn                 | WS     {KERNEL_API_PREFIX}/v1/sessions/{id}/run                |
 | scan_orphan_*            | (in-process only — no remote analog; the                     |
 |                          |  kernel runs these itself at startup)                        |
+
+The desktop networking control helpers are explicitly process-local operations:
+``reconfigure_desktop_network_egress`` and
+``interrupt_desktop_network_egress_activity``. They retain the host desktop-token
+boundary and never select or reconfigure an owner-scoped remote kernel.
 """
 
 from __future__ import annotations
@@ -55,11 +60,13 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
-from typing import Any, NoReturn, Protocol, TypedDict
+from typing import runtime_checkable, Any, NoReturn, Protocol, TypedDict
 
 import valuz_agent.boot.kernel  # noqa: F401  (sys.path side-effect)
 
 from fastapi import HTTPException  # noqa: E402
+from src.core import ToolDef as ToolDef, ToolResult as ToolResult
+from src.core.tools import ExecContext as ExecContext
 
 from valuz_agent.ports.sandbox_allocator import SandboxScope  # noqa: E402
 from valuz_agent.ports.sandbox_provider import SandboxEndpoint  # noqa: E402
@@ -1495,7 +1502,7 @@ def _marker_keys_in_session(session: object) -> dict[str, list[str]]:
     what a marker looks like. A pin that predates it simply reports nothing.
     """
     try:
-        from src.core.runtime_context import _marker_key  # type: ignore[attr-defined]
+        from src.core.runtime_context import _marker_key
     except Exception:  # noqa: BLE001 — older pin, or kernel not importable here
         return {}
     found: dict[str, list[str]] = {}
@@ -1614,12 +1621,26 @@ async def run_ephemeral_review_in_scope(
         _scope_cache.pop(req_id, None)
 
 
+@runtime_checkable
+class _KernelSupervision(Protocol):
+    async def scan_orphan_pendings(self) -> int: ...
+    async def scan_orphan_runs(self) -> int: ...
+    async def reset_stranded_session(self, user_id: str, session_id: str) -> bool: ...
+    async def cleanup_runtime(self, session_id: str) -> None: ...
+
+
+def _supervision(kernel: KernelClient) -> _KernelSupervision:
+    if not isinstance(kernel, _KernelSupervision):
+        raise KernelUnavailableError(503, "In-process kernel supervision is unavailable")
+    return kernel
+
+
 async def scan_orphan_pendings() -> int:
-    return await client.scan_orphan_pendings()  # type: ignore[attr-defined]
+    return await _supervision(client).scan_orphan_pendings()
 
 
 async def scan_orphan_runs() -> int:
-    return await client.scan_orphan_runs()  # type: ignore[attr-defined]
+    return await _supervision(client).scan_orphan_runs()
 
 
 async def reset_stranded_session(user_id: str, session_id: str) -> bool:
@@ -1631,8 +1652,61 @@ async def reset_stranded_session(user_id: str, session_id: str) -> bool:
     resumable ``host_restart``, error out running messages) DIRECTLY to the
     durable via the data plane — the stranded session's runtime store died
     with its sandbox, so there is no kernel to round-trip through."""
-    return await _data_plane().reset_stranded_session(user_id, session_id)  # type: ignore[attr-defined]
+    return await _supervision(_data_plane()).reset_stranded_session(user_id, session_id)
 
 
 async def cleanup_runtime(session_id: str) -> None:
-    await client.cleanup_runtime(session_id)  # type: ignore[attr-defined]
+    await _supervision(client).cleanup_runtime(session_id)
+
+
+def is_runtime_context_marker(value: str) -> bool:
+    from src.core.runtime_context import _marker_key
+
+    return _marker_key(value) is not None
+
+
+def desktop_network_egress_activity() -> list[str]:
+    """Process-local control-plane view, gated by the desktop token at HTTP entry."""
+    from app.dependencies import get_orchestrator
+
+    return sorted(get_orchestrator().active_sessions)
+
+
+async def reconfigure_desktop_network_egress(
+    bootstrap: dict[str, Any] | None, *, required_unavailable: bool, prewarm_limit: int
+) -> tuple[list[str], list[str]]:
+    from app.dependencies import get_orchestrator
+
+    from valuz_agent.boot.kernel import replace_kernel_network_egress
+
+    orchestrator = get_orchestrator()
+    if orchestrator.active_sessions:
+        raise KernelConflictError(409, "model_runtimes_still_active")
+    candidates = orchestrator.warm_runtime_candidates(limit=prewarm_limit)
+    await orchestrator.evict_all_warm_runtimes()
+    await replace_kernel_network_egress(bootstrap, required_unavailable=required_unavailable)
+    prewarmed: list[str] = []
+    failed: list[str] = []
+    for owner_id, session_id in candidates:
+        try:
+            await orchestrator.prepare_runtime(owner_id, session_id)
+            prewarmed.append(session_id)
+        except Exception:  # noqa: BLE001 — the networking reconfiguration already succeeded
+            failed.append(session_id)
+    return prewarmed, failed
+
+
+async def interrupt_desktop_network_egress_activity(
+    session_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    from app.dependencies import get_orchestrator
+
+    orchestrator = get_orchestrator()
+    interrupted: list[str] = []
+    inactive: list[str] = []
+    for session_id in dict.fromkeys(session_ids):
+        if await orchestrator.interrupt(session_id):
+            interrupted.append(session_id)
+        else:
+            inactive.append(session_id)
+    return interrupted, inactive

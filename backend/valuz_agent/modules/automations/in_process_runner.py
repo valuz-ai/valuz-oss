@@ -43,6 +43,8 @@ from valuz_agent.modules.automations.models import (
     AutomationRunRow,
 )
 from valuz_agent.modules.automations.triggers import TriggerEvaluator
+from valuz_agent.modules.playbooks.models import PlaybookVersionRow
+from valuz_agent.modules.playbooks.service import PlaybookService
 from valuz_agent.ports.automation_runtime import (
     AutomationExecutionLease,
     NoopAutomationExecutionLease,
@@ -153,7 +155,7 @@ def _automation_trigger_meta(
 def _compose_playbook_prompt(
     *,
     definition: Any,
-    version: Any,
+    version: PlaybookVersionRow,
     automation_prompt: str,
 ) -> str:
     """Compose the pinned Prompt and this Automation fire's instruction.
@@ -364,13 +366,14 @@ class InProcessAutomationRunner:
         Reconciling on startup keeps the DB self-consistent so the
         single-flight check in ``run_now`` doesn't get tripped by ghost rows.
         """
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            playbooks = PlaybookDatastore(db)
+            playbooks = PlaybookService(db, ProjectLibrary())
             stranded = await ds.list_stranded_runs()
             now = now_ms()
             for run in stranded:
@@ -406,13 +409,14 @@ class InProcessAutomationRunner:
                 )
 
     async def _mark_active_runs_interrupted(self) -> None:
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            playbooks = PlaybookDatastore(db)
+            playbooks = PlaybookService(db, ProjectLibrary())
             # Active automations span owners (shutdown path has no request
             # context) — use each automation's own owner, never ambient.
             for automation_id, owner in list(self._active_ids.items()):
@@ -624,10 +628,11 @@ class InProcessAutomationRunner:
         lease: AutomationExecutionLease | None = None,
         detach_chat: bool = True,
     ) -> None:
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
         from valuz_agent.modules.playbooks.models import PlaybookRunRow
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
@@ -696,7 +701,7 @@ class InProcessAutomationRunner:
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            playbooks = PlaybookDatastore(db)
+            playbooks = PlaybookService(db, ProjectLibrary())
             row = await ds.get_automation(user_id, automation_id)
             run = await ds.last_run(user_id, automation_id)
             if not row or not run or run.id != run_id:
@@ -746,14 +751,14 @@ class InProcessAutomationRunner:
                     rendered_prompt = f"{rendered_prompt}\n\n{run.extra_input}"
 
                 if run.playbook_run_id is not None:
-                    playbook_run = await playbooks.get_run(user_id, run.playbook_run_id)
+                    playbook_run = await playbooks.find_run(user_id, run.playbook_run_id)
                 if row.playbook_definition_id is not None and playbook_run is None:
-                    definition = await playbooks.get_definition(
+                    definition = await playbooks.find_definition(
                         user_id,
                         row.playbook_definition_id,
                     )
                     version = (
-                        await playbooks.get_version(
+                        await playbooks.find_version(
                             user_id,
                             row.playbook_definition_id,
                             row.playbook_version,
@@ -827,8 +832,7 @@ class InProcessAutomationRunner:
                     if not await execution_lease.is_current():
                         logger.warning("Run %s lost execution lease before preparation", run_id)
                         return
-                    playbooks.add(playbook_run)
-                    await playbooks.flush()
+                    await playbooks.prepare_automation_run(user_id, playbook_run)
                     run.playbook_run_id = playbook_run.id
                     # Session creation and task kickoff write through their own
                     # units of work. Commit the prepared run and its back-link
@@ -1053,9 +1057,10 @@ class InProcessAutomationRunner:
         it). Owns the turn, the run-row finalization, the automation reschedule,
         and releasing the ``_active_ids`` single-flight guard.
         """
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
@@ -1076,7 +1081,7 @@ class InProcessAutomationRunner:
         try:
             async with async_unit_of_work() as db:
                 ds = AutomationDatastore(db)
-                playbooks = PlaybookDatastore(db)
+                playbooks = PlaybookService(db, ProjectLibrary())
                 row = await ds.get_automation(user_id, automation_id)
                 run = await ds.last_run(user_id, automation_id)
                 if not row or not run or run.id != run_id:
@@ -1088,9 +1093,10 @@ class InProcessAutomationRunner:
                     return
                 session_svc = self._build_session_service(db)
                 try:
+                    playbook_run_id = getattr(run, "playbook_run_id", None)
                     pinned_playbook = (
-                        await playbooks.get_run(user_id, run.playbook_run_id)
-                        if getattr(run, "playbook_run_id", None)
+                        await playbooks.find_run(user_id, playbook_run_id)
+                        if isinstance(playbook_run_id, str) and playbook_run_id
                         else None
                     )
                     result = await session_svc.send_message_sync(
@@ -1184,7 +1190,7 @@ class InProcessAutomationRunner:
                     return
                 playbook_run_id = getattr(run, "playbook_run_id", None)
                 if playbook_run_id is not None:
-                    playbook_run = await playbooks.get_run(user_id, playbook_run_id)
+                    playbook_run = await playbooks.find_run(user_id, playbook_run_id)
                     if playbook_run is not None and playbook_run.status in {
                         "queued",
                         "planning",
@@ -1757,7 +1763,7 @@ class InProcessAutomationRunner:
 
     @staticmethod
     async def _stop_linked_playbook_run(
-        playbooks: Any,
+        playbooks: PlaybookService,
         automation_run: AutomationRunRow,
         *,
         completed_at: int,
@@ -1767,7 +1773,7 @@ class InProcessAutomationRunner:
         playbook_run_id = getattr(automation_run, "playbook_run_id", None)
         if playbook_run_id is None:
             return
-        playbook_run = await playbooks.get_run(
+        playbook_run = await playbooks.find_run(
             automation_run.user_id,
             playbook_run_id,
         )
@@ -1827,6 +1833,8 @@ class InProcessAutomationRunner:
         """
         from valuz_agent.modules.projects.datastore import ProjectDatastore
 
+        if user_id is None:
+            raise ValueError("user_id is required")
         try:
             row = await ProjectDatastore(db).get_by_id(user_id, project_id)
             if row is not None:

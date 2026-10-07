@@ -169,7 +169,7 @@ class SkillDetail(SkillView):
     file_count: int = 0
     root_path: str | None = None
     manifest_filename: str | None = None
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
     # Import provenance (None for skills not imported from a URL/GitHub).
     origin: SkillOrigin | None = None
 

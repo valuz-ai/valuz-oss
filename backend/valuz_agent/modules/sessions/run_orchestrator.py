@@ -719,10 +719,10 @@ async def _finalize_session(
         owner_user_id,
         session_id,
         FinalizeSessionRequest(
-            status=final_status,  # type: ignore[arg-type]
+            status=final_status,
             metadata=meta,
             error_event=error_event,
-            stop_reason_type=stop_reason_type,  # type: ignore[arg-type]
+            stop_reason_type=stop_reason_type,
             stop_reason_message=stop_reason_message,
         ),
     )

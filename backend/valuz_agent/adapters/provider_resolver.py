@@ -181,7 +181,7 @@ async def resolve_model_provider(
             return ModelProvider(
                 base_url=cred.api_base or None,
                 api_key=cred.api_key,
-                api_protocol=cred.api_protocol,  # type: ignore[arg-type]
+                api_protocol=cred.api_protocol,
             )
         raise ProviderNotResolvable(f"provider {provider_id!r} not found")
 
@@ -204,7 +204,8 @@ async def resolve_model_provider(
         # Messages API (api.deepseek.com/anthropic), which is only right for
         # the DeepSeek channel (and that one always resolves a concrete URL
         # above). Materialize the kind's own default so e.g. an Anthropic key
-        # posts to api.anthropic.com, not api.deepseek.com. Kinds with no default (blank ``compatible``)
+        # posts to api.anthropic.com, not api.deepseek.com. Kinds with no
+        # default (blank ``compatible``)
         # stay ``None`` and are rejected by the kernel factory.
         from valuz_agent.modules.providers.service import _PROVIDER_MAP
 

@@ -86,7 +86,7 @@ async def _run_with_prepare_failure(runner, exc: BaseException, ds: Mock, run) -
             return_value=ds,
         ),
         patch(
-            "valuz_agent.modules.playbooks.datastore.PlaybookDatastore",
+            "valuz_agent.modules.playbooks.service.PlaybookService",
             return_value=Mock(),
         ),
         patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow),

@@ -183,13 +183,15 @@ class MemoryExtractor:
         if not transcript.strip() and not (task_digest and task_digest.strip()):
             return {"skipped": "empty transcript", "ops": 0, "applied": 0}
 
-        targets = ["user", "global"] + (["project"] if project_id else [])
-        current = {
+        targets: list[Target] = ["user", "global"]
+        if project_id:
+            targets.append("project")
+        current: dict[str, list[str]] = {
             t: self._store.read_entries(user_id, t, project_id=project_id) for t in targets
-        }  # type: ignore[arg-type]
+        }
         # Surface each target's char budget so the reviewer consolidates before a
         # target overflows (over-cap writes are rejected, not auto-grown).
-        usage = {t: MemoryStore.usage_for(v, t) for t, v in current.items()}  # type: ignore[arg-type]
+        usage: dict[str, str] = {t: MemoryStore.usage_for(current[t], t) for t in targets}
         # ``custom_instructions`` is trusted user config (from Settings), not
         # untrusted transcript text, so it is forwarded verbatim — not run
         # through ``redact_secrets`` (that would mangle legitimate guidance, and

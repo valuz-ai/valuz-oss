@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.modules.sessions.models import SessionAttachmentRow
 from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def worktree_name_of(session: object) -> str:
 async def _build_additional_context(
     session_id: str,
     project_id: str,
-    attachment_rows=None,  # type: ignore[no-untyped-def]
+    attachment_rows: list[SessionAttachmentRow] | None = None,
     user_id: str | None = None,
     worktree: str = "",
     host_ref: HostRef | None = None,

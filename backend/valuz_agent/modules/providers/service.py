@@ -7,7 +7,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import httpx
@@ -929,7 +929,7 @@ def _row_to_detail(row: ProviderRow) -> LLMChannelDetail:
 # ── Service ─────────────────────────────────────────────────────────
 
 
-_DISCOVERY_PROTOCOL_MAP: dict[str, str] = {
+_DISCOVERY_PROTOCOL_MAP: dict[str, Literal["openai", "anthropic"]] = {
     "anthropic": "anthropic",
     "openai-completion": "openai",
     "openai-response": "openai",
@@ -1372,10 +1372,8 @@ class ProviderService:
         except UnicodeEncodeError as exc:
             raise ModelDiscoveryError(t("backend.provider.apiKeyNonAscii")) from exc
 
-        protocol_for_discovery = cast(
-            ApiProtocol,
-            _DISCOVERY_PROTOCOL_MAP.get(protocol or "")
-            or ("anthropic" if provider_kind == "anthropic" else "openai"),
+        protocol_for_discovery: ApiProtocol = _DISCOVERY_PROTOCOL_MAP.get(protocol or "") or (
+            "anthropic" if provider_kind == "anthropic" else "openai"
         )
 
         discovered_models, _ = await _discover_models_with_endpoint_fallback(
@@ -1551,10 +1549,8 @@ class ProviderService:
                 raise ModelDiscoveryError(t("backend.provider.apiKeyNonAscii")) from exc
             # protocol for /v1/models discovery: explicit ``protocol`` arg
             # wins, else openai for everything except plain anthropic.
-            protocol_for_discovery = cast(
-                ApiProtocol,
-                _DISCOVERY_PROTOCOL_MAP.get(protocol or "")
-                or ("anthropic" if provider_kind == "anthropic" else "openai"),
+            protocol_for_discovery: ApiProtocol = _DISCOVERY_PROTOCOL_MAP.get(protocol or "") or (
+                "anthropic" if provider_kind == "anthropic" else "openai"
             )
             if is_custom:
                 # Save every user-supplied model id as-is — do NOT ping here.
@@ -1673,7 +1669,7 @@ class ProviderService:
 
         if row.source == "managed":
             if name or base_url or api_key:
-                from valuz_agent.modules.providers.errors import BadRequestError
+                from valuz_agent.infra.errors import BadRequestError
 
                 raise BadRequestError("Managed provider: only default_model can be changed")
             if default_model:
@@ -1693,7 +1689,7 @@ class ProviderService:
         if models is not None and row.provider_kind == "compatible":
             cleaned = [m.strip() for m in models if isinstance(m, str) and m.strip()]
             if not cleaned:
-                from valuz_agent.modules.providers.errors import BadRequestError
+                from valuz_agent.infra.errors import BadRequestError
 
                 raise BadRequestError("自定义通道至少需要 1 个模型 id")
 
@@ -1725,7 +1721,7 @@ class ProviderService:
             row.auth_type = "api_key"
         if auth_type is not None:
             if auth_type not in ("api_key", "oauth"):
-                from valuz_agent.modules.providers.errors import BadRequestError
+                from valuz_agent.infra.errors import BadRequestError
 
                 raise BadRequestError(f"Invalid auth_type: {auth_type!r}")
             row.auth_type = auth_type

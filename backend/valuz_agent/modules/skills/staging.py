@@ -162,8 +162,9 @@ async def _resolve_project_cwd_for_session(user_id: str, session_id: str) -> Pat
     project_root_path: str | None = None
     try:
         from valuz_agent.modules.projects.datastore import ProjectDatastore
+        from valuz_agent.modules.projects.models import ProjectRow
 
-        async def _read_ws():  # type: ignore[no-untyped-def]
+        async def _read_ws() -> ProjectRow | None:
             from valuz_agent.infra.db import async_unit_of_work
 
             async with async_unit_of_work(commit=False) as db:

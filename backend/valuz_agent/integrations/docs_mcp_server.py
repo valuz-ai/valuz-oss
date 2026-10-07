@@ -144,7 +144,7 @@ async def _resolve_locked_document_scope(
     return [str(item) for item in ids] if isinstance(ids, list) else []
 
 
-def _build_doc_service(db: Any, user_id: str) -> Any:  # type: ignore[no-untyped-def]
+def _build_doc_service(db: Any, user_id: str) -> Any:
     """Build a one-shot DocumentLibraryService against ``db`` (an open
     ``AsyncSession``).
 

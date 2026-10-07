@@ -37,6 +37,7 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
     pick_lead_run,
 )
+from valuz_agent.modules.tasks.models import TaskSessionRow
 from valuz_agent.modules.tasks import mailbox_store, member_probe, notifier
 from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
@@ -70,7 +71,6 @@ _MAX_AWAIT_WINDOW_S = 600.0
 
 class CoordinationService:
     """Lead ↔ member coordination; the ActorRunner's typed ``ActorCoordinator``."""
-
 
     # ------------------------------------------------------------------
     # await_members (v0.14) — turn-内阻塞收集并行 member 结果
@@ -226,9 +226,7 @@ class CoordinationService:
             # Same rule as the between-turns wait: never claim what a
             # shutdown will discard. The drain marks rows ``consumed``, and
             # a turn being torn down cannot act on what it took.
-            durable = (
-                [] if is_draining() else await self._drain_durable_inbox(lead_session_id)
-            )
+            durable = [] if is_draining() else await self._drain_durable_inbox(lead_session_id)
             # Exactly one, and handled below. Draining a batch meant parking
             # the rest somewhere between iterations, and that somewhere was a
             # module-level dict keyed by session that nothing ever emptied.
@@ -416,9 +414,7 @@ class CoordinationService:
         try:
             async with async_unit_of_work(commit=False) as db:
                 if role == "lead":
-                    task = await TaskDatastore(db).get_task_by_project(
-                        user_id, project_id, task_id
-                    )
+                    task = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
                     # Absent is not halted: a task read that comes back empty
                     # mid-flight is far more likely to be a scoping mistake
                     # than a deletion, and the idle TTL bounds us anyway.
@@ -462,9 +458,7 @@ class CoordinationService:
             return False
         return node.status in ("done", "failed")
 
-    async def recover_crashed_members(
-        self, *, task_id: str, project_id: str, user_id: str
-    ) -> int:
+    async def recover_crashed_members(self, *, task_id: str, project_id: str, user_id: str) -> int:
         """Members whose process died before they could record finishing.
 
         **This is crash recovery, not a delivery backstop — do not delete it.**
@@ -499,10 +493,10 @@ class CoordinationService:
         async with async_unit_of_work(commit=False) as db:
             row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
         if row is None:
-            return []
+            return 0
         pending = {n.key for n in TaskPlan.from_dict(row.plan).nodes if n.status == "in_progress"}
         if not pending:
-            return []
+            return 0
         # No ``settle_keys`` here: between turns there is no in-turn delivery to
         # lose a race to, and a member that crashed without reporting is exactly
         # what this call exists to find. The in-turn wait is the one that has to
@@ -534,7 +528,7 @@ class CoordinationService:
         return len(collected)
 
     @staticmethod
-    async def _runs(user_id: str, task_id: str):
+    async def _runs(user_id: str, task_id: str) -> list[TaskSessionRow]:
         async with async_unit_of_work(commit=False) as db:
             return await TaskSessionDatastore(db).list_runs(user_id, task_id)
 

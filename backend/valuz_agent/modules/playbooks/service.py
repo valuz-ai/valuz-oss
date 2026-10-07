@@ -37,6 +37,31 @@ class PlaybookService:
         self._projects = projects
         self._ds = PlaybookDatastore(db)
 
+    async def find_definition(
+        self, user_id: str, definition_id: str
+    ) -> PlaybookDefinitionRow | None:
+        return await self._ds.get_definition(user_id, definition_id)
+
+    async def find_version(
+        self, user_id: str, definition_id: str, version: int
+    ) -> PlaybookVersionRow | None:
+        return await self._ds.get_version(user_id, definition_id, version)
+
+    async def find_run(self, user_id: str, run_id: str) -> PlaybookRunRow | None:
+        return await self._ds.get_run(user_id, run_id)
+
+    async def prepare_automation_run(self, user_id: str, row: PlaybookRunRow) -> PlaybookRunRow:
+        """Stage a prevalidated immutable automation snapshot in the caller's UoW.
+
+        The automation owns its parent/run link and commits both together; this
+        boundary owns the Playbook write. No independent commit is introduced.
+        """
+        if not user_id or row.user_id != user_id:
+            raise ValueError("Playbook run owner mismatch")
+        self._ds.add(row)
+        await self._ds.flush()
+        return row
+
     async def _validate_project(
         self,
         user_id: str,

@@ -169,6 +169,7 @@ async def resolve_session_capabilities(
     skill_paths: list[str] = []
     warnings: list[str] = []
     seen: set[str] = set()
+    absolute: str | None
     all_available = all_available_skill_paths is not None
     for path in all_available_skill_paths or []:
         absolute = str(Path(path).expanduser().resolve(strict=False))
@@ -721,7 +722,11 @@ async def resolve_skill_slugs_to_paths(
     if user_id is None:
         raise ValueError("user_id is required")
 
-    entries = list(skill_entries or [])  # type: ignore[arg-type]
+    from collections.abc import Iterable
+
+    if skill_entries is not None and not isinstance(skill_entries, Iterable):
+        raise ValueError("skill_entries must be iterable")
+    entries = list(skill_entries) if skill_entries is not None else []
     if not entries:
         return []
 

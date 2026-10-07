@@ -33,6 +33,7 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.facade.projects import ProjectLibrary
 from valuz_agent.i18n import t
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.time_utils import now_ms
@@ -124,7 +125,7 @@ from valuz_agent.modules.automations.triggers import (
     MIN_INTERVAL_SECONDS,
     TriggerEvaluator,
 )
-from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+from valuz_agent.modules.playbooks.service import PlaybookService
 from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.ports.automation_event_source import EventSubscription, UnknownEventSourceError
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
@@ -188,7 +189,7 @@ class AutomationService:
         self._ds = AutomationDatastore(db)
         self._members = ProjectMemberDatastore(db)
         self._agents = AgentDatastore(db)
-        self._playbooks = PlaybookDatastore(db)
+        self._playbooks = PlaybookService(db, ProjectLibrary())
         self._bus = event_bus
         self._ws = project_service
         self._agent_svc = agent_service
@@ -386,11 +387,11 @@ class AutomationService:
             return None, None
         if action_kind != "chat":
             raise AutomationPlaybookTaskUnsupported()
-        definition = await self._playbooks.get_definition(user_id, definition_id)
+        definition = await self._playbooks.find_definition(user_id, definition_id)
         if definition is None:
             raise AutomationPlaybookNotFound()
         resolved_version = version or definition.current_version
-        if await self._playbooks.get_version(user_id, definition.id, resolved_version) is None:
+        if await self._playbooks.find_version(user_id, definition.id, resolved_version) is None:
             raise AutomationPlaybookVersionNotFound()
         return definition.id, resolved_version
 

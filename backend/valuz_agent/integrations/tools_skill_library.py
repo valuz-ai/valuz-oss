@@ -14,12 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
-
-from src.core import ToolDef, ToolResult
-from src.core.tools import ExecContext
+from typing import Any, Literal
 
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
+from valuz_agent.adapters.kernel_client import ExecContext, ToolDef, ToolResult
 from valuz_agent.infra.errors import ValuzError
 from valuz_agent.integrations.tools_entity_common import dump, run_with_skill_service
 
@@ -144,9 +142,10 @@ async def _handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
 
     skill_id = str(args.get("skill_id") or "").strip() or None
     project_id = str(args.get("project_id") or "").strip() or None
-    scope = str(args.get("target_scope") or "user")
-    if scope not in _SCOPES:
+    requested_scope = str(args.get("target_scope") or "user")
+    if requested_scope not in _SCOPES:
         return _err("'target_scope' must be user|project")
+    scope: Literal["user", "project"] = "project" if requested_scope == "project" else "user"
     if scope == "project" and not project_id and action in ("create", "import_confirm"):
         return _err("'project_id' is required for target_scope=project")
     needs_id = action in (
@@ -231,10 +230,12 @@ async def _handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
             }
             if not fields:
                 return _err("update needs at least one of name/description/instructions_markdown")
-            payload = SkillUpdateRequest(**fields)
+            update_payload = SkillUpdateRequest(**fields)
             view = await run_with_skill_service(
                 user_id,
-                lambda svc: svc.update_skill(user_id, skill_id, payload, project_id=project_id),
+                lambda svc: svc.update_skill(
+                    user_id, skill_id, update_payload, project_id=project_id
+                ),
             )
             return _ok({"skill": dump(view)})
 
@@ -365,7 +366,7 @@ async def _confirm_import(
     *,
     preview_id: str,
     name: str | None,
-    scope: str,
+    scope: Literal["user", "project"],
     project_id: str | None,
     add_to_project: bool,
 ) -> Any:
@@ -385,7 +386,7 @@ async def _confirm_import(
         return await run_with_skill_service(
             user_id, lambda svc: svc.confirm_url_import(user_id, payload)
         )
-    payload = SkillImportArchiveConfirmRequest(
+    archive_payload = SkillImportArchiveConfirmRequest(
         preview_id=preview_id,
         name=name,
         target_scope=scope,
@@ -393,7 +394,7 @@ async def _confirm_import(
         add_to_project=add_to_project,
     )
     return await run_with_skill_service(
-        user_id, lambda svc: svc.confirm_archive_import(user_id, payload)
+        user_id, lambda svc: svc.confirm_archive_import(user_id, archive_payload)
     )
 
 

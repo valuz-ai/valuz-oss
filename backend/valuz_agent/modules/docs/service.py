@@ -774,7 +774,9 @@ class DocumentLibraryService:
         await self._ds.create_import_task(user_id, task)
         return task
 
-    async def _run_rescan(self, kb: KnowledgeBaseRow, task: DocumentImportTaskRow) -> None:
+    async def _run_rescan(
+        self, kb: KnowledgeBaseRow, task: DocumentImportTaskRow
+    ) -> ImportTaskResult:
         """Diff the on-disk tree against the indexed tree and converge.
 
         Walks ``kb.root_path`` once, then in three phases:
@@ -1748,7 +1750,7 @@ class DocumentLibraryService:
             return list(doc_ids)
 
         bindings = await self._ds.list_bindings(user_id, project_id)
-        doc_ids: set[str] = set()
+        doc_ids = set()
         for b in bindings:
             if b.binding_kind == "kb":
                 doc_ids.update(
@@ -2068,7 +2070,8 @@ class DocumentLibraryService:
         # The duck-typed contract mirrors ``ParserBackend.parse``:
         # ``parse_sync(file_path, options=None)``.
         if hasattr(self._parser, "parse_sync"):
-            return self._parser.parse_sync(file_path, options)
+            parse_sync: Callable[[str, ParseOptions], ParseResult] = self._parser.parse_sync
+            return parse_sync(file_path, options)
 
         import asyncio
 

@@ -22,7 +22,7 @@ from src.core.tools import ExecContext
 
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
 from valuz_agent.adapters import kernel_client
-from valuz_agent.modules.memory.models import TARGETS
+from valuz_agent.modules.memory.models import TARGETS, Target
 from valuz_agent.modules.memory.prompts import TOOL_DESCRIPTION
 from valuz_agent.modules.memory.service import MemoryError, memory_store
 
@@ -167,8 +167,12 @@ async def _list(user_id: str, session_id: str, target: Any) -> ToolResult:
         return ToolResult(content="memory: 'target' must be user|global|project", is_error=True)
     try:
         project_id = await _resolve_project_id(user_id, session_id)
-        targets = [target] if target else ["user", "global", *(["project"] if project_id else [])]
-        entries: dict[str, list[str]] = {}
+        targets: list[Target] = (
+            [scope for scope in TARGETS if target == scope] if target else ["user", "global"]
+        )
+        if target is None and project_id:
+            targets.append("project")
+        entries: dict[Target, list[str]] = {}
         for scope in targets:
             if scope == "project" and not project_id:
                 return ToolResult(

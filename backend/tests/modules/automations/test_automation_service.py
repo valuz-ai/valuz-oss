@@ -162,7 +162,7 @@ class FakeAutomationDatastore:
         return [r for r in self.rows.values() if r.origin_tool_call_id in wanted]
 
 
-class FakePlaybookDatastore:
+class FakePlaybookService:
     def __init__(self) -> None:
         self.definitions = {
             "pb-1": SimpleNamespace(id="pb-1", current_version=2),
@@ -174,10 +174,10 @@ class FakePlaybookDatastore:
             ("pb-2", 1): SimpleNamespace(version=1),
         }
 
-    async def get_definition(self, user_id: str, definition_id: str) -> Any | None:
+    async def find_definition(self, user_id: str, definition_id: str) -> Any | None:
         return self.definitions.get(definition_id)
 
-    async def get_version(
+    async def find_version(
         self,
         user_id: str,
         definition_id: str,
@@ -340,7 +340,7 @@ def service(
     svc._bus = bus
     svc._ws = project_svc  # type: ignore[assignment]
     svc._agent_svc = agent_svc  # type: ignore[assignment]
-    svc._playbooks = FakePlaybookDatastore()  # type: ignore[assignment]
+    svc._playbooks = FakePlaybookService()  # type: ignore[assignment]
     from valuz_agent.modules.automations.cron_utils import CronInterpreter
     from valuz_agent.modules.automations.triggers import TriggerEvaluator
 
@@ -401,7 +401,6 @@ class TestRunNowRuntimePort:
                 run_id=accepted.run_id,
             )
         ]
-
 
     async def test_should_run_now_while_paused_without_resuming(
         self,

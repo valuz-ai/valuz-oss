@@ -375,28 +375,9 @@ def init_tracing() -> None:
 
 
 def initialize_network_egress() -> None:
-    # Desktop egress bootstrap is delivered once over the sidecar's stdin.
-    # Consume it before the kernel creates any runtime or child process; the
-    # non-secret marker is removed from os.environ inside the helper.
-    # Import for its path-injection side effect before resolving ``src``.
-    __import__("kernel")
+    from valuz_agent.boot.kernel import initialize_kernel_network_egress
 
-    from src.runtimes.network_egress import (
-        configure_network_egress,
-        consume_network_egress_bootstrap,
-        get_network_egress_registry,
-    )
-
-    try:
-        consume_network_egress_bootstrap()
-    except RuntimeError:
-        # A malformed/stale one-shot payload is an egress failure, not a
-        # reason to take the renderer and non-model backend APIs down. Keep
-        # booting with the same fail-loud boundary as manager startup failure.
-        logger.error("desktop egress bootstrap rejected; admitted model traffic is blocked")
-        configure_network_egress(None, required_unavailable=True)
-    if registry := get_network_egress_registry():
-        registry.start_keepalive()
+    initialize_kernel_network_egress()
 
 
 async def init_kernel(app: FastAPI, toolkit: Sequence[Any] | None = None) -> None:
@@ -751,10 +732,16 @@ async def resolve_informational_notification_backlog() -> None:
 
 async def start_ui_push_transport() -> None:
     """Receive UI bus pushes made by other backend processes (OSS: no-op)."""
+    from collections.abc import Mapping
+    from typing import Any
+
     from valuz_agent.modules.plugin_ui.push import ui_push_hub
     from valuz_agent.ports.extensions import ext
 
-    await ext.ui_push_transport.start(ui_push_hub.deliver_remote)
+    def deliver(message: Mapping[str, Any]) -> None:
+        ui_push_hub.deliver_remote(message)
+
+    await ext.ui_push_transport.start(deliver)
 
 
 async def stop_ui_push_transport() -> None:
@@ -1210,20 +1197,9 @@ async def stop_managed_browser() -> None:
 
 
 async def shutdown_kernel() -> None:
-    from src.runtimes.network_egress import (
-        configure_network_egress,
-        get_network_egress_registry,
-    )
+    from valuz_agent.boot.kernel import shutdown_kernel_with_network_egress
 
-    from valuz_agent.boot.kernel import shutdown_kernel_dependencies
-
-    await shutdown_kernel_dependencies()
-    if registry := get_network_egress_registry():
-        await registry.close()
-    # Reset the fail-loud sentinel as well as a live registry.  Production
-    # exits after this hook, but tests and embedded hosts may initialize the
-    # backend again in the same interpreter.
-    configure_network_egress(None)
+    await shutdown_kernel_with_network_egress()
 
 
 def shutdown_tracing() -> None:

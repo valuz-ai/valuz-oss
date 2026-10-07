@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from valuz_agent.i18n import t
 from valuz_agent.ports.parser_backend import ParseOptions, ParseResult
+
+if TYPE_CHECKING:
+    from rapidocr import RapidOCR
 
 _PDF_EXTS = {".pdf"}
 # NOTE: .html intentionally NOT in plain-text — it is converted, not kept
@@ -47,7 +50,7 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}
 _ALL_EXTS = _PDF_EXTS | _PLAIN_TEXT_EXTS | _HTML_EXTS | _OFFICE_EXTS | _IMAGE_EXTS
 
 
-def _build_rapidocr(rapidocr_cls: Any) -> Any:
+def _build_rapidocr(rapidocr_cls: type[RapidOCR]) -> RapidOCR:
     """Construct ``RapidOCR`` on the user-authorized PP-OCRv6 bundle in
     ``~/.valuz-oss/models/light_local/rapidocr/``.
 
@@ -341,7 +344,7 @@ class LightLocalParser:
                 metadata={"engine": "html_to_markdown", "error": str(exc)},
             )
         try:
-            md = _to_md(html, heading_style="ATX")
+            md = _to_md(html, heading_style="atx")
             return ParseResult(
                 markdown=md,
                 page_count=1,

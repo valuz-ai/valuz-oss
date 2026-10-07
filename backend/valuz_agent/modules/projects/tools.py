@@ -22,12 +22,18 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.core import ToolDef, ToolResult
 from src.core.tools import ExecContext
 
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from valuz_agent.modules.projects.service import ProjectService
+
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.errors import ValuzError
 from valuz_agent.integrations.tools_entity_common import dump
@@ -259,29 +265,11 @@ async def _resolve_real_project_id(user_id: str, session_id: str) -> str | None:
     return project_id if (row is not None and row.kind == "project") else None
 
 
-def _full_project_service(db: Any) -> Any:
-    """``ProjectService`` with every collaborator the routes wire (``api/deps.
-    get_project_service``): delete / preview / default lead need them."""
-    from valuz_agent.infra.eventbus import event_bus
-    from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
-    from valuz_agent.modules.automations.datastore import AutomationDatastore
-    from valuz_agent.modules.connectors.datastore import ConnectorDatastore
-    from valuz_agent.modules.docs.datastore import DocumentDatastore
-    from valuz_agent.modules.projects.datastore import ProjectDatastore
-    from valuz_agent.modules.projects.service import ProjectService
-    from valuz_agent.modules.sessions.datastore import SessionDatastore
-    from valuz_agent.modules.skills.datastore import SkillDatastore
+def _full_project_service(db: AsyncSession) -> ProjectService:
+    """Use the same explicit-UoW composition as the HTTP dependency."""
+    from valuz_agent.adapters.project_composition import build_project_service
 
-    return ProjectService(
-        datastore=ProjectDatastore(db),
-        event_bus=event_bus,
-        session_datastore=SessionDatastore(db),
-        document_datastore=DocumentDatastore(db),
-        automation_datastore=AutomationDatastore(db),
-        skill_datastore=SkillDatastore(db),
-        connector_datastore=ConnectorDatastore(db),
-        member_datastore=ProjectMemberDatastore(db),
-    )
+    return build_project_service(db)
 
 
 async def _export_project(user_id: str, project_id: str) -> bytes:

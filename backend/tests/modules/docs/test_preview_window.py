@@ -69,6 +69,20 @@ async def test_a_document_that_fits_is_not_reported_as_truncated(svc, db):
     assert window.truncated is False
 
 
+async def test_local_citation_resolver_consumes_the_document_preview_contract(svc, db):
+    from valuz_agent.modules.citations.resolver import LocalCitationDocumentResolver
+
+    await _preview(svc, db, "citation-owner", b"# Revenue\n\nRevenue grew by 10%.\n")
+    resolved = await LocalCitationDocumentResolver(svc).resolve(
+        owner_user_id="citation-owner", source={"documentId": "doc-1"}, locator=None
+    )
+    assert resolved.status == "ready"
+    assert [chunk["text"] for chunk in resolved.document["chunks"]] == [
+        "Revenue",
+        "Revenue grew by 10%.",
+    ]
+
+
 async def test_a_document_larger_than_the_window_says_there_is_more(svc, db):
     body = b"x" * (PREVIEW_WINDOW_BYTES + 1024)
 

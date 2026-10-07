@@ -192,7 +192,7 @@ class SessionDatastore:
 
     async def delete_attachment(self, user_id: str, attachment_id: str) -> None:
         await self._db.execute(
-            SessionAttachmentRow.__table__.delete().where(
+            delete(SessionAttachmentRow).where(
                 SessionAttachmentRow.id == attachment_id,
                 SessionAttachmentRow.user_id == user_id,
             )
@@ -201,7 +201,7 @@ class SessionDatastore:
 
     async def delete_attachments_for_session(self, user_id: str, session_id: str) -> None:
         await self._db.execute(
-            SessionAttachmentRow.__table__.delete().where(
+            delete(SessionAttachmentRow).where(
                 SessionAttachmentRow.session_id == session_id,
                 SessionAttachmentRow.user_id == user_id,
             )

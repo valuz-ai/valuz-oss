@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AnyUrl, BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.api.deps import get_current_user_id
@@ -330,7 +330,7 @@ async def list_connectors(
     user_id: str = Depends(get_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
-) -> dict:
+) -> dict[str, Any]:
     """List all connectors (builtin, recommended, custom).
 
     For recommended connectors (those backed by a catalog entry, matched
@@ -568,21 +568,22 @@ async def create_connector(
         else:
             discover = OAuthDiscoverHelper(server_url)
             try:
-                oauth_meta = await discover.get_oauth_metadata()
+                discovered_meta = await discover.get_oauth_metadata()
             finally:
                 await discover.close()
-            if oauth_meta is None:
+            if discovered_meta is None:
                 raise HTTPException(
                     status_code=502,
                     detail=f"Could not discover OAuth metadata for {server_url!r}",
                 )
+            oauth_meta = discovered_meta
 
         from mcp.shared.auth import OAuthClientMetadata
 
         redirect_uri = f"{_settings.backend_base_url}/v1/connectors/oauth/callback"
         client_meta = OAuthClientMetadata(
             client_name="Valuz",
-            redirect_uris=[redirect_uri],  # type: ignore[arg-type]
+            redirect_uris=[AnyUrl(redirect_uri)],
             grant_types=["authorization_code"],
             response_types=["code"],
             token_endpoint_auth_method="none",
@@ -1052,7 +1053,7 @@ async def oauth_callback(
 
         client_meta = OAuthClientMetadata(
             client_name="Valuz",
-            redirect_uris=[redirect_uri],  # type: ignore[arg-type]
+            redirect_uris=[AnyUrl(redirect_uri)],
             grant_types=["authorization_code"],
             response_types=["code"],
             token_endpoint_auth_method="none",
@@ -1623,12 +1624,12 @@ async def call_tool_of_connector(
 # Directory endpoints (catalog v2 — groups + standalone connectors)
 # ---------------------------------------------------------------------------
 
-_CATALOG: list[dict] = load_catalog()
+_CATALOG: list[dict[str, Any]] = load_catalog()
 
 # CONNECTOR_DIRECTORY: flat list of all connectors for OAuth slug lookup.
 # CATALOG_ITEMS: raw catalog entries preserving order (groups + standalone connectors).
-CONNECTOR_DIRECTORY: list[dict] = []
-CATALOG_ITEMS: list[dict] = []
+CONNECTOR_DIRECTORY: list[dict[str, Any]] = []
+CATALOG_ITEMS: list[dict[str, Any]] = []
 
 for _entry in _CATALOG:
     if "connectors" in _entry:

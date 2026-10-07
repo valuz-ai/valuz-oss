@@ -23,6 +23,8 @@ import logging
 from dataclasses import replace
 from typing import Any
 
+from valuz_agent.modules.agents.effective_resources import EffectiveResourceManifest
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -335,9 +337,10 @@ class AgentService:
                 created = await self._agents.create(user_id, row)
             except IntegrityError:
                 await self._db.rollback()
-                created = await self._agents.get_agent(user_id, VALURION_SLUG)
-                if created is None:
+                recovered = await self._agents.get_agent(user_id, VALURION_SLUG)
+                if recovered is None:
                     raise
+                created = recovered
             else:
                 if authority.cloud_committed:
                     existing = created
@@ -617,7 +620,7 @@ class AgentService:
         self,
         user_id: str,
         slug: str,
-    ) -> Any:
+    ) -> EffectiveResourceManifest:
         """What a session for this agent would actually be created with.
 
         Answers for EVERY agent, not just ``all_available`` ones. It used to

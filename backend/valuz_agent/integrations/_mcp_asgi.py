@@ -10,6 +10,8 @@ from typing import Any
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import PlainTextResponse
 
+from valuz_agent.ports.sandbox_credential import SandboxCredentialClaims
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,7 +78,7 @@ async def _resolve_session_owner(session_id: str) -> str | None:
     return sessions[0].user_id if sessions else None
 
 
-async def _verify_token_owner(token: str | None):  # noqa: ANN201
+async def _verify_token_owner(token: str | None) -> SandboxCredentialClaims | None:
     """Verified owner from a per-owner MCP token, or None if invalid/absent.
 
     Same per-owner signing/verification as the data service (unifies the two

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+from typing import Any
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
@@ -87,11 +90,11 @@ async def create_kb(
 async def list_kbs(
     user_id: str = Depends(get_current_user_id),
     svc: DocumentLibraryService = Depends(get_document_service),
-) -> dict:
+) -> dict[str, Any]:
     from valuz_agent.ports.extensions import ext
 
     rows = await svc.list_kbs(user_id)
-    items = [item.model_dump() if hasattr(item, "model_dump") else item for item in rows]
+    items = [asdict(item) for item in rows]
     items = await ext.resource_list_hook.apply("kb", items, user_id=user_id)
     return {"knowledge_bases": items}
 

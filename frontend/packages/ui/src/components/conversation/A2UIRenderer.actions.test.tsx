@@ -68,6 +68,24 @@ describe("A2UIRenderer action forwarding", () => {
     expect(sink.mock.calls[0][0]).not.toHaveProperty("host");
   });
 
+  it("retains the rendered surface while forwarding the latest committed host", () => {
+    const sink = vi.fn();
+    registerGenUIActionSink(sink);
+    const { rerender } = render(
+      <A2UIRenderer body={body} hostParams={{ symbol: "US:NVDA" }} />,
+    );
+    const button = screen.getByRole("button", { name: "Ask the agent" });
+
+    rerender(<A2UIRenderer body={body} hostParams={{ symbol: "US:AAPL" }} />);
+    expect(screen.getByRole("button", { name: "Ask the agent" })).toBe(button);
+    fireEvent.click(button);
+    expect(sink.mock.calls[0][0].host).toEqual({ symbol: "US:AAPL" });
+
+    rerender(<A2UIRenderer body={body} />);
+    fireEvent.click(button);
+    expect(sink.mock.calls[1][0]).not.toHaveProperty("host");
+  });
+
   it("stays inert when no sink is registered", () => {
     render(<A2UIRenderer body={body} />);
     expect(() =>

@@ -162,7 +162,10 @@ class HttpKernelClient:
         # runtimes it can launch, so the answer reflects the sandbox image, not
         # the API pod. See design §3.3.
         result = await self._request("GET", f"{self._prefix}/v1/runtimes/availability")
-        return result["data"]
+        data = result["data"]
+        if not isinstance(data, dict):
+            raise KernelClientError(502, "Runtime availability response must contain an object")
+        return {str(key): value for key, value in data.items()}
 
     async def bg_busy_session_ids(self) -> list[str]:
         # Process-scoped, id-only (see the kernel route's docstring) — the

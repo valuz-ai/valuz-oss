@@ -1269,3 +1269,40 @@ class TestWorkspaceSync:
 
         assert [r.skipped for r in results] == [True]
         port.before_read.assert_not_awaited()
+
+
+async def test_remote_catalog_skill_is_visible_with_supported_creation_origin(svc) -> None:
+    class Registry:
+        def list_remote_skills(self, ctx):
+            assert ctx.user_id == "u"
+            return [
+                SkillManifest(
+                    id="remote:report",
+                    slug="report",
+                    name="Remote report",
+                    description="Report",
+                    scope="remote",
+                    source="cloud",
+                    path="",
+                )
+            ]
+
+    svc._remote_registry = Registry()
+    catalog = await svc.list_catalog("u", "ws-1")
+    remote = next(skill for skill in catalog.skills if skill.id == "remote:report")
+    assert remote.creation_origin == "discovered"
+    assert remote.source == "cloud" and remote.enabled is True
+
+
+async def test_project_skill_creation_rejects_missing_root_before_filesystem_write(svc) -> None:
+    svc._projects = FakeProjectService([FakeProject(id="p", kind="project", root_path=None)])
+    with pytest.raises(ValueError, match="root_path"):
+        await svc.create_skill(
+            "u",
+            SkillCreateRequest(
+                name="Broken project",
+                target_scope="project",
+                project_id="p",
+                instructions_markdown="Content",
+            ),
+        )

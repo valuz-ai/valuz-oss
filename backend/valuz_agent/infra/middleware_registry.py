@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
+from valuz_agent.ports.middleware import MiddlewareFactory
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -31,7 +33,7 @@ class MiddlewareOrder(IntEnum):
 
 @dataclass
 class _MiddlewareEntry:
-    cls: type
+    cls: MiddlewareFactory
     order: int
     kwargs: dict[str, Any] = field(default_factory=dict)
 
@@ -44,7 +46,7 @@ class MiddlewareRegistry:
 
     def register(
         self,
-        cls: type,
+        cls: MiddlewareFactory,
         order: int | MiddlewareOrder,
         **kwargs: Any,
     ) -> _MiddlewareEntry:

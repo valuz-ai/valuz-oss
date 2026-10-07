@@ -88,9 +88,7 @@ async def test_should_list_bindings_on_the_session_it_is_given(bound, monkeypatc
     monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _forbidden)
 
     async with sessions() as db:
-        bindings = await list_artifact_host_bindings(
-            SCOPE.user_id, delivered.artifact_id, db=db
-        )
+        bindings = await list_artifact_host_bindings(SCOPE.user_id, delivered.artifact_id, db=db)
 
     assert [binding.host_id for binding in bindings] == ["host-1"]
 
@@ -100,9 +98,9 @@ async def test_should_count_a_scope_on_the_session_it_is_given(bound, monkeypatc
     monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _forbidden)
 
     async with sessions() as db:
-        assert await count_scope_artifacts(
-            SCOPE.user_id, SCOPE.project_id, SCOPE.worktree, db=db
-        ) == 1
+        assert (
+            await count_scope_artifacts(SCOPE.user_id, SCOPE.project_id, SCOPE.worktree, db=db) == 1
+        )
 
 
 async def test_should_still_open_its_own_session_when_called_standalone(bound, monkeypatch) -> None:
@@ -128,3 +126,37 @@ async def test_should_still_open_its_own_session_when_called_standalone(bound, m
     assert opened == [True], "standalone must open exactly one unit of work"
     assert revision is not None
     assert revision.artifact_revision_id == delivered.revision_id
+
+
+async def test_should_resolve_artifact_identity_with_caller_session_and_owner_scope(
+    bound, monkeypatch
+) -> None:
+    from valuz_agent.modules.artifacts.service import find_artifact_id
+
+    sessions, delivered = bound
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _forbidden)
+    async with sessions() as db:
+        assert (
+            await find_artifact_id(
+                SCOPE, rel_path="page.a2ui.jsonl", display_name="page.a2ui.jsonl", db=db
+            )
+            == delivered.artifact_id
+        )
+        assert (
+            await find_artifact_id(
+                Scope(user_id="other-owner", project_id=SCOPE.project_id, worktree=""),
+                rel_path="page.a2ui.jsonl",
+                display_name="page.a2ui.jsonl",
+                db=db,
+            )
+            is None
+        )
+        assert (
+            await find_artifact_id(
+                Scope(user_id=SCOPE.user_id, project_id="other-project", worktree=""),
+                rel_path="page.a2ui.jsonl",
+                display_name="page.a2ui.jsonl",
+                db=db,
+            )
+            is None
+        )

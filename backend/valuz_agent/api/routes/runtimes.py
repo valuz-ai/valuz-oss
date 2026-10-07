@@ -58,7 +58,7 @@ async def list_runtime_endpoints() -> dict[str, list[RuntimeListItem]]:
     if override is not None:
         declared = override.available_runtimes()
 
-    availability: dict[str, dict] = {}
+    availability: dict[str, kernel_client.RuntimeAvailability] = {}
     if declared is None:
         try:
             availability = await kernel_client.runtime_availability()
