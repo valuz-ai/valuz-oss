@@ -296,6 +296,47 @@ describe("ConversationBody slots", () => {
     });
   });
 
+  describe("full input row replacement", () => {
+    it("passes the original input row through an outer single-slot chain", () => {
+      const Wrapped = ({
+        renderDefault,
+      }: {
+        renderDefault: () => ReactNode;
+      }) => (
+        <section data-testid="input-row-wrapper">{renderDefault()}</section>
+      );
+      useRegistryStore
+        .getState()
+        .registerSlot("conversation.message.user-row", {
+          id: "outer-input",
+          component: Wrapped as never,
+        });
+      renderBody({ effectiveTurns: [turn(1)] });
+      expect(screen.getByTestId("input-row-wrapper").textContent).toContain(
+        "user-1",
+      );
+      expect(screen.getByText("assistant-1")).toBeTruthy();
+    });
+
+    it("allows a contribution to replace only the input row and retain the assistant answer", () => {
+      const Event = ({ turn: value }: { turn: Turn }) => (
+        <p data-testid="system-input-event">{value.id}</p>
+      );
+      useRegistryStore
+        .getState()
+        .registerSlot("conversation.message.user-row", {
+          id: "event-input",
+          component: Event as never,
+        });
+      renderBody({ effectiveTurns: [turn(1)] });
+      expect(screen.getByTestId("system-input-event").textContent).toBe(
+        "turn-1",
+      );
+      expect(screen.queryByText("user-1")).toBeNull();
+      expect(screen.getByText("assistant-1")).toBeTruthy();
+    });
+  });
+
   describe("row slots", () => {
     it("conversation.user-message.actions gets the turn and sessionId", () => {
       const seen: Array<Record<string, unknown>> = [];
