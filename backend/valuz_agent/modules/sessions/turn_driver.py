@@ -430,6 +430,7 @@ async def run_session_to_idle(
                     kernel_status,
                     error=turn_error,
                     interrupt_category=interrupt_category,
+                    user_id=user_id,
                 )
             except KernelUnavailableError:
                 # Backend shutting down — kernel store already torn down. Finalize

@@ -59,8 +59,33 @@ def _require_user_id(user_id: str | None) -> str:
 
 
 async def _resolve_session_owner(session_id: str) -> str | None:
-    sessions = await data_reader().list_all_sessions(ids=[session_id], limit=1)
-    return sessions[0].user_id if sessions else None
+    # A worker's HTTP reader cannot sweep all owners: its cross-owner list
+    # intentionally delegates to the local identity. The host queue already
+    # records the authenticated owner. Use its durable candidate when the
+    # reader cannot resolve the session; callers still verify via the kernel.
+    try:
+        sessions = await data_reader().list_all_sessions(ids=[session_id], limit=1)
+        if sessions:
+            return sessions[0].user_id
+    except Exception:
+        logger.debug("session owner read unavailable; checking durable input owner", exc_info=True)
+    from sqlalchemy import select
+
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.sessions.models import QueuedInputRow
+
+    async with async_unit_of_work(commit=False) as db:
+        owners = list(
+            (
+                await db.execute(
+                    select(QueuedInputRow.user_id)
+                    .where(QueuedInputRow.session_id == session_id)
+                    .distinct()
+                    .limit(2)
+                )
+            ).scalars()
+        )
+    return owners[0] if len(owners) == 1 and owners[0] else None
 
 
 def is_draining_queue(session_id: str) -> bool:
@@ -212,7 +237,7 @@ async def _run_agent_background(
     )
     # Every production drain uses the existing cross-process lease, including
     # a chain started by a user turn (not only an idle/background enqueue).
-    schedule_drain(session_id, event_bus)
+    schedule_drain(session_id, event_bus, user_id=owner_user_id)
 
 
 async def _drain_queue_after_turn(
@@ -259,6 +284,9 @@ async def _drain_queue_after_turn(
                 head = await SessionDatastore(db).peek_next_queued(session_id)
             if head is None:
                 return
+            if head.user_id != owner_user_id:
+                logger.error("queue drain owner mismatch for %s; refusing input", session_id)
+                return
 
             # Busy gate: dispatch only when the previous message is GENUINELY
             # done — no turn in flight AND no live background tasks (see
@@ -285,7 +313,7 @@ async def _drain_queue_after_turn(
             attachments = list(payload.get("attachments") or [])
 
             session = await kernel_client.get_session(owner_user_id, session_id)
-            if session is None:
+            if session is None or str(session.status) in {"cancelled", "archived", "terminated"}:
                 return
 
             if payload.get("source") == "background":
@@ -417,11 +445,12 @@ async def _drain_queue_after_turn(
         _active_drains.discard(session_id)
 
 
-def schedule_drain(session_id: str, event_bus: EventBus) -> None:
+def schedule_drain(session_id: str, event_bus: EventBus, *, user_id: str | None = None) -> None:
     """Spawn a background queue drain for an idle session (idle-kick / resume).
 
-    Background path: resolve the owner from ``session_id`` before draining; do
-    not rely on request ContextVar propagation.
+    Preserve an authenticated caller's explicit owner. Ownerless recovery
+    resolves a durable candidate and verifies it against the kernel; never
+    rely on request ContextVar propagation or a remote cross-owner sweep.
     A no-op if a drain is already in flight for the session.
 
     Claims ``_active_drains`` SYNCHRONOUSLY (released by the spawned task) so
@@ -444,9 +473,17 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
 
     async def _spawn() -> None:
         try:
-            owner_user_id = await _resolve_session_owner(session_id)
+            owner_user_id = (
+                user_id if user_id is not None else await _resolve_session_owner(session_id)
+            )
             if not owner_user_id:
-                logger.warning("skip queue drain for %s: unknown session owner", session_id)
+                logger.warning("defer queue drain for %s: unknown session owner", session_id)
+                return
+            session = await kernel_client.get_session(owner_user_id, session_id)
+            if session is None or session.user_id != owner_user_id:
+                logger.warning(
+                    "defer queue drain for %s: owner has no matching session", session_id
+                )
                 return
             async with hold_lease(scope=DRAIN_LEASE_SCOPE, key=session_id) as lease:
                 if lease is None:
@@ -463,6 +500,10 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
                     user_id=owner_user_id,
                     claimed=True,
                 )
+        except Exception:
+            logger.warning(
+                "queue drain deferred for %s; durable inputs retained", session_id, exc_info=True
+            )
         finally:
             # ``_drain_queue_after_turn`` releases on its own; this covers the
             # early returns/raises before it runs. discard is idempotent.
@@ -562,6 +603,8 @@ async def _finalize_session(
     final_status: str,
     error: BaseException | None = None,
     interrupt_category: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Persist post-turn valuz metadata and the resolved kernel status.
 
@@ -586,7 +629,7 @@ async def _finalize_session(
     ``CancelledError`` case: an interruption category, no ``stop_reason_*``
     stamp, no failure notification.
     """
-    owner_user_id = await _resolve_session_owner(session_id)
+    owner_user_id = user_id if user_id is not None else await _resolve_session_owner(session_id)
     if not owner_user_id:
         logger.warning("skip finalize for %s: unknown session owner", session_id)
         return

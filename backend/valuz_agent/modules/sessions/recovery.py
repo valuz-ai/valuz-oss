@@ -190,7 +190,7 @@ async def resume_queued_drains() -> int:
             session = await kernel_client.get_session(owner, session_id)
             status = _map_kernel_status(session.status) if session else None
             if status in ("idle", "created"):
-                schedule_drain(session_id, event_bus)
+                schedule_drain(session_id, event_bus, user_id=owner)
                 resumed += 1
         except Exception:  # noqa: BLE001 — one bad session must not stop the rest
             logger.exception("resume_queued_drains: failed for session %s", session_id)

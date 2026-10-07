@@ -170,8 +170,31 @@ class SessionLibrary:
         if receipt.status == "queued":
             # Always schedule even when busy: the existing drain waits for true
             # idle, covering turns started by a remote kernel or another process.
-            schedule_drain(session_id, event_bus)
+            schedule_drain(session_id, event_bus, user_id=self.user_id)
         return receipt
+
+    async def wake_input(self, session_id: str, input_id: str) -> bool:
+        """Re-kick an owned pending background input without rewriting/replaying it.
+
+        A transient worker wake can be lost. Durable reconciliation may safely
+        call this again; the existing drain lease, FIFO/CAS and pause/admission
+        checks remain the execution authority.
+        """
+        from valuz_agent.adapters import kernel_client
+        from valuz_agent.infra.eventbus import event_bus
+        from valuz_agent.modules.sessions.errors import SessionNotFound
+        from valuz_agent.modules.sessions.run_orchestrator import schedule_drain
+
+        receipt = await get_input(self.user_id, session_id, input_id)
+        if receipt is None or receipt.status != "queued" or receipt.source != "background":
+            return False
+        session = await kernel_client.get_session(self.user_id, session_id)
+        if session is None or session.user_id != self.user_id:
+            raise SessionNotFound()
+        if str(session.status) in {"cancelled", "archived", "terminated"}:
+            return False
+        schedule_drain(session_id, event_bus, user_id=self.user_id)
+        return True
 
     async def cancel_input(self, session_id: str, input_id: str) -> bool:
         """Cancel pending input; an already dispatched turn needs interrupt()."""

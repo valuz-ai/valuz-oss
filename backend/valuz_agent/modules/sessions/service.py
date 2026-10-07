@@ -2060,7 +2060,7 @@ class SessionService:
         # turn boundary that never comes. If running / already draining, the
         # in-flight drain picks it up on its next peek.
         if status != "running" and not await is_draining_queue_anywhere(session_id):
-            schedule_drain(session_id, self._bus)
+            schedule_drain(session_id, self._bus, user_id=uid)
 
         return await self.list_queue(session_id, user_id=user_id)
 
@@ -2101,7 +2101,7 @@ class SessionService:
         await project_index.set_queue_paused(session_id, False)
         status = _map_kernel_status(session.status)
         if status != "running" and not await is_draining_queue_anywhere(session_id):
-            schedule_drain(session_id, self._bus)
+            schedule_drain(session_id, self._bus, user_id=uid)
         return await self.list_queue(session_id, user_id=user_id)
 
     async def steer_queued(
@@ -2149,7 +2149,7 @@ class SessionService:
             except Exception:  # noqa: BLE001 — runtime gone / never registered
                 logger.warning("steer: kernel interrupt failed for %s", session_id, exc_info=True)
         else:
-            schedule_drain(session_id, self._bus)
+            schedule_drain(session_id, self._bus, user_id=uid)
 
         return await self.list_queue(session_id, user_id=user_id)
 

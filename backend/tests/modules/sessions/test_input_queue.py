@@ -711,7 +711,7 @@ async def test_steer_promotes_and_silently_interrupts(monkeypatch) -> None:
     async def _interrupt(uid, sid):
         interrupted.append(sid)
 
-    def _schedule_drain(sid, bus):
+    def _schedule_drain(sid, bus, *, user_id=None):
         drained.append(sid)
 
     monkeypatch.setattr(kc, "get_session", _get_session)
@@ -766,7 +766,7 @@ async def test_steer_missing_item_is_idempotent(monkeypatch) -> None:
         return False
 
     monkeypatch.setattr(svc_mod, "is_draining_queue_anywhere", _not_draining)
-    monkeypatch.setattr(svc_mod, "schedule_drain", lambda sid, bus: None)
+    monkeypatch.setattr(svc_mod, "schedule_drain", lambda sid, bus, **kwargs: None)
 
     svc = SessionService.__new__(SessionService)
     svc._bus = _FakeBus()  # type: ignore[attr-defined]
@@ -912,7 +912,7 @@ async def test_background_input_preserves_owner_idempotence_and_staging(monkeypa
     monkeypatch.setattr(
         "valuz_agent.adapters.data_reader.data_reader", lambda: SimpleNamespace(get_session=read)
     )
-    monkeypatch.setattr(run_orchestrator, "schedule_drain", lambda *args: None)
+    monkeypatch.setattr(run_orchestrator, "schedule_drain", lambda *args, **kwargs: None)
     pending = AsyncMock(
         side_effect=AssertionError("Background must not inspect pending attachments")
     )
@@ -1045,3 +1045,135 @@ async def test_queue_claim_and_owner_cancel_are_mutually_exclusive():
         ds = SessionDatastore(db)
         assert (await ds.get_queued(OWNER, "cancel-race", cancelled.id)).status == "cancelled"
         assert (await ds.get_queued(OWNER, "dispatch-race", dispatched.id)).status == "dispatched"
+
+
+async def test_explicit_worker_owner_drains_without_http_cross_owner_sweep(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("http-worker", "first"))
+        await SessionDatastore(db).create_queued(OWNER, _row("http-worker", "second"))
+    calls = _patch_drain(monkeypatch)
+    cross_owner = AsyncMock(side_effect=AssertionError("remote HTTP has no all-owner sweep"))
+    monkeypatch.setattr(
+        run_orchestrator,
+        "data_reader",
+        lambda: SimpleNamespace(
+            list_all_sessions=cross_owner,
+        ),
+    )
+    run_orchestrator.schedule_drain("http-worker", _FakeBus(), user_id=OWNER)
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("http-worker"):
+            break
+        await asyncio.sleep(0.01)
+    assert calls == ["first", "second"]
+    cross_owner.assert_not_awaited()
+    async with async_unit_of_work(commit=False) as db:
+        receipts = await SessionDatastore(db).get_queued(OWNER, "http-worker", "absent")
+        assert receipts is None
+        from sqlalchemy import select
+
+        rows = list((await db.execute(select(QueuedInputRow))).scalars())
+        assert all(row.status == "completed" for row in rows)
+
+
+async def test_ownerless_worker_uses_durable_candidate_and_kernel_rejects_wrong_owner(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("fallback", "from durable owner"))
+    calls = _patch_drain(monkeypatch)
+    monkeypatch.setattr(
+        run_orchestrator,
+        "data_reader",
+        lambda: SimpleNamespace(
+            list_all_sessions=AsyncMock(return_value=[]),
+        ),
+    )
+    # A provided wrong identity must fail kernel validation, never fall back
+    # to the durable true owner and accidentally execute as that owner.
+    original_get = run_orchestrator.kernel_client.get_session
+
+    async def get_session(owner, sid):
+        return await original_get(owner, sid) if owner == OWNER else None
+
+    monkeypatch.setattr(run_orchestrator.kernel_client, "get_session", get_session)
+    run_orchestrator.schedule_drain("fallback", _FakeBus(), user_id="wrong-owner")
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("fallback"):
+            break
+        await asyncio.sleep(0.01)
+    assert calls == []
+    run_orchestrator.schedule_drain("fallback", _FakeBus())
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("fallback"):
+            break
+        await asyncio.sleep(0.01)
+    assert calls == ["from durable owner"]
+
+
+async def test_mixed_input_owners_never_cross_drain(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued("other-owner", _row("mixed", "foreign"))
+        await SessionDatastore(db).create_queued(OWNER, _row("mixed", "owned"))
+    calls = _patch_drain(monkeypatch)
+    monkeypatch.setattr(
+        run_orchestrator,
+        "data_reader",
+        lambda: SimpleNamespace(
+            list_all_sessions=AsyncMock(return_value=[]),
+        ),
+    )
+    assert await run_orchestrator._resolve_session_owner("mixed") is None
+    await run_orchestrator._drain_queue_after_turn("mixed", _FakeBus(), user_id=OWNER)
+    assert calls == []
+    async with async_unit_of_work(commit=False) as db:
+        assert len(await SessionDatastore(db).list_queued(OWNER, "mixed")) == 1
+        assert len(await SessionDatastore(db).list_queued("other-owner", "mixed")) == 1
+
+
+async def test_wake_input_preserves_pause_ownership_and_the_original_input(monkeypatch):
+    import asyncio
+
+    from valuz_agent.facade.sessions import SessionLibrary
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    row = _row("old-background", "same original result")
+    row.input["source"] = "background"
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, row)
+    await project_index.record("proj-1", "old-background", kind="chat", user_id=OWNER)
+    await project_index.set_queue_paused("old-background", True)
+    calls = _patch_drain(monkeypatch)
+    assert await SessionLibrary("other-owner").wake_input("old-background", row.id) is False
+    assert await SessionLibrary(OWNER).wake_input("old-background", row.id) is True
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("old-background"):
+            break
+        await asyncio.sleep(0.01)
+    assert calls == []
+    async with async_unit_of_work(commit=False) as db:
+        original = await SessionDatastore(db).get_queued(OWNER, "old-background", row.id)
+        assert original.input == row.input and original.status == "queued"
+    await project_index.set_queue_paused("old-background", False)
+    assert await SessionLibrary(OWNER).wake_input("old-background", row.id) is True
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("old-background"):
+            break
+        await asyncio.sleep(0.01)
+    assert calls == ["same original result"]
+    assert await SessionLibrary(OWNER).wake_input("old-background", row.id) is False
