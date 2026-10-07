@@ -64,6 +64,27 @@ case "$TARGET" in
   *) echo "unsupported --target: $TARGET" >&2; exit 2 ;;
 esac
 
+# Build portable macOS wheels, rather than whichever optimized wheel fits the
+# newer build host. NumPy offers both macOS 11 and macOS 14 wheels at one pin.
+# Electron's supported floor is macOS 13; the latter wheel cannot run there.
+WHEEL_PLATFORM=""
+MACOS_MINIMUM_VERSION="13.0"
+case "$TARGET" in
+  darwin-arm64) WHEEL_PLATFORM="aarch64-apple-darwin" ;;
+  darwin-amd64) WHEEL_PLATFORM="x86_64-apple-darwin" ;;
+  "")
+    if [ "$(uname -s)" = "Darwin" ]; then
+      case "$(uname -m)" in
+        arm64) WHEEL_PLATFORM="aarch64-apple-darwin"; REQUEST="cpython-$PY_VERSION-macos-aarch64-none" ;;
+        x86_64) WHEEL_PLATFORM="x86_64-apple-darwin"; REQUEST="cpython-$PY_VERSION-macos-x86_64-none" ;;
+      esac
+    fi
+    ;;
+esac
+if [ -n "$WHEEL_PLATFORM" ]; then
+  export MACOSX_DEPLOYMENT_TARGET="$MACOS_MINIMUM_VERSION"
+fi
+
 if [ "$UPDATE" = 1 ]; then
   (cd "$DIR" && uv pip compile --quiet --universal --generate-hashes \
     --python-version "${PY_VERSION%.*}" requirements.in -o requirements.txt)
@@ -81,6 +102,9 @@ interpreter() {
 }
 
 WANT="$REQUEST $(sha256 "$DIR/requirements.txt")"
+if [ -n "$WHEEL_PLATFORM" ]; then
+  WANT="$WANT wheel-platform=$WHEEL_PLATFORM macos-min=$MACOS_MINIMUM_VERSION"
+fi
 if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$WANT" ] && [ -e "$(interpreter "$DIST")" ]; then
   echo "python runtime up to date: $DIST"
   exit 0
@@ -96,8 +120,11 @@ NEW="$DIST.new"
 rm -rf "$NEW"
 cp -R "$SRC" "$NEW"
 PY="$(interpreter "$NEW")"
-uv pip install --quiet --python "$PY" --break-system-packages --require-hashes \
-  -r "$DIR/requirements.txt"
+PIP_ARGS=(--quiet --python "$PY" --break-system-packages --require-hashes -r "$DIR/requirements.txt")
+if [ -n "$WHEEL_PLATFORM" ]; then
+  PIP_ARGS+=(--python-platform "$WHEEL_PLATFORM")
+fi
+uv pip install "${PIP_ARGS[@]}"
 "$PY" -c "import docx, pptx, openpyxl, xlsxwriter, pandas, PIL, lxml"
 
 echo "$WANT" > "$NEW/.valuz-runtime-stamp"

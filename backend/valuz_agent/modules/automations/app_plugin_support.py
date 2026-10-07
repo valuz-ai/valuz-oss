@@ -31,9 +31,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -248,6 +249,9 @@ class AppPluginAutomations:
         package: Path,
         *,
         enabled: bool = True,
+        source_kind: str = "unknown",
+        catalog_binding: dict[str, Any] | None = None,
+        preserve_existing_status: bool = False,
     ) -> SyncResult:
         """Make the user's automations of ``app_plugin_id`` match ``specs``.
 
@@ -329,10 +333,15 @@ class AppPluginAutomations:
                     fresh.app_plugin_name = app_plugin_name
                     await self._ds.update_automation(fresh)
                 automation_id = row.id
+            fresh = await self._ds.get_automation(self._user_id, automation_id)
+            if fresh is not None:
+                fresh.app_plugin_source_kind = source_kind
+                fresh.app_plugin_catalog_binding = catalog_binding
+                await self._ds.update_automation(fresh)
             result.ids[spec.name] = automation_id
             if not enabled:
                 await service.pause(automation_id, user_id=self._user_id)
-            elif row is not None and row.status == "paused":
+            elif not preserve_existing_status and row is not None and row.status == "paused":
                 await service.resume(automation_id, user_id=self._user_id)
         return result
 
@@ -345,10 +354,24 @@ class AppPluginAutomations:
             elif not paused and row.status == "paused":
                 await service.resume(row.id, user_id=self._user_id)
 
-    async def delete_all(self, app_plugin_id: str) -> int:
-        """Delete every automation of the plugin (uninstall); the count."""
+    async def delete_all(
+        self,
+        app_plugin_id: str,
+        *,
+        expected_catalog_binding: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Remove this owner's selected publication jobs without removing shared scripts."""
         service = await self.service()
         rows = await self.rows(app_plugin_id)
+        if expected_catalog_binding is not None:
+            expected = _catalog_binding_key(expected_catalog_binding)
+            rows = [
+                row
+                for row in rows
+                if expected is not None
+                and row.app_plugin_source_kind == "catalog"
+                and _catalog_binding_key(row.app_plugin_catalog_binding) == expected
+            ]
         cwds: set[Path] = set()
         for row in rows:
             try:
@@ -356,9 +379,35 @@ class AppPluginAutomations:
             except Exception:  # noqa: BLE001
                 pass
             await service.delete(row.id, user_id=self._user_id)
-        for cwd in cwds:
+        retained_cwds: set[Path] = set()
+        for row in await self.rows(app_plugin_id):
+            try:
+                retained_cwds.add(await self._project_cwd(row.project_id))
+            except Exception:  # noqa: BLE001 — never remove scripts of an unresolvable survivor
+                return len(rows)
+        for cwd in cwds - retained_cwds:
             self.remove_scripts(cwd, app_plugin_id)
         return len(rows)
+
+
+def _catalog_binding_key(value: Any) -> tuple[str, ...] | None:
+    if not isinstance(value, Mapping):
+        return None
+    fields = (
+        "app_plugin_id",
+        "scope",
+        "owner_key",
+        "version",
+        "sha256",
+        "origin_scope",
+        "origin_owner_key",
+    )
+    parts = tuple(value.get(field) for field in fields)
+    return (
+        cast(tuple[str, ...], parts)
+        if all(isinstance(part, str) and part for part in parts)
+        else None
+    )
 
 
 def _is_managed_name(row: AutomationRow, app_plugin_name: str) -> bool:

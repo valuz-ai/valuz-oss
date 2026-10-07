@@ -22,12 +22,25 @@ class PolicyVerdict:
 
 
 class AppPluginPolicyPort(Protocol):
+    async def authorize_catalog_automation(
+        self, user_id: str, binding: Mapping[str, Any]
+    ) -> PolicyVerdict:
+        """Verify one persisted job source for its owner, independent of active UI identity."""
+        ...
+
     async def evaluate(self, user_id: str, plugin: Mapping[str, Any]) -> PolicyVerdict:
         """``plugin`` is the list item (``id``, ``version``, ``source``, …)."""
         ...
 
 
 class AllowAllAppPluginPolicy:
+    async def authorize_catalog_automation(
+        self, user_id: str, binding: Mapping[str, Any]
+    ) -> PolicyVerdict:
+        return PolicyVerdict(
+            allowed=False, reason="Catalogue jobs require an authenticated provider"
+        )
+
     async def evaluate(self, user_id: str, plugin: Mapping[str, Any]) -> PolicyVerdict:
         del user_id, plugin
         return PolicyVerdict(allowed=True)

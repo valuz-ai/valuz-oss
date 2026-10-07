@@ -25,7 +25,7 @@ import os
 import shutil
 import tempfile
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -621,6 +621,8 @@ class AppPluginService:
         source: dict[str, Any],
         expected_sha256: str | None = None,
         db: AsyncSession | None = None,
+        allow_reinstall: bool = False,
+        verified_catalog: bool = False,
     ) -> dict[str, Any]:
         """Install a package a caller already holds as a file (a catalog download).
 
@@ -629,7 +631,15 @@ class AppPluginService:
         self._require_local()
         prepared = await self._prepare({"source_path": archive_path}, archive_source=source)
         try:
-            return await self._install_prepared(user_id, prepared, expected_sha256, True, db)
+            return await self._install_prepared(
+                user_id,
+                prepared,
+                expected_sha256,
+                True,
+                db,
+                allow_reinstall=allow_reinstall,
+                verified_catalog=verified_catalog,
+            )
         finally:
             shutil.rmtree(prepared.work, ignore_errors=True)
 
@@ -640,25 +650,56 @@ class AppPluginService:
         expected_sha256: str | None,
         enable: bool,
         db: AsyncSession | None = None,
+        *,
+        allow_reinstall: bool = False,
+        verified_catalog: bool = False,
     ) -> dict[str, Any]:
         expected = _normalize_sha(expected_sha256)
         if expected is not None and expected != prepared.sha256:
             raise Sha256Mismatch(
                 extra={"expected": expected, "actual": prepared.sha256},
             )
+        if verified_catalog and (
+            prepared.source.get("kind") != "catalog"
+            or not prepared.source.get("owner_key")
+            or prepared.source.get("installed_by_user_id") != user_id
+            or prepared.source.get("scope") not in {"personal", "org", "global"}
+            or prepared.source.get("origin_scope") not in {"personal", "org", "global"}
+            or not prepared.source.get("origin_owner_key")
+            or expected is None
+        ):
+            raise InvalidSource("verified catalogue install requires an exact owner and digest")
+        if allow_reinstall and (
+            not verified_catalog
+            or prepared.source.get("kind") != "catalog"
+            or not prepared.source.get("owner_key")
+            or not prepared.source.get("installed_by_user_id")
+            or expected is None
+        ):
+            raise InvalidSource("exact reinstall requires a verified catalogue source")
         manifest = prepared.manifest
         if manifest is None or prepared.errors:
             raise InvalidManifest(errors=prepared.errors)
         plugin_id = str(manifest["id"])
+        if verified_catalog and prepared.source.get("item_id") != plugin_id:
+            raise InvalidSource("verified catalogue identity does not match the manifest")
         version = str(manifest["version"])
         updated_from: str | None = None
+        exact_reinstall = False
         async with self._store.transaction() as state:
             existing = state["plugins"].get(plugin_id)
             had_automations = self._declares_automations(existing)
             if existing is not None:
                 updated_from = str(existing.get("version"))
                 replaceable = self._is_dev(existing) or self._is_broken(existing)
-                if not replaceable and not is_newer(version, updated_from):
+                exact_reinstall = (
+                    allow_reinstall
+                    and version == updated_from
+                    and existing.get("sha256") == prepared.sha256
+                )
+                if exact_reinstall:
+                    enable = plugin_id not in disabled_ids()
+                if not exact_reinstall and not replaceable and not is_newer(version, updated_from):
                     raise VersionNotNewer(
                         f"{plugin_id} {updated_from} is installed; {version} is not newer",
                         extra={"installed_version": updated_from, "version": version},
@@ -674,6 +715,9 @@ class AppPluginService:
                 "id": plugin_id,
                 "version": version,
                 "source": prepared.source,
+                "catalog_verified": bool(
+                    verified_catalog and prepared.source.get("kind") == "catalog"
+                ),
                 "sha256": prepared.sha256,
                 "installed_at": now_ms(),
                 "revision": previous + 1 if existing else generation,
@@ -683,7 +727,12 @@ class AppPluginService:
         self._cache.pop(target, None)
         self._remember_sig(entry)
         await self._sync_automations(
-            user_id, entry, enabled=enable, previous=had_automations, db=db
+            user_id,
+            entry,
+            enabled=enable,
+            previous=had_automations,
+            db=db,
+            preserve_existing_status=exact_reinstall,
         )
         env = await self._env(user_id, db)
         return {"plugin": await self._item(entry, env), "updated_from": updated_from}
@@ -794,30 +843,51 @@ class AppPluginService:
         *,
         purge_data: bool = False,
         db: AsyncSession | None = None,
+        expected_catalog_binding: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._require_local()
-        existing = self._entry(plugin_id)
-        deleted = (
-            await self._delete_automations(user_id, plugin_id, db=db)
-            if self._declares_automations(existing)
-            else 0
-        )
         async with self._store.transaction() as state:
-            entry = state["plugins"].pop(plugin_id, None)
+            entry = state["plugins"].get(plugin_id)
             if entry is None:
                 raise PluginNotFound()
-            set_plugin_enabled(plugin_id, True)  # drop the id from the disabled set
+            source = entry.get("source") or {}
+            actual = {
+                "app_plugin_id": entry.get("id"),
+                "version": entry.get("version"),
+                "sha256": entry.get("sha256"),
+                "scope": source.get("scope"),
+                "owner_key": source.get("owner_key"),
+                "origin_scope": source.get("origin_scope"),
+                "origin_owner_key": source.get("origin_owner_key"),
+            }
+            if expected_catalog_binding is not None:
+                if source.get("kind") != "catalog" or actual != dict(expected_catalog_binding):
+                    return {"removed": False, "automations_deleted": 0}
+            cleanup_binding = expected_catalog_binding
+            if cleanup_binding is None and source.get("kind") == "catalog":
+                cleanup_binding = (
+                    actual  # Explicit catalogue uninstall selects the current publication.
+                )
+            deleted = (
+                await self._delete_automations(
+                    user_id, plugin_id, db=db, expected_catalog_binding=cleanup_binding
+                )
+                if self._declares_automations(entry)
+                else 0
+            )
+            state["plugins"].pop(plugin_id)
+            set_plugin_enabled(plugin_id, True)
             self._store.bump(state)
-        self._dev_sigs.pop(plugin_id, None)
-        package_dir = fs_registry.app_plugins_root() / plugin_id
-        if package_dir.is_dir():
-            shutil.rmtree(package_dir, ignore_errors=True)
-        self._cache = {k: v for k, v in self._cache.items() if plugin_id not in k.parts}
-        if purge_data:
-            async with _session(db) as session:
-                await AppPluginDatastore(session).purge(plugin_id)
-            shutil.rmtree(fs_registry.app_plugin_data_dir(plugin_id), ignore_errors=True)
-            logs.delete_log(plugin_id)
+            self._dev_sigs.pop(plugin_id, None)
+            package_dir = fs_registry.app_plugins_root() / plugin_id
+            if package_dir.is_dir():
+                shutil.rmtree(package_dir, ignore_errors=True)
+            self._cache = {k: v for k, v in self._cache.items() if plugin_id not in k.parts}
+            if purge_data:
+                async with _session(db) as session:
+                    await AppPluginDatastore(session).purge(plugin_id)
+                shutil.rmtree(fs_registry.app_plugin_data_dir(plugin_id), ignore_errors=True)
+                logs.delete_log(plugin_id)
         return {"removed": True, "automations_deleted": deleted}
 
     # ---- validate / pack -----------------------------------------------------------
@@ -1068,6 +1138,7 @@ class AppPluginService:
         enabled: bool,
         previous: bool = True,
         db: AsyncSession | None = None,
+        preserve_existing_status: bool = False,
     ) -> None:
         """Create / update / delete the plugin's declared automations for ``user_id``.
 
@@ -1093,6 +1164,21 @@ class AppPluginService:
                     specs,
                     root,
                     enabled=enabled,
+                    source_kind=str((entry.get("source") or {}).get("kind") or "unknown"),
+                    catalog_binding=(
+                        {
+                            "app_plugin_id": plugin_id,
+                            "scope": entry["source"].get("scope"),
+                            "owner_key": entry["source"].get("owner_key"),
+                            "version": entry.get("version"),
+                            "sha256": entry.get("sha256"),
+                            "origin_scope": entry["source"].get("origin_scope"),
+                            "origin_owner_key": entry["source"].get("origin_owner_key"),
+                        }
+                        if entry.get("catalog_verified")
+                        else None
+                    ),
+                    preserve_existing_status=preserve_existing_status,
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not sync the automations of %s", plugin_id, exc_info=True)
@@ -1108,13 +1194,20 @@ class AppPluginService:
             logger.warning("could not (un)pause the automations of %s", plugin_id, exc_info=True)
 
     async def _delete_automations(
-        self, user_id: str, plugin_id: str, db: AsyncSession | None = None
+        self,
+        user_id: str,
+        plugin_id: str,
+        db: AsyncSession | None = None,
+        *,
+        expected_catalog_binding: Mapping[str, Any] | None = None,
     ) -> int:
         try:
             from valuz_agent.modules.automations.app_plugin_support import AppPluginAutomations
 
             async with _session(db) as session:
-                return await AppPluginAutomations(session, user_id).delete_all(plugin_id)
+                return await AppPluginAutomations(session, user_id).delete_all(
+                    plugin_id, expected_catalog_binding=expected_catalog_binding
+                )
         except Exception:  # noqa: BLE001
             logger.warning("could not delete the automations of %s", plugin_id, exc_info=True)
             return 0

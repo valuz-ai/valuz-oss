@@ -53,14 +53,13 @@ export function useAppPlugin() {
             generation = data.generation;
             setState({ phase: "ready", data });
           } else {
-            const next = await appPluginsApi.watch(generation, 25, signal);
+            await appPluginsApi.watch(generation, 25, signal);
             if (signal.aborted) return;
-            if (next.generation !== generation) {
-              const data = await appPluginsApi.list();
-              if (signal.aborted) return;
-              generation = data.generation;
-              setState({ phase: "ready", data });
-            }
+            // Requirements may change without an install generation bump.
+            const data = await appPluginsApi.list();
+            if (signal.aborted) return;
+            generation = data.generation;
+            setState({ phase: "ready", data });
           }
         } catch (error) {
           if (signal.aborted) return;
@@ -79,12 +78,14 @@ export function useAppPlugin() {
       }
     };
 
-    setState((prev) => (prev.phase === "ready" ? prev : { phase: "loading" }));
     void run();
     return () => controller.abort();
   }, [epoch]);
 
-  const refresh = useCallback(() => setEpoch((value) => value + 1), []);
+  const refresh = useCallback(() => {
+    setState((prev) => (prev.phase === "ready" ? prev : { phase: "loading" }));
+    setEpoch((value) => value + 1);
+  }, []);
   return { state, refresh };
 }
 

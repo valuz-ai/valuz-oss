@@ -321,6 +321,20 @@ describe("failures are isolated", () => {
 });
 
 describe("generation changes", () => {
+  it("loads and unloads when connector requirements change without an install generation bump", async () => {
+    const h = harness(listOf(1, [item("a.connector", { status: "requires-unmet", unmet_requires: ["connector:acme-data"] })]));
+    await start(h);
+    expect(h.slotIds()).toEqual([]);
+    h.api.list.mockResolvedValue(listOf(1, [item("a.connector")]));
+    h.bump(1);
+    await vi.waitFor(() => expect(h.runtime.getSnapshot().plugins["a.connector"]?.phase).toBe("active"));
+    expect(h.slotIds()).toEqual(["x:a.connector:button"]);
+    h.api.list.mockResolvedValue(listOf(1, [item("a.connector", { status: "requires-unmet" })]));
+    h.bump(1);
+    await vi.waitFor(() => expect(h.slotIds()).toEqual([]));
+    expect(h.runtime.getSnapshot().plugins["a.connector"]?.reason).toBe("requires-unmet");
+  });
+
   it("loads new, unloads removed and disabled, reloads changed", async () => {
     const h = harness(listOf(1, [item("a.keep"), item("a.remove"), item("a.disable"), item("a.dev")]));
     await start(h);
@@ -388,6 +402,20 @@ describe("generation changes", () => {
 });
 
 describe("stop", () => {
+  it("does not apply a package list that arrives after its context is stopped", async () => {
+    const h = harness(listOf(1, [item("a.old")]));
+    await start(h);
+    let finishList!: (value: AppPluginList) => void;
+    h.api.list.mockImplementationOnce(() => new Promise<AppPluginList>((resolve) => { finishList = resolve; }));
+    h.bump(1);
+    await vi.waitFor(() => expect(h.api.list).toHaveBeenCalledTimes(2));
+    const stopped = h.runtime.stop();
+    finishList(listOf(1, [item("a.late")]));
+    await stopped;
+    expect(h.contexts.has("a.late")).toBe(false);
+    expect(h.slotIds()).toEqual([]);
+  });
+
   it("unloads every app plugin, clears the bridge and the marker", async () => {
     const h = harness(listOf(1, [item("a.one"), item("a.two")]));
     await start(h);

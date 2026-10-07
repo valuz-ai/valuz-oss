@@ -545,6 +545,18 @@ class InProcessAutomationRunner:
                 logger.info("Run %s is already %s; not executing", run_id, run.status)
                 return
 
+            from .app_plugin_authorization import authorize_managed_automation
+
+            try:
+                await authorize_managed_automation(row, user_id=user_id)
+            except Exception as exc:
+                run.status = "failed"
+                run.error_code = "app_plugin_source_unavailable"
+                run.error_message = str(exc)[:500]
+                run.completed_at = now_ms()
+                await ds.replace_run(run)
+                return
+
             # Owner boundary: an automation fires from the background scheduler
             # with no request context. Use the automation row's stored owner and
             # pass it explicitly through every owner-scoped call.
