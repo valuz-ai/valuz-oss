@@ -29,7 +29,9 @@ async def uow(*args, **kwargs):
 async def test_run_waits_for_its_receipt_and_preserves_same_session(outcome, expected):
     runner = InProcessAutomationRunner()
     runner._triggers = Mock(next_fire_at=Mock(return_value=None))
-    row = SimpleNamespace(target_session_id="main", result_kind="conversation", status="enabled")
+    row = SimpleNamespace(
+        target_session_id="main", project_id="project", result_kind="conversation", status="enabled"
+    )
     run = SimpleNamespace(
         id="run-1",
         status="running",
@@ -87,7 +89,9 @@ async def test_run_waits_for_its_receipt_and_preserves_same_session(outcome, exp
 async def test_replayed_run_reuses_completed_receipt_without_new_input():
     runner = InProcessAutomationRunner()
     runner._triggers = Mock(next_fire_at=Mock(return_value=None))
-    row = SimpleNamespace(target_session_id="main", result_kind="conversation", status="enabled")
+    row = SimpleNamespace(
+        target_session_id="main", project_id="project", result_kind="conversation", status="enabled"
+    )
     run = SimpleNamespace(
         id="run-2", status="running", started_at=1, triggered_at=1, playbook_run_id=None
     )
@@ -260,3 +264,91 @@ async def test_legacy_task_update_cannot_keep_existing_chat_target():
     with pytest.raises(AutomationContractInvalid):
         await service.update("a", AutomationUpdatePayload(action_kind="task"), user_id="u")
     assert row.action_kind == "chat"
+
+
+@pytest.mark.parametrize("mode", ["deny", "facts", "replay", "observer_failure"])
+async def test_optional_preparation_port_skips_without_input_or_reuses_original_receipt(
+    mode, monkeypatch
+):
+    from valuz_agent.ports.automation_input import AutomationInputPreparation
+    from valuz_agent.ports.extensions import ext
+
+    runner = InProcessAutomationRunner()
+    runner._triggers = Mock(next_fire_at=Mock(return_value=None))
+    run = SimpleNamespace(
+        id="port-run", status="running", started_at=1, triggered_at=1, playbook_run_id=None
+    )
+    row = SimpleNamespace(
+        target_session_id="main", project_id="project", result_kind="conversation", status="enabled"
+    )
+    ds = Mock(
+        get_run=AsyncMock(return_value=run),
+        get_automation=AsyncMock(return_value=row),
+        replace_run=AsyncMock(),
+        update_automation=AsyncMock(),
+    )
+    terminal = _receipt("port-run", "main", "completed", result_summary="Real completed summary")
+    library = Mock(
+        get_input=AsyncMock(
+            return_value=terminal if mode in {"replay", "observer_failure"} else None
+        ),
+        enqueue_background=AsyncMock(return_value=terminal),
+    )
+    observer = AsyncMock(
+        side_effect=RuntimeError("observer failed") if mode == "observer_failure" else None
+    )
+    preparation = AsyncMock(
+        return_value=AutomationInputPreparation(False, "NO_CHANGE")
+        if mode == "deny"
+        else AutomationInputPreparation(additional_context="Verified fact context")
+    )
+    monkeypatch.setattr(
+        ext,
+        "automation_input_preparers",
+        [SimpleNamespace(prepare=preparation, on_receipt=observer)],
+    )
+    with (
+        patch("valuz_agent.facade.sessions.SessionLibrary", return_value=library),
+        patch("valuz_agent.infra.db.async_unit_of_work", uow),
+        patch("valuz_agent.modules.automations.datastore.AutomationDatastore", return_value=ds),
+    ):
+        await runner._finish_existing_chat_run(
+            user_id="owner",
+            automation_id="automation",
+            run_id="port-run",
+            session_id="main",
+            rendered_prompt="Original fixed preamble and prompt",
+            lease=NoopAutomationExecutionLease(),
+        )
+    if mode == "deny":
+        library.enqueue_background.assert_not_called()
+        observer.assert_not_called()
+        assert run.status == "skipped" and run.result_summary == "NO_CHANGE"
+    elif mode == "facts":
+        args = library.enqueue_background.call_args
+        assert args.args == ("main", "Original fixed preamble and prompt\n\nVerified fact context")
+        assert args.kwargs["input_id"] == "port-run"
+        assert run.status == "success"
+        assert observer.call_args.args[0].input_id == "port-run"
+    else:
+        preparation.assert_not_called()
+        library.enqueue_background.assert_not_called()
+        observer.assert_awaited_once()
+        assert run.status == "success"  # Observation is not invented delivery acknowledgement.
+
+
+async def test_preparation_failure_fails_closed_without_main_input(monkeypatch):
+    from valuz_agent.ports.automation_input import prepare_automation_input
+    from valuz_agent.ports.automation_runtime import AutomationRunCommand
+    from valuz_agent.ports.extensions import ext
+
+    monkeypatch.setattr(
+        ext,
+        "automation_input_preparers",
+        [SimpleNamespace(prepare=AsyncMock(side_effect=ConnectionError("source unavailable")))],
+    )
+    result = await prepare_automation_input(
+        AutomationRunCommand("owner", "a", "run"), project_id="p", session_id="main"
+    )
+    assert not result.allowed and result.status == "failed"
+    assert result.reason == "AUTOMATION_INPUT_PREPARATION_UNAVAILABLE"

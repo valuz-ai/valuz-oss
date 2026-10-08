@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from valuz_agent.facade.tasks import TaskLibrary
 from valuz_agent.infra.database import Base
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
@@ -156,6 +156,75 @@ async def test_terminal_detail_retains_result_and_lead_trace(store):
     assert detail.latest_summary == "finished" and detail.event_sequence == 1
     assert detail.runs[0].session_id == "lead-session"
     assert detail.runs[0].result_manifest == {"summary": "finished", "artifacts": ["report.md"]}
+
+
+async def test_event_pages_are_owner_scoped_complete_and_keep_true_finalized_time(store):
+    seed_task(store, status="completed", stamp=9999999)
+    with store() as db:
+        for sequence in range(1, 307):
+            db.add(
+                TaskEventRow(
+                    id=f"event-{sequence}",
+                    user_id=OWNER,
+                    task_id="t1",
+                    project_id="project",
+                    sequence=sequence,
+                    type="task_plan_update",
+                    actor="lead",
+                    payload={"summary": str(sequence)},
+                    created_at=sequence,
+                )
+            )
+        db.add(
+            TaskEventRow(
+                id="completed",
+                user_id=OWNER,
+                task_id="t1",
+                project_id="project",
+                sequence=307,
+                type="task_completed",
+                actor="lead",
+                payload={"summary": "done"},
+                created_at=4000,
+            )
+        )
+        db.add(
+            TaskEventRow(
+                id="later-note",
+                user_id=OWNER,
+                task_id="t1",
+                project_id="project",
+                sequence=308,
+                type="user_note",
+                actor="user",
+                payload={"text": "Read"},
+                created_at=9999999,
+            )
+        )
+        db.commit()
+    library = TaskLibrary()
+    first = await library.event_page(OWNER, "t1", limit=100)
+    assert first.next_cursor == 100 and first.items[0].sequence == 1
+    found = list(first.items)
+    cursor = first.next_cursor
+    while cursor is not None:
+        page = await library.event_page(OWNER, "t1", after_seq=cursor, limit=100)
+        found.extend(page.items)
+        cursor = page.next_cursor
+    assert len(found) == 308 and found[-1].id == "later-note"
+    assert found[-2].created_at == datetime.fromtimestamp(4, UTC)
+    assert await library.event_page("other", "t1") is None
+    detail = await library.get(OWNER, "t1")
+    assert detail.finalized_at == datetime.fromtimestamp(4, UTC)
+    with store() as db:
+        db.get(TaskRow, "t1").status = "active"
+        db.commit()
+    assert (await library.get(OWNER, "t1")).finalized_at is None
+
+
+async def test_terminal_header_without_matching_event_never_uses_updated_at(store):
+    seed_task(store, status="completed", stamp=9999999)
+    assert (await TaskLibrary().get(OWNER, "t1")).finalized_at is None
 
 
 async def test_control_state_rejection_and_real_pause_stop(store):
@@ -379,6 +448,7 @@ async def test_blocked_detail_exposes_attention_from_real_owner_scoped_events(st
                     "category": "execution_error",
                     "internal_unused": "not projected",
                 },
+                created_at=3000,
             )
         )
         db.add(
@@ -400,6 +470,7 @@ async def test_blocked_detail_exposes_attention_from_real_owner_scoped_events(st
         "reason": "lead_turn_error",
         "error": "Provider needs authorization",
         "category": "execution_error",
+        "created_at": "1970-01-01T00:00:03+00:00",
     }
     assert await TaskLibrary().get("other-owner", "t1") is None
     with store() as db:

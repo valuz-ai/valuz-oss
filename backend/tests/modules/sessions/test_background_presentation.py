@@ -61,6 +61,9 @@ async def test_owner_checked_facade_persists_immutable_presentation_and_drains(m
     captured = []
 
     async def run(*args, **kwargs):
+        assert args[1] == "original evidence"
+        assert kwargs["input_id"] == "input"
+        assert kwargs["input_source"] == "background"
         captured.append(kwargs["input_metadata"])
         await kwargs["on_outcome"]("idle", None, None)
 

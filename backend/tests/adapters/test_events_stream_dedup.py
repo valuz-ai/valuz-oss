@@ -36,7 +36,7 @@ import uuid
 
 import pytest
 
-from conftest import reimported_modules
+from tests.module_reimports import reimported_modules
 
 
 @pytest.fixture

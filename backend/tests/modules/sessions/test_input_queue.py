@@ -369,8 +369,12 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
         user_id=None,
         host_ref=None,
         input_metadata=None,
+        input_id=None,
+        input_source="host",
     ):
         assert user_id == OWNER
+        assert input_id is not None
+        assert input_source in {"foreground", "background", "host"}
         # A drained item is a full chat turn, so it must carry the full
         # per-turn convergence hook — not the credential-only default.
         assert pre_turn is not None

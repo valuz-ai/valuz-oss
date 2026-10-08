@@ -13,8 +13,10 @@ Cross-machine portability contract:
   - ``id`` / ``root_path`` / ``provider_id`` are dropped (machine-local).
   - ``model`` is demoted to ``model_hint``.
   - connector definitions carry only their non-secret fields.
-  - project memory is carried as a ``memory/`` file tree.
-  - import regenerates a fresh project id, remaps the memory dir to it,
+  - project memory is a portable text/kind payload under ``memory/``; catalog
+    owner, identities, versions and confirmation never travel.
+  - explicit import regenerates project/record identities and admits memory
+    through the catalog as untrusted archive evidence, then
     reuses (or recreates) the library agents by slug, preserves each
     member's project-local ``agent_slug`` handle so automations resolve,
     and SKIPS a name-collision (never overwrites).
@@ -22,13 +24,18 @@ Cross-machine portability contract:
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from valuz_agent.adapters.capability_resolver import resolve_skill_slugs_to_paths
+from valuz_agent.facade.memory import MemoryLibrary
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.agent_packs.manifest import (
     PackCollection,
@@ -39,6 +46,13 @@ from valuz_agent.modules.agent_packs.manifest import (
 from valuz_agent.modules.agent_packs.service import AgentPackService
 from valuz_agent.modules.agents.service import AgentService
 from valuz_agent.modules.automations.service import AutomationService
+from valuz_agent.modules.memory.models import (
+    ENTRY_DELIMITER,
+    MemoryError,
+    MemoryKind,
+    MemoryRecord,
+    SourceRef,
+)
 from valuz_agent.modules.packs_common import (
     PackAutomation,
     PackManifest,
@@ -62,7 +76,21 @@ logger = logging.getLogger(__name__)
 # Staged uploads between preview and confirm: preview_id → (manifest, temp
 # root). The temp root holds extracted embedded skills + memory; confirm
 # consumes + cleans it. Mirrors AgentPackService._pack_import_stage.
-_project_import_stage: dict[str, tuple[PackManifest, Path]] = {}
+_project_import_stage: dict[str, tuple[PackManifest, Path, str, str]] = {}
+
+
+class _PortableMemoryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=4000)
+    kind: MemoryKind = "fact"
+    object_refs: tuple[str, ...] = ()
+
+
+class _PortableMemory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    format: Literal["valuz-project-memory"]
+    version: Literal[1]
+    entries: tuple[_PortableMemoryEntry, ...] = Field(max_length=1000)
 
 
 class ProjectPackService:
@@ -105,13 +133,17 @@ class ProjectPackService:
             raise ProjectNotExportable()
 
         manifest = await self._build_export_manifest(user_id, row)
-        # Resolve the on-disk memory dir; pass None when absent / empty so
-        # the archive carries no ``memory/`` entries for projects that have
-        # never written any memory yet.
-        memory_dir = self._resolve_memory_dir(user_id, project_id)
-
         skill_dirs = await self._resolve_embedded_skill_dirs(user_id, manifest)
-        return build_archive(manifest, skill_dirs, memory_dir)
+        # Export the catalog, never a manually edited view or an owner's whole catalog.
+        memory_dir: Path | None = None
+        try:
+            memory_dir = await self._export_memory_payload(user_id, project_id)
+            return await asyncio.to_thread(build_archive, manifest, skill_dirs, memory_dir)
+        except (MemoryError, OSError) as exc:
+            raise ProjectNotExportable("Project memory could not be exported") from exc
+        finally:
+            if memory_dir is not None:
+                await asyncio.to_thread(shutil.rmtree, memory_dir, True)
 
     async def _build_export_manifest(self, user_id: str, project_row: Any) -> PackManifest:
         # --- members + the hoisted agent payload ---
@@ -259,7 +291,12 @@ class ProjectPackService:
             )
 
         preview_id = f"project-{uuid4().hex[:8]}"
-        _project_import_stage[preview_id] = (manifest, root)
+        _project_import_stage[preview_id] = (
+            manifest,
+            root,
+            user_id,
+            hashlib.sha256(data).hexdigest(),
+        )
 
         present_agents = {a.slug for a in await self._agents.list_agents(user_id)}
         present_conns = (
@@ -346,12 +383,15 @@ class ProjectPackService:
         already own. If the resulting name is still taken, SKIP (don't create,
         don't overwrite) and return ``{status: "skipped_name_conflict"}``.
         """
-        staged = _project_import_stage.pop(preview_id, None)
+        staged = _project_import_stage.get(preview_id)
         if staged is None:
             raise ProjectPackImportFailed(
                 "import preview expired or already used — re-upload the pack"
             )
-        manifest, root = staged
+        manifest, root, staged_owner, pack_hash = staged
+        if staged_owner != user_id:
+            raise ProjectPackImportFailed("Import preview belongs to a different owner")
+        _project_import_stage.pop(preview_id)
         try:
             project = manifest.project
             if project is None:
@@ -404,19 +444,15 @@ class ProjectPackService:
                 root_path=root_path,
             )
 
-            # 3) Restore memory dir (best-effort — never fail the import).
-            #    Locate it via the manifest's archive-relative ``memory`` pointer;
-            #    guard against a traversal in an untrusted manifest.
-            try:
-                if project.memory:
-                    src_memory = (root / project.memory).resolve()
-                    if src_memory.is_dir() and src_memory.is_relative_to(root.resolve()):
-                        dest_memory = fs_registry.memory_dir(
-                            user_id, "project", project_id=project_row.id
-                        )
-                        shutil.copytree(src_memory, dest_memory, dirs_exist_ok=True)
-            except Exception:  # noqa: BLE001
-                logger.exception("project-pack: memory restore failed for %s", project_row.id)
+            # 3) An explicit import can carry old Markdown, but all writes go through
+            # the governed catalog. Archive evidence is untrusted, never confirmation.
+            memory_imported, memory_errors = await self._import_memory_payload(
+                user_id,
+                project_row.id,
+                root,
+                project.memory,
+                pack_hash,
+            )
 
             # 4) Recreate members, preserving each member's project-local
             #    ``agent_slug`` handle so automations keep resolving.
@@ -514,6 +550,8 @@ class ProjectPackService:
                 "agents_skipped": pack_result["skipped"],
                 "automations_created": len(recreated_automations),
                 "automation_errors": automation_errors,
+                "memory_imported": memory_imported,
+                "memory_errors": memory_errors,
                 "members": recreated_members,
                 "automations": recreated_automations,
                 "connectors_to_configure": [
@@ -534,24 +572,128 @@ class ProjectPackService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _resolve_memory_dir(self, user_id: str, project_id: str) -> Path | None:
-        """Return the project's memory dir if it has any files, else None."""
+    async def _export_memory_payload(self, user_id: str, project_id: str) -> Path | None:
+        records = await MemoryLibrary(user_id).list_records("project", project_id=project_id)
+        if not records:
+            return None
+        return await asyncio.to_thread(self._write_memory_export, user_id, records)
+
+    @staticmethod
+    def _write_memory_export(user_id: str, records: tuple[MemoryRecord, ...]) -> Path:
+        directory = fs_registry.user_temp_dir(user_id) / f"project-memory-export-{uuid4().hex}"
+        directory.mkdir()
         try:
-            d = fs_registry.memory_dir(user_id, "project", project_id=project_id)
-        except ValueError:
-            return None
-        if not d.is_dir():
-            return None
-        # Treat an empty dir as "no memory" so we don't carry an empty
-        # ``memory/`` entry in the archive.
+            portable = _PortableMemory(
+                format="valuz-project-memory",
+                version=1,
+                entries=tuple(
+                    _PortableMemoryEntry(content=r.content, kind=r.kind, object_refs=r.object_refs)
+                    for r in records
+                ),
+            )
+            (directory / "entries.json").write_text(portable.model_dump_json(), encoding="utf-8")
+            (directory / "MEMORY.md").write_text(
+                ENTRY_DELIMITER.join(record.content for record in records), encoding="utf-8"
+            )
+            return directory
+        except Exception:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+
+    @staticmethod
+    async def _import_memory_payload(
+        user_id: str,
+        project_id: str,
+        root: Path,
+        memory_pointer: str | None,
+        pack_hash: str,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        if not memory_pointer:
+            return 0, []
+        errors: list[dict[str, Any]] = []
         try:
-            if not any(d.rglob("*")):
-                return None
-            if not any(p.is_file() for p in d.rglob("*")):
-                return None
-        except OSError:
-            return None
-        return d
+            entries = await asyncio.to_thread(
+                ProjectPackService._read_memory_payload, root, memory_pointer
+            )
+        except (OSError, ValueError, UnicodeError, ValidationError):
+            return 0, [
+                {
+                    "entry_index": None,
+                    "error_code": "memory.import_invalid",
+                    "error": "Archive memory is missing, invalid or unreadable",
+                }
+            ]
+        library = MemoryLibrary(user_id)
+        source = SourceRef(kind="import", source_id=pack_hash, origin="untrusted")
+        imported = 0
+        for index, entry in enumerate(entries):
+            operation_id = hashlib.sha256(
+                f"pack:{pack_hash}:{project_id}:{index}:{entry.model_dump_json()}".encode()
+            ).hexdigest()
+            try:
+                snapshot = await library.snapshot()
+                receipt = await library.operation_receipt(operation_id)
+                base = (
+                    (receipt.revision - (receipt.status == "applied"))
+                    if receipt
+                    else snapshot.revision
+                )
+                result = await library.mutate(
+                    action="add",
+                    target="project",
+                    project_id=project_id,
+                    content=entry.content,
+                    kind=entry.kind,
+                    object_refs=entry.object_refs,
+                    operation_id=operation_id,
+                    base_revision=base,
+                    authority_id=snapshot.authority_id,
+                    authority_epoch=snapshot.authority_epoch,
+                    source="agent",
+                    source_refs=(source,),
+                )
+                active = await library.list_records("project", project_id=project_id)
+                if not any(record.id == result.record_id for record in active):
+                    errors.append(
+                        {
+                            "entry_index": index,
+                            "error_code": "memory.protected",
+                            "error": "Previously imported memory was retired; not restored",
+                        }
+                    )
+                    continue
+                imported += 1
+            except MemoryError as exc:
+                errors.append(
+                    {
+                        "entry_index": index,
+                        "error_code": exc.error_code,
+                        "error": "Memory entry was not imported: " + exc.error_code,
+                    }
+                )
+        return imported, errors
+
+    @staticmethod
+    def _read_memory_payload(root: Path, memory_pointer: str) -> tuple[_PortableMemoryEntry, ...]:
+        directory = (root / memory_pointer).resolve()
+        if not directory.is_relative_to(root.resolve()) or not directory.is_dir():
+            raise ValueError("Invalid archive memory path")
+        portable = directory / "entries.json"
+        if portable.exists():
+            entries = _PortableMemory.model_validate_json(portable.read_text()).entries
+        else:
+            text = (directory / "MEMORY.md").read_text(encoding="utf-8")
+            text = text.removeprefix(
+                "<!-- Generated memory view; memory.json is authoritative. -->\n"
+            )
+            entries = tuple(
+                _PortableMemoryEntry(content=entry.strip())
+                for entry in text.split(ENTRY_DELIMITER)
+                if entry.strip()
+            )
+            if len(entries) > 1000:
+                raise ValueError("Archive memory has too many entries")
+        return entries
 
     async def _resolve_embedded_skill_dirs(
         self, user_id: str, manifest: PackManifest

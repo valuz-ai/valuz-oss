@@ -235,6 +235,8 @@ def _run_turn(
     events: tuple[str, ...] = ("tool.call",),
     mcp_servers: tuple[Any, ...] = (),
     workspace_files: dict[str, str] | None = None,
+    required: bool = False,
+    extra_patch: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     home = tmp_path / "dsh-home"
     workspace = tmp_path / "ws"
@@ -258,11 +260,16 @@ def _run_turn(
             build_session_patch(
                 session,
                 model_base_url=model_url,
-                hook_bridge={"endpoint": f"{bridge_base}/{token}", "events": list(events)}
+                hook_bridge={
+                    "endpoint": f"{bridge_base}/{token}",
+                    "events": list(events),
+                    "required": required,
+                }
                 if events
                 else None,
                 classic_hooks=write_classic_hooks(session, tmp_path),
             )
+            + (extra_patch or [])
         )
     )
     env = {
@@ -471,3 +478,61 @@ def test_dsh_runs_the_workspace_claude_hooks_with_its_own_bridge(
     text = _result_text(results[-1])
     assert "no shell here (workspace hook)" in text
     assert "bridge-ran" not in text
+
+
+def test_required_bridge_failure_never_executes_native_bash(tmp_path: Path, model_url: str) -> None:
+    """Real dsh pre-execute must deny a down required transport, even full access."""
+    effect = tmp_path / "should-not-exist"
+    _ToolCallingModel.tool = (
+        "bash",
+        {"command": f"printf executed > {effect}", "description": "Synthetic effect"},
+    )
+    _run_turn(tmp_path, model_url, "http://127.0.0.1:1/unavailable", required=True)
+    assert not effect.exists()
+    assert "required execution guard unavailable" in _result_text(
+        _tool_results(_ToolCallingModel.requests[1])[-1]
+    )
+
+
+def test_required_native_guard_denies_before_real_dsh_effect(
+    tmp_path: Path, model_url: str, bridge_base: str
+) -> None:
+    async def deny(ctx: Any, event: Any, next_: Any) -> ToolOutcome:
+        return ToolOutcome(content="exact action approval required", is_error=True, executed=False)
+
+    hook_registry.register(
+        TOOL_CALL, deny, owner=OWNER, tier="builtin", fail_closed=True, required=True
+    )
+    effect = tmp_path / "guarded-effect"
+    _ToolCallingModel.tool = (
+        "bash",
+        {"command": f"printf executed > {effect}", "description": "Synthetic effect"},
+    )
+    _run_turn(tmp_path, model_url, bridge_base, required=True)
+    assert not effect.exists()
+    assert "exact action approval required" in _result_text(
+        _tool_results(_ToolCallingModel.requests[1])[-1]
+    )
+
+
+def test_required_monotonic_guard_still_denies_short_circuited_pre_waterfall(
+    tmp_path: Path, model_url: str, bridge_base: str
+) -> None:
+    plugin = tmp_path / "short-circuit.mjs"
+    plugin.write_text(
+        'export function apply(ctx) { '
+        'ctx.on("tools/pre-execute", async (exec, next) => ({ kind: "allow" })); }'
+    )
+    effect = tmp_path / "must-not-exist"
+    _ToolCallingModel.tool = (
+        "bash",
+        {"command": f"printf executed > {effect}", "description": "Synthetic effect"},
+    )
+    _run_turn(
+        tmp_path,
+        model_url,
+        bridge_base,
+        required=True,
+        extra_patch=[{"insert": [{"id": "synthetic-short-circuit", "name": str(plugin)}]}],
+    )
+    assert not effect.exists()

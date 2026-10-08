@@ -423,6 +423,10 @@ class CodexRuntime:
         turn_attempt_id = uuid.uuid4().hex
 
         try:
+            from src.core.hooks.runtime_support import runtime_constraints
+
+            self._hook_session_ref = SessionRef.from_session(session)
+            self._runtime_constraints = await runtime_constraints(self, "codex")
             await self._prepare(session, turn_attempt_id=turn_attempt_id)
             assert self._codex is not None
             assert self._thread is not None
@@ -784,6 +788,9 @@ class CodexRuntime:
                 )
                 await self.event_sink.emit(Event(type="session_error", data={"message": cause}))
         finally:
+            from src.core.hooks.runtime_support import release_runtime_constraints
+
+            await release_runtime_constraints(self, "codex")
             self._active_turn = None
             self._active_task = None
             await self.event_sink.emit(
@@ -949,6 +956,9 @@ class CodexRuntime:
         await self._release_mcp_proxy()
         proxied = proxy_session_mcp(session.id, session.mcp_servers, self._hook_session())
         if proxied is None:
+            hooks = self._hook_session()
+            if any(spec.required for spec in hooks.registry.specs_for(TOOL_CALL, hooks.session)):
+                raise RuntimeError("required MCP execution guard unavailable")
             return session
         self._mcp_proxy_session_id = session.id
         return dataclasses.replace(session, mcp_servers=proxied)
@@ -1328,7 +1338,11 @@ class CodexRuntime:
                 except BaseException:
                     logger.exception("codex tool.check dispatch crashed; auto-rejecting")
                     return _build_approval_response(method, "reject", params)
-        if not is_user_input and self._cached_permission_mode != "default":
+        if (
+            not is_user_input
+            and self._cached_permission_mode != "default"
+            and not getattr(getattr(self, "_runtime_constraints", None), "human_review", False)
+        ):
             return _build_approval_response(method, "approve", params)
         if self._loop is None or self._loop.is_closed():
             # Either ``run()`` hasn't captured the loop yet (race on a
@@ -1400,7 +1414,9 @@ class CodexRuntime:
         """``tool.check`` with Valuz's approval (auto-accept or the card) as core."""
 
         async def core(_event: HookEvent) -> ToolDecision:
-            if self._cached_permission_mode != "default":
+            if self._cached_permission_mode != "default" and not getattr(
+                getattr(self, "_runtime_constraints", None), "human_review", False
+            ):
                 return ToolDecision(behavior="allow")
             decision, message, _answers = await self._await_host_decision_coro(method, params)
             if decision == "approve":
@@ -1690,6 +1706,23 @@ class CodexRuntime:
         if session.mode == "plan":
             kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
 
+        constraints = getattr(self, "_runtime_constraints", None)
+        if constraints is not None:
+            if constraints.read_only:
+                kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
+            if constraints.network_off:
+                if not hasattr(kwargs["sandbox_policy"].root, "network_access"):
+                    kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
+                kwargs["sandbox_policy"].root.network_access = False
+            if constraints.human_review:
+                from openai_codex.generated.v2_all import (
+                    ApprovalsReviewer,
+                    AskForApproval,
+                    AskForApprovalValue,
+                )
+
+                kwargs["approval_policy"] = AskForApproval(root=AskForApprovalValue.on_request)
+                kwargs["approvals_reviewer"] = ApprovalsReviewer.user
         return kwargs
 
     # Session-metadata marker: the thread has been switched into codex's

@@ -23,6 +23,12 @@ class SessionInputReceipt:
     error_message: str | None = None
     source: str = "user"
     input: dict[str, Any] = field(default_factory=dict)
+    # Source-row ownership and instants. updated_at is a record revision time,
+    # never evidence of dispatch/start/completion; no started_at exists in this ledger.
+    owner_user_id: str | None = None
+    project_id: str | None = None
+    created_at: int | None = None  # Unix epoch milliseconds (UTC).
+    updated_at: int | None = None  # Unix epoch milliseconds (UTC).
 
 
 def receipt_of(row: Any) -> SessionInputReceipt:
@@ -31,6 +37,7 @@ def receipt_of(row: Any) -> SessionInputReceipt:
     }
     values["input"] = dict(row.input or {})
     values["source"] = values["input"].get("source", "user")
+    values["owner_user_id"] = getattr(row, "user_id", None)
     return SessionInputReceipt(**values)
 
 

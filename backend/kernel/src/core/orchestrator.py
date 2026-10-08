@@ -1977,6 +1977,7 @@ class SessionOrchestrator:
                 message.metadata["optional_check_snapshot"] = copy.deepcopy(check_snapshot)
         await self._store.save_message(user_id, message)
         self._active_message[session_id] = message
+        session.execution_message_id = message.id
 
         # Persist ``session.status = "running"`` so the DB row reflects
         # the in-flight state for the duration of the turn. Before this,
@@ -2082,6 +2083,7 @@ class SessionOrchestrator:
                     turn_trace.end(error=None)
                 trace_scope.close()
                 self._active_message.pop(session_id, None)
+                session.execution_message_id = None
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
         # creation. Seed the workspace stub lazily (idempotent, one stat on
@@ -2146,6 +2148,7 @@ class SessionOrchestrator:
                 )
             )
             self._active_message.pop(session_id, None)
+            session.execution_message_id = None
             return message
         self._active[session_id] = runtime
 
@@ -2348,6 +2351,7 @@ class SessionOrchestrator:
             trace_scope.close()
             self._active.pop(session_id, None)
             self._active_message.pop(session_id, None)
+            session.execution_message_id = None
             # Mark the runtime freshly-used at turn END too, not just at entry.
             # A long-running turn (in ``_active``, so never swept) could finish
             # well past the idle TTL measured from its start; without this bump

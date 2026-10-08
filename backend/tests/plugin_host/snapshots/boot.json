@@ -1,6 +1,7 @@
 {
  "shutdown": [
   "lifecycle.set_draining()",
+  "stop_memory_recovery()",
   "stop_managed_browser()",
   "stop_dsh_manager()",
   "stop_decision_aggregator(app)",
@@ -44,6 +45,7 @@
   "purge_tasks_of_deleted_projects()",
   "recover_active_tasks()",
   "resolve_informational_notification_backlog()",
+  "start_memory_recovery()",
   "start_mcp_session_managers(app)",
   "start_automation_runtime(app)",
   "start_task_health_monitor(app)",

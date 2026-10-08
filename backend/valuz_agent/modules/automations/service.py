@@ -1118,6 +1118,7 @@ class AutomationService:
         user_id: str | None = None,
         app_plugin_id: str | None = None,
         app_plugin_name: str | None = None,
+        initial_status: Literal["enabled", "paused"] = "enabled",
     ) -> AutomationDetailResponse:
         """Create a new automation row.
 
@@ -1132,6 +1133,8 @@ class AutomationService:
         以当前 chat project 为准" decision). HTTP create requests pass
         ``None``, which falls back to lazy-create for chat-kind payloads.
         """
+        if initial_status not in {"enabled", "paused"}:
+            raise ValueError("invalid initial automation status")
         user_id = self._require_user_id(user_id)
         name = payload.name.strip()
         if not name:
@@ -1188,7 +1191,7 @@ class AutomationService:
             playbook_definition_id=playbook_definition_id,
             playbook_version=playbook_version,
             trigger_kind="cron",  # overwritten by _apply_trigger
-            status="enabled",
+            status=initial_status,
             next_run_at=None,
             last_run_at=None,
             origin_tool_call_id=origin_tool_call_id,
@@ -1203,7 +1206,9 @@ class AutomationService:
         apply_input_contract(row, payload.input)
         apply_result_contract(row, result)
         self._apply_trigger(row, payload.trigger)
-        row.next_run_at = self._triggers.initial_next_fire(row, now=now)
+        row.next_run_at = (
+            self._triggers.initial_next_fire(row, now=now) if initial_status == "enabled" else None
+        )
 
         await self._ds.create_automation(user_id, row)
         self._bus.publish(
@@ -1638,6 +1643,7 @@ class AutomationService:
         extra_input: str | None = None,
         input_json: dict[str, Any] | None = None,
         invoked_by_ref: str | None = None,
+        run_id: str | None = None,
     ) -> AutomationRunRow:
         """Shared enqueue path: write the run row, publish, hand to the
         runtime port. Every entrance that starts a run — ``run_now`` and
@@ -1646,7 +1652,7 @@ class AutomationService:
         """
         now = now_ms()
         run = AutomationRunRow(
-            id=uuid4().hex,
+            id=run_id or uuid4().hex,
             automation_id=row.id,
             project_id=row.project_id,
             trigger_type=trigger_type,
@@ -1696,6 +1702,8 @@ class AutomationService:
         run_input: Any = None,
         invoked_by_ref: str | None = None,
         user_id: str | None = None,
+        _retry_source_run_id: str | None = None,
+        _retry_run_id: str | None = None,
     ) -> AutomationRunAcceptedResponse:
         """Enqueue an immediate, off-schedule run for this automation.
 
@@ -1727,6 +1735,12 @@ class AutomationService:
         guards against the cron-triggered path; this DB-side check guards
         against two rapid "run now" clicks racing each other.
         """
+        if (
+            _retry_source_run_id is None
+            and invoked_by_ref
+            and invoked_by_ref.startswith("retry-failed:")
+        ):
+            raise ValueError("reserved retry provenance requires the canonical retry factory")
         user_id = self._require_user_id(user_id)
         row = await self._ds.get_automation_for_update(user_id, automation_id)
         if row is None:
@@ -1743,12 +1757,37 @@ class AutomationService:
             run_input = extra_input
         text_input, json_input = self._effective_run_input(row, run_input)
 
+        if _retry_run_id is not None:
+            if _retry_source_run_id is None or not _retry_run_id:
+                raise ValueError("retry run identity requires the canonical retry factory")
+            replay = await self._db.get(AutomationRunRow, _retry_run_id)
+            if replay is not None:
+                if (
+                    replay.user_id != user_id
+                    or replay.automation_id != automation_id
+                    or replay.invoked_by_ref != f"retry-failed:{_retry_source_run_id}"
+                ):
+                    raise ValueError("retry run identity has a different owner or source")
+                source = await self._ds.get_run(user_id, automation_id, _retry_source_run_id)
+                if source is None or source.status not in {"failed", "cancelled"}:
+                    raise ValueError("retry source is no longer a terminal failure")
+                # Persisted queue is the authority. Never enqueue a second run on an
+                # uncertain dispatch reply; normal queue recovery owns this run.
+                return AutomationRunAcceptedResponse(
+                    run_id=replay.id, automation_id=automation_id, status="queued"
+                )
         existing = await self._ds.active_run(user_id, automation_id)
         if existing is not None:
             if existing.status == "queued":
                 raise AutomationAlreadyQueued()
             if existing.status == "running":
                 raise AutomationAlreadyRunning()
+
+        if _retry_source_run_id is not None:
+            source_run = await self._ds.get_run(user_id, automation_id, _retry_source_run_id)
+            if source_run is None or source_run.status not in {"failed", "cancelled"}:
+                raise ValueError("retry requires an owned terminal failure of this automation")
+            invoked_by_ref = f"retry-failed:{source_run.id}"
 
         run = await self._enqueue_run(
             row,
@@ -1758,9 +1797,28 @@ class AutomationService:
             extra_input=text_input,
             input_json=json_input,
             invoked_by_ref=invoked_by_ref,
+            run_id=_retry_run_id,
         )
         return AutomationRunAcceptedResponse(
             run_id=run.id, automation_id=automation_id, status="queued"
+        )
+
+    async def retry_failed_run(
+        self,
+        automation_id: str,
+        source_run_id: str,
+        *,
+        user_id: str | None = None,
+        run_id: str | None = None,
+    ) -> AutomationRunAcceptedResponse:
+        """Explicit retry references the owned failed run and its immutable source event.
+
+        It uses the original single-flight/enqueue path and creates no new event,
+        watch subscription or alternate execution ledger. Unknown or successful
+        source runs cannot be retried through this interface.
+        """
+        return await self.run_now(
+            automation_id, user_id=user_id, _retry_source_run_id=source_run_id, _retry_run_id=run_id
         )
 
     # ── Runs: read / wait / cancel / artifact ─────────────────────────

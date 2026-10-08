@@ -39,7 +39,7 @@ from app.schemas import (  # type: ignore[import-not-found]
 from valuz_agent.adapters.kernel_client import KernelClientError
 from valuz_agent.adapters.kernel_client_http import HttpKernelClient
 
-from conftest import reimported_modules
+from tests.module_reimports import reimported_modules
 
 TOKEN = "test-kernel-token"
 

@@ -343,6 +343,9 @@ class Session:
     # "activeForm"?: str}`. None when the agent has never updated todos in
     # this session.
     todos: list[dict[str, Any]] | None = None
+    # Orchestrator-only binding to the Message persisted for this actual turn.
+    # Not accepted by create/update, serialized, or recovered from metadata.
+    execution_message_id: str | None = field(default=None, init=False, repr=False, compare=False)
 
 
 # Host-stamped ``Session.metadata`` marker for one-shot "bare completion"

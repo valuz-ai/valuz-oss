@@ -129,7 +129,7 @@ from valuz_agent.modules.sessions.task_checks import CONFIG_KEY, fresh_config
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.ports.capability_policy import TaskCheckConfig
 from valuz_agent.ports.feedback import FeedbackTarget
-from valuz_agent.ports.message_context import HostRef
+from valuz_agent.ports.message_context import HostRef, TurnContextRequest
 from valuz_agent.token_usage import read_session_token_usage
 
 if TYPE_CHECKING:
@@ -1796,6 +1796,14 @@ class SessionService:
                 user_id=user_id,
                 worktree=worktree_name_of(session),
                 host_ref=host_ref,
+                turn=TurnContextRequest(
+                    user_id=user_id,
+                    session_id=session_id,
+                    project_id=project_id,
+                    host_ref=host_ref,
+                    input_text=content,
+                    input_source="host",
+                ),
             )
 
             try:

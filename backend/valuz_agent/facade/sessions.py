@@ -5,12 +5,35 @@ from __future__ import annotations
 import builtins
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 
 from valuz_agent.modules.sessions.input_receipts import SessionInputReceipt, get_input, receipt_of
+
+
+@dataclass(frozen=True, slots=True)
+class SessionEventRef:
+    seq: int
+    event_id: str
+    legacy_identity: bool
+    type: str
+    timestamp: int  # Unix epoch milliseconds (UTC), matching kernel EventData.
+    data: dict[str, Any]
+    message_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionEventPage:
+    owner_user_id: str
+    session_id: str
+    project_id: str | None
+    status: str
+    items: tuple[SessionEventRef, ...]
+    next_cursor: int | None
 
 
 @asynccontextmanager
@@ -84,6 +107,77 @@ class SessionLibrary:
             else:
                 events, _ = await service.list_events_window(session_id, self.user_id, turn_limit=5)
         return builtins.list(events[-limit:])
+
+    async def event_page(
+        self, user_id: str, session_id: str, *, after_seq: int = 0, limit: int = 200
+    ) -> SessionEventPage | None:
+        """Forward cursor page of canonical events, including the earliest page.
+
+        Unlike events(), this never reads a tail window or slices away middle
+        events. seq is only a cursor within this source store. event_id is the
+        store-independent UID when present; a legacy identity is explicitly
+        marked and must not be treated as a cross-store deduplication key.
+        """
+        from valuz_agent.adapters.data_reader import data_reader
+
+        if user_id != self.user_id:
+            raise PermissionError("event reader owner mismatch")
+        if not session_id or isinstance(after_seq, bool) or after_seq < 0 or not 1 <= limit <= 500:
+            raise ValueError("invalid event page")
+        reader = data_reader()
+        session = await reader.get_session(user_id, session_id)
+        if session is None:
+            return None
+        if session.id != session_id or session.user_id != user_id:
+            raise PermissionError("session does not match verified owner")
+        events = await reader.get_events(user_id, session_id, after_seq=after_seq, limit=limit + 1)
+        normalized: builtins.list[SessionEventRef] = []
+        previous = after_seq
+        for event in events:
+            seq, timestamp = event.seq, event.timestamp
+            if (
+                isinstance(seq, bool)
+                or not isinstance(seq, int)
+                or seq <= previous
+                or isinstance(timestamp, bool)
+                or not isinstance(timestamp, int)
+            ):
+                raise ValueError("source event page has an unreliable cursor or timestamp")
+            if (
+                not isinstance(event.type, str)
+                or not event.type
+                or not isinstance(event.data, dict)
+            ):
+                raise ValueError("source event page has invalid canonical content")
+            if event.session_id is not None and event.session_id != session_id:
+                raise PermissionError("source event belongs to another session")
+            uid = event.event_uid
+            if uid is not None and not isinstance(uid, str):
+                raise ValueError("source event identity is invalid")
+            legacy = not isinstance(uid, str) or not uid
+            normalized.append(
+                SessionEventRef(
+                    seq=seq,
+                    event_id=uid if isinstance(uid, str) and uid else f"{session_id}:{seq}",
+                    legacy_identity=legacy,
+                    type=event.type,
+                    timestamp=timestamp,
+                    data=deepcopy(event.data),
+                    message_id=event.message_id,
+                )
+            )
+            previous = seq
+        selected = normalized[:limit]
+        metadata = (session.metadata or {}).get("valuz") or {}
+        project_id = metadata.get("project_id") if isinstance(metadata, dict) else None
+        return SessionEventPage(
+            owner_user_id=user_id,
+            session_id=session_id,
+            project_id=project_id if isinstance(project_id, str) else None,
+            status=session.status,
+            items=tuple(selected),
+            next_cursor=selected[-1].seq if len(normalized) > limit else None,
+        )
 
     async def enqueue_background(
         self,
@@ -221,4 +315,4 @@ class SessionLibrary:
         return await get_input(self.user_id, session_id, input_id)
 
 
-__all__ = ["SessionLibrary", "SessionInputReceipt"]
+__all__ = ["SessionEventPage", "SessionEventRef", "SessionLibrary", "SessionInputReceipt"]

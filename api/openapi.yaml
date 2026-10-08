@@ -1400,7 +1400,118 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemoryView"
 
+  /v1/memory/records:
+    get:
+      summary: List owner-scoped memory records with provenance and catalog revision
+      operationId: listMemoryRecords
+      tags: [memory]
+      parameters:
+        - {name: project_id, in: query, schema: {type: string}}
+        - {name: target, in: query, schema: {$ref: "#/components/schemas/MemoryTarget"}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        "200":
+          description: Snapshot filtered to user/global and the verified project, if supplied
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryRecordsPage"}
+        "404": {description: Project not owned or not found}
+        "503": {description: Memory authority unavailable; not an empty snapshot}
+    post:
+      summary: Save an explicitly supplied memory using catalog compare-and-set
+      operationId: addMemoryRecord
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryRecordAdd"}
+      responses:
+        "200":
+          description: Durable mutation receipt; current sessions may still contain older snapshots
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "403": {description: Memory collection disabled}
+        "404": {description: Project not owned or not found}
+        "409": {description: Catalog revision or operation fingerprint conflict}
+        "422": {description: Invalid content or scope}
+        "503": {description: Memory authority unavailable}
+
+  /v1/memory/records/{record_id}:
+    parameters:
+      - {name: record_id, in: path, required: true, schema: {type: string}}
+    patch:
+      summary: Correct a memory by stable identity and expected catalog revision
+      operationId: correctMemoryRecord
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryRecordCorrection"}
+      responses:
+        "200":
+          description: Durable correction receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "403": {description: Memory collection disabled}
+        "404": {description: Record or owned project not found}
+        "409": {description: Version or operation conflict}
+        "422": {description: Invalid content}
+        "503": {description: Memory authority unavailable}
+    delete:
+      summary: Forget a memory by identity; retain only deletion identifiers and source watermarks
+      operationId: forgetMemoryRecord
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryRecordForget"}
+      responses:
+        "200":
+          description: Deletion receipt; original chat, files and already loaded context are not erased
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "404": {description: Record or owned project not found}
+        "409": {description: Version or operation conflict}
+        "503": {description: Memory authority unavailable}
+
+  /v1/memory/sources/forget:
+    post:
+      summary: Forget all traced memories from an owner-scoped source and prohibit re-extraction
+      operationId: forgetMemorySource
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemorySourceForget"}
+      responses:
+        "200":
+          description: Source-forgetting receipt; original source is retained
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "404": {description: Referenced project not owned or not found}
+        "409": {description: Version or operation conflict}
+        "503": {description: Memory authority unavailable}
+
   /v1/memory/settings:
+    get:
+      summary: Read memory settings without reading stored content
+      operationId: getMemorySettings
+      tags: [memory]
+      responses:
+        "200":
+          description: Current collection and extraction settings
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemorySettings"}
     patch:
       summary: Toggle the memory system on/off
       operationId: patchMemorySettings
@@ -6737,6 +6848,120 @@ components:
             type: array
             items: {type: string}
           description: Entries per scope, keyed by target (user / global / project).
+    MemoryImportError:
+      type: object
+      required: [entry_index, error_code, error]
+      properties:
+        entry_index: {type: integer, nullable: true}
+        error_code: {type: string}
+        error: {type: string, description: Safe explanation without source contents}
+    MemorySourceRef:
+      type: object
+      required: [kind, source_id, origin]
+      properties:
+        kind: {type: string, enum: [message, session, task, input, document, tool, manual, import]}
+        source_id: {type: string}
+        revision: {type: string, nullable: true}
+        origin: {type: string, enum: [owner, agent, untrusted, system], description: Host-derived classification, not action authorization}
+    MemoryRecord:
+      type: object
+      required: [id, target, content, revision, source, source_refs, kind, namespace, object_refs, observed_at, supersedes, confirmed]
+      properties:
+        id: {type: string}
+        target: {$ref: "#/components/schemas/MemoryTarget"}
+        project_id: {type: string, nullable: true}
+        content: {type: string}
+        revision: {type: integer, minimum: 1}
+        source: {type: string, enum: [agent, auto, user]}
+        source_refs: {type: array, items: {$ref: "#/components/schemas/MemorySourceRef"}}
+        kind: {type: string, enum: [preference, fact, decision, lesson, work_context]}
+        namespace: {type: string}
+        object_refs: {type: array, items: {type: string}}
+        observed_at: {type: number, description: Unix timestamp in seconds}
+        supersedes: {type: array, items: {type: string}}
+        confirmed: {type: boolean}
+    MemoryRecordsPage:
+      type: object
+      required: [revision, records, total, offset, limit, context_notice]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        revision: {type: integer, minimum: 0}
+        records: {type: array, items: {$ref: "#/components/schemas/MemoryRecord"}}
+        total: {type: integer, minimum: 0}
+        offset: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 1, maximum: 100}
+        context_notice: {type: string, description: Explicit retained-history and current-context limitations}
+    MemoryRevisionInput:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+    MemoryRecordAdd:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, target, content]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        target: {$ref: "#/components/schemas/MemoryTarget"}
+        project_id: {type: string, nullable: true}
+        content: {type: string, minLength: 1, maxLength: 4000}
+        kind: {type: string, enum: [preference, fact, decision, lesson, work_context], default: fact}
+    MemoryRecordForget:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, target]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        target: {$ref: "#/components/schemas/MemoryTarget"}
+        project_id: {type: string, nullable: true}
+    MemorySourceForget:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, kind, source_id]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        kind: {type: string, enum: [message, session, task, input, document, tool, manual, import]}
+        source_id: {type: string, minLength: 1, maxLength: 256}
+    MemoryRecordCorrection:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, content]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        content: {type: string, minLength: 1, maxLength: 4000}
+    MemoryMutationReceipt:
+      type: object
+      required: [status, revision, affected_ids, affected_project_ids, replayed, context_notice]
+      properties:
+        maintenance_complete: {type: boolean, default: true}
+        maintenance_reason_code: {type: string, nullable: true}
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        status: {type: string, enum: [applied, noop]}
+        revision: {type: integer, minimum: 0}
+        record_id: {type: string, nullable: true}
+        record_revision: {type: integer, nullable: true}
+        affected_ids: {type: array, items: {type: string}}
+        affected_project_ids: {type: array, items: {type: string}}
+        replayed: {type: boolean}
+        context_notice: {type: string}
     MemorySettings:
       type: object
       required: [enabled, auto_extract, custom_instructions]
@@ -7567,6 +7792,10 @@ components:
         agents_created: {type: integer, description: "Library agents newly created (de-duped by slug)."}
         agents_skipped: {type: integer, description: "Library agents reused (slug already present)."}
         automations_created: {type: integer}
+        memory_imported: {type: integer, minimum: 0, default: 0}
+        memory_errors:
+          type: array
+          items: {$ref: "#/components/schemas/MemoryImportError"}
         automation_errors:
           type: array
           description: "Per-automation failures (one bad automation does not sink the rest). Empty when all recreated."

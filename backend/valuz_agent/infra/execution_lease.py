@@ -61,7 +61,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, Index, String, or_, select, update
+from sqlalchemy import BigInteger, Index, String, false, or_, select, true, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
@@ -295,6 +295,10 @@ async def acquire_lease(*, scope: str, key: str, note: str = "") -> ExecutionLea
                 ExecutionLeaseRow.scope == scope,
                 ExecutionLeaseRow.key == key,
                 or_(
+                    # The actual single-writer OS lock proves an old boot's
+                    # holder cannot still own this store. Its desktop lease
+                    # uses _NEVER_MS, so TTL alone cannot recover after a crash.
+                    true() if exclusive else false(),
                     ExecutionLeaseRow.holder_id == _HOLDER_ID,
                     ExecutionLeaseRow.state == "released",
                     ExecutionLeaseRow.lease_expires_at <= now,

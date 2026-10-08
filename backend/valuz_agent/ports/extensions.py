@@ -84,7 +84,10 @@ from valuz_agent.ports.instructions import (
 )
 from valuz_agent.ports.llm_provider import LLMProvider, NoopLLMProvider
 from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
-from valuz_agent.ports.message_context import MessageContextProviderPort
+from valuz_agent.ports.memory import MemoryBackendPort
+from valuz_agent.ports.memory_maintenance import MemoryMaintenancePort, NoopMemoryMaintenance
+from valuz_agent.ports.memory_namespaces import CoreMemoryNamespacePolicy, MemoryNamespacePolicy
+from valuz_agent.ports.message_context import MessageContextProviderPort, TurnContextProviderPort
 from valuz_agent.ports.middleware import MiddlewareFactory
 from valuz_agent.ports.model_defaults import ModelDefaultsPort, SettingsModelDefaults
 from valuz_agent.ports.parser_routing_policy import (
@@ -143,6 +146,9 @@ class Extensions:
         # (a site data channel, a workbench). OSS registers none.
         self.automation_result_hooks: list[AutomationResultHook] = []
         self.automation_run_guards: list[AutomationRunGuardPort] = []
+        from valuz_agent.ports.automation_input import AutomationInputPreparationPort
+
+        self.automation_input_preparers: list[AutomationInputPreparationPort] = []
         # Whether the ``automation`` tool may persist a ``create`` without the
         # confirmation card (ports/automation_create_policy.py). OSS: never.
         self.automation_create_policy: AutomationCreatePolicyPort = CardOnlyAutomationCreatePolicy()
@@ -310,6 +316,14 @@ class Extensions:
         # after resolving it server-side. OSS registers none; a failing
         # provider is skipped so it can never block a turn.
         self.message_context_providers: list[MessageContextProviderPort] = []
+        # None is the ordinary OSS local default. Editions bind an authority
+        # router explicitly; an installed backend's errors never fall back local.
+        self.memory_backend: MemoryBackendPort | None = None
+        self.memory_namespace_policy: MemoryNamespacePolicy = CoreMemoryNamespacePolicy()
+        # Query-aware current-input contributors. Separate from the legacy
+        # host-ref-only signature; plugin append registrations dispose normally.
+        self.turn_context_providers: list[TurnContextProviderPort] = []
+        self.memory_maintenance: MemoryMaintenancePort = NoopMemoryMaintenance()
         # Deprecated live-host compatibility. New inputs do not inherit it;
         # use task_check_policies for operation/config based policy.
         self.host_capability_policies: list[HostCapabilityPolicyPort] = []

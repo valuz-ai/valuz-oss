@@ -63,6 +63,8 @@ ADDED_AFTER_REFACTOR: frozenset[str] = frozenset(
         "install_session_tools()",  # bundled session commands on the agent PATH
         "start_ui_push_transport()",  # UI bus pushes from other backend processes
         "stop_ui_push_transport()",
+        "start_memory_recovery()",  # recover only registered extraction candidates
+        "stop_memory_recovery()",
         "warn_unreachable_plugin_hooks()",  # plugin hooks a remote kernel can't see
         "cleanup_superseded_app_plugin_versions()",  # third-party plugin dirs (ADR-034)
     }

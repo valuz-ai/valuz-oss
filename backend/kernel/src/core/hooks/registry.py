@@ -51,6 +51,7 @@ class HookRegistry:
         tier: Tier = "user",
         matcher: Matcher | None = None,
         fail_closed: bool = False,
+        required: bool = False,
         budget_s: float = DEFAULT_BUDGET_S,
         priority: int = 0,
         applies: Callable[[SessionRef], bool] | None = None,
@@ -62,6 +63,8 @@ class HookRegistry:
             raise ValueError(f"unknown tier {tier!r}")
         if not owner:
             raise ValueError("owner is required (the plugin id that registers the hook)")
+        if required and (not fail_closed or tier in {"user", "append"}):
+            raise ValueError("required guards must be trusted and fail closed")
         validate(matcher)
         spec = HookSpec(
             event=event,
@@ -70,6 +73,7 @@ class HookRegistry:
             tier=tier,
             matcher=dict(matcher) if matcher else None,
             fail_closed=fail_closed,
+            required=required,
             budget_s=budget_s,
             priority=priority,
             applies=applies,
@@ -98,10 +102,12 @@ class HookRegistry:
 
     def specs_for(self, event: str, session: SessionRef) -> tuple[HookSpec, ...]:
         """Handlers for *event* that exist for *session*, outermost first."""
-        if session.bare:
-            return ()
         with self._lock:
-            candidates = [spec for spec in self._specs if spec.event == event]
+            candidates = [
+                spec
+                for spec in self._specs
+                if spec.event == event and (not session.bare or spec.required)
+            ]
         applicable = [
             spec for spec in candidates if spec.applies is None or _applies(spec, session)
         ]
@@ -151,6 +157,10 @@ class HookRegistry:
 
     def wants_tool_source(self, event: str, session: SessionRef, source: str) -> bool:
         return bool(self.tool_source_owners(event, session, source))
+
+    def has_required(self, event: str) -> bool:
+        with self._lock:
+            return any(spec.required and spec.event == event for spec in self._specs)
 
     def owners(self) -> list[dict[str, Any]]:
         """Diagnostics: who registered what."""

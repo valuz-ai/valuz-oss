@@ -68,6 +68,13 @@ TICK_INTERVAL = 30
 TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
 
 
+class _InputPreparationDeniedError(Exception):
+    def __init__(self, status: str, reason: str | None) -> None:
+        self.status = status
+        self.reason = reason
+        super().__init__(reason or "Automation input preparation denied")
+
+
 def _automation_check_config(
     row: AutomationRow,
     run: AutomationRunRow,
@@ -1255,14 +1262,36 @@ class InProcessAutomationRunner:
         from valuz_agent.modules.automations.datastore import AutomationDatastore
         from valuz_agent.modules.playbooks.service import PlaybookService
         from valuz_agent.modules.sessions.input_receipts import TERMINAL_INPUT_STATUSES
+        from valuz_agent.ports.automation_input import (
+            AutomationInputOutcome,
+            observe_automation_input,
+            prepare_automation_input,
+        )
+        from valuz_agent.ports.automation_runtime import AutomationRunCommand
 
         assert self._triggers is not None
         status, error, summary = "failed", None, None
         admitted_result_kind: str | None = None
+        command = AutomationRunCommand(user_id, automation_id, run_id)
+        receipt = None
+        async with async_unit_of_work(commit=False) as prepare_db:
+            target = await AutomationDatastore(prepare_db).get_automation(user_id, automation_id)
+            if target is None:
+                return
+            project_id = target.project_id
         try:
             library = SessionLibrary(user_id)
             receipt = await library.get_input(session_id, run_id)
             if receipt is None:
+                preparation = await prepare_automation_input(
+                    command, project_id=project_id, session_id=session_id
+                )
+                if not preparation.allowed:
+                    raise _InputPreparationDeniedError(preparation.status, preparation.reason)
+                if not await lease.is_current():
+                    return
+                if preparation.additional_context:
+                    rendered_prompt += "\n\n" + preparation.additional_context
                 receipt = await library.enqueue_background(
                     session_id,
                     rendered_prompt,
@@ -1317,6 +1346,8 @@ class InProcessAutomationRunner:
                     receipt.status
                 ]
                 error, summary = receipt.error_message, receipt.result_summary
+        except _InputPreparationDeniedError as exc:
+            status, summary = exc.status, exc.reason
         except Exception as exc:
             error = str(exc)[:500]
             logger.exception("Existing-session run %s failed", run_id)
@@ -1325,6 +1356,13 @@ class InProcessAutomationRunner:
 
         if not await lease.is_current():
             return
+        if receipt is not None and receipt.status in TERMINAL_INPUT_STATUSES:
+            await observe_automation_input(
+                AutomationInputOutcome(
+                    command=command, project_id=project_id, session_id=session_id,
+                    input_id=receipt.id, status=receipt.status, completed_at=receipt.completed_at,
+                )
+            )
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
             run = await ds.get_run(user_id, automation_id, run_id)

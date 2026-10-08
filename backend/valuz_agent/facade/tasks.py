@@ -10,15 +10,17 @@ from __future__ import annotations
 import base64
 import builtins
 import json
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import and_, or_, select
 
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.projects.datastore import ProjectDatastore
-from valuz_agent.modules.tasks.models import TaskRow
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow
 from valuz_agent.modules.tasks.service import TaskService
 from valuz_agent.modules.tasks.task_state import TASK_STATUSES
 
@@ -56,6 +58,25 @@ class TaskDetailRef:
     latest_summary: str
     event_sequence: int
     latest_attention: dict[str, Any] | None = None
+    finalized_at: datetime | None = None  # Canonical terminal event time, never updated_at.
+
+
+@dataclass(frozen=True, slots=True)
+class TaskEventRef:
+    id: str
+    sequence: int
+    type: str
+    created_at: datetime  # ISO UTC on the wire, converted from host epoch-millisecond events.
+    payload: dict[str, Any]
+    session_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskEventPage:
+    owner_user_id: str
+    task_id: str
+    items: tuple[TaskEventRef, ...]
+    next_cursor: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +114,19 @@ def _ref(row: TaskRow) -> TaskRef:
         trigger_task_id=row.trigger_task_id,
         trigger_automation_id=row.trigger_automation_id,
     )
+
+
+def _finalized_at(status: str, events: Sequence[TaskEventRow]) -> datetime | None:
+    event_types = {
+        "completed": {"task_completed"},
+        "stopped": {"task_stopped", "stopped"},
+        "abandoned": {"task_abandoned", "abandoned"},
+    }.get(status, set())
+    matching = [event for event in events if event.type in event_types]
+    if not matching:
+        return None
+    last = max(matching, key=lambda event: event.sequence)
+    return datetime.fromtimestamp(last.created_at / 1000, UTC)
 
 
 def _cursor(row: TaskRow) -> str:
@@ -198,6 +232,7 @@ class TaskLibrary:
                 latest_attention = {
                     "event_type": latest.type,
                     "sequence": latest.sequence,
+                    "created_at": datetime.fromtimestamp(latest.created_at / 1000, UTC).isoformat(),
                     **{
                         key: deepcopy(latest.payload[key])
                         for key in ("reason", "category", "error", "summary")
@@ -220,6 +255,39 @@ class TaskLibrary:
                 latest_summary=summaries[-1] if summaries else "",
                 event_sequence=max((e.sequence for e in detail.events), default=0),
                 latest_attention=latest_attention,
+                finalized_at=_finalized_at(detail.task.status, detail.events),
+            )
+
+    async def event_page(
+        self, user_id: str, task_id: str, *, after_seq: int = 0, limit: int = 200
+    ) -> TaskEventPage | None:
+        """Exact append-only timeline pages, including superseded plan changes."""
+        _identity(user_id, "user_id")
+        _identity(task_id, "task_id")
+        if isinstance(after_seq, bool) or after_seq < 0 or not 1 <= limit <= 500:
+            raise ValueError("invalid task event page")
+        async with async_unit_of_work(commit=False) as db:
+            service = TaskService(db)
+            task = await service.get_owned_task(user_id, task_id)
+            if task is None:
+                return None
+            events = await service.events_after(user_id, task.project_id, task_id, after_seq)
+            selected = events[:limit]
+            return TaskEventPage(
+                owner_user_id=user_id,
+                task_id=task_id,
+                items=tuple(
+                    TaskEventRef(
+                        id=event.id,
+                        sequence=event.sequence,
+                        type=event.type,
+                        created_at=datetime.fromtimestamp(event.created_at / 1000, UTC),
+                        payload=deepcopy(event.payload),
+                        session_id=event.session_id,
+                    )
+                    for event in selected
+                ),
+                next_cursor=selected[-1].sequence if len(events) > limit else None,
             )
 
     async def create(
@@ -379,4 +447,13 @@ class TaskLibrary:
         )
 
 
-__all__ = ["TaskCommandResult", "TaskDetailRef", "TaskLibrary", "TaskPage", "TaskRef", "TaskRunRef"]
+__all__ = [
+    "TaskCommandResult",
+    "TaskDetailRef",
+    "TaskEventPage",
+    "TaskEventRef",
+    "TaskLibrary",
+    "TaskPage",
+    "TaskRef",
+    "TaskRunRef",
+]

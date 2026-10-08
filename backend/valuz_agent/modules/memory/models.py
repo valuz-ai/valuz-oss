@@ -1,31 +1,81 @@
-"""Memory types (memory-system-design §4)."""
+"""Memory implementation constants and compatibility type re-exports.
+
+Shared DTOs live in ports.memory, allowing ports and facades to depend on them
+without importing persistence. Existing module imports remain the same classes.
+"""
 
 from __future__ import annotations
 
-from typing import Literal
+from valuz_agent.ports.memory import (
+    TARGETS as TARGETS,
+)
+from valuz_agent.ports.memory import (
+    MemoryConflict as MemoryConflict,
+)
+from valuz_agent.ports.memory import (
+    MemoryError as MemoryError,
+)
+from valuz_agent.ports.memory import (
+    MemoryInvalidation as MemoryInvalidation,
+)
+from valuz_agent.ports.memory import (
+    MemoryKind as MemoryKind,
+)
+from valuz_agent.ports.memory import (
+    MemoryMutationResult as MemoryMutationResult,
+)
+from valuz_agent.ports.memory import (
+    MemoryProtected as MemoryProtected,
+)
+from valuz_agent.ports.memory import (
+    MemoryRecord as MemoryRecord,
+)
+from valuz_agent.ports.memory import (
+    MemorySnapshot as MemorySnapshot,
+)
+from valuz_agent.ports.memory import (
+    MemoryUnavailable as MemoryUnavailable,
+)
+from valuz_agent.ports.memory import (
+    MutationAction as MutationAction,
+)
+from valuz_agent.ports.memory import (
+    Source as Source,
+)
+from valuz_agent.ports.memory import (
+    SourceKind as SourceKind,
+)
+from valuz_agent.ports.memory import (
+    SourceOrigin as SourceOrigin,
+)
+from valuz_agent.ports.memory import (
+    SourceRef as SourceRef,
+)
+from valuz_agent.ports.memory import (
+    Target as Target,
+)
 
-# Three write targets, 1:1 with the three flat §-delimited files (design §3/§4):
-#   user    -> <memories>/USER.md                 (global: who the user is)
-#   global  -> <memories>/MEMORY.md               (global: cross-project notes/lessons)
-#   project -> <memories>/projects/<id>/MEMORY.md (this project)
-Target = Literal["user", "global", "project"]
-TARGETS: tuple[Target, ...] = ("user", "global", "project")
-
-# Who wrote it. "auto" = background extractor; "agent" = foreground tool call;
-# "user" = explicit user-driven write. A tag only — every source goes through the
-# same write pipeline (design §5). Not persisted per-entry in P0 (flat files have
-# no per-entry metadata); used for logging/gating. Per-entry markers arrive in P2.
-Source = Literal["agent", "auto", "user"]
-
-# Entry delimiter — a sequence that essentially never appears in prose, so an
-# entry may itself be multi-line (design §3).
+# Delimiter and capacity policy belong to the local implementation, not the port.
 ENTRY_DELIMITER = "\n§\n"
+CHAR_LIMITS: dict[Target, int] = {"user": 1500, "global": 2500, "project": 4000}
 
-# Hard char limits per target (chars, not tokens — model-independent). Design §4.
-CHAR_LIMITS: dict[Target, int] = {
-    "user": 1500,
-    "global": 2500,
-    "project": 4000,
-}
-
-__all__ = ["Target", "TARGETS", "Source", "ENTRY_DELIMITER", "CHAR_LIMITS"]
+__all__ = [
+    "Target",
+    "TARGETS",
+    "Source",
+    "SourceKind",
+    "SourceOrigin",
+    "SourceRef",
+    "MemoryKind",
+    "MutationAction",
+    "MemoryRecord",
+    "MemorySnapshot",
+    "MemoryInvalidation",
+    "MemoryMutationResult",
+    "MemoryError",
+    "MemoryConflict",
+    "MemoryUnavailable",
+    "MemoryProtected",
+    "ENTRY_DELIMITER",
+    "CHAR_LIMITS",
+]

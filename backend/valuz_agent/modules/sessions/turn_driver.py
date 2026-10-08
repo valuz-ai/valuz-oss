@@ -27,7 +27,7 @@ from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.modules.sessions.pre_turn import PreTurnHook, always_on_mcp_hook
-from valuz_agent.ports.message_context import HostRef
+from valuz_agent.ports.message_context import HostRef, TurnContextRequest, TurnInputSource
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,8 @@ async def run_session_to_idle(
     user_id: str,
     host_ref: HostRef | None = None,
     input_metadata: dict[str, Any] | None = None,
+    input_id: str | None = None,
+    input_source: TurnInputSource = "host",
 ) -> str:
     """Drive one agent turn to completion and return the final session status.
 
@@ -278,6 +280,19 @@ async def run_session_to_idle(
                 user_id=user_id,
                 worktree=worktree_name_of(loaded_session),
                 host_ref=host_ref,
+                turn=(
+                    TurnContextRequest(
+                        user_id=user_id,
+                        session_id=session_id,
+                        project_id=project_id,
+                        host_ref=host_ref,
+                        input_text=content,
+                        input_id=input_id,
+                        input_source=input_source,
+                    )
+                    if loaded_session is not None
+                    else None
+                ),
             )
         except Exception:  # noqa: BLE001
             additional_context = ""

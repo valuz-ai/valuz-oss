@@ -7,21 +7,29 @@ Kept out of the system prompt on purpose: attachments and KB bindings churn,
 but the system prompt / skills / MCP list must stay stable for prompt-cache
 hits. Shared by the session run path and the task orchestrator.
 
-Memory is NOT part of this block: injecting it here put a full copy of the
-frozen snapshot inside every user message of the transcript (N copies for an
-N-turn session). It now freezes once into ``Session.instructions`` at create
-time — see ``modules/memory/injection.py`` (memory-system-design §8).
+The legacy memory snapshot stays frozen in ``Session.instructions`` at create
+time — see ``modules/memory/injection.py`` (memory-system-design §8). Query-aware
+contributors may add a bounded current-turn view through the separate turn
+context port; they never rewrite that snapshot or confer new authorization.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.sessions.models import SessionAttachmentRow
-from valuz_agent.ports.message_context import HostRef
+from valuz_agent.ports.message_context import HostRef, TurnContextRequest
 
 logger = logging.getLogger(__name__)
+
+# Deployments/tests may adjust this finite per-contributor refresh budget.
+TURN_CONTEXT_PROVIDER_TIMEOUT_SECONDS = 3.0
+TURN_CONTEXT_UNAVAILABLE = (
+    "Current-turn context refresh is unavailable. Do not claim an old context "
+    "value is current; re-check the relevant source before relying on it."
+)
 
 
 def worktree_name_of(session: object) -> str:
@@ -49,6 +57,8 @@ async def _build_additional_context(
     user_id: str | None = None,
     worktree: str = "",
     host_ref: HostRef | None = None,
+    *,
+    turn: TurnContextRequest | None = None,
 ) -> str:
     if user_id is None:
         raise ValueError("user_id is required")
@@ -191,6 +201,34 @@ async def _build_additional_context(
             continue
         if section:
             sections.append(section)
+
+    # New query-aware contributors are independent of the legacy host-ref
+    # contract. A missing/failed refresh must not silently bless an old snapshot.
+    if turn is not None:
+        if (turn.user_id, turn.session_id, turn.project_id) != (
+            user_id,
+            session_id,
+            project_id,
+        ):
+            sections.append(TURN_CONTEXT_UNAVAILABLE)
+        elif turn.input_text.startswith("/"):
+            logger.debug("native slash command: current-turn context not refreshed")
+        else:
+            refresh_failed = False
+            for turn_provider in tuple(ext.turn_context_providers):
+                try:
+                    async with asyncio.timeout(TURN_CONTEXT_PROVIDER_TIMEOUT_SECONDS):
+                        section = await turn_provider.build(request=turn)
+                        if not isinstance(section, str):
+                            raise TypeError("turn context provider must return text")
+                except Exception:  # noqa: BLE001 — retain original input on refresh failure
+                    logger.debug("turn context refresh unavailable", exc_info=True)
+                    refresh_failed = True
+                    continue
+                if section:
+                    sections.append(section)
+            if refresh_failed:
+                sections.append(TURN_CONTEXT_UNAVAILABLE)
 
     return "\n\n".join(sections)
 

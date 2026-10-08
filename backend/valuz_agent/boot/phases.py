@@ -98,6 +98,7 @@ STARTUP_ORDER: Mapping[str, tuple[str, ...]] = {
         "purge_tasks_of_deleted_projects",
         "recover_active_tasks",
         "resolve_informational_notification_backlog",
+        "start_memory_recovery",
     ),
     # long-lived runners
     BootPhase.RUNNERS: (
@@ -137,6 +138,7 @@ SHUTDOWN_ORDER: Mapping[str, tuple[str, ...]] = {
     # (which otherwise spams "Dependencies not initialized" at every restart).
     BootPhase.DRAIN: ("set_draining",),
     BootPhase.STOP_RUNNERS: (
+        "stop_memory_recovery",
         "stop_managed_browser",
         "stop_dsh_manager",
         "stop_decision_aggregator",

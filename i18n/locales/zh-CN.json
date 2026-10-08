@@ -1453,7 +1453,9 @@
     "trustMakeTrusted": "信任这个文件夹",
     "trustMakeUntrusted": "不再信任",
     "trustAppliesToNewSessions": "对之后新开的会话生效。",
-    "trustUpdateFailed": "更新工作区信任失败：{error}"
+    "trustUpdateFailed": "更新工作区信任失败：{error}",
+    "memoryImportItem": "记忆条目",
+    "partialImportErrors": "部分内容未导入，其余内容已保留："
   },
   "schedule": {
     "create": "创建定时任务",
@@ -1584,7 +1586,49 @@
       "deleted": "已删除",
       "cleared": "已清空",
       "loadFailed": "加载记忆失败",
-      "saveFailed": "操作失败"
+      "saveFailed": "操作失败",
+      "contextLimit": "忘记记忆不会删除原聊天或文件，也不会撤回已载入当前对话的内容。需要最新信息时，请重新查询来源或开始新对话。",
+      "unavailable": "记忆服务暂时不可达。当前无法确认记忆内容，请稍后刷新。",
+      "conflict": "记忆已在别处变化。列表已重新读取，请检查最新内容后再次确认；不会自动覆盖。",
+      "scope": "记忆范围",
+      "allScopes": "全部范围",
+      "scopeProject": "项目记忆",
+      "refreshRecords": "刷新记忆",
+      "addRecord": "添加记忆",
+      "correctRecord": "纠正记忆",
+      "forgetRecord": "忘记记忆",
+      "forgetSource": "忘记此来源",
+      "confirmed": "已确认",
+      "unconfirmed": "未确认",
+      "recordId": "记忆 ID",
+      "previousPage": "上一页",
+      "nextPage": "下一页",
+      "recordContent": "记忆内容",
+      "saveRecord": "保存记忆",
+      "confirmLatest": "确认最新版本",
+      "confirmForget": "确认忘记",
+      "forgetRecordHint": "忘记这条记忆，并阻止其已追踪来源再次提炼它。原聊天、文件和当前对话已载入的内容仍保留。",
+      "forgetSourceHint": "忘记由这个可追踪来源派生的全部记忆，并阻止未来继续从该来源提炼。原聊天、文件和当前对话已载入的内容仍保留。",
+      "sourceKinds": {
+        "message": "消息",
+        "session": "对话",
+        "task": "任务",
+        "input": "后台输入",
+        "document": "文档",
+        "tool": "工具结果",
+        "manual": "手动录入",
+        "import": "导入"
+      },
+      "sourceOrigins": {
+        "owner": "来自你",
+        "agent": "来自智能体",
+        "untrusted": "外部未验证信息",
+        "system": "系统记录"
+      },
+      "latestRecordContent": "最新已保存内容",
+      "recordRemoved": "这条记忆已不在当前列表中",
+      "cleanupIncomplete": "记忆已更新，但部分待处理提炼仍未清理。请重试本次操作以完成清理。",
+      "saveUncertain": "保存结果尚未确定。请先恢复待处理写入，再提交新修改；重试会保留原请求。"
     },
     "personalization": {
       "conversationTitle": "对话",

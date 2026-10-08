@@ -235,6 +235,7 @@ async def _run_agent_background(
         ),
         user_id=owner_user_id,
         host_ref=host_ref,
+        input_source="foreground",
     )
     # Every production drain uses the existing cross-process lease, including
     # a chain started by a user turn (not only an idle/background enqueue).
@@ -451,6 +452,16 @@ async def _drain_queue_after_turn(
                     ),
                     user_id=owner_user_id,
                     host_ref=host_ref,
+                    input_id=head_id,
+                    # Only the host queue producer stamps source. Client
+                    # input_metadata/presentation cannot promote this label.
+                    input_source=(
+                        "background"
+                        if payload.get("source") == "background"
+                        else "foreground"
+                        if payload.get("source", "user") == "user"
+                        else "host"
+                    ),
                 )
             finally:
                 _dispatching_heads.pop(session_id, None)
@@ -740,8 +751,8 @@ async def _finalize_session(
     # scheduler debounces, so it fires once the conversation goes quiet — not per
     # turn — and is a no-op until the runner is wired at boot. Never blocks a turn.
     try:
-        from valuz_agent.modules.memory.scheduler import idle_scheduler
+        from valuz_agent.modules.memory.scheduler import memory_scheduler
 
-        idle_scheduler.notify_turn(session_id, owner_user_id)
+        await memory_scheduler.notify_turn(session_id, owner_user_id)
     except Exception:  # noqa: BLE001 — memory triggering must never fail a turn
         logger.debug("memory idle trigger skipped for %s", session_id, exc_info=True)

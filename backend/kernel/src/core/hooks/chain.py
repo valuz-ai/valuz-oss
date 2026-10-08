@@ -24,16 +24,19 @@ hooks-and-plugin-ui.md §3.2):
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
+from uuid import uuid4
 
 from src.core.hooks.events import (
     AGENT_SPAWN,
     COMMAND_RUN,
     PROMPT_SUBMIT,
+    RUNTIME_CHECK,
     SESSION_COMPACT,
     SESSION_END,
     SESSION_START,
@@ -45,6 +48,7 @@ from src.core.hooks.events import (
     CompactDecision,
     HookEvent,
     PromptDecision,
+    RuntimeConstraints,
     SessionRef,
     ToolDecision,
     ToolOutcome,
@@ -70,6 +74,7 @@ OBSERVE_EVENTS: frozenset[str] = frozenset(
 RESULT_TYPES: dict[str, type] = {
     TOOL_CALL: ToolOutcome,
     TOOL_CHECK: ToolDecision,
+    RUNTIME_CHECK: RuntimeConstraints,
     PROMPT_SUBMIT: PromptDecision,
     SESSION_COMPACT: CompactDecision,
     COMMAND_RUN: CommandOutput,
@@ -104,15 +109,21 @@ class HookSpec:
     tier: Tier = "user"
     matcher: Matcher | None = None
     fail_closed: bool = False
+    required: bool = False
     budget_s: float = DEFAULT_BUDGET_S
     priority: int = 0
     # Session-level predicate: the handler only exists for sessions it
     # applies to (e.g. a gate that matters only for image-less models).
     applies: Callable[[SessionRef], bool] | None = None
     seq: int = 0
+    registration_id: str = field(default_factory=lambda: uuid4().hex)
+
+    @property
+    def release_key(self) -> str:
+        return f"{self.seq}:{self.registration_id}"
 
     def sort_key(self) -> tuple[int, int, int]:
-        return (TIER_ORDER[self.tier], self.priority, self.seq)
+        return (4 if self.required else TIER_ORDER[self.tier], self.priority, self.seq)
 
 
 class HookError(Exception):
@@ -127,6 +138,12 @@ class HookError(Exception):
 
 class _BudgetExceededError(Exception):
     pass
+
+
+class _RuntimeGuardCancelledError(asyncio.CancelledError):
+    def __init__(self, constraints: RuntimeConstraints, *args: Any) -> None:
+        super().__init__(*args)
+        self.runtime_constraints = constraints
 
 
 class _CallState:
@@ -199,6 +216,8 @@ def fail_closed_result(event: HookEvent, owner: str, reason: str) -> Any:
     text = f"Blocked by the '{owner}' hook ({reason})."
     if event.name == TOOL_CALL:
         return ToolOutcome(content=text, is_error=True, executed=False)
+    if event.name == RUNTIME_CHECK:
+        return RuntimeConstraints(proceed=False, reason=text)
     if event.name == TOOL_CHECK:
         return ToolDecision(behavior="deny", reason=text)
     if event.name == PROMPT_SUBMIT:
@@ -212,6 +231,20 @@ def fail_closed_result(event: HookEvent, owner: str, reason: str) -> Any:
 
 def _input_changed(before: HookEvent, after: HookEvent) -> bool:
     return thaw(before.get("input")) != thaw(after.get("input"))
+
+
+def _tighten_runtime(
+    result: RuntimeConstraints, required: RuntimeConstraints
+) -> RuntimeConstraints:
+    return dataclasses.replace(
+        result,
+        proceed=result.proceed and required.proceed,
+        read_only=result.read_only or required.read_only,
+        network_off=result.network_off or required.network_off,
+        human_review=result.human_review or required.human_review,
+        require_tool_guard=result.require_tool_guard or required.require_tool_guard,
+        guard_nonce=required.guard_nonce or result.guard_nonce,
+    )
 
 
 async def _invoke(
@@ -277,6 +310,12 @@ async def _invoke(
                 event.get("tool.name"),
             )
             return await downstream(event)
+        if (
+            event.name == RUNTIME_CHECK
+            and isinstance(result, RuntimeConstraints)
+            and isinstance(state.last_result, RuntimeConstraints)
+        ):
+            result = _tighten_runtime(result, state.last_result)
         return result
     except asyncio.CancelledError:
         raise
@@ -304,7 +343,61 @@ async def _invoke(
 async def run_chain(event: HookEvent, specs: Sequence[HookSpec], core: Core) -> Any:
     """Run *event* through *specs* (already sorted, outermost first) to *core*."""
 
+    if event.name == RUNTIME_CHECK and any(spec.required for spec in specs):
+        # Constraint queries have no tool effect. Required contributions are a
+        # separate aggregation stage: an ordinary takeover must not swallow
+        # them, and a required takeover must not swallow another required guard.
+        # Keep native tool.call/tool.check middleware and their consumption
+        # boundaries unchanged; never replay an actual effect here.
+        ordinary = [spec for spec in specs if not spec.required]
+        result = await run_chain(event, ordinary, core)
+        if not isinstance(result, RuntimeConstraints):
+            result = RuntimeConstraints(proceed=False, reason="invalid runtime constraints")
+        # Only actual required registrations may issue release references.
+        # Ordinary middleware cannot add, discard, or relabel those references.
+        tokens: dict[str, dict[str, str]] = {}
+        result = dataclasses.replace(result, guard_tokens=tokens)
+
+        async def guard_core(current: HookEvent) -> RuntimeConstraints:
+            if current != event:
+                return RuntimeConstraints(proceed=False, reason="runtime guard identity changed")
+            return RuntimeConstraints()
+
+        for spec in specs:
+            if spec.required and matches(spec.matcher, event):
+                try:
+                    contribution = await _invoke(spec, event, guard_core)
+                except asyncio.CancelledError as exc:
+                    # The runtime helper retains/releases references already
+                    # acquired before cancellation, then propagates cancellation.
+                    raise _RuntimeGuardCancelledError(result, *exc.args) from exc
+                result = _tighten_runtime(result, contribution)
+                if event.get("phase", "prepare") != "release" and contribution.guard_nonce:
+                    tokens.setdefault(spec.owner, {})[spec.release_key] = contribution.guard_nonce
+                result = dataclasses.replace(
+                    result,
+                    policy_version=contribution.policy_version
+                    if contribution.policy_version is not None
+                    else result.policy_version,
+                    reason=contribution.reason or result.reason,
+                    guard_tokens=tokens,
+                )
+        return result
+
+    guarded_execution = any(spec.required for spec in specs)
+
+    def identity(current: HookEvent) -> tuple[Any, ...]:
+        return (
+            current.get("effect_boundary"),
+            current.session,
+            *(current.get(f"tool.{key}") for key in ("name", "kind", "source", "server")),
+        )
+
     async def call(index: int, current: HookEvent) -> Any:
+        if guarded_execution and identity(current) != identity(event):
+            return fail_closed_result(
+                event, "required-execution-guard", "tool or session identity changed"
+            )
         while index < len(specs) and not matches(specs[index].matcher, current):
             index += 1
         if index >= len(specs):

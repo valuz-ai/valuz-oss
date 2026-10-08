@@ -15,7 +15,7 @@
     "design-audit": "node scripts/design-audit.mjs",
     "design-audit:update": "node scripts/design-audit.mjs --update-baseline",
     "clean": "turbo run clean",
-    "generate-types": "node scripts/generate-plugin-types.mjs && node scripts/generate-session-types.mjs && node scripts/generate-docs-types.mjs"
+    "generate-types": "node scripts/generate-plugin-types.mjs && node scripts/generate-session-types.mjs && node scripts/generate-docs-types.mjs && node scripts/generate-memory-types.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

@@ -26,6 +26,12 @@ def patched(tmp_path, monkeypatch):  # noqa: ANN001, ANN201
     monkeypatch.setattr(memory_store._fs, "data_dir", lambda user_id: tmp_path / "app")
     monkeypatch.setattr(m, "async_unit_of_work", lambda *_a, **_k: _UOW())
 
+    async def _owned(_user_id, _project_id):  # noqa: ANN001, ANN202
+        return None
+
+    # The legacy handler fixture supplies no project database. Ownership is
+    # exercised separately at the HTTP boundary with the real verifier.
+    monkeypatch.setattr(m, "_require_owned_project", _owned)
     state = {"enabled": True, "auto_extract": True, "custom_instructions": ""}
 
     async def _ge(_db, _user_id: str | None = None, *_args, **_kwargs):  # noqa: ANN001, ANN202

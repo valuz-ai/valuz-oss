@@ -92,6 +92,28 @@ class StagedSubmission:
     manifest_name: str = ""
     manifest_description: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+    learning_context: dict[str, object] | None = None
+
+
+async def _validate_learning_context(
+    user_id: str, session_id: str, context: dict[str, object]
+) -> None:
+    from valuz_agent.adapters import kernel_client
+    from valuz_agent.modules.memory.learning import (
+        SkillLearningSubmissionContext,
+        validate_learning_submission,
+    )
+
+    session = await kernel_client.get_session(user_id, session_id)
+    if session is None or session.user_id != user_id:
+        raise ValueError("stale: an owned session is required for learning submission")
+    valuz_meta = (session.metadata or {}).get("valuz") or {}
+    project_id = str(valuz_meta.get("project_id") or "") or None
+    await validate_learning_submission(
+        user_id,
+        SkillLearningSubmissionContext.model_validate(context),
+        project_id=project_id,
+    )
 
 
 def skill_service_for(db: AsyncSession) -> SkillLibraryService:
@@ -127,6 +149,9 @@ async def inspect_staged_submission(
     tree_hash = staging.hash_skill_directory(staging_dir)
     meta = staging.read_staging_meta(staging_dir)
     name, description, _version = staging._read_manifest_meta(staging_dir)
+    learning_context = staging.read_learning_context(staging_dir)
+    if learning_context is not None:
+        await _validate_learning_context(user_id, session_id, learning_context)
 
     library_dir = _default_user_skill_root(user_id) / slug
     if not library_dir.exists():
@@ -165,6 +190,7 @@ async def inspect_staged_submission(
         next_version=next_version,
         manifest_name=name,
         manifest_description=description,
+        learning_context=learning_context,
     )
 
 
@@ -177,7 +203,7 @@ def build_submission_proposal(
     files_touched: list[str],
     idempotency_suffix: str = "",
 ) -> OperationProposal:
-    payload = {
+    payload: dict[str, Any] = {
         "session_id": session_id,
         "slug": sub.slug,
         "summary": summary,
@@ -202,6 +228,9 @@ def build_submission_proposal(
         "existing_skill_id": sub.existing_skill_id,
         "next_version": sub.next_version,
     }
+    if sub.learning_context is not None:
+        payload["learning_context"] = sub.learning_context
+        preview["learning_context"] = sub.learning_context
     target_refs: list[dict[str, Any]] = [{"type": "skill", "slug": sub.slug}]
     if sub.existing_skill_id:
         target_refs[0]["id"] = sub.existing_skill_id
@@ -371,6 +400,11 @@ async def _skill_submit_handler(
             "stale: the staged files changed after they were submitted — what you "
             "reviewed is not what would be saved. Ask the agent to submit again."
         )
+    learning_context = payload.get("learning_context")
+    if learning_context is not None:
+        if not isinstance(learning_context, dict):
+            raise ValueError("Invalid learning submission metadata")
+        await _validate_learning_context(user_id, session_id, learning_context)
 
     library_root = _default_user_skill_root(user_id)
     final_slug = slug

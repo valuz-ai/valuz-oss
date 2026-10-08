@@ -1,4 +1,6 @@
+import inspect
 import os
+import sys
 import tempfile
 from functools import wraps
 from pathlib import Path
@@ -94,10 +96,6 @@ for _escape_key in [
 # owner, and inserts from a never-seeded context keep failing loudly (covered
 # by ``tests/infra/test_ownership.py``, which opts out via fresh Contexts).
 # ---------------------------------------------------------------------------
-import inspect
-import sys  # noqa: E402
-from contextlib import contextmanager  # noqa: E402
-
 import pytest  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -132,51 +130,6 @@ import pytest  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _rebind_on_parent(name: str, module) -> None:
-    """Point ``parent.leaf`` back at ``module`` (or drop it when it vanished)."""
-    parent_name, _, leaf = name.rpartition(".")
-    if not parent_name:
-        return
-    parent = sys.modules.get(parent_name)
-    if parent is None:
-        return
-    if module is None:
-        # Imported only inside the window: the package attribute now refers to a
-        # module that is no longer in ``sys.modules``. Drop it so the next
-        # ``from package import leaf`` re-imports instead of resurrecting it.
-        if hasattr(parent, leaf):
-            try:
-                delattr(parent, leaf)
-            except AttributeError:  # pragma: no cover - defensive
-                pass
-        return
-    setattr(parent, leaf, module)
-
-
-@contextmanager
-def reimported_modules(*prefixes: str):
-    """Drop ``prefixes``-matching modules for the duration of the block.
-
-    Inside the block the next import rebuilds them from the current environment;
-    on exit the ORIGINAL module objects are restored — in ``sys.modules`` *and*
-    on their parent packages — so later tests monkeypatch the very objects that
-    already-imported call sites hold.
-    """
-    matcher = tuple(prefixes)
-    saved = {name: mod for name, mod in sys.modules.items() if name.startswith(matcher)}
-    for name in saved:
-        sys.modules.pop(name, None)
-    try:
-        yield
-    finally:
-        window_names = [n for n in sys.modules if n.startswith(matcher)]
-        for name in window_names:
-            sys.modules.pop(name, None)
-        sys.modules.update(saved)
-        for name in set(window_names) | set(saved):
-            _rebind_on_parent(name, saved.get(name))
-
-
 # Modules whose import-time singletons (``settings`` / ``fs_registry``) the rest
 # of the suite monkeypatches. If any of them ends a test reachable under TWO
 # identities, every later ``monkeypatch.setattr(fsr.settings, ...)`` becomes a
@@ -208,7 +161,7 @@ def _split_module_identity_tripwire():
         "module identity split after this test — sys.modules and the parent "
         "package disagree for: "
         f"{split}. Reload settings-bearing modules with the "
-        "``reimported_modules`` context manager (tests/conftest.py), which "
+        "``reimported_modules`` context manager (tests/module_reimports.py), which "
         "restores both halves."
     )
 

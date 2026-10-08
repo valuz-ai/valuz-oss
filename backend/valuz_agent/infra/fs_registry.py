@@ -692,7 +692,7 @@ class FsRegistry:
         *,
         project_id: str | None = None,
     ) -> Path:
-        if not user_id:
+        if not user_id or user_id in {".", ".."} or "\x00" in user_id:
             raise ValueError("user_id is required for owner-scoped memory")
         owner_key = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
         root = self.data_dir(user_id) / "memories" / "owners" / owner_key

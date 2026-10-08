@@ -145,6 +145,36 @@ async def test_events_fire_in_order_around_the_runtime(tmp_path, monkeypatch) ->
     ]
 
 
+async def test_execution_binding_is_actual_saved_turn_and_frozen_per_runtime_call(
+    tmp_path, monkeypatch
+) -> None:
+    from src.core.hooks import SessionRef
+
+    session, store, orch, _log, _runtimes = _setup(tmp_path, monkeypatch)
+    captured: list[SessionRef] = []
+    original = _FakeRuntime.run
+
+    async def capture(self, current, user_message):
+        ref = SessionRef.from_session(current)
+        persisted = [message for message in store.messages if message.status == "running"]
+        assert persisted and ref.execution_message_id == persisted[-1].id
+        assert ref.execution_message_id != user_message.metadata.get("execution_message_id")
+        captured.append(ref)
+        await original(self, current, user_message)
+
+    monkeypatch.setattr(_FakeRuntime, "run", capture)
+    first = await orch.run_turn(
+        "owner-1", session.id, UserMessage("synthetic", metadata={"execution_message_id": "old"})
+    )
+    assert session.execution_message_id is None
+    second = await orch.run_turn("owner-1", session.id, UserMessage("synthetic followup"))
+    assert session.execution_message_id is None
+    assert captured[0].execution_message_id == first.id
+    assert captured[1].execution_message_id == second.id
+    assert first.id != second.id
+    await orch.cleanup(session.id)
+
+
 async def test_turn_complete_carries_the_outcome(tmp_path, monkeypatch) -> None:
     session, _store, orch, _log, _ = _setup(tmp_path, monkeypatch)
     seen: list[dict[str, Any]] = []

@@ -125,6 +125,8 @@ class ClaudeToolRelay:
         if not tool_use_id:
             return None
         data = tool_event_data(tool_name, tool_input, tool_use_id)
+        if data["tool"].get("source") in {"mcp", "toolkit"}:
+            data["effect_boundary"] = False
         if data["tool"]["source"] != "native" or not hooks.wants(TOOL_CALL, data):
             return None
         pending = _Pending(original_input=data["input"])

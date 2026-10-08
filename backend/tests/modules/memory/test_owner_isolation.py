@@ -65,10 +65,13 @@ def test_memory_owner_names_cannot_alias(
     assert first.is_relative_to(tmp_path)
 
 
-def test_memory_requires_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("owner", ["", ".", "..", "a\x00b"])
+def test_memory_requires_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str
+) -> None:
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     with pytest.raises(ValueError, match="user_id"):
-        FsRegistry().memory_dir("", "global")
+        FsRegistry().memory_dir(owner, "global")
 
 
 @pytest.mark.parametrize("project_id", ["../outside", "a/b", "a\\b"])

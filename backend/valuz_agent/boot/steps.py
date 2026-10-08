@@ -427,19 +427,28 @@ def wire_memory_triggers() -> None:
     Runs right after ``init_kernel`` (which builds the toolkit the memory tools
     live in).
     """
-    from valuz_agent.modules.memory.runner import (
-        run_extraction_for_session,
-        run_task_finish_extraction,
+    from valuz_agent.modules.memory.scheduler import (
+        idle_scheduler,
+        memory_scheduler,
+        task_finish_scheduler,
     )
-    from valuz_agent.modules.memory.scheduler import idle_scheduler, task_finish_scheduler
 
-    idle_scheduler.set_runner(run_extraction_for_session)
-    task_finish_scheduler.set_runner(run_task_finish_extraction)
-    # Event-first memory trigger: graduate a completed task's lessons when
-    # tasks/events.finalize_task announces task.finalized.
-    from valuz_agent.modules.memory.scheduler import wire_task_finalized_trigger
+    # Real finalizers await the durable scheduler. Do not arm process-only timers.
+    memory_scheduler.registered = True
+    idle_scheduler._runner = None
+    task_finish_scheduler._runner = None
 
-    wire_task_finalized_trigger()
+
+async def start_memory_recovery() -> None:
+    from valuz_agent.modules.memory.scheduler import memory_scheduler
+
+    await memory_scheduler.start()
+
+
+async def stop_memory_recovery() -> None:
+    from valuz_agent.modules.memory.scheduler import memory_scheduler
+
+    await memory_scheduler.stop()
 
 
 async def bind_data_service(app: FastAPI) -> None:
