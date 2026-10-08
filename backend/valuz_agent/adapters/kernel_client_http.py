@@ -38,6 +38,7 @@ from app.schemas import (  # noqa: E402
     EventPayload,
     EventWindowData,
     FinalizeSessionRequest,
+    RecoverFailedSessionRequest,
     ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
@@ -284,6 +285,17 @@ class HttpKernelClient:
         return SessionData(**result["data"])
 
     # -- events -------------------------------------------------------
+
+    async def recover_failed_session(
+        self, user_id: str, session_id: str, req: RecoverFailedSessionRequest
+    ) -> SessionData:
+        result = await self._request(
+            "POST",
+            f"{self._prefix}/v1/sessions/{session_id}/recover-failed",
+            json_body=req.model_dump(mode="json"),
+            owner=user_id,
+        )
+        return SessionData(**result["data"])
 
     async def append_event(self, user_id: str, session_id: str, event: EventPayload) -> bool:
         result = await self._request(

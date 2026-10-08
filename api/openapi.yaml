@@ -2964,6 +2964,54 @@ paths:
 
   # ─── Sessions ──────────────────────────────────────────────────────
 
+  /kernel/v1/sessions/{session_id}/recover-failed:
+    post:
+      operationId: recoverFailedKernelSession
+      summary: Conditionally restore the exact owned failed background conversation
+      description: >-
+        Internal kernel seam used only by explicit owner retry through the Host
+        SessionLibrary. The current SQL store updates status only, requiring
+        a terminated execution_error/exhausted session, a matching complete
+        SessionData snapshot hash and the latest owned errored message with a
+        framework explicit_owner_retry marker. Periodic admission never invokes
+        this operation. Unsupported stores fail closed and require manual recovery.
+      parameters:
+        - {name: session_id, in: path, required: true, schema: {type: string}}
+        - {name: X-Valuz-Owner-Id, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [failed_message_id, project_id, agent_slug, expected_snapshot_hash]
+              properties:
+                failed_message_id: {type: string, minLength: 1, maxLength: 36}
+                project_id: {type: string, minLength: 1, maxLength: 128}
+                agent_slug: {type: string, minLength: 1, maxLength: 128}
+                expected_snapshot_hash: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200':
+          description: Same SessionData; only status was restored, never a completed input
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [id, status]
+                    additionalProperties: true
+                    properties:
+                      id: {type: string}
+                      status: {type: string, enum: [created, idle, running, terminated]}
+        '404': {description: Session is absent or not owned}
+        '409': {description: Binding, latest message, stop or snapshot changed; recovery refused}
+        '422': {description: Invalid recovery request}
+        '501': {description: Store lacks atomic recovery; manual recovery required}
+
   /v1/sessions:
     get:
       summary: List sessions

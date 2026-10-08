@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import JSON, cast, delete, exists, func, literal, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.adapters.sqlalchemy_store.converters import (
@@ -65,6 +66,82 @@ class SQLAlchemyStore:
                 )
             ).scalar_one_or_none()
             return model_to_session(model) if model else None
+
+    async def recover_failed_session_if_current(
+        self, user_id: str, expected: Session, failed_message_id: str
+    ) -> bool:
+        """Only status changes, conditioned on the whole prior snapshot and latest failure.
+
+        No read-then-save: a new foreground message, running transition, owner
+        stop or capability edit causes the single UPDATE to lose its CAS.
+        """
+        from src.core.types import Error
+
+        reason = expected.stop_reason
+        if (
+            expected.user_id != user_id
+            or expected.status != "terminated"
+            or not isinstance(reason, Error)
+            or reason.category != "execution_error"
+            or reason.retry_status != "exhausted"
+        ):
+            return False
+        model = session_to_model(expected)
+        dialect = self._session_factory.kw["bind"].dialect.name
+
+        def equality(column: Any, value: Any, json_column: bool) -> Any:
+            # PostgreSQL JSON deliberately has no equality operator. Compare
+            # every JSON snapshot field structurally as JSONB without changing
+            # the schema. JSON null and SQL NULL both decode as Python None.
+            if json_column and dialect == "postgresql":
+                structural = cast(column, JSONB) == literal(
+                    JSON.NULL if value is None else value, type_=JSONB
+                )
+                return or_(column.is_(None), structural) if value is None else structural
+            if value is None and json_column:
+                return or_(column.is_(None), column == JSON.NULL)
+            return column.is_(None) if value is None else column == value
+
+        conditions = []
+        for attribute in SessionModel.__mapper__.column_attrs:
+            column = getattr(SessionModel, attribute.key)
+            value = getattr(model, attribute.key)
+            conditions.append(equality(column, value, isinstance(attribute.columns[0].type, JSON)))
+        source_started = (
+            select(MessageModel.started_at)
+            .where(
+                MessageModel.id == failed_message_id,
+                MessageModel.user_id == user_id,
+                MessageModel.session_id == expected.id,
+            )
+            .scalar_subquery()
+        )
+        source_failed = exists().where(
+            MessageModel.id == failed_message_id,
+            MessageModel.user_id == user_id,
+            MessageModel.session_id == expected.id,
+            MessageModel.status == "errored",
+            MessageModel.error_message["recovery"].as_string() == "explicit_owner_retry",
+            equality(MessageModel.stop_reason, model.stop_reason, True),
+        )
+        # Equal timestamps with another message are ambiguous, not evidence
+        # that this failure is latest. Fail closed rather than order UUIDs.
+        newer_message = exists().where(
+            MessageModel.user_id == user_id,
+            MessageModel.session_id == expected.id,
+            MessageModel.id != failed_message_id,
+            MessageModel.started_at >= source_started,
+        )
+        async with self._session_factory() as db:
+            result = await db.execute(
+                update(SessionModel)
+                .where(*conditions, source_failed, ~newer_message)
+                .values(status="idle")
+                .returning(SessionModel.id)
+            )
+            changed = result.scalar_one_or_none() is not None
+            await db.commit()
+            return changed
 
     async def list_sessions(
         self,

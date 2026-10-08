@@ -33,10 +33,11 @@ from app.schemas import (  # type: ignore[import-not-found]
     CreateSessionRequest,
     EventPayload,
     FinalizeSessionRequest,
+    RecoverFailedSessionRequest,
     UpdateSessionRequest,
 )
 
-from valuz_agent.adapters.kernel_client import KernelClientError
+from valuz_agent.adapters.kernel_client import KernelClientError, KernelConflictError
 from valuz_agent.adapters.kernel_client_http import HttpKernelClient
 
 from tests.module_reimports import reimported_modules
@@ -138,6 +139,18 @@ async def test_rest_round_trip_against_standalone_kernel(kernel_proc) -> None:
             owner, session_id, FinalizeSessionRequest(status="idle")
         )
         assert finalized.status == "idle"
+        # Real owned HTTP route refuses a nonfailed/unknown-message snapshot.
+        with pytest.raises(KernelConflictError):
+            await client.recover_failed_session(
+                owner,
+                session_id,
+                RecoverFailedSessionRequest(
+                    failed_message_id="unknown-message",
+                    project_id="chat",
+                    agent_slug="valurion",
+                    expected_snapshot_hash="0" * 64,
+                ),
+            )
 
         # No message rows yet → out-of-band append reports not-persisted.
         assert (

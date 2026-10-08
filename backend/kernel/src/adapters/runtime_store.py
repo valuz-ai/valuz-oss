@@ -54,6 +54,24 @@ class RuntimeStore:
         await self._runtime.save_session(session)
         await self._mirror_op("save_session", self._mirror.save_session(session))
 
+    async def recover_failed_session_if_current(
+        self, user_id: str, expected: Session, failed_message_id: str
+    ) -> bool:
+        """The live store alone decides CAS; mirror only its re-read current state.
+
+        A stale mirror can neither authorize recovery nor veto live success.
+        Never publish the old expected snapshot after the conditional update.
+        """
+        recover = getattr(self._runtime, "recover_failed_session_if_current", None)
+        if not callable(recover):
+            raise NotImplementedError("Live store requires manual session recovery")
+        changed = await recover(user_id, expected, failed_message_id)
+        if changed:
+            current = await self._runtime.load_session(user_id, expected.id)
+            if current is not None:
+                await self._mirror_op("recover_failed_session", self._mirror.save_session(current))
+        return bool(changed)
+
     async def save_message(self, user_id: str, message: Message) -> None:
         await self._runtime.save_message(user_id, message)
         await self._mirror_op("save_message", self._mirror.save_message(user_id, message))

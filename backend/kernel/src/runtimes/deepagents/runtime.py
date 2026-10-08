@@ -133,6 +133,81 @@ PLAN_MODE_INSTRUCTIONS = (
 _PROPOSED_PLAN_RE = re.compile(r"<proposed_plan>(.*?)</proposed_plan>", re.DOTALL)
 
 
+def _allows_explicit_owner_retry(exc: BaseException) -> bool:
+    """Framework exception types/statuses, never model/error-message text.
+
+    Generic execution_error is not a retry grant: auth, billing, context,
+    ambiguous 429 and unknown exceptions deliberately receive no marker.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return bool(exc.exceptions) and all(_allows_explicit_owner_retry(e) for e in exc.exceptions)
+    denied_codes = {
+        "insufficient_quota",
+        "quota_exceeded",
+        "budget_exceeded",
+        "billing_hard_limit_reached",
+        "billing_error",
+        "insufficient_credits",
+        "credit_balance_exhausted",
+        "payment_required",
+        "authentication_error",
+        "invalid_api_key",
+        "unauthorized",
+        "permission_denied",
+        "permission_error",
+        "forbidden",
+        "access_denied",
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "max_context_length",
+        "user_interrupt",
+        "user_stop",
+        "cancelled",
+        "canceled",
+    }
+
+    def protected_fields(value: Any, depth: int = 0) -> bool:
+        if depth > 3:
+            return False
+        if isinstance(value, dict):
+            if any(
+                isinstance(value.get(key), str) and value[key].strip().lower() in denied_codes
+                for key in ("code", "type")
+            ):
+                return True
+            return any(protected_fields(value.get(key), depth + 1) for key in ("error", "detail"))
+        if isinstance(value, list):
+            return any(protected_fields(item, depth + 1) for item in value[:8])
+        return False
+
+    fields = {key: getattr(exc, key, None) for key in ("code", "type")}
+    body = getattr(exc, "body", None)
+    if body is None and isinstance(exc, httpx.HTTPStatusError):
+        try:
+            body = exc.response.json()
+        except ValueError:
+            pass
+    if protected_fields(fields) or protected_fields(body):
+        return False
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in {500, 502, 503, 504}
+    # These are optional SDK backends, imported only during their failed turn.
+    for module_name in ("openai", "anthropic"):
+        try:
+            import importlib
+
+            sdk = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if isinstance(exc, (sdk.APIConnectionError, sdk.APITimeoutError)):
+            return True
+        if isinstance(exc, sdk.APIStatusError):
+            return exc.status_code in {500, 502, 503, 504}
+    return False
+
+
 def _is_internal_summarization_event(chunk: dict[str, Any]) -> bool:
     """Return whether a LangChain model event belongs to history compaction.
 
@@ -1288,7 +1363,10 @@ class DeepAgentsRuntime:
                     retry_status="exhausted",
                     message=cause,
                 )
-                await self.event_sink.emit(Event(type="session_error", data={"message": cause}))
+                error_data = {"message": cause}
+                if _allows_explicit_owner_retry(exc):
+                    error_data["recovery"] = "explicit_owner_retry"
+                await self.event_sink.emit(Event(type="session_error", data=error_data))
         finally:
             self._active_task = None
             await self.event_sink.emit(

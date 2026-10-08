@@ -179,6 +179,82 @@ class SessionLibrary:
             next_cursor=selected[-1].seq if len(normalized) > limit else None,
         )
 
+    async def recover_failed_background_input(
+        self,
+        session_id: str,
+        input_id: str,
+        *,
+        project_id: str,
+        agent_slug: str,
+    ) -> bool:
+        """Explicit owner retry only; revive an exact execution failure without sending work.
+
+        The caller validates its failed run lineage and current authorization.
+        This facade verifies the original background receipt, current budget,
+        ordinary chat binding and atomic latest-message/session snapshot CAS.
+        It never consumes attachments, creates a session or changes history.
+        """
+        import hashlib
+        import json
+
+        from valuz_agent.adapters import kernel_client
+        from valuz_agent.adapters.data_reader import data_reader
+        from valuz_agent.modules.sessions.errors import SessionNotRunnable
+        from valuz_agent.modules.sessions.service import _enforce_budget
+
+        receipt = await self.get_input(session_id, input_id)
+        if (
+            receipt is None
+            or receipt.owner_user_id != self.user_id
+            or receipt.project_id != project_id
+            or receipt.source != "background"
+            or receipt.status != "failed"
+        ):
+            raise SessionNotRunnable("An original owned failed background input is required")
+        session = await data_reader().get_session(self.user_id, session_id)
+        meta = ((session.metadata or {}).get("valuz") or {}) if session is not None else {}
+        if (
+            session is None
+            or session.user_id != self.user_id
+            or meta.get("project_id") != project_id
+            or meta.get("agent_slug") != agent_slug
+            or meta.get("task_id")
+            or meta.get("worktree")
+            or str(session.status) in {"cancelled", "archived"}
+        ):
+            raise SessionNotRunnable("Original main chat binding is no longer recoverable")
+        if str(session.status) in {"created", "idle", "running"}:
+            return False  # Already usable; never overwrite a concurrent foreground turn.
+        reason = session.stop_reason
+        if (
+            str(session.status) != "terminated"
+            or reason is None
+            or reason.type != "error"
+            or reason.category != "execution_error"
+            or reason.retry_status != "exhausted"
+            or not receipt.output_message_id
+        ):
+            raise SessionNotRunnable("This stop requires manual owner recovery")
+        await _enforce_budget(session, user_id=self.user_id)
+        fingerprint = hashlib.sha256(
+            json.dumps(session.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+            .encode()
+        ).hexdigest()
+        try:
+            await kernel_client.recover_failed_session(
+                self.user_id,
+                session_id,
+                kernel_client.RecoverFailedSessionRequest(
+                    failed_message_id=receipt.output_message_id,
+                    project_id=project_id,
+                    agent_slug=agent_slug,
+                    expected_snapshot_hash=fingerprint,
+                ),
+            )
+        except kernel_client.KernelNotImplementedError as exc:
+            raise SessionNotRunnable("This store requires manual owner recovery") from exc
+        return True
+
     async def enqueue_background(
         self,
         session_id: str,

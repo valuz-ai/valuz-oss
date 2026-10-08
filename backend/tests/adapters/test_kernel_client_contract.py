@@ -26,6 +26,7 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "delete_session": ("DELETE", "/kernel/v1/sessions/{session_id}"),
     "set_mode": ("POST", "/kernel/v1/sessions/{session_id}/mode"),
     "finalize_session": ("POST", "/kernel/v1/sessions/{session_id}/finalize"),
+    "recover_failed_session": ("POST", "/kernel/v1/sessions/{session_id}/recover-failed"),
     "append_event": ("POST", "/kernel/v1/sessions/{session_id}/events"),
     "emit_live_event": ("POST", "/kernel/v1/sessions/{session_id}/events"),  # ?live_only=true
     "get_events": ("GET", "/kernel/v1/sessions/{session_id}/events"),

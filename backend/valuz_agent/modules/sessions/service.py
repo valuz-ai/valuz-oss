@@ -2207,7 +2207,9 @@ class SessionService:
         old_status = _map_kernel_status(session.status)
 
         updated = await kernel_client.finalize_session(
-            user_id, session_id, FinalizeSessionRequest(status="terminated")
+            user_id,
+            session_id,
+            FinalizeSessionRequest(status="terminated", stop_reason_type="user_interrupt"),
         )
 
         self._bus.publish(

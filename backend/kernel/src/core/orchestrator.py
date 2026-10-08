@@ -858,6 +858,11 @@ class _MessageObserverSink:
                 "category": str(event.data.get("category") or "execution_error"),
                 "message": str(event.data.get("message") or ""),
             }
+            if (
+                self.error_payload["category"] == "execution_error"
+                and event.data.get("recovery") == "explicit_owner_retry"
+            ):
+                self.error_payload["recovery"] = "explicit_owner_retry"
 
         elif event.type == "usage_update":
             current = {

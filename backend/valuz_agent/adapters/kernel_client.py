@@ -82,6 +82,7 @@ from app.schemas import (  # noqa: E402
     ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
+    RecoverFailedSessionRequest as RecoverFailedSessionRequest,
     SessionData,
     SetSessionModeRequest,
     SubmitActionRequest,
@@ -202,6 +203,10 @@ class KernelClient(Protocol):
     async def create_session(self, user_id: str, req: CreateSessionRequest) -> SessionData: ...
 
     async def get_session(self, user_id: str, session_id: str) -> SessionData | None: ...
+
+    async def recover_failed_session(
+        self, user_id: str, session_id: str, req: RecoverFailedSessionRequest
+    ) -> SessionData: ...
 
     async def list_sessions(
         self,
@@ -407,6 +412,17 @@ class InProcessKernelClient:
         except HTTPException as exc:
             if exc.status_code == 404:
                 return None
+            _raise_mapped(exc)
+        return result["data"]
+
+    async def recover_failed_session(
+        self, user_id: str, session_id: str, req: RecoverFailedSessionRequest
+    ) -> SessionData:
+        from app.routes.sessions import recover_failed_session
+
+        try:
+            result = await recover_failed_session(session_id, req, self._store(), user_id)
+        except HTTPException as exc:
             _raise_mapped(exc)
         return result["data"]
 
@@ -1160,6 +1176,17 @@ async def bg_busy_session_ids() -> list[str]:
 
 async def get_session(user_id: str, session_id: str) -> SessionData | None:
     return await _data_plane().get_session(user_id, session_id)
+
+
+async def recover_failed_session(
+    user_id: str, session_id: str, req: RecoverFailedSessionRequest
+) -> SessionData:
+    # This is a control write: use the live kernel first, like finalize/cancel.
+    # A lagging durable snapshot fails its hash check instead of restoring over
+    # a newer foreground turn or user stop in the execution authority.
+    return await (await _control_kernel(user_id, session_id)).recover_failed_session(
+        user_id, session_id, req
+    )
 
 
 async def list_sessions(

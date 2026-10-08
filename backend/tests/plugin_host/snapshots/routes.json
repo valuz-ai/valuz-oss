@@ -363,6 +363,7 @@
   "DELETE /kernel/v1/sessions/{session_id} delete_session",
   "POST /kernel/v1/sessions/{session_id}/prepare prepare_session_runtime",
   "POST /kernel/v1/sessions/{session_id}/events append_session_event",
+  "POST /kernel/v1/sessions/{session_id}/recover-failed recover_failed_session",
   "POST /kernel/v1/sessions/{session_id}/finalize finalize_session",
   "GET /kernel/v1/sessions/{session_id}/events get_session_events",
   "GET /kernel/v1/sessions/{session_id}/events/window get_session_events_window",
