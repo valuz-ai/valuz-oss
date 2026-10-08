@@ -48,7 +48,7 @@ jobs:
     name: macOS (arm64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'mac-arm64' }}
-    runs-on: macos-14
+    runs-on: macos-15
     environment: CSC_KEY_PASSWORD
     permissions:
       contents: write
@@ -148,14 +148,11 @@ jobs:
             exit 1
           fi
           echo "OK: latest-mac.yml present, version=$actual"
-          # The Electron this ships needs macOS 13 (Electron 44's
-          # LSMinimumSystemVersion). electron-updater compares os.release() —
-          # the Darwin kernel version — against minimumSystemVersion, so an
-          # older Mac stops being offered a build it cannot open. Darwin 22 =
-          # macOS 13; it must be semver ("13.0" is ignored and the update is
-          # offered anyway). Stamped here, before this job uploads the manifest,
-          # so the merged one inherits it too. Moves with the Electron pin.
-          grep -q '^minimumSystemVersion:' "$yml" || printf 'minimumSystemVersion: 22.0.0\n' >> "$yml"
+          # Valuz requires macOS 15, including its bundled DSH native modules.
+          # electron-updater compares os.release(): macOS 15 is Darwin 24.
+          # Replace any older gate before uploading either architecture.
+          sed -i '' '/^minimumSystemVersion:/d' "$yml"
+          printf 'minimumSystemVersion: 24.0.0\n' >> "$yml"
           grep '^minimumSystemVersion:' "$yml"
 
       # electron-builder refuses to upload if the release was published >2h ago.
@@ -329,14 +326,11 @@ jobs:
             exit 1
           fi
           echo "OK: latest-mac.yml present, version=$actual"
-          # The Electron this ships needs macOS 13 (Electron 44's
-          # LSMinimumSystemVersion). electron-updater compares os.release() —
-          # the Darwin kernel version — against minimumSystemVersion, so an
-          # older Mac stops being offered a build it cannot open. Darwin 22 =
-          # macOS 13; it must be semver ("13.0" is ignored and the update is
-          # offered anyway). Stamped here, before this job uploads the manifest,
-          # so the merged one inherits it too. Moves with the Electron pin.
-          grep -q '^minimumSystemVersion:' "$yml" || printf 'minimumSystemVersion: 22.0.0\n' >> "$yml"
+          # Valuz requires macOS 15, including its bundled DSH native modules.
+          # electron-updater compares os.release(): macOS 15 is Darwin 24.
+          # Replace any older gate before uploading either architecture.
+          sed -i '' '/^minimumSystemVersion:/d' "$yml"
+          printf 'minimumSystemVersion: 24.0.0\n' >> "$yml"
           grep '^minimumSystemVersion:' "$yml"
 
       # electron-builder refuses to upload if the release was published >2h ago.
@@ -700,7 +694,7 @@ jobs:
             frontend/apps/desktop/release/latest.yml
           if-no-files-found: warn
 
-  # macOS ships as two separate arch builds (arm64 on macos-14, x64 on
+  # macOS ships as two separate arch builds (arm64 on macos-15, x64 on
   # macos-15-intel). electron-builder emits ONE arch-specific latest-mac.yml per
   # job, and uploading both to the same release left the later one (x64) as the
   # published manifest — so electron-updater on an Apple Silicon Mac, finding no

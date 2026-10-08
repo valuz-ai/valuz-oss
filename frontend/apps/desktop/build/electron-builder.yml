@@ -103,6 +103,8 @@ asarUnpack:
   - build/iconRounded.png
   - build/icon.ico
 mac:
+  # Product floor includes the bundled DSH native dependencies.
+  minimumSystemVersion: "15.0"
   target:
     - dmg
     - dir

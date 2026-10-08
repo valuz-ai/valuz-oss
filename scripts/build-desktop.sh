@@ -151,6 +151,17 @@ esac
 # injected separately via VALUZ_EDITION). Result example: ``darwin-arm64``.
 export VALUZ_DIST_TAG="${PLATFORM_TAG}-${ARCH_TAG}"
 
+# Resolve native backend wheels against the product floor, not the build host.
+UV_TARGET_ARGS=()
+if [ "$PLATFORM_TAG" = "darwin" ]; then
+  export MACOSX_DEPLOYMENT_TARGET=15.0
+  case "$ARCH_TAG" in
+    arm64) UV_TARGET_ARGS=(--python-platform aarch64-apple-darwin) ;;
+    amd64) UV_TARGET_ARGS=(--python-platform x86_64-apple-darwin) ;;
+    *) die "unsupported macOS Python architecture: $ARCH_TAG" ;;
+  esac
+fi
+
 log "Platform: $PLATFORM ($ARCH_RAW) | edition=$EDITION | dist tag=$VALUZ_DIST_TAG"
 
 # ============================================================
@@ -167,10 +178,10 @@ if ! $SKIP_BACKEND; then
 
   # Ensure dependencies are synced
   log "Syncing backend dependencies..."
-  uv sync --quiet
+  uv sync --quiet "${UV_TARGET_ARGS[@]}"
 
   # Install PyInstaller if not present
-  if ! uv run python -c "import PyInstaller" 2>/dev/null; then
+  if ! uv run "${UV_TARGET_ARGS[@]}" python -c "import PyInstaller" 2>/dev/null; then
     log "Installing PyInstaller..."
     uv add --dev pyinstaller --quiet
   fi
@@ -179,7 +190,7 @@ if ! $SKIP_BACKEND; then
   # --distpath/--workpath are CWD-relative (we're in backend/), so output stays at
   # backend/dist regardless of where the spec file lives.
   log "Running PyInstaller..."
-  uv run pyinstaller scripts/valuz_agent.spec \
+  uv run "${UV_TARGET_ARGS[@]}" pyinstaller scripts/valuz_agent.spec \
     --clean \
     --noconfirm \
     --distpath dist \

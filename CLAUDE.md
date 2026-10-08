@@ -171,7 +171,7 @@ Operational recipes:
   `gh release edit vX.Y.Z --notes-file <notes> --title "Valuz X.Y.Z"`.
 
 Runner quirks:
-- The mac-x64 job runs on `macos-15-intel` (arm64 on `macos-14`); see the
+- The mac-x64 job runs on `macos-15-intel` (arm64 on `macos-15`); see the
   `runs-on:` labels in `release-desktop.yml`. If a runner is slow to pick up, the
   other three platforms upload independently — cancel a stuck run once they're done.
 - Two `workflow_dispatch` runs on the same `--ref` share the

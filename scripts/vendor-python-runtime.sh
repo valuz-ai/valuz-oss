@@ -64,11 +64,10 @@ case "$TARGET" in
   *) echo "unsupported --target: $TARGET" >&2; exit 2 ;;
 esac
 
-# Build portable macOS wheels, rather than whichever optimized wheel fits the
-# newer build host. NumPy offers both macOS 11 and macOS 14 wheels at one pin.
-# Electron's supported floor is macOS 13; the latter wheel cannot run there.
+# Resolve wheels for Valuz's macOS 15 product floor, regardless of the build
+# host version. Keep the floor in the warm-cache stamp so older runtimes rebuild.
 WHEEL_PLATFORM=""
-MACOS_MINIMUM_VERSION="13.0"
+MACOS_MINIMUM_VERSION="15.0"
 case "$TARGET" in
   darwin-arm64) WHEEL_PLATFORM="aarch64-apple-darwin" ;;
   darwin-amd64) WHEEL_PLATFORM="x86_64-apple-darwin" ;;
