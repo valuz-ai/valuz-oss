@@ -28,8 +28,14 @@ module (or from ``runtime.py`` for backward-compat re-export).
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
+
+from src.core.hooks import SessionRef, mcp_tool_ref
+from src.core.hooks.freeze import freeze, thaw
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +59,109 @@ _ELICITATION_METHODS: frozenset[str] = frozenset({"mcpServer/elicitation/request
 _REQUEST_USER_INPUT_METHOD = "item/tool/requestUserInput"
 
 
+@dataclass(frozen=True)
+class McpApprovalItem:
+    """A typed SDK item/start, bound to the actual runtime execution snapshot."""
+
+    session: SessionRef
+    thread_id: str
+    turn_id: str
+    item_id: str
+    server: str
+    tool: str
+    arguments: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "arguments", freeze(self.arguments))
+
+
+def mcp_approval_key(
+    session: SessionRef, thread_id: str, turn_id: str, server: str, arguments: Mapping[str, Any]
+) -> tuple[SessionRef, str, str, str, str]:
+    """Canonical effect grouping for causal ambiguity, fenced to this execution."""
+    return (
+        session,
+        thread_id,
+        turn_id,
+        server,
+        json.dumps(thaw(arguments), sort_keys=True, separators=(",", ":"), allow_nan=False),
+    )
+
+
+def matching_mcp_approval_items(
+    params: dict[str, Any],
+    items: Sequence[McpApprovalItem],
+    *,
+    session: SessionRef,
+    thread_id: str,
+    turn_id: str,
+) -> tuple[McpApprovalItem, ...]:
+    """Correlate an approval RPC with one authoritative live MCP item.
+
+    Elicitation text/display/approved claims never identify a tool or effect.
+    Only real item/start provides its name; transport ids fence the lookup but
+    are excluded from the final effect arguments sent to the policy provider.
+    """
+    meta = params.get("_meta")
+    if (
+        not isinstance(meta, dict)
+        or meta.get("codex_approval_kind") != "mcp_tool_call"
+        or params.get("mode") != "form"
+        or params.get("threadId") != thread_id
+        or params.get("turnId") != turn_id
+        or not isinstance(meta.get("tool_params"), dict)
+    ):
+        return ()
+    server = params.get("serverName")
+    if not isinstance(server, str) or not session.tool_bindings.get(server):
+        return ()
+    candidates = [
+        item
+        for item in items
+        if item.session == session
+        and item.thread_id == thread_id
+        and item.turn_id == turn_id
+        and item.server == server
+        and item.tool
+        and thaw(item.arguments) == meta["tool_params"]
+        and (params.get("itemId") is None or params["itemId"] == item.item_id)
+    ]
+    return tuple(candidates)
+
+
+def decode_mcp_approval(
+    params: dict[str, Any],
+    items: Sequence[McpApprovalItem],
+    *,
+    session: SessionRef,
+    thread_id: str,
+    turn_id: str,
+) -> dict[str, Any] | None:
+    candidates = matching_mcp_approval_items(
+        params,
+        items,
+        session=session,
+        thread_id=thread_id,
+        turn_id=turn_id,
+    )
+    if len(candidates) != 1:
+        return None
+    item = candidates[0]
+    return {
+        "tool": mcp_tool_ref(item.server, item.tool).to_dict(),
+        "input": thaw(item.arguments),
+        "tool_use_id": item.item_id,
+        "effect_boundary": False,
+    }
+
+
 def _is_elicitation_method(method: str) -> bool:
     return method in _ELICITATION_METHODS
 
 
 def _classify_codex_subject(
     method: str,
-) -> Literal[
-    "shell_command", "file_change", "mcp_tool_call", "clarifying_questions", "tool_input"
-]:
+) -> Literal["shell_command", "file_change", "mcp_tool_call", "clarifying_questions", "tool_input"]:
     """Map a codex server-request method to the approval-card subject.
 
     Recognises the documented ``requestApproval`` methods,

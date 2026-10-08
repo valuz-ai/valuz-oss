@@ -58,6 +58,9 @@ from openai_codex.generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
     AskForApprovalValue,
+    ItemCompletedNotification,
+    ItemStartedNotification,
+    McpToolCallThreadItem,
     SandboxMode,
     TextUserInput,
     ThreadForkParams,
@@ -111,11 +114,15 @@ from src.core.types import (
 # ``runtime.py`` (e.g. tests written before the split) keep working.
 from src.runtimes.codex.approval_bridge import (
     _REQUEST_USER_INPUT_METHOD,
+    McpApprovalItem,
     _build_approval_response,
     _build_codex_pending_payload,
     _build_request_user_input_response,
     _classify_codex_subject,
     _extract_matcher_inputs,
+    decode_mcp_approval,
+    matching_mcp_approval_items,
+    mcp_approval_key,
 )
 from src.runtimes.codex.event_mapper import (
     extract_error,
@@ -296,6 +303,7 @@ class CodexRuntime:
         ) = None
 
     APPROVAL_TIMEOUT_SECONDS: float = 3600.0  # 1 h; class attr for test override
+    MCP_APPROVAL_ITEM_WAIT_SECONDS: float = 2.0
 
     # -- RuntimePort interface --
 
@@ -421,6 +429,10 @@ class CodexRuntime:
         self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         turn_attempt_id = uuid.uuid4().hex
+        self._mcp_approval_items: dict[str, McpApprovalItem] = {}
+        self._mcp_approval_retired_items: set[str] = set()
+        self._mcp_approval_history: dict[tuple[SessionRef, str, str, str, str], set[str]] = {}
+        self._mcp_approval_items_changed = asyncio.Event()
 
         try:
             from src.core.hooks.runtime_support import runtime_constraints
@@ -571,6 +583,7 @@ class CodexRuntime:
                 async for notification in stream:
                     if self._cancelled:
                         break
+                    self._observe_mcp_approval_item(notification)
 
                     for event in map_notification(notification):
                         # On a ``/compact`` turn, swallow the model's
@@ -791,6 +804,10 @@ class CodexRuntime:
             from src.core.hooks.runtime_support import release_runtime_constraints
 
             await release_runtime_constraints(self, "codex")
+            self._mcp_approval_items.clear()
+            self._mcp_approval_retired_items.clear()
+            self._mcp_approval_history.clear()
+            self._mcp_approval_items_changed.set()
             self._active_turn = None
             self._active_task = None
             await self.event_sink.emit(
@@ -1413,6 +1430,15 @@ class CodexRuntime:
     ) -> dict[str, Any]:
         """``tool.check`` with Valuz's approval (auto-accept or the card) as core."""
 
+        if method == "mcpServer/elicitation/request" and self._hook_session().registry.has_required(
+            TOOL_CHECK
+        ):
+            canonical = await self._decode_live_mcp_approval(params)
+            if canonical is None:
+                logger.warning("codex MCP approval has no unique verified execution item; denying")
+                return _build_approval_response(method, "reject", params)
+            data = canonical
+
         async def core(_event: HookEvent) -> ToolDecision:
             if self._cached_permission_mode != "default" and not getattr(
                 getattr(self, "_runtime_constraints", None), "human_review", False
@@ -1426,6 +1452,110 @@ class CodexRuntime:
         decision = await self._hook_session().dispatch(TOOL_CHECK, data, core)
         allowed = isinstance(decision, ToolDecision) and decision.behavior == "allow"
         return _build_approval_response(method, "approve" if allowed else "reject", params)
+
+    def _observe_mcp_approval_item(self, notification: Any) -> None:
+        payload = getattr(notification, "payload", None)
+        if not isinstance(payload, (ItemStartedNotification, ItemCompletedNotification)):
+            return
+        item = payload.item.root
+        if not isinstance(item, McpToolCallThreadItem):
+            return
+        if not hasattr(self, "_mcp_approval_items"):
+            return
+        if (
+            self._active_turn is None
+            or payload.thread_id != self._active_turn.thread_id
+            or payload.turn_id != self._active_turn.id
+        ):
+            return
+        if isinstance(payload, ItemCompletedNotification):
+            self._mcp_approval_items.pop(item.id, None)
+            self._mcp_approval_retired_items.add(item.id)
+        elif (
+            self._active_turn is not None
+            and payload.thread_id == self._active_turn.thread_id
+            and payload.turn_id == self._active_turn.id
+            and isinstance(item.arguments, dict)
+            and self._hook_session_ref is not None
+            and item.id not in self._mcp_approval_retired_items
+        ):
+            candidate = McpApprovalItem(
+                self._hook_session_ref,
+                payload.thread_id,
+                payload.turn_id,
+                item.id,
+                item.server,
+                item.tool,
+                item.arguments,
+            )
+            key = mcp_approval_key(
+                candidate.session,
+                candidate.thread_id,
+                candidate.turn_id,
+                candidate.server,
+                candidate.arguments,
+            )
+            self._mcp_approval_history.setdefault(key, set()).add(item.id)
+            previous = self._mcp_approval_items.get(item.id)
+            # Repeated item/start cannot replace its original execution identity.
+            if previous is None or previous == candidate:
+                self._mcp_approval_items[item.id] = candidate
+            else:
+                self._mcp_approval_items.pop(item.id, None)
+                self._mcp_approval_retired_items.add(item.id)
+        self._mcp_approval_items_changed.set()
+
+    async def _decode_live_mcp_approval(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        turn = self._active_turn
+        items = getattr(self, "_mcp_approval_items", {})
+        changed = getattr(self, "_mcp_approval_items_changed", None)
+        if turn is None or not isinstance(changed, asyncio.Event):
+            return None
+        deadline = asyncio.get_running_loop().time() + self.MCP_APPROVAL_ITEM_WAIT_SECONDS
+        while True:
+            changed.clear()
+            meta = params.get("_meta")
+            server = params.get("serverName")
+            if (
+                params.get("itemId") is None
+                and isinstance(meta, dict)
+                and isinstance(meta.get("tool_params"), dict)
+                and isinstance(server, str)
+            ):
+                key = mcp_approval_key(
+                    self._hook_session().session,
+                    turn.thread_id,
+                    turn.id,
+                    server,
+                    meta["tool_params"],
+                )
+                if len(self._mcp_approval_history.get(key, ())) > 1:
+                    return None  # Completion never erases causal ambiguity within a turn.
+            candidates = matching_mcp_approval_items(
+                params,
+                tuple(items.values()),
+                session=self._hook_session().session,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+            )
+            if len(candidates) > 1:
+                return None  # Never wait for another tool to finish to guess causality.
+            result = decode_mcp_approval(
+                params,
+                tuple(items.values()),
+                session=self._hook_session().session,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+            )
+            if result is not None:
+                return dict(result)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0 or self._active_turn is not turn:
+                return None
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=remaining)
+            except TimeoutError:
+                return None
 
     async def _await_host_decision_coro(
         self,
