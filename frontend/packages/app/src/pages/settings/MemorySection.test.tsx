@@ -183,6 +183,9 @@ describe("memory record management", () => {
     expect(api.correctRecord).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
     await screen.findByRole("button", { name: label("confirmLatest") });
+    const conflictAlert = within(screen.getByRole("dialog")).getByRole("alert");
+    expect(conflictAlert).toHaveTextContent(label("conflict"));
+    expect(conflictAlert.closest('[aria-hidden="true"]')).toBeNull();
     expect(api.correctRecord).toHaveBeenCalledTimes(1);
     expect(
       within(screen.getByRole("dialog")).getByText(
@@ -214,12 +217,47 @@ describe("memory record management", () => {
       target: { value: "correction" },
     });
     fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
-    await screen.findByText(label("unavailable"));
-    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    await within(screen.getByRole("dialog")).findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
     await waitFor(() => expect(api.correctRecord).toHaveBeenCalledTimes(2));
     expect(api.correctRecord.mock.calls[1]).toEqual(
       api.correctRecord.mock.calls[0],
     );
+  });
+
+  it("keeps a lost reply visibly uncertain inside the dialog and replays the same submission", async () => {
+    api.addRecord.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValue(receipt);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: label("addRecord") }));
+    fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "uncertain draft" } });
+    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    const dialog = screen.getByRole("dialog");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(label("saveUncertain"));
+    expect(within(dialog).queryByText(label("saveFailed"))).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "common.retry" }));
+    await waitFor(() => expect(api.addRecord).toHaveBeenCalledTimes(2));
+    expect(api.addRecord.mock.calls[1]).toEqual(api.addRecord.mock.calls[0]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it.each([new TypeError("timeout"), { status: 502 }, { status: 422, body: JSON.stringify({ detail: { code: "MEMORY_WRITE_UNKNOWN" } }) }])("shows uncertain writes accessibly for transport and unknown server outcomes: %j", async (cause) => {
+    api.correctRecord.mockRejectedValue(cause);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: label("correctRecord") }));
+    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    const alert = await within(screen.getByRole("dialog")).findByRole("alert");
+    expect(alert).toHaveTextContent(label("saveUncertain"));
+    expect(alert.closest('[aria-hidden="true"]')).toBeNull();
+    expect(screen.getByRole("button", { name: "common.retry" })).toBeEnabled();
+  });
+
+  it("keeps a definite validation rejection accessible in the form", async () => {
+    api.correctRecord.mockRejectedValue({ status: 422 });
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: label("correctRecord") }));
+    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent(label("saveFailed"));
+    expect(screen.queryByText(label("saveUncertain"))).not.toBeInTheDocument();
   });
 
   it("keeps the original authority binding when a failed save refreshes to another epoch", async () => {
@@ -229,8 +267,8 @@ describe("memory record management", () => {
     fireEvent.click(screen.getByRole("button", { name: label("correctRecord") }));
     fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "corrected" } });
     fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
-    await screen.findByText(label("unavailable"));
-    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    await within(screen.getByRole("dialog")).findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
     await waitFor(() => expect(api.correctRecord).toHaveBeenCalledTimes(2));
     expect(api.correctRecord.mock.calls[0][1]).toMatchObject({ authority_id: "a", authority_epoch: 2 });
     expect(api.correctRecord.mock.calls[1]).toEqual(api.correctRecord.mock.calls[0]);
@@ -241,7 +279,7 @@ describe("memory record management", () => {
     await loaded(false);
     fireEvent.click(screen.getByRole("button", { name: label("forgetRecord") }));
     fireEvent.click(screen.getByRole("button", { name: label("confirmForget") }));
-    await screen.findByText(label("cleanupIncomplete"));
+    await within(screen.getByRole("dialog")).findByText(label("cleanupIncomplete"), { exact: false });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: label("confirmForget") })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: label("confirmForget") }));

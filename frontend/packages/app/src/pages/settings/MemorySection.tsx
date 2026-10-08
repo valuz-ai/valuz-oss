@@ -472,9 +472,11 @@ export function MemoryRecordsPanel({
         }
       } else {
         setError(
-          codeOf(cause) === "memory.admission_recovery_required"
+          statusOf(cause) === undefined || (statusOf(cause) ?? 0) >= 500 ||
+            codeOf(cause) === "memory.admission_recovery_required" ||
+            codeOf(cause) === "MEMORY_WRITE_UNKNOWN"
             ? "saveUncertain"
-            : statusOf(cause) === 503 ? "unavailable" : "saveFailed",
+            : "saveFailed",
         );
       }
     } finally {
@@ -492,7 +494,7 @@ export function MemoryRecordsPanel({
           {notice}
         </p>
       )}
-      {error && (
+      {error && !writing && !forgetting && (
         <p role="alert" className="text-sm text-error-text">
           {label(error)}
         </p>
@@ -681,13 +683,13 @@ export function MemoryRecordsPanel({
         title={label(pending?.kind === "add" ? "addRecord" : "correctRecord")}
         description={label("contextLimit")}
         loading={busy}
-        submitLabel={label(pending?.conflict ? "confirmLatest" : "saveRecord")}
+        submitLabel={error === "saveUncertain" ? t("common.retry") : label(pending?.conflict ? "confirmLatest" : "saveRecord")}
         cancelLabel={t("common.cancel")}
         onSubmit={() => void submit()}
       >
-        {pending?.conflict && (
+        {error && (
           <p role="alert" className="text-sm text-error-text">
-            {label("conflict")}
+            {label(error)}
           </p>
         )}
         {pending?.conflict && pending.record && (
@@ -740,7 +742,7 @@ export function MemoryRecordsPanel({
           pending?.kind === "source" ? "forgetSource" : "forgetRecord",
         )}
         description={[
-          pending?.conflict ? label("conflict") : "",
+          error ? label(error) : "",
           label(
             pending?.kind === "source"
               ? "forgetSourceHint"
