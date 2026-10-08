@@ -372,7 +372,9 @@ async def init_kernel_dependencies() -> None:
     from app.config import AppConfig
     from app.dependencies import init_dependencies
 
-    await init_dependencies(AppConfig())
+    from valuz_agent.infra.config import settings
+
+    await init_dependencies(AppConfig(), recover_orphans=settings.deployment_type != "cloud")
 
     # No kernel-side owner default to seed: every kernel write stamps ``user_id``
     # explicitly (host → kernel_client → route → store), so there is nothing to

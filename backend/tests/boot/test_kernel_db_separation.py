@@ -69,13 +69,11 @@ async def split_db(tmp_path, monkeypatch):
 
             sb.run_host_migrations()
 
-            from app.config import AppConfig  # type: ignore[import-not-found]
             from app.dependencies import (  # type: ignore[import-not-found]
-                init_dependencies,
                 shutdown_dependencies,
             )
 
-            await init_dependencies(AppConfig())
+            await kb.init_kernel_dependencies()
             try:
                 yield host_db, kernel_db
             finally:
@@ -95,6 +93,44 @@ def _tables(path: Path) -> set[str]:
 
 
 KERNEL_TABLES = {"sessions", "messages", "events"}
+
+
+@pytest.mark.asyncio
+async def test_host_boot_does_not_repeat_completed_kernel_pending_recovery(split_db):
+    from app.dependencies import get_store, boot_orphan_recovery_complete
+    from src.core.agent_config import AgentConfig
+    from src.core.events import Event
+    from src.core.types import Message, Session, UserMessage
+    from valuz_agent.boot import steps
+
+    assert boot_orphan_recovery_complete()
+    store = get_store()
+    sid = uuid.uuid4().hex
+    await store.save_session(
+        Session(
+            id=sid,
+            user_id="recovery-owner",
+            cwd="/tmp",
+            agent_config=AgentConfig(id="a", name="test", model="m"),
+        )
+    )
+    msg = Message(
+        id=uuid.uuid4().hex,
+        session_id=sid,
+        user_message=UserMessage(text="resumed synthetic request"),
+        started_at=1,
+    )
+    await store.save_message("recovery-owner", msg)
+    await store.append_event(
+        "recovery-owner",
+        sid,
+        msg.id,
+        Event(type="requires_action", data={"pending_id": "new-after-boot"}),
+    )
+    await steps.seal_orphan_pendings()
+    assert [e.type for e in await store.get_events_for_message("recovery-owner", msg.id)] == [
+        "requires_action"
+    ]
 
 
 def test_kernel_env_keeps_deepagents_checkpoints_in_a_sibling_database(

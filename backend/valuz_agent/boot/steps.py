@@ -641,6 +641,24 @@ async def seal_orphan_pendings() -> None:
     if settings.is_http_kernel:
         return
 
+    if settings.deployment_type == "cloud":
+        from valuz_agent.adapters import kernel_client
+        from valuz_agent.modules.sessions.recovery import _sandbox_alive
+
+        try:
+            await kernel_client.scan_orphan_pendings(session_alive=_sandbox_alive)
+        except Exception:  # recovery is best effort; failed liveness never expires actions
+            logging.getLogger(__name__).exception("cloud pending recovery failed")
+        return
+
+    from app.dependencies import boot_orphan_recovery_complete
+
+    # init_kernel already recovered this orchestrator. Repeating the sweep
+    # scales boot with history twice and can expire newly resumed approvals.
+    # Keep the retry when dependency initialization could not finish recovery.
+    if boot_orphan_recovery_complete():
+        return
+
     from valuz_agent.adapters import kernel_client
 
     try:

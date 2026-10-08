@@ -739,8 +739,10 @@ class InProcessKernelClient:
     # -- In-process-only supervision hooks (no remote analog: a standalone
     # kernel runs its own orphan scans at startup; see app.dependencies). --
 
-    async def scan_orphan_pendings(self) -> int:
-        return await _orchestrator().scan_orphan_pendings()
+    async def scan_orphan_pendings(
+        self, *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+    ) -> int:
+        return await _orchestrator().scan_orphan_pendings(session_alive=session_alive)
 
     async def scan_orphan_runs(self) -> int:
         return await _orchestrator().scan_orphan_runs()
@@ -1605,8 +1607,12 @@ async def run_ephemeral_review_in_scope(
         _scope_cache.pop(req_id, None)
 
 
-async def scan_orphan_pendings() -> int:
-    return await client.scan_orphan_pendings()  # type: ignore[attr-defined]
+async def scan_orphan_pendings(
+    *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+) -> int:
+    if session_alive is None:
+        return await client.scan_orphan_pendings()  # type: ignore[attr-defined]
+    return await client.scan_orphan_pendings(session_alive=session_alive)  # type: ignore[attr-defined]
 
 
 async def scan_orphan_runs() -> int:

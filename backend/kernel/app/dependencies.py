@@ -34,6 +34,7 @@ _durable_engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _store: StorePort | None = None
 _orchestrator: SessionOrchestrator | None = None
+_boot_recovered_orchestrator: SessionOrchestrator | None = None
 # The kernel's runtime store (sqlite authority + DataService mirror), held by
 # its concrete type for introspection/tests. ``None`` only when no mirror
 # backend is configured (bare local / collapsed DSN → plain local store).
@@ -92,7 +93,7 @@ async def _session_claim_normalizer_factory(
     return build_session_claim_normalizer(user_id, session)
 
 
-async def init_dependencies(config: AppConfig) -> None:
+async def init_dependencies(config: AppConfig, *, recover_orphans: bool = True) -> None:
     """Initialize DB engine, session factory, store, and orchestrator.
 
     Also runs the orphan-pending scan: any ``requires_action`` event left
@@ -102,6 +103,8 @@ async def init_dependencies(config: AppConfig) -> None:
     """
     global _engine, _session_factory, _store, _orchestrator  # noqa: PLW0603
     global _durable_engine, _runtime_store  # noqa: PLW0603
+    global _boot_recovered_orchestrator  # noqa: PLW0603
+    _boot_recovered_orchestrator = None
     # Langfuse tracing bootstrap — no-op unless the LANGFUSE_* env is set and
     # the ``tracing`` extra is installed. Runs here for the STANDALONE kernel
     # (cloud sandbox); the in-process host initializes it in its own lifespan.
@@ -149,6 +152,12 @@ async def init_dependencies(config: AppConfig) -> None:
     # subprocesses; see SessionOrchestrator). Safe before the orphan scan's
     # possible early return so it runs regardless of migration state.
     _orchestrator.start()
+    # A shared host initializes the same services over its durable database,
+    # but cannot infer sandbox death from its own process restart. Its boot
+    # recovery supplies sandbox liveness; execution kernels recover their own
+    # lineage here as before.
+    if not recover_orphans:
+        return
     # Boot orphan scans sweep the kernel's OWN lineage — its runtime sqlite —
     # unconditionally: sessions live on other processes are structurally out of
     # reach (the kernel has no remote read path), so the sweep is safe in every
@@ -161,6 +170,7 @@ async def init_dependencies(config: AppConfig) -> None:
     except OperationalError as exc:
         logger.debug("Orphan scan skipped (schema not migrated): %s", exc)
         return
+    _boot_recovered_orchestrator = _orchestrator
     if sealed:
         logger.info("Sealed %d orphan pending approval(s) on startup", sealed)
     if reset_runs:
@@ -171,6 +181,7 @@ async def shutdown_dependencies() -> None:
     """Dispose engine and clear singletons. Called during app lifespan shutdown."""
     global _engine, _durable_engine, _session_factory, _store, _orchestrator  # noqa: PLW0603
     global _runtime_store  # noqa: PLW0603
+    global _boot_recovered_orchestrator  # noqa: PLW0603
     if _orchestrator is not None:
         # Cancel the idle sweeper and close every warm runtime — terminates all
         # live claude/codex subprocesses deterministically on shutdown.
@@ -190,6 +201,7 @@ async def shutdown_dependencies() -> None:
     _session_factory = None
     _store = None
     _orchestrator = None
+    _boot_recovered_orchestrator = None
     _runtime_store = None
 
 
@@ -396,6 +408,11 @@ def get_store() -> StorePort:
     if _store is None:
         raise RuntimeError("Dependencies not initialized — is the app lifespan running?")
     return _store
+
+
+def boot_orphan_recovery_complete() -> bool:
+    """Whether this exact orchestrator already completed its boot sweep."""
+    return _orchestrator is not None and _boot_recovered_orchestrator is _orchestrator
 
 
 def get_orchestrator() -> SessionOrchestrator:
