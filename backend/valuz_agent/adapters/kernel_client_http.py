@@ -23,8 +23,10 @@ its own orphan scans at startup and owns its runtime cache.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from urllib.parse import quote
+from uuid import uuid4
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, NoReturn
 
@@ -59,10 +61,10 @@ from valuz_agent.adapters.kernel_client import (  # noqa: E402
 )
 from valuz_agent.boot.kernel import kernel_api_prefix  # noqa: E402
 
-# Events that end a turn on the WS run channel. ``session_update`` with a
-# terminal status also closes turns for some runtimes, but every runtime
-# emits exactly one of these two as its final frame.
-_TURN_TERMINAL_EVENTS = frozenset({"session_idle", "session_error"})
+# Opt-in WS completion capability. The session event stream may replay an
+# earlier execution, so only a request-scoped reply identifies our result.
+_COMPLETION_CAPABILITY = "execution_request_id-v1"
+_CAPABILITY_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
 
 def _raise_for_status(status: int, detail: str) -> NoReturn:
@@ -520,16 +522,20 @@ class HttpKernelClient:
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         headers["X-Valuz-Owner-Id"] = user_id
+        headers["X-Valuz-Completion-Correlation"] = "1"
+        execution_request_id = str(uuid4())
         payload: dict[str, Any] = {
+            "execution_request_id": execution_request_id,
             "message": {
                 "text": text,
                 "attachments": attachments or [],
                 "additional_context": additional_context,
                 **({"metadata": input_metadata} if input_metadata is not None else {}),
-            }
+            },
         }
         if runtime_context is not None:
             payload["runtime_context"] = runtime_context
+        execution_message_id: str | None = None
         try:
             # The run channel carries a whole agent turn, which can legitimately
             # go quiet for long stretches (a slow tool call, a model streaming
@@ -547,6 +553,25 @@ class HttpKernelClient:
                 ping_interval=20,
                 ping_timeout=None,
             ) as ws:
+                # Old kernels never receive a turn: capability negotiation
+                # is bounded and precedes send, so callers can recover safely.
+                try:
+                    capability = json.loads(
+                        await asyncio.wait_for(
+                            ws.recv(), timeout=_CAPABILITY_HANDSHAKE_TIMEOUT_SECONDS
+                        )
+                    )
+                except (TimeoutError, ValueError) as exc:
+                    raise KernelNotImplementedError(
+                        501, "kernel lacks correlated completion"
+                    ) from exc
+                if (
+                    not isinstance(capability, dict)
+                    or capability.get("type") != "run_capabilities"
+                    or not isinstance(capability.get("data"), dict)
+                    or capability["data"].get("completion_correlation") != _COMPLETION_CAPABILITY
+                ):
+                    raise KernelNotImplementedError(501, "kernel lacks correlated completion")
                 await ws.send(json.dumps(payload))
                 while True:
                     frame = json.loads(await ws.recv())
@@ -555,14 +580,37 @@ class HttpKernelClient:
                         raise KernelClientError(
                             500, str((frame.get("data") or {}).get("message", "run failed"))
                         )
-                    if ftype in _TURN_TERMINAL_EVENTS:
+                    if ftype == "run_result":
+                        if (frame.get("data") or {}).get(
+                            "execution_request_id"
+                        ) != execution_request_id:
+                            raise KernelClientError(
+                                500, "completion belongs to another execution request"
+                            )
+                        message_id = (frame.get("data") or {}).get("message_id")
+                        if not isinstance(message_id, str) or not message_id:
+                            raise KernelClientError(
+                                500, "terminal event has no execution message id"
+                            )
+                        execution_message_id = message_id
                         break
         except websockets.exceptions.ConnectionClosed as exc:
             raise KernelUnavailableError(503, f"run channel closed: {exc}") from exc
         except OSError as exc:
             raise KernelUnavailableError(503, f"kernel unreachable: {exc}") from exc
 
-        messages = await self.list_messages(user_id, session_id, limit=1)
-        if not messages:
-            raise KernelClientError(500, "turn completed but no message row found")
-        return messages[0]
+        # A subsequent turn can already exist when REST readback starts. The
+        # request-scoped reply names the Message returned by this run_turn,
+        # after final persistence; session-bus replay never decides completion.
+        if execution_message_id is None:
+            raise KernelClientError(500, "turn has no execution message id")
+        message = await self.get_message(user_id, execution_message_id)
+        if (
+            message is None
+            or message.id != execution_message_id
+            or message.session_id != session_id
+            or message.status not in {"completed", "errored", "cancelled"}
+            or message.ended_at is None
+        ):
+            raise KernelClientError(500, "execution message is not durably finalized")
+        return message

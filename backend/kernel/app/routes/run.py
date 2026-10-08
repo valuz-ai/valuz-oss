@@ -118,6 +118,16 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
+    correlated_completion = websocket.headers.get("x-valuz-completion-correlation") == "1"
+    if correlated_completion:
+        await _send_safely(
+            websocket,
+            {
+                "type": "run_capabilities",
+                "data": {"completion_correlation": "execution_request_id-v1"},
+            },
+        )
+
     orchestrator = get_orchestrator()
     sink: EventSink = WebSocketEventSink(websocket)
 
@@ -130,25 +140,49 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
     current_run: asyncio.Task[Any] | None = None
 
     async def _execute_turn(
-        user_message: UserMessage, runtime_context: dict[str, str] | None = None
+        user_message: UserMessage,
+        runtime_context: dict[str, str] | None = None,
+        execution_request_id: str | None = None,
     ) -> None:
         try:
-            await orchestrator.run_turn(
+            message = await orchestrator.run_turn(
                 owner,
                 session_id,
                 user_message,
                 runtime_context=runtime_context,
             )
+            if execution_request_id is not None:
+                # This response belongs only to the submitted request, never
+                # to the session bus/replay; run_turn persisted this Message.
+                await _send_safely(
+                    websocket,
+                    {
+                        "type": "run_result",
+                        "data": {
+                            "execution_request_id": execution_request_id,
+                            "message_id": message.id,
+                        },
+                    },
+                )
         except SessionNotFoundError:
             await _send_safely(
                 websocket,
-                {"type": "error", "data": {"message": "Session not found"}},
+                {
+                    "type": "error",
+                    "data": {
+                        "message": "Session not found",
+                        "execution_request_id": execution_request_id,
+                    },
+                },
             )
         except Exception as run_exc:
             logger.exception("Runtime error for session %s", session_id)
             await _send_safely(
                 websocket,
-                {"type": "error", "data": {"message": str(run_exc)}},
+                {
+                    "type": "error",
+                    "data": {"message": str(run_exc), "execution_request_id": execution_request_id},
+                },
             )
 
     try:
@@ -196,6 +230,23 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                 )
                 continue
 
+            execution_request_id = msg.get("execution_request_id")
+            if correlated_completion and (
+                not isinstance(execution_request_id, str) or not execution_request_id
+            ):
+                await _send_safely(
+                    websocket,
+                    {
+                        "type": "error",
+                        "data": {
+                            "message": "execution_request_id must be a non-empty string",
+                        },
+                    },
+                )
+                continue
+            if not correlated_completion:
+                execution_request_id = None
+
             # Wait for the prior turn to finish before dispatching a new
             # one. Awaiting closes the brief race window where ``done()``
             # is still False after the final sink emit.
@@ -204,7 +255,11 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                     await current_run
 
             current_run = asyncio.create_task(
-                _execute_turn(user_message, runtime_context=runtime_context)
+                _execute_turn(
+                    user_message,
+                    runtime_context=runtime_context,
+                    execution_request_id=execution_request_id,
+                )
             )
 
     except WebSocketDisconnect:

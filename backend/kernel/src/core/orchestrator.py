@@ -647,7 +647,10 @@ class _MessageObserverSink:
         mode_persist: Callable[[str], Awaitable[None]] | None = None,
         session_id: str = "",
         input_metadata: dict[str, Any] | None = None,
+        defer_terminal_events: bool = False,
     ) -> None:
+        self._defer_terminal_events = defer_terminal_events
+        self._pending_error_events: list[Event] = []
         self._input_metadata = copy.deepcopy(input_metadata or {})
         self._inner = inner
         self._message_id = message_id
@@ -848,7 +851,7 @@ class _MessageObserverSink:
                 )
             self._task_coverage_continuation_active = False
             self._pending_idle_event = event
-            if not self._task_coverage_enabled:
+            if not self._task_coverage_enabled and not self._defer_terminal_events:
                 await self.finalize_sidecars()
                 await self.release_session_idle()
             return
@@ -863,6 +866,9 @@ class _MessageObserverSink:
                 and event.data.get("recovery") == "explicit_owner_retry"
             ):
                 self.error_payload["recovery"] = "explicit_owner_retry"
+            if self._defer_terminal_events:
+                self._pending_error_events.append(event)
+                return
 
         elif event.type == "usage_update":
             current = {
@@ -1463,6 +1469,10 @@ class _MessageObserverSink:
 
     async def release_session_idle(self) -> None:
         await self._complete_post_run_verification()
+        error_events = self._pending_error_events
+        self._pending_error_events = []
+        for error_event in error_events:
+            await self._inner.emit(error_event)
         event = self._pending_idle_event
         self._pending_idle_event = None
         if event is not None:
@@ -2058,6 +2068,7 @@ class SessionOrchestrator:
             session_id=session.id,
             user_prompt=current_task_prompt,
             input_metadata=user_message.metadata,
+            defer_terminal_events=True,
             citation_policy_available=any(Path(path).name == "citation" for path in session.skills),
             citation_quality_policy=citation_policy_snapshot,
             allowed_document_ids=document_scope,
@@ -2146,6 +2157,8 @@ class SessionOrchestrator:
             self._finalize_message(message, session, observer)
             await self._store.save_session(session)
             await self._store.save_message(user_id, message)
+            # Terminal consumers may read this exact Message immediately.
+            await observer.release_session_idle()
             await observer.emit(
                 Event(
                     type="session_update",
@@ -2279,7 +2292,7 @@ class SessionOrchestrator:
                         runtime.update_sink(observer)
             await observer.ensure_partial_assistant_message()
             await observer.finalize_sidecars()
-            await observer.release_session_idle()
+            await observer._complete_post_run_verification()
             # Native per-turn fork anchor (codex turn id / Claude transcript
             # uuid / deepagents checkpoint id / deepseek_harness event seq),
             # captured by the runtime during ``run()``. deepseek_harness
@@ -2324,6 +2337,8 @@ class SessionOrchestrator:
                     session.mode = fresh.mode
             await self._store.save_session(session)
             await self._store.save_message(user_id, message)
+            # Terminal consumers may read this exact Message immediately.
+            await observer.release_session_idle()
             await observer.emit(
                 Event(
                     type="session_update",
@@ -2457,10 +2472,12 @@ class SessionOrchestrator:
         )
         await observer.ensure_partial_assistant_message()
         await observer.finalize_sidecars()
-        await observer.release_session_idle()
+        await observer._complete_post_run_verification()
         self._finalize_message(message, session, observer)
         await self._store.save_session(session)
         await self._store.save_message(user_id, message)
+        # Terminal consumers may read this exact Message immediately.
+        await observer.release_session_idle()
         await observer.emit(
             Event(
                 type="session_update",
