@@ -441,7 +441,9 @@ class DeepSeekHarnessRuntime:
                 or self._hook_session().registry.has_required(TOOL_CALL)
             ):
                 entry = dsh_entry()
-                bridge = entry.parents[3] / "valuz-dsh-bundle/lib/hook-bridge.js" if entry else None
+                # The launcher is <bundle>/bin/dsh.mjs in both installed and
+                # packaged closures; validate the bridge in that same bundle.
+                bridge = entry.parent.parent / "lib/hook-bridge.js" if entry else None
                 if (
                     bridge is None
                     or not bridge.is_file()
