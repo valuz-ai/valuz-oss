@@ -303,6 +303,8 @@ type Mutation = {
   authorityId?: string | null;
   authorityEpoch?: number | null;
   conflict?: boolean;
+  uncertain?: boolean;
+  cleanupIncomplete?: boolean;
 };
 
 export function MemoryRecordsPanel({
@@ -334,7 +336,10 @@ export function MemoryRecordsPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<Mutation | null>(null);
+  const [confirmationOpen, setConfirmationOpen] = useState(true);
   const [notice, setNotice] = useState("");
+  const replayRequired = !!(pending?.uncertain || pending?.cleanupIncomplete);
+  const displayedError = pending?.uncertain ? "saveUncertain" : pending?.cleanupIncomplete ? "cleanupIncomplete" : error;
   const query = {
     offset,
     limit: 20,
@@ -367,6 +372,7 @@ export function MemoryRecordsPanel({
   }, [offset, scope, refresh, sameOwner]);
 
   function editContent(content: string) {
+    if (busy || replayRequired) return;
     setPending((current) =>
       current
         ? {
@@ -380,6 +386,19 @@ export function MemoryRecordsPanel({
           }
         : current,
     );
+  }
+
+  function begin(operation: Mutation) {
+    if (busy || replayRequired) return;
+    setPending(operation);
+    setConfirmationOpen(true);
+    setError("");
+  }
+
+  function closeConfirmation(open: boolean) {
+    if (busy) return;
+    setConfirmationOpen(open);
+    if (!open && !replayRequired) setPending(null);
   }
 
   async function submit() {
@@ -433,6 +452,7 @@ export function MemoryRecordsPanel({
       if (!receipt || !sameOwner()) return;
       setNotice(receipt.context_notice);
       if (receipt.maintenance_complete === false) {
+        setPending({ ...operation, uncertain: false, cleanupIncomplete: true });
         setError("cleanupIncomplete");
         setOffset(0);
         setRefresh((value) => value + 1);
@@ -449,6 +469,11 @@ export function MemoryRecordsPanel({
           const current = await memoryApi.listRecords(query);
           if (!sameOwner()) return;
           setPage(current);
+          if (operation.uncertain || operation.cleanupIncomplete) {
+            setPending(operation);
+            setError("saveUncertain");
+            return;
+          }
           setPending({
             ...operation,
             operationId: undefined,
@@ -460,6 +485,11 @@ export function MemoryRecordsPanel({
           setError("conflict");
         } catch {
           if (!sameOwner()) return;
+          if (operation.uncertain || operation.cleanupIncomplete) {
+            setPending(operation);
+            setError("saveUncertain");
+            return;
+          }
           setPending({
             ...operation,
             operationId: undefined,
@@ -471,13 +501,12 @@ export function MemoryRecordsPanel({
           setError("unavailable");
         }
       } else {
-        setError(
+        const uncertain = operation.uncertain ||
           statusOf(cause) === undefined || (statusOf(cause) ?? 0) >= 500 ||
             codeOf(cause) === "memory.admission_recovery_required" ||
-            codeOf(cause) === "MEMORY_WRITE_UNKNOWN"
-            ? "saveUncertain"
-            : "saveFailed",
-        );
+            codeOf(cause) === "MEMORY_WRITE_UNKNOWN";
+        setPending({ ...operation, uncertain });
+        setError(uncertain ? "saveUncertain" : "saveFailed");
       }
     } finally {
       if (sameOwner()) setBusy(false);
@@ -494,17 +523,23 @@ export function MemoryRecordsPanel({
           {notice}
         </p>
       )}
-      {error && !writing && !forgetting && (
+      {displayedError && (!confirmationOpen || (!writing && !forgetting)) && (
         <p role="alert" className="text-sm text-error-text">
-          {label(error)}
+          {label(displayedError)}
         </p>
+      )}
+      {replayRequired && !confirmationOpen && (
+        <Button variant="outline" disabled={busy} onClick={() => setConfirmationOpen(true)}>
+          {t("common.retry")}
+        </Button>
       )}
       <div className="flex flex-wrap items-center gap-3">
         <NativeSelect
           aria-label={label("scope")}
           value={scope}
-          disabled={busy}
+          disabled={busy || replayRequired}
           onChange={(event) => {
+            if (busy || replayRequired) return;
             setScope(event.target.value as typeof scope);
             setOffset(0);
           }}
@@ -527,9 +562,9 @@ export function MemoryRecordsPanel({
           {label("refreshRecords")}
         </Button>
         <Button
-          disabled={!enabled || !page || busy || loading}
+          disabled={!enabled || !page || busy || loading || replayRequired}
           onClick={() =>
-            setPending({ kind: "add", content: "", target: "user" })
+            begin({ kind: "add", content: "", target: "user" })
           }
         >
           {label("addRecord")}
@@ -596,9 +631,9 @@ export function MemoryRecordsPanel({
                           <Button
                             variant="ghost"
                             size="sm"
-                            disabled={busy || loading}
+                            disabled={busy || loading || replayRequired}
                             onClick={() =>
-                              setPending({
+                              begin({
                                 kind: "source",
                                 source,
                                 content: "",
@@ -615,9 +650,9 @@ export function MemoryRecordsPanel({
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={!enabled || busy || loading}
+                        disabled={!enabled || busy || loading || replayRequired}
                         onClick={() =>
-                          setPending({
+                          begin({
                             kind: "correct",
                             record,
                             content: record.content,
@@ -631,9 +666,9 @@ export function MemoryRecordsPanel({
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={busy || loading}
+                        disabled={busy || loading || replayRequired}
                         onClick={() =>
-                          setPending({
+                          begin({
                             kind: "forget",
                             record,
                             content: "",
@@ -676,20 +711,18 @@ export function MemoryRecordsPanel({
         </>
       ) : null}
       <FormDialog
-        open={!!writing}
-        onOpenChange={(open) => {
-          if (!open && !busy) setPending(null);
-        }}
+        open={!!writing && confirmationOpen}
+        onOpenChange={closeConfirmation}
         title={label(pending?.kind === "add" ? "addRecord" : "correctRecord")}
         description={label("contextLimit")}
         loading={busy}
-        submitLabel={error === "saveUncertain" ? t("common.retry") : label(pending?.conflict ? "confirmLatest" : "saveRecord")}
+        submitLabel={pending?.uncertain ? t("common.retry") : label(pending?.conflict ? "confirmLatest" : "saveRecord")}
         cancelLabel={t("common.cancel")}
         onSubmit={() => void submit()}
       >
-        {error && (
+        {displayedError && (
           <p role="alert" className="text-sm text-error-text">
-            {label(error)}
+            {label(displayedError)}
           </p>
         )}
         {pending?.conflict && pending.record && (
@@ -704,7 +737,9 @@ export function MemoryRecordsPanel({
             <NativeSelect
               id="memory-target"
               value={pending.target}
-              onChange={(event) =>
+              disabled={busy || replayRequired}
+              onChange={(event) => {
+                if (busy || replayRequired) return;
                 setPending({
                   ...pending,
                   target: event.target.value as "user" | "global",
@@ -712,8 +747,8 @@ export function MemoryRecordsPanel({
                   baseRevision: undefined,
             authorityId: undefined,
             authorityEpoch: undefined,
-                })
-              }
+                });
+              }}
             >
               <NativeSelectOption value="user">
                 {label("scopeUser")}
@@ -728,21 +763,19 @@ export function MemoryRecordsPanel({
           <Textarea
             id="memory-content"
             value={pending?.content ?? ""}
-            disabled={busy || !enabled}
+            disabled={busy || !enabled || replayRequired}
             onChange={(event) => editContent(event.target.value)}
           />
         </DialogField>
       </FormDialog>
       <DeleteConfirmDialog
-        open={!!forgetting}
-        onOpenChange={(open) => {
-          if (!open && !busy) setPending(null);
-        }}
+        open={!!forgetting && confirmationOpen}
+        onOpenChange={closeConfirmation}
         title={label(
           pending?.kind === "source" ? "forgetSource" : "forgetRecord",
         )}
         description={[
-          error ? label(error) : "",
+          displayedError ? label(displayedError) : "",
           label(
             pending?.kind === "source"
               ? "forgetSourceHint"
@@ -757,7 +790,7 @@ export function MemoryRecordsPanel({
           .filter(Boolean)
           .join("\n")}
         itemName={pending?.source?.source_id ?? pending?.record?.content}
-        confirmLabel={label(
+        confirmLabel={pending?.uncertain ? t("common.retry") : label(
           pending?.conflict ? "confirmLatest" : "confirmForget",
         )}
         cancelLabel={t("common.cancel")}

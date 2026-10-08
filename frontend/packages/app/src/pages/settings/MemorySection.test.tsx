@@ -260,6 +260,69 @@ describe("memory record management", () => {
     expect(screen.queryByText(label("saveUncertain"))).not.toBeInTheDocument();
   });
 
+  it("freezes an unknown add across attempted edits, target changes and dialog reopen", async () => {
+    api.listRecords.mockResolvedValue({ ...page, authority_id: "original-authority", authority_epoch: 7 });
+    api.addRecord.mockRejectedValueOnce(new TypeError("reply lost after commit")).mockResolvedValue(receipt);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: label("addRecord") }));
+    fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "original submitted content" } });
+    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    const dialog = screen.getByRole("dialog");
+    await within(dialog).findByRole("alert");
+    expect(within(dialog).getByLabelText(label("recordContent"))).toBeDisabled();
+    expect(within(dialog).getByLabelText(label("scope"))).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(label("recordContent")), { target: { value: "changed after lost reply" } });
+    fireEvent.change(within(dialog).getByLabelText(label("scope")), { target: { value: "global" } });
+    expect(within(dialog).getByLabelText(label("recordContent"))).toHaveValue("original submitted content");
+    fireEvent.click(within(dialog).getByRole("button", { name: "common.cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: label("addRecord") })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: label("scope") })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(label("saveUncertain"));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "common.retry" }));
+    await waitFor(() => expect(api.addRecord).toHaveBeenCalledTimes(2));
+    expect(api.addRecord.mock.calls[1]).toEqual(api.addRecord.mock.calls[0]);
+    expect(api.addRecord.mock.calls[1][0]).toMatchObject({ content: "original submitted content", target: "user", base_revision: 1, authority_id: "original-authority", authority_epoch: 7 });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: label("addRecord") }));
+    expect(screen.getByLabelText(label("recordContent"))).toBeEnabled();
+    expect(screen.getByLabelText(label("recordContent"))).toHaveValue("");
+  });
+
+  it("keeps an unknown forget's exact record and token when its dialog is dismissed", async () => {
+    api.forgetRecord.mockRejectedValueOnce(new TypeError("lost forget reply")).mockResolvedValue(receipt);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: label("forgetRecord") }));
+    fireEvent.click(screen.getByRole("button", { name: label("confirmForget") }));
+    await within(screen.getByRole("dialog")).findByText(label("saveUncertain"), { exact: false });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "common.cancel" }));
+    expect(screen.getByRole("button", { name: label("forgetSource") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: label("correctRecord") })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("stable-memory-id");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "common.retry" }));
+    await waitFor(() => expect(api.forgetRecord).toHaveBeenCalledTimes(2));
+    expect(api.forgetRecord.mock.calls[1]).toEqual(api.forgetRecord.mock.calls[0]);
+  });
+
+  it("allows a new explicit payload after a definite rejection", async () => {
+    api.addRecord.mockRejectedValueOnce({ status: 422 }).mockResolvedValue(receipt);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: label("addRecord") }));
+    fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "rejected content" } });
+    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    await within(screen.getByRole("dialog")).findByRole("alert");
+    expect(screen.getByLabelText(label("recordContent"))).toBeEnabled();
+    expect(within(screen.getByRole("dialog")).getByLabelText(label("scope"))).toBeEnabled();
+    fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "new intent" } });
+    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText(label("scope")), { target: { value: "global" } });
+    fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+    await waitFor(() => expect(api.addRecord).toHaveBeenCalledTimes(2));
+    expect(api.addRecord.mock.calls[1][0]).toMatchObject({ content: "new intent", target: "global" });
+    expect(api.addRecord.mock.calls[1][0].operation_id).not.toBe(api.addRecord.mock.calls[0][0].operation_id);
+  });
+
   it("keeps the original authority binding when a failed save refreshes to another epoch", async () => {
     api.listRecords.mockResolvedValue({ ...page, authority_id: "a", authority_epoch: 2 });
     api.correctRecord.mockRejectedValueOnce({ status: 503 }).mockResolvedValue(receipt);
@@ -439,4 +502,23 @@ it("ignores old settings and record promises that resolve after switching the ac
   expect(
     screen.getByRole("button", { name: label("addRecord") }),
   ).toBeDisabled();
+});
+
+it("drops the prior owner's uncertain draft when identity changes", async () => {
+  account("owner-a");
+  api.addRecord.mockRejectedValue(new TypeError("reply lost"));
+  render(<MemorySection />);
+  await screen.findByText("old preference");
+  fireEvent.click(screen.getByRole("button", { name: label("addRecord") }));
+  fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "A submitted private draft" } });
+  fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
+  await within(screen.getByRole("dialog")).findByRole("alert");
+  api.listRecords.mockResolvedValue({ ...page, records: [], total: 0 });
+  account("owner-b");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("button", { name: label("addRecord") })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: label("addRecord") }));
+  expect(screen.getByLabelText(label("recordContent"))).toHaveValue("");
+  expect(screen.getByLabelText(label("recordContent"))).toBeEnabled();
+  expect(screen.queryByText(label("saveUncertain"))).not.toBeInTheDocument();
 });
