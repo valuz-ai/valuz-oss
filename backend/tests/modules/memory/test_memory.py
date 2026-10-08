@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -33,7 +34,8 @@ def store(tmp_path, monkeypatch):  # noqa: ANN001, ANN201
 
 
 def _root(tmp_path):  # noqa: ANN001, ANN202
-    return tmp_path / "app" / "memories"
+    owner_key = hashlib.sha256(b"local-test-owner").hexdigest()
+    return tmp_path / "app" / "memories" / "owners" / owner_key
 
 
 def test_add_creates_file(store, tmp_path):

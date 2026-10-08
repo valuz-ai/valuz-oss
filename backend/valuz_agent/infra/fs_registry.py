@@ -29,6 +29,7 @@ via ``project_cwd()``.
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import tempfile
 from collections.abc import Callable
@@ -674,12 +675,14 @@ class FsRegistry:
 
     # ---- FS-12 — memory store directories (memory-system-design §3) ----
     #
-    #   global  → <data_dir>/memories/               (root IS the global namespace)
-    #   project → <data_dir>/memories/projects/<id>/ (per-project, keyed by project_id)
+    #   global  → <data_dir>/memories/owners/<owner hash>/
+    #   project → <owner memory root>/projects/<id>/
     #
     # Centralized under the valuz data dir (never inside a user's bound repo) and
-    # keyed by stable ``project_id`` (decoupled from ``project.cwd``). global holds
-    # the flat ``USER.md`` + ``MEMORY.md``; each project dir holds ``MEMORY.md``.
+    # Always owner-scoped even when DATA_DIR has no user template. The digest
+    # uses the original owner identity, so filesystem sanitization cannot merge
+    # two owners. Old flat files have no provable owner; leave them untouched
+    # for explicit import, never adopt them during reads or deletes.
     # Returns (and creates) the scope directory.
 
     def memory_dir(
@@ -689,14 +692,18 @@ class FsRegistry:
         *,
         project_id: str | None = None,
     ) -> Path:
+        if not user_id:
+            raise ValueError("user_id is required for owner-scoped memory")
+        owner_key = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+        root = self.data_dir(user_id) / "memories" / "owners" / owner_key
         if scope == "global":
-            path = self.data_dir(user_id) / "memories"
+            path = root
         elif scope == "project":
             if not project_id:
                 raise ValueError("project memory requires project_id")
-            if "/" in project_id or ".." in project_id:
+            if "/" in project_id or "\\" in project_id or ".." in project_id:
                 raise ValueError(f"invalid project_id: {project_id!r}")
-            path = self.data_dir(user_id) / "memories" / "projects" / project_id
+            path = root / "projects" / project_id
         else:  # pragma: no cover - guarded by Literal
             raise ValueError(f"unknown memory scope: {scope!r}")
         path.mkdir(parents=True, exist_ok=True)
@@ -704,14 +711,14 @@ class FsRegistry:
 
     # ---- FS-13 — memory review scratch cwd (memory-system-design §7.2) ----
     #
-    # ONE fixed cwd shared by every ephemeral extraction session. Runtimes key
+    # ONE fixed owner-scoped cwd shared by that owner's extraction sessions. Runtimes key
     # per-project artifacts on the session cwd (claude-agent-sdk keeps
     # transcripts under ``~/.claude/projects/<encoded-cwd>/``), so a fresh cwd
     # per review leaked one such directory per extraction. The review session
     # is no-tools and never writes here — sharing is safe.
 
     def memory_review_cwd(self, user_id: str) -> Path:
-        path = self.data_dir(user_id) / "memory-review"
+        path = self.memory_dir(user_id, "global") / "memory-review"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
