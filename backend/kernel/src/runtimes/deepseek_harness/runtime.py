@@ -915,6 +915,24 @@ class DeepSeekHarnessRuntime:
 
     async def _ensure_process_locked(self, session: Session) -> None:
         if self._client is not None and self._client.is_running:
+            # An idle/background UI prepare must not erase the actual run
+            # scope with its at-rest Session (which has no Message binding).
+            if self._active_task is not asyncio.current_task():
+                return
+            # The CLI/process token stays warm; its guard context is per turn.
+            self._hook_session_ref = SessionRef.from_session(session)
+            hooks = self._hook_session()
+            if self._hook_bridge_token is not None:
+                from src.core.hooks.remote import get_remote_hooks
+
+                remote = get_remote_hooks(self._hook_bridge_token)
+                if remote is None:
+                    raise RuntimeError("Warm native hook registration is missing")
+                remote.rebind(hooks)
+            if self._mcp_proxy_session_id is not None:
+                from src.runtimes.mcp_proxy import refresh_session_proxy
+
+                await refresh_session_proxy(self._mcp_proxy_session_id, session.mcp_servers, hooks)
             return
         t_init = time.monotonic()
         old_client = self._client

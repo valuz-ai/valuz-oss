@@ -808,6 +808,9 @@ class ClaudeAgentRuntime:
 
         session.status = "running"
         self._session = session
+        # Warm SDK callbacks/proxies must use this persisted execution, not
+        # the SessionRef captured when the native client was first spawned.
+        self._hook_session_ref = SessionRef.from_session(session)
         # Per-turn state — todo tool_use_ids are scoped to a single
         # query()/receive_response() cycle.
         self._todo_tool_use_ids = set()
@@ -1921,7 +1924,15 @@ class ClaudeAgentRuntime:
     # -- Options building --
 
     def _build_options(self, session: Session) -> ClaudeAgentOptions:
-        self._hook_session_ref = SessionRef.from_session(session)
+        active = getattr(self, "_session", None)
+        hook_session = (
+            active
+            if active is not None
+            and active.status == "running"
+            and active.execution_message_id is not None
+            else session
+        )
+        self._hook_session_ref = SessionRef.from_session(hook_session)
         self._workspace_untrusted = is_workspace_untrusted(session)
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()

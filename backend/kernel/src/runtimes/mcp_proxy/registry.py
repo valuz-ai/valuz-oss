@@ -156,6 +156,13 @@ async def refresh_session_proxy(
         entry = _SESSIONS.get(session_id)
         if entry is None:
             raise RuntimeError("Warm MCP proxy registration is missing")
+        before, after = entry.hooks.session, hooks.session
+        if (before.user_id, before.session_id, before.runtime_provider) != (
+            after.user_id,
+            after.session_id,
+            after.runtime_provider,
+        ) or after.session_id != session_id:
+            raise RuntimeError("Warm MCP proxy owner or session changed")
         current = {cfg.name: cfg for cfg in selected if cfg.name in entry.advertised_names}
         refreshed: dict[str, McpUpstream] = {}
         for name, config in current.items():
