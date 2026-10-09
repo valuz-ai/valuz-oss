@@ -12,8 +12,11 @@ import {
   LoadingState,
   FormDialog,
   DialogField,
-  NativeSelect,
-  NativeSelectOption,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
 } from "@valuz/ui";
 import {
   memoryApi,
@@ -534,26 +537,24 @@ export function MemoryRecordsPanel({
         </Button>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <NativeSelect
-          aria-label={label("scope")}
+        <Select
           value={scope}
           disabled={busy || replayRequired}
-          onChange={(event) => {
+          onValueChange={(value) => {
             if (busy || replayRequired) return;
-            setScope(event.target.value as typeof scope);
+            setScope(value as typeof scope);
             setOffset(0);
           }}
         >
-          <NativeSelectOption value="all">
-            {label("allScopes")}
-          </NativeSelectOption>
-          <NativeSelectOption value="user">
-            {label("scopeUser")}
-          </NativeSelectOption>
-          <NativeSelectOption value="global">
-            {label("scopeGlobal")}
-          </NativeSelectOption>
-        </NativeSelect>
+          <SelectTrigger size="sm" aria-label={label("scope")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{label("allScopes")}</SelectItem>
+            <SelectItem value="user">{label("scopeUser")}</SelectItem>
+            <SelectItem value="global">{label("scopeGlobal")}</SelectItem>
+          </SelectContent>
+        </Select>
         <Button
           variant="outline"
           disabled={loading || busy}
@@ -734,29 +735,29 @@ export function MemoryRecordsPanel({
         )}
         {pending?.kind === "add" && (
           <DialogField label={label("scope")} htmlFor="memory-target">
-            <NativeSelect
-              id="memory-target"
+            <Select
               value={pending.target}
               disabled={busy || replayRequired}
-              onChange={(event) => {
+              onValueChange={(value) => {
                 if (busy || replayRequired) return;
                 setPending({
                   ...pending,
-                  target: event.target.value as "user" | "global",
+                  target: value as "user" | "global",
                   operationId: undefined,
                   baseRevision: undefined,
-            authorityId: undefined,
-            authorityEpoch: undefined,
+                  authorityId: undefined,
+                  authorityEpoch: undefined,
                 });
               }}
             >
-              <NativeSelectOption value="user">
-                {label("scopeUser")}
-              </NativeSelectOption>
-              <NativeSelectOption value="global">
-                {label("scopeGlobal")}
-              </NativeSelectOption>
-            </NativeSelect>
+              <SelectTrigger size="sm" id="memory-target" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="user">{label("scopeUser")}</SelectItem>
+                <SelectItem value="global">{label("scopeGlobal")}</SelectItem>
+              </SelectContent>
+            </Select>
           </DialogField>
         )}
         <DialogField label={label("recordContent")} htmlFor="memory-content">

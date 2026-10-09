@@ -164,12 +164,15 @@ function useNavItems(): DesktopSidebarBottomItem[] {
 }
 
 /** Custom labeled sidebar groups from the active profile, labels translated. */
-function useNavGroups(): { id: string; label: string }[] {
+function useNavGroups() {
   const { t } = useTranslation();
   const navGroups = useRegistryStore((state) => state.navGroups);
   return navGroups.map((group) => ({
     id: group.id,
     label: t(group.label as Parameters<typeof t>[0]),
+    presentation: group.presentation,
+    icon: group.icon,
+    itemIds: group.itemIds,
   }));
 }
 

@@ -12,8 +12,11 @@ import {
   FormField,
   Input,
   LoadingState,
-  NativeSelect,
-  NativeSelectOption,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
   Switch,
   Textarea,
 } from "@valuz/ui";
@@ -70,29 +73,51 @@ const FieldControl = ({
           onCheckedChange={onChange}
         />
       );
-    case "enum":
-      return (
-        <NativeSelect
-          id={id}
-          value={String(value)}
-          disabled={disabled}
-          aria-invalid={invalid}
-          onChange={(event) => onChange(event.target.value)}
-        >
-          {/* An optional enum can stay unset; a required one shows the
-              blank only until a member is picked. */}
-          {!field.required || value === "" ? (
-            <NativeSelectOption value="">
-              {t("pluginSettings.appPlugins.config.unset")}
-            </NativeSelectOption>
-          ) : null}
-          {field.options.map((option) => (
-            <NativeSelectOption key={String(option)} value={String(option)}>
-              {String(option)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+    case "enum": {
+      // Radix reserves the empty string for its placeholder. Encode options
+      // by index so any manifest value (including "unset") remains unambiguous.
+      const selected = field.options.findIndex(
+        (option) => String(option) === String(value),
       );
+      const selectedValue =
+        value === "" || selected < 0 ? "" : `option-${selected}`;
+      return (
+        <Select
+          value={selectedValue}
+          disabled={disabled}
+          onValueChange={(next) =>
+            onChange(
+              next === "unset"
+                ? ""
+                : String(field.options[Number(next.slice(7))]),
+            )
+          }
+        >
+          <SelectTrigger
+            id={id}
+            size="sm"
+            className="w-full"
+            aria-invalid={invalid}
+          >
+            <SelectValue
+              placeholder={t("pluginSettings.appPlugins.config.unset")}
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {!field.required && (
+              <SelectItem value="unset">
+                {t("pluginSettings.appPlugins.config.unset")}
+              </SelectItem>
+            )}
+            {field.options.map((option, index) => (
+              <SelectItem key={index} value={`option-${index}`}>
+                {String(option)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
     case "string-list":
       return (
         <Textarea

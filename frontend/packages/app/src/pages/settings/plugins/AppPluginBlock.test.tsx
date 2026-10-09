@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -706,7 +707,8 @@ describe("AppPluginBlock — config", () => {
     await userEvent.type(await dialog.findByLabelText("令牌 *"), "abc");
     // The schema default shows up in the form.
     expect((dialog.getByLabelText("retries") as HTMLInputElement).value).toBe("3");
-    await userEvent.selectOptions(dialog.getByLabelText("区域"), "hk");
+    fireEvent.keyDown(dialog.getByRole("combobox", { name: "区域" }), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "hk" }), { key: "Enter" });
     await userEvent.type(dialog.getByLabelText("标签"), "a{enter}b");
     await userEvent.click(dialog.getByRole("button", { name: "保存" }));
     await waitFor(() =>
@@ -723,6 +725,40 @@ describe("AppPluginBlock — config", () => {
       expect(toast.success).toHaveBeenCalledWith("配置已保存"),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("can clear an optional enum after selection without persisting a UI sentinel", async () => {
+    const put = vi.spyOn(appPluginsApi, "putConfig").mockResolvedValue({ values: {}, schema: SCHEMA });
+    const dialog = await open();
+    await userEvent.type(await dialog.findByLabelText("令牌 *"), "abc");
+    fireEvent.keyDown(dialog.getByRole("combobox", { name: "区域" }), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "hk" }), { key: "Enter" });
+    fireEvent.keyDown(dialog.getByRole("combobox", { name: "区域" }), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "未设置" }), { key: "Enter" });
+    await userEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("acme.dash", { keep: 1, token: "abc", retries: 3, verbose: true }));
+  });
+
+  it("keeps a required enum placeholder and maps sentinel-like manifest values correctly", async () => {
+    const schema = {
+      ...SCHEMA,
+      required: ["token", "region"],
+      properties: { ...SCHEMA.properties, region: { type: "string", enum: ["unset", "option-0"], title: "区域" } },
+    };
+    vi.spyOn(appPluginsApi, "getConfig").mockResolvedValue({ values: {}, schema });
+    const put = vi.spyOn(appPluginsApi, "putConfig").mockResolvedValue({ values: {}, schema });
+    const view = await renderBlock([plugin({ config_schema: schema })]);
+    await userEvent.click(within(rowOf(view.container, "acme.dash")).getByRole("button", { name: "配置" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await userEvent.type(await dialog.findByLabelText("令牌 *"), "abc");
+    await userEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(dialog.getByText("区域 为必填项")).toBeTruthy();
+    expect(put).not.toHaveBeenCalled();
+    fireEvent.keyDown(dialog.getByRole("combobox", { name: "区域 *" }), { key: "ArrowDown" });
+    expect(screen.queryByRole("option", { name: "未设置" })).toBeNull();
+    fireEvent.keyDown(await screen.findByRole("option", { name: "unset" }), { key: "Enter" });
+    await userEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("acme.dash", { token: "abc", retries: 3, verbose: true, region: "unset" }));
   });
 
   it("rejects a non-integer before sending", async () => {

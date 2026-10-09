@@ -272,7 +272,8 @@ describe("memory record management", () => {
     expect(within(dialog).getByLabelText(label("recordContent"))).toBeDisabled();
     expect(within(dialog).getByLabelText(label("scope"))).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText(label("recordContent")), { target: { value: "changed after lost reply" } });
-    fireEvent.change(within(dialog).getByLabelText(label("scope")), { target: { value: "global" } });
+    fireEvent.keyDown(within(dialog).getByLabelText(label("scope")), { key: "ArrowDown" });
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
     expect(within(dialog).getByLabelText(label("recordContent"))).toHaveValue("original submitted content");
     fireEvent.click(within(dialog).getByRole("button", { name: "common.cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -316,7 +317,8 @@ describe("memory record management", () => {
     expect(screen.getByLabelText(label("recordContent"))).toBeEnabled();
     expect(within(screen.getByRole("dialog")).getByLabelText(label("scope"))).toBeEnabled();
     fireEvent.change(screen.getByLabelText(label("recordContent")), { target: { value: "new intent" } });
-    fireEvent.change(within(screen.getByRole("dialog")).getByLabelText(label("scope")), { target: { value: "global" } });
+    fireEvent.keyDown(within(screen.getByRole("dialog")).getByLabelText(label("scope")), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: label("scopeGlobal") }), { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: label("saveRecord") }));
     await waitFor(() => expect(api.addRecord).toHaveBeenCalledTimes(2));
     expect(api.addRecord.mock.calls[1][0]).toMatchObject({ content: "new intent", target: "global" });
@@ -385,9 +387,8 @@ describe("memory record management", () => {
         expect.any(Object),
       ),
     );
-    fireEvent.change(screen.getByRole("combobox", { name: label("scope") }), {
-      target: { value: "global" },
-    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: label("scope") }), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: label("scopeGlobal") }), { key: "Enter" });
     await waitFor(() =>
       expect(api.listRecords).toHaveBeenLastCalledWith(
         { offset: 0, limit: 20, target: "global" },

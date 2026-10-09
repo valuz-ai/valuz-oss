@@ -129,7 +129,7 @@ describe("DesktopSidebar", () => {
     href: `/projects/p${i + 1}`,
   }));
 
-  it("caps the project list at ten behind a show-more toggle", async () => {
+  it("caps the project list at five behind a show-more toggle", async () => {
     render(
       <DesktopSidebar
         activePath="/projects"
@@ -138,8 +138,8 @@ describe("DesktopSidebar", () => {
       />,
     );
 
-    expect(screen.getByText("工作区 10")).toBeTruthy();
-    expect(screen.queryByText("工作区 11")).toBeNull();
+    expect(screen.getByText("工作区 5")).toBeTruthy();
+    expect(screen.queryByText("工作区 6")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "展开" }));
 
@@ -150,14 +150,14 @@ describe("DesktopSidebar", () => {
   it("holds the project list open when the active project sits past the cap", () => {
     render(
       <DesktopSidebar
-        activePath="/projects/p12"
-        activeProjectId="p12"
+        activePath="/projects/p6"
+        activeProjectId="p6"
         projectGroups={manyProjects}
         bottomItems={[]}
       />,
     );
 
-    expect(screen.getByText("工作区 12")).toBeTruthy();
+    expect(screen.getByText("工作区 6")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "展开" })).toBeNull();
     expect(screen.queryByRole("button", { name: "收起" })).toBeNull();
   });
