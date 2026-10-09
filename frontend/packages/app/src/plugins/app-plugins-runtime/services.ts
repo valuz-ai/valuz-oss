@@ -76,8 +76,13 @@ async function openExternalUrl(url: string): Promise<void> {
 }
 
 function navigateWithoutRouter(path: string, state?: unknown): void {
+  // ``valuz-app:`` is the packaged desktop's renderer scheme (main process
+  // ``renderer-protocol.ts``) — a standard scheme like the dev server, but the
+  // app is hash-routed there just as it was under ``file:``.
   const hashRouted =
-    window.location.protocol === "file:" || window.location.hash.startsWith("#/");
+    window.location.protocol === "file:" ||
+    window.location.protocol === "valuz-app:" ||
+    window.location.hash.startsWith("#/");
   if (hashRouted) {
     window.location.hash = path;
     return;
@@ -158,7 +163,10 @@ export function createAppPluginHostServices(): HostServices {
     subscribeHostContext(listener) {
       const offStore = useRegistryStore.subscribe(listener);
       let observer: MutationObserver | null = null;
-      if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
+      if (
+        typeof MutationObserver !== "undefined" &&
+        typeof document !== "undefined"
+      ) {
         observer = new MutationObserver(listener);
         observer.observe(document.documentElement, {
           attributes: true,
@@ -173,7 +181,11 @@ export function createAppPluginHostServices(): HostServices {
 
     registerLocales(pluginId, locales) {
       for (const [locale, tree] of Object.entries(locales)) {
-        registerLocaleNamespace(`appPlugin.${pluginId}`, locale as LocaleCode, tree);
+        registerLocaleNamespace(
+          `appPlugin.${pluginId}`,
+          locale as LocaleCode,
+          tree,
+        );
       }
     },
   };
