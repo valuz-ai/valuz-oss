@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import JSON, cast, delete, exists, func, literal, or_, select, update
+from sqlalchemy import JSON, and_, cast, delete, exists, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 from src.adapters.sqlalchemy_store.converters import (
     event_to_model,
     message_to_model,
@@ -188,6 +189,45 @@ class SQLAlchemyStore:
             await db.commit()
             return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
+    async def list_pending_action_session_keys(
+        self, *, after_session_id: str | None = None, limit: int = 500
+    ) -> list[tuple[str, str]]:
+        """Boot-only candidates; avoid loading every historical session/config.
+
+        Resolution is scoped to both owner and session. A reused pending id is
+        open again when its new requires_action follows the previous resolution.
+        Keyset pagination stays valid while recovery resolves earlier pages.
+        """
+        pending = aliased(EventModel)
+        resolved = aliased(EventModel)
+        resolved_after = exists(
+            select(1).where(
+                resolved.user_id == pending.user_id,
+                resolved.session_id == pending.session_id,
+                resolved.type == "action_resolved",
+                resolved.data["pending_id"].as_string() == pending.data["pending_id"].as_string(),
+                or_(
+                    resolved.timestamp > pending.timestamp,
+                    and_(resolved.timestamp == pending.timestamp, resolved.id > pending.id),
+                ),
+            ).correlate(pending)
+        )
+        has_pending = exists(
+            select(1).where(
+                pending.user_id == SessionModel.user_id,
+                pending.session_id == SessionModel.id,
+                pending.type == "requires_action",
+                pending.data["pending_id"].as_string().is_not(None),
+                ~resolved_after,
+            ).correlate(SessionModel)
+        )
+        stmt = select(SessionModel.user_id, SessionModel.id).where(has_pending)
+        if after_session_id is not None:
+            stmt = stmt.where(SessionModel.id > after_session_id)
+        async with self._session_factory() as db:
+            rows = await db.execute(stmt.order_by(SessionModel.id).limit(limit))
+            return [(row[0], row[1]) for row in rows]
+
     # -- Message CRUD --
 
     async def save_message(self, user_id: str, message: Message) -> None:
@@ -274,7 +314,7 @@ class SQLAlchemyStore:
             stmt = (
                 select(EventModel)
                 .where(EventModel.session_id == session_id, EventModel.user_id == user_id)
-                .order_by(EventModel.timestamp)
+                .order_by(EventModel.timestamp, EventModel.id)
                 .offset(offset)
                 .limit(limit)
             )

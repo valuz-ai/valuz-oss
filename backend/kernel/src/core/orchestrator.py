@@ -3124,7 +3124,9 @@ class SessionOrchestrator:
                 resolved = ev
         return pending, resolved
 
-    async def scan_orphan_pendings(self) -> int:
+    async def scan_orphan_pendings(
+        self, *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+    ) -> int:
         """Seal every still-open ``requires_action`` with a synthetic
         ``action_resolved(decision="expired", resolved_by="system")``.
 
@@ -3134,6 +3136,20 @@ class SessionOrchestrator:
         do better. Returns the number of synthetic resolutions emitted.
         """
         sealed = 0
+        candidates = getattr(self._store, "list_pending_action_session_keys", None)
+        if callable(candidates):
+            cursor = None
+            while True:
+                keys = await candidates(after_session_id=cursor, limit=500)
+                if keys is None:  # older/remote adapters retain their existing sweep
+                    break
+                for owner, sid in keys:
+                    if session_alive is not None and await session_alive(owner, sid):
+                        continue
+                    sealed += await self._seal_session_pendings(owner, sid)
+                if len(keys) < 500:
+                    return sealed
+                cursor = keys[-1][1]
         # Own-lineage sweep: ``self._store`` reads are the kernel's runtime
         # sqlite (RuntimeStore authority) — sessions live on other processes
         # are structurally out of reach, so this is safe in every deployment.
@@ -3146,6 +3162,8 @@ class SessionOrchestrator:
         while True:
             sessions = await self._store.list_sessions(None, limit=page_size, offset=offset)
             for session in sessions:
+                if session_alive is not None and await session_alive(session.user_id, session.id):
+                    continue
                 sealed += await self._seal_session_pendings(session.user_id, session.id)
             if len(sessions) < page_size:
                 break

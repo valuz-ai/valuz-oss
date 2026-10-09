@@ -136,6 +136,15 @@ class RuntimeStore:
     async def load_message(self, user_id: str, message_id: str) -> Message | None:
         return await self._runtime.load_message(user_id, message_id)
 
+    async def list_pending_action_session_keys(
+        self, *, after_session_id: str | None = None, limit: int = 500
+    ) -> list[tuple[str, str]] | None:
+        """Delegate the optional boot optimization to runtime authority only."""
+        candidates = getattr(self._runtime, "list_pending_action_session_keys", None)
+        if not callable(candidates):
+            return None
+        return await candidates(after_session_id=after_session_id, limit=limit)
+
     async def list_messages_for_session(
         self, user_id: str, session_id: str, *, limit: int = 50, offset: int = 0
     ) -> list[Message]:

@@ -769,8 +769,10 @@ class InProcessKernelClient:
     # -- In-process-only supervision hooks (no remote analog: a standalone
     # kernel runs its own orphan scans at startup; see app.dependencies). --
 
-    async def scan_orphan_pendings(self) -> int:
-        return await _orchestrator().scan_orphan_pendings()
+    async def scan_orphan_pendings(
+        self, *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+    ) -> int:
+        return await _orchestrator().scan_orphan_pendings(session_alive=session_alive)
 
     async def scan_orphan_runs(self) -> int:
         return await _orchestrator().scan_orphan_runs()
@@ -1650,7 +1652,9 @@ async def run_ephemeral_review_in_scope(
 
 @runtime_checkable
 class _KernelSupervision(Protocol):
-    async def scan_orphan_pendings(self) -> int: ...
+    async def scan_orphan_pendings(
+        self, *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+    ) -> int: ...
     async def scan_orphan_runs(self) -> int: ...
     async def reset_stranded_session(self, user_id: str, session_id: str) -> bool: ...
     async def cleanup_runtime(self, session_id: str) -> None: ...
@@ -1662,8 +1666,13 @@ def _supervision(kernel: KernelClient) -> _KernelSupervision:
     return kernel
 
 
-async def scan_orphan_pendings() -> int:
-    return await _supervision(client).scan_orphan_pendings()
+async def scan_orphan_pendings(
+    *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+) -> int:
+    supervision = _supervision(client)
+    if session_alive is None:
+        return await supervision.scan_orphan_pendings()
+    return await supervision.scan_orphan_pendings(session_alive=session_alive)
 
 
 async def scan_orphan_runs() -> int:

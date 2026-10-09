@@ -30,7 +30,10 @@ dependencies = [
     # >=0.2.128 bundles CLI 2.1.220 — required for the claude-opus-5 model
     # (added in CLI 2.1.219 / first bundled by 0.2.127); also picks up the
     # premature-stdin-closure fix for in-flight background tasks (0.2.127).
-    "claude-agent-sdk>=0.2.128",
+    # >=0.2.164 bundles CLI 2.1.292. CLI 2.1.220 (SDK 0.2.128) hangs
+    # even at --version under macOS Rosetta; upgrade the complete SDK so the
+    # Python transport and officially bundled CLI stay paired.
+    "claude-agent-sdk>=0.2.164",
     "openai-agents>=0.14.6",
     # Routes OpenAI-compatible models (incl. Reportify proxy on
     # http://172.20.2.240:8080) through the kernel's deepagents runtime.
