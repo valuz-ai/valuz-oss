@@ -641,15 +641,13 @@ async def seal_orphan_pendings() -> None:
             logging.getLogger(__name__).exception("cloud pending recovery failed")
         return
 
-    from app.dependencies import boot_orphan_recovery_complete
+    from valuz_agent.adapters import kernel_client
 
     # init_kernel already recovered this orchestrator. Repeating the sweep
     # scales boot with history twice and can expire newly resumed approvals.
     # Keep the retry when dependency initialization could not finish recovery.
-    if boot_orphan_recovery_complete():
+    if kernel_client.boot_orphan_recovery_complete():
         return
-
-    from valuz_agent.adapters import kernel_client
 
     try:
         sealed = await kernel_client.scan_orphan_pendings()

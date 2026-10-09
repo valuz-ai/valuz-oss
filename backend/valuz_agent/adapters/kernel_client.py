@@ -1666,6 +1666,13 @@ def _supervision(kernel: KernelClient) -> _KernelSupervision:
     return kernel
 
 
+def boot_orphan_recovery_complete() -> bool:
+    """Whether the current in-process orchestrator completed its startup scan."""
+    from app.dependencies import boot_orphan_recovery_complete as recovery_complete
+
+    return recovery_complete()
+
+
 async def scan_orphan_pendings(
     *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
 ) -> int:
