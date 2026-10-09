@@ -79,10 +79,12 @@ class CronInterpreter:
         opts = Options()
         opts.locale_code = locale
         try:
-            result: str = get_description(expr, opts)
+            result = get_description(expr, opts)
         except Exception:
             opts.locale_code = DEFAULT_LOCALE
             result = get_description(expr, opts)
+        if not isinstance(result, str):
+            raise TypeError("cron descriptor must return text")
         return result
 
     def _next_n_runs(self, expr: str, tz_name: str, n: int) -> list[int]:

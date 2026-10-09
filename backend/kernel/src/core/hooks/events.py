@@ -27,6 +27,8 @@ read-only payload. Payloads by event:
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -41,6 +43,7 @@ SESSION_END = "session.end"
 PROMPT_SUBMIT = "prompt.submit"
 TURN_START = "turn.start"
 TURN_COMPLETE = "turn.complete"
+RUNTIME_CHECK = "runtime.check"
 TOOL_CHECK = "tool.check"
 TOOL_CALL = "tool.call"
 SESSION_COMPACT = "session.compact"
@@ -54,6 +57,7 @@ EVENT_NAMES: frozenset[str] = frozenset(
         PROMPT_SUBMIT,
         TURN_START,
         TURN_COMPLETE,
+        RUNTIME_CHECK,
         TOOL_CHECK,
         TOOL_CALL,
         SESSION_COMPACT,
@@ -83,12 +87,16 @@ class SessionRef:
     metadata: Mapping[str, Any] = field(default_factory=FrozenDict)
     # One-shot helper sessions (generative UI, memory review) — no hooks run.
     bare: bool = False
+    tool_bindings: Mapping[str, str] = field(default_factory=FrozenDict)
+    # Trusted ephemeral turn binding; never read from session/user metadata.
+    execution_message_id: str | None = None
     # Workspace trust (H0). Untrusted workspaces never run third-party hooks.
     trusted: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "model_settings", freeze(self.model_settings))
         object.__setattr__(self, "metadata", freeze(self.metadata))
+        object.__setattr__(self, "tool_bindings", freeze(self.tool_bindings))
 
     @classmethod
     def from_session(cls, session: Session, *, user_id: str | None = None) -> SessionRef:
@@ -111,6 +119,18 @@ class SessionRef:
             for key in ("project_id", "agent_slug", "agent_id", "task_id", "kind")
             if key in valuz and isinstance(valuz[key], (str, int, float, bool))
         }
+        bindings: dict[str, str] = {}
+        for server in getattr(session, "mcp_servers", ()):
+            name = getattr(server, "name", None)
+            if isinstance(name, str):
+                value = (
+                    dataclasses.asdict(server)
+                    if dataclasses.is_dataclass(server)
+                    else getattr(server, "model_dump", lambda: {})()
+                )
+                bindings[name] = hashlib.sha256(
+                    json.dumps(value, sort_keys=True, default=str).encode()
+                ).hexdigest()
         trust = valuz.get("workspace_trust")
         return cls(
             session_id=str(getattr(session, "id", "") or ""),
@@ -124,6 +144,8 @@ class SessionRef:
             metadata=routed,
             bare=is_bare_completion(session) if raw_metadata is not None else False,
             trusted=trust != "untrusted",
+            tool_bindings=bindings,
+            execution_message_id=getattr(session, "execution_message_id", None),
         )
 
     def to_wire(self) -> dict[str, Any]:
@@ -240,6 +262,26 @@ class ToolDecision:
 
 
 @dataclass(frozen=True)
+class RuntimeConstraints:
+    """A guard may only tighten the runtime's original execution configuration."""
+
+    proceed: bool = True
+    read_only: bool = False
+    network_off: bool = False
+    human_review: bool = False
+    require_tool_guard: bool = False
+    policy_version: int | None = None
+    guard_nonce: str | None = None
+    reason: str | None = None
+    # Aggregator-owned release references: owner -> registration identity -> nonce.
+    # A scalar nonce remains for legacy single-guard adapters.
+    guard_tokens: Mapping[str, Mapping[str, str]] = field(default_factory=FrozenDict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "guard_tokens", freeze(self.guard_tokens))
+
+
+@dataclass(frozen=True)
 class PromptDecision:
     """``text`` is sent to the model, followed by each ``context`` block.
 
@@ -278,6 +320,8 @@ __all__ = [
     "SESSION_START",
     "SessionRef",
     "TOOL_CALL",
+    "RUNTIME_CHECK",
+    "RuntimeConstraints",
     "TOOL_CHECK",
     "TURN_COMPLETE",
     "TURN_START",

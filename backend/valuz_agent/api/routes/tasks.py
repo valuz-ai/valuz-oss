@@ -633,7 +633,10 @@ async def intervene(
     elif payload.action == "revise_goal":
         if not payload.goal:
             raise HTTPException(status_code=422, detail="goal is required for revise_goal")
-        await service.revise_goal(user_id, task, payload.goal)
+        if not await service.revise_goal(user_id, task, payload.goal):
+            raise HTTPException(
+                status_code=409, detail="Task has no active lead to receive the revised goal"
+            )
     elif payload.action in ("pause", "stop"):
         # Layer 2 cascade halt (orchestrator manages its own txn). ``pause`` →
         # ``paused``; ``stop`` → ``stopped``. Both are soft terminals the

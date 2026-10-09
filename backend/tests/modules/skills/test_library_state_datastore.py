@@ -79,3 +79,25 @@ async def test_per_user_isolation(session_ds) -> None:  # type: ignore[no-untype
     await ds.set_library_enabled("u2", "user:beta", False)
     assert await ds.list_library_disabled_ids("u1") == {"user:alpha"}
     assert await ds.list_library_disabled_ids("u2") == {"user:beta"}
+
+
+def test_rootless_project_has_no_configured_skills(session_ds) -> None:
+    from types import SimpleNamespace
+
+    _session, ds = session_ds
+    project = SimpleNamespace(id="rootless", kind="project", root_path=None)
+    assert ds.enabled_skill_paths(project) == set()
+    assert ds.set_skill_enabled(project, "/some/skill", True) == set()
+    assert ds.overwrite_enabled_skill_paths(project, ["relative-skill"]) == set()
+
+
+def test_project_skill_config_rejects_non_object_json(session_ds, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    _session, ds = session_ds
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "project-config.json").write_text("[]", encoding="utf-8")
+    project = SimpleNamespace(id="project", kind="project", root_path=str(tmp_path))
+    with pytest.raises(ValueError, match="must be an object"):
+        ds.set_mcp_servers(project, ["server"])

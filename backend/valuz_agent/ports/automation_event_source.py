@@ -305,9 +305,7 @@ class AutomationEventSourceRegistry:
         source = self.get(event.source)
         return source is not None and event.event_type in source.event_types()
 
-    def resolve_inbound(
-        self, source_name: str, payload: Mapping[str, Any]
-    ) -> InboundEvent | None:
+    def resolve_inbound(self, source_name: str, payload: Mapping[str, Any]) -> InboundEvent | None:
         """Authenticate and parse a delivery through its own source."""
         return self.require(source_name).resolve_inbound(payload)
 
@@ -341,10 +339,7 @@ def registered_event_types() -> dict[str, tuple[str, ...]]:
     actually deliver.
     """
     registry = _registry()
-    return {
-        name: tuple(sorted(registry.require(name).event_types()))
-        for name in registry.names()
-    }
+    return {name: tuple(sorted(registry.require(name).event_types())) for name in registry.names()}
 
 
 def describe_sources() -> Sequence[Mapping[str, Any]]:
@@ -383,15 +378,16 @@ async def create_source_ref(
     if create is None:
         raise ValueError(f"event source {source_name!r} cannot create subscriptions")
     if event_type not in source.event_types():
-        raise UnknownEventTypeError(
-            f"event source {source_name!r} does not produce {event_type!r}"
-        )
-    return await create(
+        raise UnknownEventTypeError(f"event source {source_name!r} does not produce {event_type!r}")
+    option = await create(
         user_id=user_id,
         event_type=event_type,
         params=dict(params),
         authorization=authorization,
     )
+    if not isinstance(option, EventRefOption):
+        raise ValueError("event source create_ref must return EventRefOption")
+    return option
 
 
 async def list_source_refs(source_name: str, *, user_id: str) -> list[EventRefOption]:

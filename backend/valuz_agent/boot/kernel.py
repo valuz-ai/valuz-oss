@@ -24,9 +24,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol, cast
+
+from fastapi import FastAPI
 
 from valuz_agent.infra.db_urls import (
     db_url,
@@ -37,7 +41,11 @@ from valuz_agent.infra.db_urls import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import APIRouter
     from sqlalchemy.ext.asyncio import AsyncEngine
+    from src.core.store_port import StorePort
+    from src.core.token_signer import HmacTokenVerifier
+    from src.core.token_verifier import OwnerClaims
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +53,11 @@ logger = logging.getLogger(__name__)
 
 # Triggers sys.path injection so ``from src.core...`` and ``from app.config...``
 # resolve once anyone in the host imports the kernel package.
-import kernel  # noqa: F401, E402  (side-effect import)
+__import__("kernel")  # install the kernel import path before loading its networking seam
+
+from src.runtimes.network_egress import (  # noqa: E402
+    EgressRegistrationError as EgressRegistrationError,
+)
 
 KERNEL_DIR: Path = Path(__file__).resolve().parents[2] / "kernel"
 # The kernel alembic chain was moved out of the kernel tree to
@@ -359,7 +371,6 @@ def run_kernel_migrations() -> None:
         raise error[0]
 
 
-
 async def init_kernel_dependencies() -> None:
     """Initialize the kernel's engine/session/store/orchestrator singletons.
 
@@ -395,7 +406,7 @@ async def shutdown_kernel_dependencies() -> None:
     await shutdown_dependencies()
 
 
-def get_kernel_routers() -> list:
+def get_kernel_routers() -> list[APIRouter]:
     """Return the kernel's FastAPI routers in the order they should be mounted.
 
     Each router's paths are frozen at import time under ``KERNEL_API_PREFIX``
@@ -442,7 +453,7 @@ def get_kernel_routers() -> list:
     ]
 
 
-def make_data_service_placeholder():
+def make_data_service_placeholder() -> FastAPI:
     """Create the host-mounted DataService sub-app. Store + verifier are bound
     later in the lifespan (once the backend DSN + secret are known); until then
     ``/health`` and ``/openapi.json`` work and ``/rpc`` returns 401. Mounted at
@@ -451,10 +462,10 @@ def make_data_service_placeholder():
     from app.data_service import create_data_service_app
     from src.core.token_verifier import NullTokenVerifier
 
-    return create_data_service_app(store=None, verifier=NullTokenVerifier())
+    return cast(FastAPI, create_data_service_app(store=None, verifier=NullTokenVerifier()))
 
 
-def build_host_data_service_store(backend_dsn: str):
+def build_host_data_service_store(backend_dsn: str) -> tuple[StorePort, AsyncEngine]:
     """Build a ``(StorePort, AsyncEngine)`` over the host DataService backend.
 
     The host owns the DB credential here; a sandbox reaches this DataService
@@ -467,7 +478,7 @@ def build_host_data_service_store(backend_dsn: str):
     return SQLAlchemyStore(create_session_factory(engine)), engine
 
 
-async def ensure_host_data_service_schema(engine) -> None:
+async def ensure_host_data_service_schema(engine: AsyncEngine) -> None:
     """Create the kernel data schema on the host DataService backend if absent
     (checkfirst; idempotent vs. an already-migrated PG)."""
     from src.adapters.sqlalchemy_store.models import Base
@@ -476,7 +487,7 @@ async def ensure_host_data_service_schema(engine) -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-def make_host_data_service_verifier(secret: str):
+def make_host_data_service_verifier(secret: str) -> HmacTokenVerifier:
     """HS256 verifier for the host-mounted DataService (sandbox tokens).
 
     Single-secret: assumes one owner (OSS local). For a shared multi-tenant host
@@ -500,7 +511,7 @@ class _PerOwnerDataServiceVerifier:
     resolves its own secret) and cloud (many owners).
     """
 
-    def verify(self, token: str | None):
+    def verify(self, token: str | None) -> OwnerClaims | None:
         if not token:
             return None
         import base64
@@ -540,10 +551,10 @@ def mint_data_service_token(
     The sandbox carries only this token — never the DB credential."""
     from src.core.token_signer import TokenSigner
 
-    return TokenSigner(secret).sign(user_id=user_id, session_id=session_id, ttl_s=ttl_s)
+    return cast(str, TokenSigner(secret).sign(user_id=user_id, session_id=session_id, ttl_s=ttl_s))
 
 
-def get_data_service_openapi() -> dict:
+def get_data_service_openapi() -> dict[str, Any]:
     """The DataService (``/rpc/{op}``) OpenAPI schema, for the settings panel.
 
     Built from the kernel's data-service app (no store / DB needed — the schema
@@ -551,7 +562,59 @@ def get_data_service_openapi() -> dict:
     SaaS client speaks; surfacing it lets the user inspect the data API. Lives
     in ``boot`` because that's the seam allowed to import ``app.*``.
     """
-    from app.data_service import create_data_service_app
-    from src.core.token_verifier import NullTokenVerifier
+    return make_data_service_placeholder().openapi()
 
-    return create_data_service_app(store=None, verifier=NullTokenVerifier()).openapi()
+
+# Model networking is a kernel lifecycle concern. Host consumers use these
+# narrow seams instead of importing a runtime's registry implementation.
+
+
+class ProviderTestEgress(Protocol):
+    proxy_url: str
+
+
+@asynccontextmanager
+async def provider_test_egress() -> AsyncIterator[ProviderTestEgress | None]:
+    from src.runtimes.network_egress import provider_test_egress as kernel_egress
+
+    async with kernel_egress() as descriptor:
+        yield descriptor
+
+
+def desktop_control_authorized(token: str | None) -> bool:
+    from src.runtimes.network_egress import desktop_control_authorized as authorized
+
+    return bool(authorized(token))
+
+
+async def replace_kernel_network_egress(
+    bootstrap: dict[str, Any] | None, *, required_unavailable: bool
+) -> None:
+    from src.runtimes.network_egress import replace_network_egress
+
+    await replace_network_egress(bootstrap, required_unavailable=required_unavailable)
+
+
+def initialize_kernel_network_egress() -> None:
+    from src.runtimes.network_egress import (
+        configure_network_egress,
+        consume_network_egress_bootstrap,
+        get_network_egress_registry,
+    )
+
+    try:
+        consume_network_egress_bootstrap()
+    except RuntimeError:
+        logger.error("desktop egress bootstrap rejected; admitted model traffic is blocked")
+        configure_network_egress(None, required_unavailable=True)
+    if registry := get_network_egress_registry():
+        registry.start_keepalive()
+
+
+async def shutdown_kernel_with_network_egress() -> None:
+    from src.runtimes.network_egress import configure_network_egress, get_network_egress_registry
+
+    await shutdown_kernel_dependencies()
+    if registry := get_network_egress_registry():
+        await registry.close()
+    configure_network_egress(None)

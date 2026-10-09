@@ -12,6 +12,7 @@ from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
 from valuz_agent.integrations.toolkit_mcp_server import HostExecContext
+from valuz_agent.modules.memory.models import MemoryRecord, MemorySnapshot
 
 import valuz_agent.infra.db as infra_db
 import valuz_agent.modules.memory.tools as t
@@ -35,9 +36,39 @@ class FakeStore:
     def usage_for(self, entries: list[str], target: str) -> str:
         return f"{len(entries)} entries"
 
-    def clear(self, user_id: str, target: str, *, project_id: str | None = None) -> None:
+    def snapshot(self, user_id: str) -> MemorySnapshot:
+        records = tuple(
+            MemoryRecord(
+                id=f"{target}_{project_id}_{index}",
+                target=target,
+                project_id=project_id,
+                content=text,
+                revision=1,
+                source="agent",
+                observed_at=1,
+            )
+            for (target, project_id), entries in self.entries.items()
+            for index, text in enumerate(entries)
+        )
+        return MemorySnapshot(owner_user_id=user_id, revision=0, records=records)
+
+    def clear(
+        self, user_id: str, target: str, *, project_id: str | None = None, **_kwargs: Any
+    ) -> None:
         self.cleared.append((target, project_id))
         self.entries[(target, project_id)] = []
+
+
+class FakeLibrary:
+    def __init__(self, store: FakeStore, owner: str) -> None:
+        self.store = store
+        self.owner = owner
+
+    async def snapshot(self) -> MemorySnapshot:
+        return self.store.snapshot(self.owner)
+
+    async def clear(self, target: str, **kwargs: Any) -> None:
+        self.store.clear(self.owner, target, **kwargs)
 
 
 def _const(value: Any):  # noqa: ANN202
@@ -49,7 +80,7 @@ def _const(value: Any):  # noqa: ANN202
 
 def _setup(monkeypatch, project_id: str | None = "p1") -> FakeStore:  # noqa: ANN001
     store = FakeStore()
-    monkeypatch.setattr(t, "memory_store", store)
+    monkeypatch.setattr(t, "MemoryLibrary", lambda owner: FakeLibrary(store, owner))
     monkeypatch.setattr(t, "_resolve_project_id", _const(project_id))
 
     @asynccontextmanager
@@ -97,7 +128,7 @@ def test_list_returns_every_scope_and_the_settings(monkeypatch) -> None:  # noqa
         "project": ["deadline friday"],
     }
     assert body["settings"]["custom_instructions"] == "focus on deadlines"
-    assert body["usage"]["project"] == "1 entries"
+    assert "4,000 chars" in body["usage"]["project"]
 
 
 def test_list_skips_project_scope_outside_a_project(monkeypatch) -> None:  # noqa: ANN001
@@ -137,6 +168,7 @@ def test_tool_def_declares_the_management_actions() -> None:
         "list",
         "clear",
         "settings",
+        "skill_preview",
     }
     assert td.parameters["required"] == ["action"]
     assert "action=list" in td.description and "action=settings" in td.description

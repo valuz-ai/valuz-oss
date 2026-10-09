@@ -38,6 +38,12 @@ async def call_tooldef(
     if handler is None:
         raise ValueError(f"tool {tdef.name} has no handler")
     if hooks is None:
+        from src.core.hooks.registry import hook_registry
+
+        if hook_registry.has_required(TOOL_CALL):
+            return ToolResult(
+                content="Required execution guard has no trusted session context", is_error=True
+            )
         return await handler(args, context)
     data = {"tool": toolkit_tool_ref(tdef.name).to_dict(), "input": args, "tool_use_id": None}
     if not hooks.wants(TOOL_CALL, data):

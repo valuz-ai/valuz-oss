@@ -425,7 +425,13 @@ def build_session_patch(
         # Valuz hook bus for dsh's built-in tools (row declared by
         # valuz-dsh-bundle, session role only); present only while a
         # handler listens.
-        patch.append({"id": HOOK_BRIDGE_ROW, "config": dict(hook_bridge)})
+        patch.append(
+            {
+                "id": HOOK_BRIDGE_ROW,
+                "config": dict(hook_bridge),
+                **({"disabled": False} if hook_bridge.get("required") else {}),
+            }
+        )
 
     inserted: list[dict[str, Any]] = []
     inserted.extend(_mcp_rows(session))

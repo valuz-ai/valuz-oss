@@ -339,6 +339,10 @@ class DeepSeekHarnessRuntime:
             from src.runtimes.mcp_proxy import proxy_session_mcp
 
             proxied = proxy_session_mcp(session.id, session.mcp_servers, hooks)
+            if proxied is None and any(
+                spec.required for spec in hooks.registry.specs_for(TOOL_CALL, hooks.session)
+            ):
+                raise RuntimeError("required MCP execution guard unavailable")
             if proxied is not None:
                 self._mcp_proxy_session_id = session.id
                 patch_session = dataclasses.replace(session, mcp_servers=proxied)
@@ -365,6 +369,11 @@ class DeepSeekHarnessRuntime:
         return patch_session, {
             "endpoint": hook_bridge_endpoint(self._hook_bridge_token),
             "events": events,
+            "required": any(
+                spec.required
+                for event in events
+                for spec in hooks.registry.specs_for(event, hooks.session)
+            ),
         }
 
     async def _release_hook_bus(self) -> None:
@@ -422,6 +431,27 @@ class DeepSeekHarnessRuntime:
         self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         try:
+            from src.core.hooks.runtime_support import runtime_constraints
+            from src.runtimes.deepseek_harness.composition import dsh_entry
+
+            self._hook_session_ref = SessionRef.from_session(session)
+            self._runtime_constraints = await runtime_constraints(self, "deepseek_harness")
+            if (
+                self._runtime_constraints.require_tool_guard
+                or self._hook_session().registry.has_required(TOOL_CALL)
+            ):
+                entry = dsh_entry()
+                # The launcher is <bundle>/bin/dsh.mjs in both installed and
+                # packaged closures; validate the bridge in that same bundle.
+                bridge = entry.parent.parent / "lib/hook-bridge.js" if entry else None
+                if (
+                    bridge is None
+                    or not bridge.is_file()
+                    or "valuz-required-guard-v1" not in await asyncio.to_thread(bridge.read_text)
+                ):
+                    raise RuntimeError(
+                        "Required DSH native execution guard is unavailable; execution stopped"
+                    )
             # The composition is baked once per subprocess, but the session's
             # capability state drifts between turns: the host's pre-turn
             # re-stamp rotates MCP credentials (external connector bearers
@@ -885,6 +915,24 @@ class DeepSeekHarnessRuntime:
 
     async def _ensure_process_locked(self, session: Session) -> None:
         if self._client is not None and self._client.is_running:
+            # An idle/background UI prepare must not erase the actual run
+            # scope with its at-rest Session (which has no Message binding).
+            if self._active_task is not asyncio.current_task():
+                return
+            # The CLI/process token stays warm; its guard context is per turn.
+            self._hook_session_ref = SessionRef.from_session(session)
+            hooks = self._hook_session()
+            if self._hook_bridge_token is not None:
+                from src.core.hooks.remote import get_remote_hooks
+
+                remote = get_remote_hooks(self._hook_bridge_token)
+                if remote is None:
+                    raise RuntimeError("Warm native hook registration is missing")
+                remote.rebind(hooks)
+            if self._mcp_proxy_session_id is not None:
+                from src.runtimes.mcp_proxy import refresh_session_proxy
+
+                await refresh_session_proxy(self._mcp_proxy_session_id, session.mcp_servers, hooks)
             return
         t_init = time.monotonic()
         old_client = self._client

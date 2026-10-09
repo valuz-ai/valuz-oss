@@ -12,12 +12,13 @@
  * screen without a provider crash, regardless of how the bootstrap
  * sequencing evolves.
  */
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import type { ServiceInfo } from "@valuz/shared";
 
 const initialStartupState = {
-  services: [],
+  services: [] as ServiceInfo[],
   logs: [],
   loading: false,
   checking: false,
@@ -47,6 +48,37 @@ describe("startup screen under the platform provider", () => {
   beforeEach(() => {
     startupState = { ...initialStartupState };
     routerThrows = false;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("enters immediately after a warm readiness probe without showing the boot splash", async () => {
+    startupState.checking = true;
+    const { rerender } = render(<App />);
+    expect(screen.queryByRole("heading", { name: /VALUZ/i })).toBeNull();
+
+    startupState = { ...startupState, checking: false, ready: true };
+    rerender(<App />);
+    expect(await screen.findByText("Desktop app ready")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /VALUZ/i })).toBeNull();
+  });
+
+  it("keeps a cold boot splash mounted until its completion dwell ends", async () => {
+    vi.useFakeTimers();
+    startupState.services = [{ name: "backend", status: "starting", port: 8000, pid: null }];
+    const { container, rerender } = render(<App />);
+    expect(screen.getByRole("heading", { name: /VALUZ/i })).toBeTruthy();
+
+    startupState.ready = true;
+    startupState.services = [{ name: "backend", status: "running", port: 8000, pid: 100 }];
+    await act(async () => rerender(<App />));
+    expect(screen.queryByText("Desktop app ready")).toBeNull();
+    act(() => vi.advanceTimersByTime(3000));
+    expect(container.querySelector(".splash-progress-pct")?.textContent).toBe("100%");
+    expect(screen.queryByText("Desktop app ready")).toBeNull();
+
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getByText("Desktop app ready")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /VALUZ/i })).toBeNull();
   });
 
   it("shows a loader (not a blank window) while startup is still checking", () => {

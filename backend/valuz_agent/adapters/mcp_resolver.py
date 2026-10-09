@@ -31,6 +31,7 @@ from app.schemas import (
 # Side-effect import — surfaces ``src.core...`` on sys.path.
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+from valuz_agent.modules.connectors.models import ConnectorRow
 from valuz_agent.modules.connectors.service import build_request_overrides, merge_params_into_url
 from valuz_agent.ports.extensions import ext
 
@@ -139,9 +140,8 @@ async def resolve_mcp_servers(
 
 
 async def _resolve_connector_slug(
-    slug: str,
-    connectors: ConnectorDatastore | None,
- user_id: str | None = None) -> list[McpServerConfig] | None:
+    slug: str, connectors: ConnectorDatastore | None, user_id: str | None = None
+) -> list[McpServerConfig] | None:
     if user_id is None:
         raise ValueError("user_id is required")
 
@@ -157,7 +157,9 @@ async def _resolve_connector_slug(
     return await _build_http_config(row, connectors)
 
 
-async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpServerConfig] | None:
+async def _build_http_config(
+    row: ConnectorRow, connectors: ConnectorDatastore
+) -> list[McpServerConfig] | None:
     # Single injection truth shared with the probe (Acceptance #8 — probe
     # and runtime must produce byte-identical headers/params).
     headers, params = build_request_overrides(row)
@@ -203,7 +205,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
             McpHttpServerConfig(
                 name=f"{row.slug}_{module}",
                 url=merge_params_into_url(url.replace("{module}", module), params),
-                transport=transport,  # type: ignore[arg-type]
+                transport=transport,
                 headers=dict(headers),
                 tool_timeout_sec=tool_timeout_sec,
                 server_instructions_trusted=server_instructions_trusted,
@@ -215,7 +217,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
         McpHttpServerConfig(
             name=row.slug,
             url=merge_params_into_url(url, params),
-            transport=transport,  # type: ignore[arg-type]
+            transport=transport,
             headers=dict(headers),
             tool_timeout_sec=tool_timeout_sec,
             server_instructions_trusted=server_instructions_trusted,
@@ -249,7 +251,7 @@ def expand_mcp_dir(value: str) -> str:
     return value.replace("{mcp_dir}", _bundled_mcp_servers_dir())
 
 
-def _build_stdio_config(row) -> list[McpServerConfig] | None:
+def _build_stdio_config(row: ConnectorRow) -> list[McpServerConfig] | None:
     import shlex
     import shutil
 

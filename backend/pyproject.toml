@@ -304,7 +304,7 @@ select = ["E", "F", "I", "N", "UP", "B"]
 python_version = "3.12"
 strict = true
 warn_return_any = true
-mypy_path = "$MYPY_CONFIG_FILE_DIR/kernel/src"
+mypy_path = ["$MYPY_CONFIG_FILE_DIR/kernel/src", "$MYPY_CONFIG_FILE_DIR/typings"]
 exclude = [
     "^kernel/",
     "^valuz_agent/resources/",

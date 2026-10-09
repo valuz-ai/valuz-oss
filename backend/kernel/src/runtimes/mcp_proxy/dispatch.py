@@ -70,6 +70,7 @@ def mcp_event_data(server: str, tool: str, arguments: dict[str, Any]) -> dict[st
         "tool": mcp_tool_ref(server, tool).to_dict(),
         "input": dict(arguments),
         "tool_use_id": None,
+        "effect_boundary": True,
     }
 
 
@@ -92,6 +93,16 @@ async def dispatch_mcp_call(
     and a leftover marker is removed from a rewritten one.
     """
     if hooks is None:
+        from src.core.hooks.registry import hook_registry
+
+        if hook_registry.has_required(TOOL_CALL):
+            return result_from_outcome(
+                ToolOutcome(
+                    content="Required execution guard has no trusted MCP session",
+                    is_error=True,
+                    executed=False,
+                )
+            )
         return await call(arguments)
     data = mcp_event_data(server, tool, arguments)
     if not hooks.wants(TOOL_CALL, data):

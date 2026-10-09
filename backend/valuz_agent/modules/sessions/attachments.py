@@ -13,6 +13,7 @@ from pathlib import Path
 
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.modules.sessions.models import SessionAttachmentRow
 
 
 def _resolve_file_key_path(user_id: str, ref: str | None) -> str | None:
@@ -37,7 +38,7 @@ def _resolve_file_key_path(user_id: str, ref: str | None) -> str | None:
     return str(target) if target.is_file() else None
 
 
-async def _load_pending_attachments(session_id: str, user_id: str):
+async def _load_pending_attachments(session_id: str, user_id: str) -> list[SessionAttachmentRow]:
     if not user_id:
         raise ValueError("user_id is required")
 

@@ -232,6 +232,7 @@ export function ConversationBody({
   // wrappers are not passed at all and every card / message renders as is.
   const hasToolCallSlot = useHasSlot("conversation.tool-call");
   const hasUserMessageSlot = useHasSlot("conversation.message.user");
+  const hasUserRowSlot = useHasSlot("conversation.message.user-row");
   const hasAssistantMessageSlot = useHasSlot("conversation.message.assistant");
   const hasEmptyHeroSlot = useHasSlot("conversation.empty.hero");
   const hasEmptyBrandMarkSlot = useHasSlot("conversation.empty.brand-mark");
@@ -379,6 +380,7 @@ export function ConversationBody({
                     hasTurnTailSlot ||
                     hasToolCallSlot ||
                     hasUserMessageSlot ||
+                    hasUserRowSlot ||
                     hasAssistantMessageSlot
                       ? `row-slot:${selectedSessionId ?? ""}`
                       : "",
@@ -518,6 +520,22 @@ export function ConversationBody({
                           }}
                         >
                           {card}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                wrapUserTurn={
+                  hasUserRowSlot
+                    ? (turn, row) => (
+                        <SingleSlot
+                          name="conversation.message.user-row"
+                          context={{
+                            turn,
+                            turnId: turn.id,
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {row}
                         </SingleSlot>
                       )
                     : undefined

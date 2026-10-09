@@ -1105,6 +1105,9 @@ interface TurnRowProps {
   wrapToolCall?: (tool: PrototypeToolCall, card: ReactNode) => ReactNode;
   /** Wrap the user's message bubble. Same contract as ``wrapToolCall``. */
   wrapUserMessage?: (turn: ConversationTurn, message: ReactNode) => ReactNode;
+  /** Wrap the full input row, including leading controls, attachments and actions.
+   * Same memoization contract as wrapToolCall; the assistant row is independent. */
+  wrapUserTurn?: (turn: ConversationTurn, row: ReactNode) => ReactNode;
   /**
    * Wrap an assistant message (the text of one segment; ``messageId`` is the
    * kernel message it belongs to, when known). Same contract as
@@ -1146,6 +1149,7 @@ const TurnRow = memo(
     startingRuntime,
     wrapToolCall,
     wrapUserMessage,
+    wrapUserTurn,
     wrapAssistantMessage,
   }: TurnRowProps) {
     const { t } = useI18n();
@@ -1365,53 +1369,59 @@ const TurnRow = memo(
       wrapAssistantMessage
         ? wrapAssistantMessage(turn, messageId, message)
         : message;
+    const wrapUserRow = (row: ReactNode): ReactNode =>
+      wrapUserTurn ? wrapUserTurn(turn, row) : row;
     return (
       <div data-conversation-turn className="space-y-[26px]">
         {/* Host control rendered BEFORE the messages — a selection checkbox
             belongs beside the message it selects, not down in the action row
             where it reads as another action. */}
-        {turn.userText || (turn.attachments && turn.attachments.length > 0) ? (
-          <div className="flex items-start gap-2">
-            {renderTurnLeading?.(turn, "user")}
-            <div className="group flex min-w-0 flex-1 flex-col items-end gap-1">
-              {turn.userText
-                ? wrapUser(
-                    <div className="max-w-[78%]">
-                      <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
-                        <UserMessageBody
-                          text={turn.userText}
-                          skillsBySlug={skillsBySlug}
-                        />
-                      </div>
-                    </div>,
-                  )
-                : null}
-              {turn.attachments?.map((att, i) => (
-                <FileUploadMessage
-                  key={`att-${turn.id}-${i}`}
-                  fileName={att.name}
-                  fileSize={att.size > 0 ? formatFileSize(att.size) : undefined}
-                  status="ready"
-                  // Both conditions matter: a host that cannot resolve files
-                  // passes no handler, and a turn recorded before the path was
-                  // kept has nothing to open.
-                  onOpen={
-                    onOpenAttachment && att.path
-                      ? () => onOpenAttachment(att.path as string)
-                      : undefined
-                  }
-                />
-              ))}
-              {turn.userText ? (
-                <UserMessageActions
-                  text={turn.userText}
-                  timestamp={turn.userTimestamp}
-                  extraActions={renderUserMessageActions?.(turn)}
-                />
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+        {turn.userText || (turn.attachments && turn.attachments.length > 0)
+          ? wrapUserRow(
+              <div className="flex items-start gap-2">
+                {renderTurnLeading?.(turn, "user")}
+                <div className="group flex min-w-0 flex-1 flex-col items-end gap-1">
+                  {turn.userText
+                    ? wrapUser(
+                        <div className="max-w-[78%]">
+                          <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
+                            <UserMessageBody
+                              text={turn.userText}
+                              skillsBySlug={skillsBySlug}
+                            />
+                          </div>
+                        </div>,
+                      )
+                    : null}
+                  {turn.attachments?.map((att, i) => (
+                    <FileUploadMessage
+                      key={`att-${turn.id}-${i}`}
+                      fileName={att.name}
+                      fileSize={
+                        att.size > 0 ? formatFileSize(att.size) : undefined
+                      }
+                      status="ready"
+                      // Both conditions matter: a host that cannot resolve files
+                      // passes no handler, and a turn recorded before the path was
+                      // kept has nothing to open.
+                      onOpen={
+                        onOpenAttachment && att.path
+                          ? () => onOpenAttachment(att.path as string)
+                          : undefined
+                      }
+                    />
+                  ))}
+                  {turn.userText ? (
+                    <UserMessageActions
+                      text={turn.userText}
+                      timestamp={turn.userTimestamp}
+                      extraActions={renderUserMessageActions?.(turn)}
+                    />
+                  ) : null}
+                </div>
+              </div>,
+            )
+          : null}
 
         <div className="flex items-start gap-3">
           {renderTurnLeading?.(turn, "assistant")}
@@ -1489,7 +1499,12 @@ const TurnRow = memo(
                   />
                 );
               }
-              if (block.kind === "tool-overridden" && block.trailing && inFlight) return null;
+              if (
+                block.kind === "tool-overridden" &&
+                block.trailing &&
+                inFlight
+              )
+                return null;
               if (
                 block.kind === "tool-overridden" &&
                 !isToolCardFoldable?.(block.tool)
@@ -1770,6 +1785,8 @@ interface ConversationTurnListProps {
   wrapToolCall?: TurnRowProps["wrapToolCall"];
   /** See ``TurnRowProps.wrapUserMessage``. */
   wrapUserMessage?: TurnRowProps["wrapUserMessage"];
+  /** See TurnRowProps.wrapUserTurn. */
+  wrapUserTurn?: TurnRowProps["wrapUserTurn"];
   /** See ``TurnRowProps.wrapAssistantMessage``. */
   wrapAssistantMessage?: TurnRowProps["wrapAssistantMessage"];
   /** See ``TurnRowProps.onRevealFile``. */
@@ -1875,6 +1892,7 @@ export function ConversationTurnList({
   isToolCardFoldable,
   wrapToolCall,
   wrapUserMessage,
+  wrapUserTurn,
   wrapAssistantMessage,
   onRevealFile,
   isLocalFileHref,
@@ -2070,6 +2088,7 @@ export function ConversationTurnList({
                     startingRuntime={startingRuntime}
                     wrapToolCall={wrapToolCall}
                     wrapUserMessage={wrapUserMessage}
+                    wrapUserTurn={wrapUserTurn}
                     wrapAssistantMessage={wrapAssistantMessage}
                   />
                 </div>

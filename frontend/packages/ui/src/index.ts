@@ -198,3 +198,4 @@ export * from "./layout/AppShell";
 export * from "./layout/DesktopSidebar";
 export * from "./layout/TopBar";
 export * from "./lib/cn";
+export { tokens } from "../tailwind.preset";

@@ -105,7 +105,10 @@ class LocalConnectorOAuthRefreshProvider(ConnectorOAuthRefreshPort):
         # Hand the rotated token to the siblings sharing this credential, so the
         # next one to resolve finds it fresh instead of refreshing a dead token.
         await propagate_oauth_credentials(row.user_id, row, connectors)
-        return row.oauth_token_json
+        stored_token = row.oauth_token_json
+        if stored_token is None or isinstance(stored_token, str):
+            return stored_token
+        raise TypeError("OAuth token storage must contain JSON text")
 
 
 class NoopConnectorOAuthRefreshProvider(ConnectorOAuthRefreshPort):

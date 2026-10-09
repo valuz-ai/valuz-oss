@@ -24,7 +24,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.db import async_commit_with_retry, async_unit_of_work, defer_commits
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
@@ -81,8 +81,9 @@ async def finalize_task(
     status flip (through the ``task_state`` guard) + ``task.finalized`` bus
     announce + the terminal event row (returned, for notifications).
 
-    ONE CALL SITE, not one transaction: each datastore write commits on its
-    own (repo-wide convention) and the bus publish cannot roll back, so a
+    With memory registered, status and its review candidate share one commit.
+    Other datastore writes commit on their own (repo-wide convention) and the
+    bus publish cannot roll back, so a
     crash between legs leaves a terminal status without its event — readers
     must tolerate that. The value is that no site can FORGET a leg, which is
     the bug class this replaced.
@@ -91,7 +92,25 @@ async def finalize_task(
     already announced its own terminal) — announce and event are skipped so
     two finalizers can't publish contradictory terminals for one task.
     """
-    if not await TaskDatastore(db).update_task_status(user_id, task_id, status):
+    from valuz_agent.modules.memory.scheduler import memory_scheduler
+
+    if memory_scheduler.registered and status in {"completed", "blocked", "stopped", "failed"}:
+        # Share the existing task transaction: no terminal status can commit
+        # without its durable review candidate. Bus/event/notifications remain
+        # after this commit and are never emitted on enqueue failure.
+        try:
+            async with defer_commits():
+                changed = await TaskDatastore(db).update_task_status(user_id, task_id, status)
+                if changed:
+                    await memory_scheduler.notify_finished(task_id, user_id, db=db)
+            if changed:
+                await async_commit_with_retry(db, where="finalize_task.memory_candidate")
+        except Exception:
+            await db.rollback()
+            raise
+    else:
+        changed = await TaskDatastore(db).update_task_status(user_id, task_id, status)
+    if not changed:
         logger.error(
             "finalize_task: task %s → %r lost a concurrent status race — "
             "skipping announce/event (the winner recorded its own terminal)",

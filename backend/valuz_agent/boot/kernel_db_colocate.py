@@ -21,6 +21,10 @@ from __future__ import annotations
 
 import logging
 import shutil
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.core.store_port import StorePort
 
 from valuz_agent.infra.db_urls import (
     db_url_async,
@@ -37,7 +41,7 @@ def _is_sqlite(url: str) -> bool:
     return url.startswith("sqlite")
 
 
-async def _copy_sessions(source, target) -> int:
+async def _copy_sessions(source: StorePort, target: StorePort) -> int:
     """Copy every source session (+messages +events) absent from target.
 
     Session-level idempotent: a session already in target is skipped (so events

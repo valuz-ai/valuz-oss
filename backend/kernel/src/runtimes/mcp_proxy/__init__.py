@@ -13,6 +13,7 @@ from src.runtimes.mcp_proxy.registry import (
     get_session_proxy,
     proxy_session_mcp,
     proxy_url,
+    refresh_session_proxy,
     register_session_proxy,
     unregister_session_proxy,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "proxy_session_mcp",
     "proxy_url",
     "register_session_proxy",
+    "refresh_session_proxy",
     "result_from_outcome",
     "unregister_session_proxy",
 ]

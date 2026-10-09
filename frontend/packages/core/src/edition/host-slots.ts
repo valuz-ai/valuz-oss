@@ -323,6 +323,14 @@ export const HOST_SLOTS: readonly SlotSpec[] = [
     context: ["turn", "turnId", "text", "sessionId"],
   },
   {
+    name: "conversation.message.user-row",
+    kind: "single",
+    region: "conversation",
+    description:
+      "Around the full user input row, including attachments and actions; renderDefault() keeps it. The assistant row is separate.",
+    context: ["turn", "turnId", "sessionId"],
+  },
+  {
     name: "conversation.message.assistant",
     kind: "single",
     region: "conversation",

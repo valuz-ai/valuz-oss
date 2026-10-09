@@ -1453,7 +1453,9 @@
     "trustMakeTrusted": "Trust this folder",
     "trustMakeUntrusted": "Stop trusting",
     "trustAppliesToNewSessions": "Applies to sessions started from now on.",
-    "trustUpdateFailed": "Couldn't update workspace trust: {error}"
+    "trustUpdateFailed": "Couldn't update workspace trust: {error}",
+    "memoryImportItem": "Memory entry",
+    "partialImportErrors": "Some content could not be imported; the remaining content was kept:"
   },
   "schedule": {
     "create": "Create Schedule",
@@ -1584,7 +1586,49 @@
       "deleted": "Deleted",
       "cleared": "Cleared",
       "loadFailed": "Failed to load memory",
-      "saveFailed": "Action failed"
+      "saveFailed": "Action failed",
+      "contextLimit": "Forgetting memory does not delete original chats or files, or remove context already loaded in this conversation. Recheck the source or start a new conversation when you need current information.",
+      "unavailable": "The memory service is unavailable. Memory contents cannot be verified; try refreshing later.",
+      "conflict": "Memory changed elsewhere. The list was reloaded; review the latest contents and confirm again. Nothing will be overwritten automatically.",
+      "scope": "Memory scope",
+      "allScopes": "All scopes",
+      "scopeProject": "Project memory",
+      "refreshRecords": "Refresh memory",
+      "addRecord": "Add memory",
+      "correctRecord": "Correct memory",
+      "forgetRecord": "Forget memory",
+      "forgetSource": "Forget this source",
+      "confirmed": "Confirmed",
+      "unconfirmed": "Unconfirmed",
+      "recordId": "Memory ID",
+      "previousPage": "Previous page",
+      "nextPage": "Next page",
+      "recordContent": "Memory content",
+      "saveRecord": "Save memory",
+      "confirmLatest": "Confirm latest version",
+      "confirmForget": "Confirm forgetting",
+      "forgetRecordHint": "Forget this memory and prevent its tracked sources from extracting it again. Original chats, files, and context already loaded in this conversation remain.",
+      "forgetSourceHint": "Forget all memories derived from this tracked source and prevent further extraction from it. Original chats, files, and context already loaded in this conversation remain.",
+      "sourceKinds": {
+        "message": "Message",
+        "session": "Conversation",
+        "task": "Task",
+        "input": "Background input",
+        "document": "Document",
+        "tool": "Tool result",
+        "manual": "Manual entry",
+        "import": "Import"
+      },
+      "sourceOrigins": {
+        "owner": "From you",
+        "agent": "From an agent",
+        "untrusted": "Unverified external information",
+        "system": "System record"
+      },
+      "latestRecordContent": "Latest saved contents",
+      "recordRemoved": "This memory is no longer in the current list",
+      "cleanupIncomplete": "Memory was updated, but pending extraction cleanup is incomplete. Retry this operation to finish cleanup.",
+      "saveUncertain": "The save outcome is not yet known. Recover the pending write before submitting a new change. Retrying keeps this request unchanged."
     },
     "personalization": {
       "conversationTitle": "Conversation",

@@ -646,7 +646,12 @@ class _MessageObserverSink:
         private_tool_patterns: tuple[str, ...] = (),
         mode_persist: Callable[[str], Awaitable[None]] | None = None,
         session_id: str = "",
+        input_metadata: dict[str, Any] | None = None,
+        defer_terminal_events: bool = False,
     ) -> None:
+        self._defer_terminal_events = defer_terminal_events
+        self._pending_error_events: list[Event] = []
+        self._input_metadata = copy.deepcopy(input_metadata or {})
         self._inner = inner
         self._message_id = message_id
         self._session_id = session_id
@@ -748,6 +753,12 @@ class _MessageObserverSink:
         return False
 
     async def emit(self, event: Event) -> None:
+        if event.type == "user_message":
+            # Runtime-authored data cannot forge or erase host presentation.
+            data = {k: v for k, v in event.data.items() if k != "metadata"}
+            if self._input_metadata:
+                data["metadata"] = copy.deepcopy(self._input_metadata)
+            event = Event(type=event.type, data=data, timestamp=event.timestamp)
         # Host-declared private tools (protected-builtins v2 decrypt): the model
         # already consumed the output inside the runtime loop, so dropping the
         # normalized echo here keeps the plaintext off BOTH the transcript
@@ -840,7 +851,7 @@ class _MessageObserverSink:
                 )
             self._task_coverage_continuation_active = False
             self._pending_idle_event = event
-            if not self._task_coverage_enabled:
+            if not self._task_coverage_enabled and not self._defer_terminal_events:
                 await self.finalize_sidecars()
                 await self.release_session_idle()
             return
@@ -850,6 +861,14 @@ class _MessageObserverSink:
                 "category": str(event.data.get("category") or "execution_error"),
                 "message": str(event.data.get("message") or ""),
             }
+            if (
+                self.error_payload["category"] == "execution_error"
+                and event.data.get("recovery") == "explicit_owner_retry"
+            ):
+                self.error_payload["recovery"] = "explicit_owner_retry"
+            if self._defer_terminal_events:
+                self._pending_error_events.append(event)
+                return
 
         elif event.type == "usage_update":
             current = {
@@ -1450,6 +1469,10 @@ class _MessageObserverSink:
 
     async def release_session_idle(self) -> None:
         await self._complete_post_run_verification()
+        error_events = self._pending_error_events
+        self._pending_error_events = []
+        for error_event in error_events:
+            await self._inner.emit(error_event)
         event = self._pending_idle_event
         self._pending_idle_event = None
         if event is not None:
@@ -1948,6 +1971,7 @@ class SessionOrchestrator:
             user_message=user_message,
             started_at=now_ms(),
             status="running",
+            metadata=copy.deepcopy(user_message.metadata),
         )
         # Keep the trusted host snapshot with this message, not just the
         # mutable Session. Later turns can choose another policy without
@@ -1968,6 +1992,7 @@ class SessionOrchestrator:
                 message.metadata["optional_check_snapshot"] = copy.deepcopy(check_snapshot)
         await self._store.save_message(user_id, message)
         self._active_message[session_id] = message
+        session.execution_message_id = message.id
 
         # Persist ``session.status = "running"`` so the DB row reflects
         # the in-flight state for the duration of the turn. Before this,
@@ -2042,6 +2067,8 @@ class SessionOrchestrator:
             message_id=message.id,
             session_id=session.id,
             user_prompt=current_task_prompt,
+            input_metadata=user_message.metadata,
+            defer_terminal_events=True,
             citation_policy_available=any(Path(path).name == "citation" for path in session.skills),
             citation_quality_policy=citation_policy_snapshot,
             allowed_document_ids=document_scope,
@@ -2072,6 +2099,7 @@ class SessionOrchestrator:
                     turn_trace.end(error=None)
                 trace_scope.close()
                 self._active_message.pop(session_id, None)
+                session.execution_message_id = None
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
         # creation. Seed the workspace stub lazily (idempotent, one stat on
@@ -2129,6 +2157,8 @@ class SessionOrchestrator:
             self._finalize_message(message, session, observer)
             await self._store.save_session(session)
             await self._store.save_message(user_id, message)
+            # Terminal consumers may read this exact Message immediately.
+            await observer.release_session_idle()
             await observer.emit(
                 Event(
                     type="session_update",
@@ -2136,6 +2166,7 @@ class SessionOrchestrator:
                 )
             )
             self._active_message.pop(session_id, None)
+            session.execution_message_id = None
             return message
         self._active[session_id] = runtime
 
@@ -2261,7 +2292,7 @@ class SessionOrchestrator:
                         runtime.update_sink(observer)
             await observer.ensure_partial_assistant_message()
             await observer.finalize_sidecars()
-            await observer.release_session_idle()
+            await observer._complete_post_run_verification()
             # Native per-turn fork anchor (codex turn id / Claude transcript
             # uuid / deepagents checkpoint id / deepseek_harness event seq),
             # captured by the runtime during ``run()``. deepseek_harness
@@ -2306,6 +2337,8 @@ class SessionOrchestrator:
                     session.mode = fresh.mode
             await self._store.save_session(session)
             await self._store.save_message(user_id, message)
+            # Terminal consumers may read this exact Message immediately.
+            await observer.release_session_idle()
             await observer.emit(
                 Event(
                     type="session_update",
@@ -2338,6 +2371,7 @@ class SessionOrchestrator:
             trace_scope.close()
             self._active.pop(session_id, None)
             self._active_message.pop(session_id, None)
+            session.execution_message_id = None
             # Mark the runtime freshly-used at turn END too, not just at entry.
             # A long-running turn (in ``_active``, so never swept) could finish
             # well past the idle TTL measured from its start; without this bump
@@ -2438,10 +2472,12 @@ class SessionOrchestrator:
         )
         await observer.ensure_partial_assistant_message()
         await observer.finalize_sidecars()
-        await observer.release_session_idle()
+        await observer._complete_post_run_verification()
         self._finalize_message(message, session, observer)
         await self._store.save_session(session)
         await self._store.save_message(user_id, message)
+        # Terminal consumers may read this exact Message immediately.
+        await observer.release_session_idle()
         await observer.emit(
             Event(
                 type="session_update",

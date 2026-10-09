@@ -92,9 +92,9 @@ def load_config_from_env() -> FailureMonitorConfig:
     raw_ratio = os.environ.get("VALUZ_AUTOMATION_FAIL_MONITOR_FAIL_RATIO", "").strip()
     if raw_ratio:
         try:
-            v = float(raw_ratio)
-            if 0 < v <= 1:
-                fail_ratio = v
+            ratio = float(raw_ratio)
+            if 0 < ratio <= 1:
+                fail_ratio = ratio
             else:
                 logger.warning("FAIL_RATIO must be in (0, 1]; got %r — using default", raw_ratio)
         except ValueError:

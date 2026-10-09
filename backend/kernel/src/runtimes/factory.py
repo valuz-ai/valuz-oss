@@ -27,9 +27,9 @@ from src.core.agent_config import AgentConfig
 from src.core.events import EventSink
 from src.core.runtime_port import RuntimePort
 from src.core.tool_registry import build_toolkit_for_config
-from src.ptc.executor import maybe_expose_execute_code
 from src.core.tools import ToolKit
 from src.core.types import ApiProtocol, RuntimeProvider, Session
+from src.ptc.executor import maybe_expose_execute_code
 from src.runtimes.network_egress import (
     EgressDescriptor,
     ForwardProxyDescriptor,

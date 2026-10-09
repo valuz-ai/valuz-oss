@@ -1,5 +1,6 @@
-import { Spinner } from "./spinner";
 "use client"
+
+import { Spinner } from "./spinner";
 
 import {
   CircleCheckIcon,

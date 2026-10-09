@@ -21,6 +21,7 @@ route's ``session_to_data``) and event history (``get_events(after_seq=…)`` /
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -42,8 +43,10 @@ class LocalDataServiceReader:
         offset: int = 0,
         after_seq: int | None = None,
     ) -> list[Any]:
-        return await self._store.get_events_after(
-            user_id, session_id, after_seq=after_seq or 0, limit=limit
+        return list(
+            await self._store.get_events_after(
+                user_id, session_id, after_seq=after_seq or 0, limit=limit
+            )
         )
 
     async def get_events_after_for_user(
@@ -54,8 +57,10 @@ class LocalDataServiceReader:
         types: tuple[str, ...] | None = None,
         limit: int = 200,
     ) -> list[Any]:
-        return await self._store.get_events_after_for_user(
-            user_id, after_seq=after_seq, types=types, limit=limit
+        return list(
+            await self._store.get_events_after_for_user(
+                user_id, after_seq=after_seq, types=types, limit=limit
+            )
         )
 
     async def get_events_window(
@@ -101,7 +106,7 @@ class LocalDataServiceReader:
         user_id: str,
         *,
         status: str | None = None,
-        ids: list[str] | None = None,
+        ids: Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Any]:
@@ -116,7 +121,7 @@ class LocalDataServiceReader:
         self,
         *,
         status: str | None = None,
-        ids: list[str] | None = None,
+        ids: Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Any]:

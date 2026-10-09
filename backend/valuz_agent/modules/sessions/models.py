@@ -130,6 +130,11 @@ class QueuedInputRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # queued (待发) | dispatched (执行中/已派发) | blocked (预检失败) | cancelled (删除)
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    # Durable execution receipt. Dispatched is nonterminal; crash recovery
+    # closes an orphaned dispatch as cancelled rather than replaying model work.
+    completed_at: Mapped[int | None] = mapped_column(BigInteger)
+    output_message_id: Mapped[str | None] = mapped_column(String(36))
+    result_summary: Mapped[str | None] = mapped_column(Text)
     # FIFO order within a session; ``MAX(position)+1`` at enqueue.
     position: Mapped[int] = mapped_column(Integer, default=0)
     # Turn-level overrides mirrored from send_message (NOT part of UserMessage).

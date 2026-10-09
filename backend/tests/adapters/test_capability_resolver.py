@@ -490,3 +490,10 @@ def test_the_resolver_never_asks_for_a_content_hash(tmp_path: Path) -> None:
     )
 
     assert asked == [False, False]
+
+
+def test_agent_skill_entries_reject_non_iterable_before_catalog_access() -> None:
+    from valuz_agent.adapters.capability_resolver import resolve_skill_slugs_to_paths
+
+    with pytest.raises(ValueError, match="must be iterable"):
+        asyncio.run(resolve_skill_slugs_to_paths(123, None, user_id=USER))

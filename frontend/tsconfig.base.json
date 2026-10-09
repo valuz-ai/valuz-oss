@@ -17,6 +17,10 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
       "@valuz/shared": ["./packages/shared/src/index.ts"],
       "@valuz/core": ["./packages/core/src/index.ts"],
       "@valuz/core/types": ["./packages/core/src/types.ts"],

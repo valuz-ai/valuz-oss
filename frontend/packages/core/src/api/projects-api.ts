@@ -1,3 +1,4 @@
+import type { components as MemoryComponents } from "./generated/memory";
 import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
@@ -153,6 +154,8 @@ export interface ImportProjectConfirmResult {
   agents_skipped: number;
   automations_created: number;
   automation_errors: { name: string; error: string }[];
+  memory_imported?: number;
+  memory_errors?: MemoryComponents["schemas"]["MemoryImportError"][];
   connectors_to_configure: ProjectConnectorToConfigure[];
 }
 

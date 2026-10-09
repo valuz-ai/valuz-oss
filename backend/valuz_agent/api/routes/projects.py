@@ -419,6 +419,12 @@ class ConnectorToConfigure(BaseModel):
     requires_setup: bool
 
 
+class MemoryImportError(BaseModel):
+    entry_index: int | None = None
+    error_code: str
+    error: str
+
+
 class ImportProjectConfirmResponse(BaseModel):
     status: str
     project: dict[str, Any] | None = None
@@ -430,6 +436,8 @@ class ImportProjectConfirmResponse(BaseModel):
     agents_skipped: int = 0
     automations_created: int = 0
     automation_errors: list[dict[str, str]] = []
+    memory_imported: int = 0
+    memory_errors: list[MemoryImportError] = []
     members: list[dict[str, Any]] = []
     automations: list[dict[str, Any]] = []
     connectors_to_configure: list[ConnectorToConfigure] = []
@@ -538,6 +546,8 @@ async def import_project_confirm(
         agents_skipped=result.get("agents_skipped", 0),
         automations_created=result.get("automations_created", 0),
         automation_errors=result.get("automation_errors", []),
+        memory_imported=result.get("memory_imported", 0),
+        memory_errors=[MemoryImportError(**item) for item in result.get("memory_errors", [])],
         members=result.get("members", []),
         automations=result.get("automations", []),
         connectors_to_configure=[

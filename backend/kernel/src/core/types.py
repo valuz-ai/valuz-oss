@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -50,6 +51,16 @@ class UserMessage:
     text: str
     attachments: tuple[Attachment, ...] = ()
     additional_context: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.metadata, dict):
+            raise ValueError("message metadata must be a JSON object")
+        try:
+            detached = json.loads(json.dumps(self.metadata, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("message metadata must contain only JSON values") from exc
+        object.__setattr__(self, "metadata", detached)
 
 
 # -- Model provider + settings --
@@ -332,6 +343,9 @@ class Session:
     # "activeForm"?: str}`. None when the agent has never updated todos in
     # this session.
     todos: list[dict[str, Any]] | None = None
+    # Orchestrator-only binding to the Message persisted for this actual turn.
+    # Not accepted by create/update, serialized, or recovered from metadata.
+    execution_message_id: str | None = field(default=None, init=False, repr=False, compare=False)
 
 
 # Host-stamped ``Session.metadata`` marker for one-shot "bare completion"

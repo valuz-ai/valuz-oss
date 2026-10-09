@@ -1,3 +1,4 @@
+import { tokens } from "../../../tailwind.preset";
 import {
   Check,
   Code,
@@ -535,7 +536,7 @@ export const SkillDetailPanel = ({
         [data-streamdown="table-fullscreen"] [data-streamdown="table-cell"] {
           padding: 12px 16px;
           font-size: 13px;
-          color: var(--color-ink-heading, #131313);
+          color: var(--color-ink-heading, ${tokens.color.foreground});
         }
       `}</style>
       <div className="border-b border-surface-border px-4 pb-4 pt-4">

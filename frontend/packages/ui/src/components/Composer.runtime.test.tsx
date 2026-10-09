@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -191,6 +191,149 @@ describe("Composer agent selector layering", () => {
     fireEvent.mouseDown(agentMenu!);
     expect(document.body.contains(agentMenu!)).toBe(true);
   });
+});
+
+describe("Composer frozen agent brain", () => {
+  const agent = {
+    slug: "valurion",
+    name: "小万",
+    runtimeLabel: "Claude Code",
+    modelLabel: "Valuz Pro",
+  };
+  const providers = [
+    {
+      providerId: "native",
+      providerName: "Native",
+      modelId: "gpt-6.1-sol",
+      isDefault: false,
+    },
+  ];
+  const frozen = {
+    agents: [agent],
+    selectedAgentSlug: "valurion",
+    allowAgentBrainOverride: true,
+    agentLocked: true,
+    modelLocked: true,
+    runtimes: sampleRuntimes,
+    selectedRuntimeId: "codex",
+    providers,
+    selectedProviderId: "native",
+    selectedModelId: "gpt-6.1-sol",
+  };
+
+  it("shows the conversation's Codex override and keeps its brain frozen", () => {
+    const onAgentChange = vi.fn();
+    const onModelChange = vi.fn();
+    const onRuntimeChange = vi.fn();
+    render(
+      <Composer
+        {...frozen}
+        onAgentChange={onAgentChange}
+        onModelChange={onModelChange}
+        onRuntimeChange={onRuntimeChange}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /小万/ });
+    expect(trigger.textContent).toContain("GPT 6.1 Sol");
+    expect(trigger.textContent).not.toContain("Valuz Pro");
+    fireEvent.click(trigger);
+    const menu = document.querySelector('[data-slot="composer-agent-menu"]')!;
+    const bound = within(menu as HTMLElement).getByRole("button", {
+      name: /小万/,
+    });
+    expect(bound.textContent).toContain("Codex Agent");
+    expect(bound.textContent).toContain("GPT 6.1 Sol");
+    expect((bound as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(bound);
+    expect(onAgentChange).not.toHaveBeenCalled();
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(onRuntimeChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps frozen labels after the library agent's defaults change", () => {
+    const view = render(<Composer {...frozen} />);
+    view.rerender(
+      <Composer
+        {...frozen}
+        agents={[
+          {
+            ...agent,
+            runtimeLabel: "Other runtime",
+            modelLabel: "Updated default",
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /小万/ });
+    expect(trigger.textContent).toContain("GPT 6.1 Sol");
+    fireEvent.click(trigger);
+    const menu = document.querySelector('[data-slot="composer-agent-menu"]')!;
+    expect(menu.textContent).toContain("Codex Agent");
+    expect(menu.textContent).not.toContain("Updated default");
+    expect(menu.textContent).not.toContain("Other runtime");
+  });
+
+  it.each([
+    { scenario: "an empty catalog", catalog: [] },
+    {
+      scenario: "a catalog with only today's default",
+      catalog: [
+        {
+          providerId: "valuz",
+          providerName: "Valuz",
+          modelId: "valuz-pro",
+          isDefault: true,
+        },
+      ],
+    },
+  ])("names frozen model/runtime with $scenario", ({ catalog }) => {
+    render(
+      <Composer
+        {...frozen}
+        runtimes={sampleRuntimes.filter((r) => r.id !== "codex")}
+        selectedProviderId="removed"
+        selectedModelId="private-model-v7"
+        providers={catalog}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /小万/ });
+    expect(trigger.textContent).toContain("private-model-v7");
+    expect(trigger.textContent).not.toContain("Valuz Pro");
+    fireEvent.click(trigger);
+    const menu = document.querySelector('[data-slot="composer-agent-menu"]')!;
+    const bound = within(menu as HTMLElement).getByRole("button", {
+      name: /小万/,
+    });
+    expect(bound.textContent).toContain("codex");
+    expect(bound.textContent).not.toContain("Claude Agent");
+  });
+
+  it.each([
+    {
+      agentLocked: false,
+      allowAgentBrainOverride: true,
+      scenario: "new conversation",
+    },
+    {
+      agentLocked: true,
+      allowAgentBrainOverride: false,
+      scenario: "project conversation",
+    },
+  ])(
+    "retains the host-computed agent label for a $scenario",
+    ({ agentLocked, allowAgentBrainOverride }) => {
+      render(
+        <Composer
+          {...frozen}
+          agentLocked={agentLocked}
+          allowAgentBrainOverride={allowAgentBrainOverride}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: /小万/ }).textContent,
+      ).toContain("Valuz Pro");
+    },
+  );
 });
 
 describe("Composer IME submission guard", () => {

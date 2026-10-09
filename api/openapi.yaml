@@ -1035,6 +1035,8 @@ paths:
                 $ref: "#/components/schemas/Task"
         "404":
           description: Task not found
+        "409":
+          description: Goal revision could not be delivered to an active owned lead; task remains unchanged
   /v1/tasks/{task_id}:commit:
     post:
       summary: Promote a draft task to active (spawns its lead session)
@@ -1398,7 +1400,118 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemoryView"
 
+  /v1/memory/records:
+    get:
+      summary: List owner-scoped memory records with provenance and catalog revision
+      operationId: listMemoryRecords
+      tags: [memory]
+      parameters:
+        - {name: project_id, in: query, schema: {type: string}}
+        - {name: target, in: query, schema: {$ref: "#/components/schemas/MemoryTarget"}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        "200":
+          description: Snapshot filtered to user/global and the verified project, if supplied
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryRecordsPage"}
+        "404": {description: Project not owned or not found}
+        "503": {description: Memory authority unavailable; not an empty snapshot}
+    post:
+      summary: Save an explicitly supplied memory using catalog compare-and-set
+      operationId: addMemoryRecord
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryRecordAdd"}
+      responses:
+        "200":
+          description: Durable mutation receipt; current sessions may still contain older snapshots
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "403": {description: Memory collection disabled}
+        "404": {description: Project not owned or not found}
+        "409": {description: Catalog revision or operation fingerprint conflict}
+        "422": {description: Invalid content or scope}
+        "503": {description: Memory authority unavailable}
+
+  /v1/memory/records/{record_id}:
+    parameters:
+      - {name: record_id, in: path, required: true, schema: {type: string}}
+    patch:
+      summary: Correct a memory by stable identity and expected catalog revision
+      operationId: correctMemoryRecord
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryRecordCorrection"}
+      responses:
+        "200":
+          description: Durable correction receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "403": {description: Memory collection disabled}
+        "404": {description: Record or owned project not found}
+        "409": {description: Version or operation conflict}
+        "422": {description: Invalid content}
+        "503": {description: Memory authority unavailable}
+    delete:
+      summary: Forget a memory by identity; retain only deletion identifiers and source watermarks
+      operationId: forgetMemoryRecord
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryRecordForget"}
+      responses:
+        "200":
+          description: Deletion receipt; original chat, files and already loaded context are not erased
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "404": {description: Record or owned project not found}
+        "409": {description: Version or operation conflict}
+        "503": {description: Memory authority unavailable}
+
+  /v1/memory/sources/forget:
+    post:
+      summary: Forget all traced memories from an owner-scoped source and prohibit re-extraction
+      operationId: forgetMemorySource
+      tags: [memory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemorySourceForget"}
+      responses:
+        "200":
+          description: Source-forgetting receipt; original source is retained
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryMutationReceipt"}
+        "404": {description: Referenced project not owned or not found}
+        "409": {description: Version or operation conflict}
+        "503": {description: Memory authority unavailable}
+
   /v1/memory/settings:
+    get:
+      summary: Read memory settings without reading stored content
+      operationId: getMemorySettings
+      tags: [memory]
+      responses:
+        "200":
+          description: Current collection and extraction settings
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemorySettings"}
     patch:
       summary: Toggle the memory system on/off
       operationId: patchMemorySettings
@@ -2851,6 +2964,54 @@ paths:
 
   # ─── Sessions ──────────────────────────────────────────────────────
 
+  /kernel/v1/sessions/{session_id}/recover-failed:
+    post:
+      operationId: recoverFailedKernelSession
+      summary: Conditionally restore the exact owned failed background conversation
+      description: >-
+        Internal kernel seam used only by explicit owner retry through the Host
+        SessionLibrary. The current SQL store updates status only, requiring
+        a terminated execution_error/exhausted session, a matching complete
+        SessionData snapshot hash and the latest owned errored message with a
+        framework explicit_owner_retry marker. Periodic admission never invokes
+        this operation. Unsupported stores fail closed and require manual recovery.
+      parameters:
+        - {name: session_id, in: path, required: true, schema: {type: string}}
+        - {name: X-Valuz-Owner-Id, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [failed_message_id, project_id, agent_slug, expected_snapshot_hash]
+              properties:
+                failed_message_id: {type: string, minLength: 1, maxLength: 36}
+                project_id: {type: string, minLength: 1, maxLength: 128}
+                agent_slug: {type: string, minLength: 1, maxLength: 128}
+                expected_snapshot_hash: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200':
+          description: Same SessionData; only status was restored, never a completed input
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [id, status]
+                    additionalProperties: true
+                    properties:
+                      id: {type: string}
+                      status: {type: string, enum: [created, idle, running, terminated]}
+        '404': {description: Session is absent or not owned}
+        '409': {description: Binding, latest message, stop or snapshot changed; recovery refused}
+        '422': {description: Invalid recovery request}
+        '501': {description: Store lacks atomic recovery; manual recovery required}
+
   /v1/sessions:
     get:
       summary: List sessions
@@ -3264,6 +3425,20 @@ paths:
           description: Queue is full (soft cap reached) or session not runnable
 
   /v1/sessions/{session_id}/queue/{queue_id}:
+    get:
+      tags: [sessions]
+      operationId: getSessionInputReceipt
+      summary: Read the durable outcome of one queued input
+      parameters:
+        - {name: session_id, in: path, required: true, schema: {type: string}}
+        - {name: queue_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Owner-scoped input receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionInputReceipt"}
+        "404": {description: Session or input not found}
     patch:
       summary: Edit a queued input (only while still queued)
       operationId: editSessionQueuedInput
@@ -5424,6 +5599,47 @@ paths:
   # 403 {detail: {code: app_plugins_unavailable}} on a cloud deployment. Errors are
   # {detail: AppPluginError}. Requests a plugin makes carry X-Valuz-App-Plugin-Id and are
   # held to its manifest permissions by the plugin-request middleware.
+  /v1/automations:
+    post:
+      tags: [automations]
+      operationId: createAutomation
+      summary: Create an automation, optionally targeting an existing chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AutomationDefinitionCommand"}
+      responses:
+        "201":
+          description: Automation definition
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "404": {description: Owner-scoped project, agent or target session not found}
+        "400": {description: Target is not a runnable matching chat}
+        "422": {description: Invalid target or execution contract}
+  /v1/automations/{automation_id}:
+    patch:
+      tags: [automations]
+      operationId: updateAutomation
+      summary: Update an automation execution contract
+      parameters:
+        - {name: automation_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AutomationDefinitionCommand"}
+      responses:
+        "200":
+          description: Updated automation definition
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "404": {description: Owner-scoped definition or target not found}
+        "400": {description: Target is not a runnable matching chat}
+        "422": {description: Invalid target or execution contract}
+
   /v1/app-plugins:
     get:
       summary: Installed third-party plugins
@@ -6680,6 +6896,120 @@ components:
             type: array
             items: {type: string}
           description: Entries per scope, keyed by target (user / global / project).
+    MemoryImportError:
+      type: object
+      required: [entry_index, error_code, error]
+      properties:
+        entry_index: {type: integer, nullable: true}
+        error_code: {type: string}
+        error: {type: string, description: Safe explanation without source contents}
+    MemorySourceRef:
+      type: object
+      required: [kind, source_id, origin]
+      properties:
+        kind: {type: string, enum: [message, session, task, input, document, tool, manual, import]}
+        source_id: {type: string}
+        revision: {type: string, nullable: true}
+        origin: {type: string, enum: [owner, agent, untrusted, system], description: Host-derived classification, not action authorization}
+    MemoryRecord:
+      type: object
+      required: [id, target, content, revision, source, source_refs, kind, namespace, object_refs, observed_at, supersedes, confirmed]
+      properties:
+        id: {type: string}
+        target: {$ref: "#/components/schemas/MemoryTarget"}
+        project_id: {type: string, nullable: true}
+        content: {type: string}
+        revision: {type: integer, minimum: 1}
+        source: {type: string, enum: [agent, auto, user]}
+        source_refs: {type: array, items: {$ref: "#/components/schemas/MemorySourceRef"}}
+        kind: {type: string, enum: [preference, fact, decision, lesson, work_context]}
+        namespace: {type: string}
+        object_refs: {type: array, items: {type: string}}
+        observed_at: {type: number, description: Unix timestamp in seconds}
+        supersedes: {type: array, items: {type: string}}
+        confirmed: {type: boolean}
+    MemoryRecordsPage:
+      type: object
+      required: [revision, records, total, offset, limit, context_notice]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        revision: {type: integer, minimum: 0}
+        records: {type: array, items: {$ref: "#/components/schemas/MemoryRecord"}}
+        total: {type: integer, minimum: 0}
+        offset: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 1, maximum: 100}
+        context_notice: {type: string, description: Explicit retained-history and current-context limitations}
+    MemoryRevisionInput:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+    MemoryRecordAdd:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, target, content]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        target: {$ref: "#/components/schemas/MemoryTarget"}
+        project_id: {type: string, nullable: true}
+        content: {type: string, minLength: 1, maxLength: 4000}
+        kind: {type: string, enum: [preference, fact, decision, lesson, work_context], default: fact}
+    MemoryRecordForget:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, target]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        target: {$ref: "#/components/schemas/MemoryTarget"}
+        project_id: {type: string, nullable: true}
+    MemorySourceForget:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, kind, source_id]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        kind: {type: string, enum: [message, session, task, input, document, tool, manual, import]}
+        source_id: {type: string, minLength: 1, maxLength: 256}
+    MemoryRecordCorrection:
+      type: object
+      additionalProperties: false
+      required: [operation_id, base_revision, content]
+      properties:
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        operation_id: {type: string, minLength: 1, maxLength: 128}
+        base_revision: {type: integer, minimum: 0}
+        content: {type: string, minLength: 1, maxLength: 4000}
+    MemoryMutationReceipt:
+      type: object
+      required: [status, revision, affected_ids, affected_project_ids, replayed, context_notice]
+      properties:
+        maintenance_complete: {type: boolean, default: true}
+        maintenance_reason_code: {type: string, nullable: true}
+        authority_id: {type: string, nullable: true, minLength: 1, maxLength: 128}
+        authority_epoch: {type: integer, nullable: true, minimum: 0}
+        status: {type: string, enum: [applied, noop]}
+        revision: {type: integer, minimum: 0}
+        record_id: {type: string, nullable: true}
+        record_revision: {type: integer, nullable: true}
+        affected_ids: {type: array, items: {type: string}}
+        affected_project_ids: {type: array, items: {type: string}}
+        replayed: {type: boolean}
+        context_notice: {type: string}
     MemorySettings:
       type: object
       required: [enabled, auto_extract, custom_instructions]
@@ -7510,6 +7840,10 @@ components:
         agents_created: {type: integer, description: "Library agents newly created (de-duped by slug)."}
         agents_skipped: {type: integer, description: "Library agents reused (slug already present)."}
         automations_created: {type: integer}
+        memory_imported: {type: integer, minimum: 0, default: 0}
+        memory_errors:
+          type: array
+          items: {$ref: "#/components/schemas/MemoryImportError"}
         automation_errors:
           type: array
           description: "Per-automation failures (one bad automation does not sink the rest). Empty when all recreated."
@@ -10679,7 +11013,9 @@ components:
           type: object
           description: >-
             Flat string map. Final message.assistant.delta frames may carry a
-            JSON-encoded CitationBundleV1 under citation_bundle.
+            JSON-encoded CitationBundleV1 under citation_bundle. message.user
+            frames may carry JSON-encoded trusted Message.metadata under
+            metadata; its background_input follows BackgroundInputMetadata.
           additionalProperties:
             type: string
 
@@ -10794,6 +11130,28 @@ components:
           items:
             $ref: "#/components/schemas/SessionEventEnvelope"
 
+    BackgroundInputPresentation:
+      type: object
+      additionalProperties: false
+      required: [kind, work_ref_id]
+      description: Trusted host display hint, accepted only by the background session facade.
+      properties:
+        kind: {type: string, enum: [personal_work_result, personal_work_attention]}
+        work_ref_id: {type: string, minLength: 1, maxLength: 512}
+        project_id: {type: string, minLength: 1, maxLength: 512}
+        task_id: {type: string, minLength: 1, maxLength: 512}
+        session_id: {type: string, minLength: 1, maxLength: 512}
+        target_id: {type: string, minLength: 1, maxLength: 512}
+        status: {type: string, minLength: 1, maxLength: 512}
+
+    BackgroundInputMetadata:
+      type: object
+      required: [input_id, source]
+      properties:
+        input_id: {type: string, maxLength: 36}
+        source: {type: string, enum: [background]}
+        presentation: {$ref: '#/components/schemas/BackgroundInputPresentation'}
+
     # ── Session input queue ────────────────────────────────────────
 
     QueuedInput:
@@ -10832,6 +11190,62 @@ components:
           type: integer
           format: int64
           nullable: true
+
+    SessionInputReceipt:
+      type: object
+      required: [id, session_id, status]
+      properties:
+        id: {type: string}
+        session_id: {type: string}
+        status: {type: string, enum: [queued, dispatched, blocked, completed, failed, cancelled]}
+        completed_at: {type: integer, format: int64, nullable: true}
+        source: {type: string}
+        input: {type: object, additionalProperties: true}
+        output_message_id: {type: string, nullable: true}
+        result_summary: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+
+    AutomationDefinitionCommand:
+      type: object
+      additionalProperties: true
+      description: Creation requires name, project_kind and trigger; patch fields are optional. Legacy scheduling and input/result fields retain their existing behavior.
+      properties:
+        name: {type: string, minLength: 1, maxLength: 50}
+        project_kind: {type: string, enum: [chat, project]}
+        project_id: {type: string, nullable: true}
+        agent_kind: {type: string, enum: [project_member, library_agent], nullable: true}
+        agent_slug: {type: string, nullable: true}
+        prompt_template: {type: string}
+        trigger: {type: object, additionalProperties: true}
+        action_kind: {type: string, enum: [chat, task]}
+        worktree: {type: boolean, default: false}
+        execution:
+          oneOf:
+            - {$ref: "#/components/schemas/AutomationAgentExecution"}
+            - {$ref: "#/components/schemas/AutomationCodeExecution"}
+          discriminator: {propertyName: kind}
+    AutomationCodeExecution:
+      type: object
+      additionalProperties: false
+      required: [kind, runtime, entry]
+      properties:
+        kind: {type: string, enum: [code]}
+        runtime: {type: string, enum: [python, shell]}
+        entry: {type: string}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 3600}
+
+    AutomationAgentExecution:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [agent]}
+        mode: {type: string, enum: [chat, task], default: chat}
+        target_session_id:
+          type: string
+          nullable: true
+          maxLength: 36
+          description: Existing owner/project/agent-bound chat session. Incompatible with task, code or worktree execution. Omitted creates a fresh session per run.
 
     QueuedInputList:
       type: object

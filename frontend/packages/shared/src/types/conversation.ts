@@ -121,6 +121,16 @@ export interface ConversationTokenUsage {
   models: string[];
 }
 
+/** Queue provenance stamped by the host, never inferred from message text. */
+export interface ConversationTurnMetadata {
+  background_input: {
+    input_id: string;
+    source: "background";
+    /** Optional host presentation hint; edition renderers validate their own contract. */
+    presentation?: Record<string, unknown>;
+  };
+}
+
 export interface ConversationTurn {
   /** Render identity — unique per turn by construction, and stable across
    * the live → persisted transition. Derived from the ``user_message``
@@ -141,6 +151,7 @@ export interface ConversationTurn {
    * live → persisted transition. */
   userMessageSeq: number;
   userText: string;
+  metadata?: ConversationTurnMetadata;
   blocks: ConversationBlock[];
   failedMessage: string | null;
   /** The run ended because the user cancelled it (``run.failed`` with

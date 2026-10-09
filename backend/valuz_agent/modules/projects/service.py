@@ -691,9 +691,9 @@ class ProjectService:
         # centralized memory dir is Valuz-owned (never the user's bound repo), so
         # it's safe to remove. Best-effort — never fail the delete on cleanup.
         try:
-            from valuz_agent.modules.memory.service import memory_store
+            from valuz_agent.facade.memory import MemoryLibrary
 
-            memory_store.drop_project(user_id, project_id)
+            await MemoryLibrary(user_id).drop_project(project_id)
         except Exception:  # noqa: BLE001
             logger.debug("project memory cleanup skipped for %s", project_id, exc_info=True)
 

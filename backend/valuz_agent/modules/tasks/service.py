@@ -18,11 +18,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
-from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.db import async_commit_with_retry, async_unit_of_work, defer_commits
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
+    pick_lead_run,
 )
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.plan import TaskPlan
@@ -143,42 +144,61 @@ class TaskService:
         from valuz_agent.modules.tasks import messaging
         from valuz_agent.ports.capability_policy import TaskCheckConfig
 
-        task.goal = goal
-        # A revised goal is new intent, not a continuation of a layout-only
-        # exemption. Keep execution lineage on TaskRow; only the optional-check
-        # revision changes so every lead/member converges at its next boundary.
-        try:
-            previous_checks = TaskCheckConfig.model_validate(
-                (task.metadata_ or {}).get(CONFIG_KEY) or {}
+        # Do not persist new intent when no owned active lead can receive it.
+        # The old path committed the header first and returned False only after
+        # discovering the absent lead, leaving a deceptively revised task.
+        owned = await self._tasks.get_task(user_id, task.id)
+        if owned is None or owned.status != "active":
+            return False
+        lead = pick_lead_run(await self._runs.list_runs(user_id, task.id))
+        if lead is None or lead.status != "active":
+            return False
+        task = owned
+        async with defer_commits():
+            task.goal = goal
+            # A revised goal is new intent, not a continuation of a layout-only
+            # exemption. Keep execution lineage on TaskRow; only the optional-check
+            # revision changes so every lead/member converges at its next boundary.
+            try:
+                previous_checks = TaskCheckConfig.model_validate(
+                    (task.metadata_ or {}).get(CONFIG_KEY) or {}
+                )
+            except ValidationError:
+                previous_checks = TaskCheckConfig()
+            task.metadata_ = {
+                **(task.metadata_ or {}),
+                CONFIG_KEY: fresh_config(
+                    TaskCheckConfig(
+                        origin="task",
+                        operation="task.execute",
+                        run_id=previous_checks.run_id or task.id,
+                    )
+                ).model_dump(mode="json"),
+            }
+            await self._tasks.update_task(task)
+            # One transaction: the row, the timeline entry and the lead's copy of
+            # the revision. Splitting them is how a task ends up looking redirected
+            # while its lead still pursues the old objective.
+            notified = await messaging.notify_lead_goal_revised(
+                self._db,
+                task_id=task.id,
+                project_id=task.project_id,
+                new_goal=goal,
+                user_id=user_id,
             )
-        except ValidationError:
-            previous_checks = TaskCheckConfig()
-        task.metadata_ = {
-            **(task.metadata_ or {}),
-            CONFIG_KEY: fresh_config(TaskCheckConfig(
-                origin="task", operation="task.execute", run_id=previous_checks.run_id or task.id,
-            )).model_dump(mode="json"),
-        }
-        await self._tasks.update_task(task)
-        # One transaction: the row, the timeline entry and the lead's copy of
-        # the revision. Splitting them is how a task ends up looking redirected
-        # while its lead still pursues the old objective.
-        notified = await messaging.notify_lead_goal_revised(
-            self._db,
-            task_id=task.id,
-            project_id=task.project_id,
-            new_goal=goal,
-            user_id=user_id,
-        )
-        delivered = bool(notified["delivered"])
-        await self._events.append_event(
-            user_id,
-            task.project_id,
-            task.id,
-            "goal_revised",
-            actor="user",
-            payload={"goal": goal, "delivered_to_lead": delivered},
-        )
+            delivered = bool(notified["delivered"])
+            if not delivered:
+                await self._db.rollback()
+                return False
+            await self._events.append_event(
+                user_id,
+                task.project_id,
+                task.id,
+                "goal_revised",
+                actor="user",
+                payload={"goal": goal, "delivered_to_lead": delivered},
+            )
+        await async_commit_with_retry(self._db, where="TaskService.revise_goal")
         return delivered
 
 
@@ -335,9 +355,7 @@ async def get_task(
             return None
         runs = await run_ds.list_runs(user_id, task_id)
         latest_summary = ""
-        for ev in reversed(
-            await event_ds.list_events(user_id, project_id, task_id)
-        ):
+        for ev in reversed(await event_ds.list_events(user_id, project_id, task_id)):
             summary = (ev.payload or {}).get("summary")
             if summary:
                 latest_summary = str(summary)

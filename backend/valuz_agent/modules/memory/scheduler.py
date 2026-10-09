@@ -5,8 +5,9 @@ turns), so firing extraction on every finalize would be per-turn-expensive.
 Instead each turn (re)arms a delayed task; a new turn cancels and reschedules it,
 so extraction fires once when the session truly goes quiet for ``delay`` seconds.
 
-Fully in-process and best-effort: a process restart simply drops pending timers
-(the next turn re-arms), and a failing run never propagates to the turn.
+Production finalizers await MemoryScheduler durable registration. The legacy
+in-process timer classes remain compatibility helpers for explicitly injected
+runners; boot does not wire them to production extraction.
 """
 
 from __future__ import annotations
@@ -14,6 +15,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from valuz_agent.modules.memory.journal import ReviewJournal, ReviewLimits
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +143,78 @@ def wire_task_finalized_trigger() -> None:
     from valuz_agent.modules.tasks.events import TASK_FINALIZED
 
     def _on_finalized(*, task_id: str, owner_user_id: str, status: str, **_kw: object) -> None:
-        if status == "completed":
+        # The real finalization path awaits durable enqueue. Legacy bus-only
+        # callers remain supported without double-registering production jobs.
+        if status == "completed" and not memory_scheduler.registered:
             task_finish_scheduler.notify_finished(task_id, owner_user_id)
 
     event_bus.subscribe(TASK_FINALIZED, _on_finalized)
     _task_finalized_wired = True
+
+
+class MemoryScheduler:
+    """Poll only already registered candidates; never invent jobs or user cron."""
+
+    def __init__(
+        self,
+        *,
+        journal: ReviewJournal | None = None,
+        limits: ReviewLimits | None = None,
+        registered: bool = True,
+    ) -> None:
+        from valuz_agent.modules.memory.journal import ReviewLimits, review_journal
+
+        self.registered = registered
+        self.journal = journal if journal is not None else review_journal
+        self.limits = limits if limits is not None else ReviewLimits()
+        self._task: asyncio.Task[None] | None = None
+
+    async def notify_turn(self, session_id: str, user_id: str) -> None:
+        if not self.registered:
+            return
+        from valuz_agent.infra.time_utils import now_ms
+
+        await self.journal.schedule(
+            user_id, "session", session_id, now_ms() + int(self.limits.idle_delay * 1000)
+        )
+
+    async def notify_finished(
+        self, task_id: str, user_id: str, *, db: AsyncSession | None = None
+    ) -> None:
+        if not self.registered:
+            return
+        from valuz_agent.infra.time_utils import now_ms
+
+        await self.journal.schedule(user_id, "task", task_id, now_ms(), db=db)
+
+    async def run_due(self) -> None:
+        from valuz_agent.modules.memory.recovery import dispatch
+
+        for job in await self.journal.due():
+            await dispatch(job, journal=self.journal, limits=self.limits)
+
+    async def _poll(self) -> None:
+        while True:
+            try:
+                await self.run_due()
+            except Exception:  # noqa: BLE001 — keep registered work for bounded retry
+                logger.debug("memory candidate polling unavailable", exc_info=True)
+            await asyncio.sleep(self.limits.poll_interval)
+
+    async def start(self) -> None:
+        self.registered = True
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._poll(), name="memory-review-recovery")
+
+    async def stop(self) -> None:
+        self.registered = False
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+memory_scheduler = MemoryScheduler(registered=False)

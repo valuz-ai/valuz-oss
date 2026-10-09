@@ -228,7 +228,7 @@ describe("ComposerPane slots", () => {
   });
 
   describe("conversation.composer.dock", () => {
-    it("renders in a px-5 row between the queue and the composer, with context", () => {
+    it("renders in an inset centered column between the queue and the composer, with context", () => {
       let ctx: Record<string, unknown> = {};
       register("conversation.composer.dock", (props) => {
         ctx = props;
@@ -237,7 +237,9 @@ describe("ComposerPane slots", () => {
       const setDraft = vi.fn();
       renderPane({ displayBusy: true, setDraft });
 
-      const row = screen.getByTestId("ext-dock").parentElement!;
+      const column = screen.getByTestId("ext-dock").parentElement!;
+      expect(column.className).toBe("mx-auto max-w-[760px]");
+      const row = column.parentElement!;
       expect(row.className).toBe("px-5");
       expect(row.previousElementSibling?.className).toBe("px-5");
       expect(

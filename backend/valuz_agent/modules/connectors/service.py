@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,14 @@ from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.integrations.mcp_http import mcp_request_headers
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
+from valuz_agent.ports.mcp_catalog import McpCatalogPort
 from valuz_agent.ports.runtime_resource import ManagedMutationResult
+
+if TYPE_CHECKING:
+    from valuz_agent.ports.connector_lifecycle import (
+        ConnectorOAuthSnapshot,
+        ConnectorSecretSnapshot,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +189,7 @@ class _Storage:
     params_json: str | None
 
 
-def _secret_snapshot(row: ConnectorRow):
+def _secret_snapshot(row: ConnectorRow) -> ConnectorSecretSnapshot:
     from valuz_agent.ports.connector_lifecycle import ConnectorSecretSnapshot
 
     return ConnectorSecretSnapshot(
@@ -192,7 +199,7 @@ def _secret_snapshot(row: ConnectorRow):
     )
 
 
-def _oauth_snapshot(row: ConnectorRow):
+def _oauth_snapshot(row: ConnectorRow) -> ConnectorOAuthSnapshot:
     from valuz_agent.ports.connector_lifecycle import ConnectorOAuthSnapshot
 
     return ConnectorOAuthSnapshot(
@@ -260,9 +267,7 @@ async def after_connector_oauth_authorized_hook(
     )
 
 
-async def _before_connector_delete_hook(
-    db: AsyncSession, user_id: str, row: ConnectorRow
-) -> None:
+async def _before_connector_delete_hook(db: AsyncSession, user_id: str, row: ConnectorRow) -> None:
     from valuz_agent.ports.extensions import ext
 
     await ext.connector_lifecycle.before_connector_delete(
@@ -341,7 +346,7 @@ class ConnectorService:
     def __init__(
         self,
         datastore: ConnectorDatastore,
-        remote_catalog: object | None = None,
+        remote_catalog: McpCatalogPort | None = None,
     ) -> None:
         self._ds = datastore
         self._remote_catalog = remote_catalog
@@ -475,9 +480,13 @@ class ConnectorService:
             enabled=True,
             status="connecting",
         )
-        credential_patch = {
-            "set_attrs": {"headers": headers, "params": params, "env": env},
-        } if any(value is not None for value in (headers, params, env)) else None
+        credential_patch = (
+            {
+                "set_attrs": {"headers": headers, "params": params, "env": env},
+            }
+            if any(value is not None for value in (headers, params, env))
+            else None
+        )
         authority = await _before_managed_connector_mutation(
             user_id,
             {
@@ -531,9 +540,13 @@ class ConnectorService:
         row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return None
-        credential_patch = {
-            "set_attrs": {"headers": headers, "params": params, "env": env},
-        } if any(value is not None for value in (headers, params, env)) else None
+        credential_patch = (
+            {
+                "set_attrs": {"headers": headers, "params": params, "env": env},
+            }
+            if any(value is not None for value in (headers, params, env))
+            else None
+        )
         authority = await _before_managed_connector_mutation(
             user_id,
             {
@@ -661,9 +674,7 @@ class ConnectorService:
         from valuz_agent.ports.extensions import ext
 
         if not getattr(ext.managed_connector_mutation, "cloud_first", False):
-            await _after_connector_saved_hook(
-                self._ds.session, user_id, updated, "updated"
-            )
+            await _after_connector_saved_hook(self._ds.session, user_id, updated, "updated")
         return _row_to_view(updated)
 
 

@@ -8,6 +8,7 @@ import type {
   PrototypeToolCall,
 } from "@valuz/shared";
 import { t } from "@valuz/shared/i18n";
+import { parseTurnMetadata } from "./turn-metadata";
 
 /* ── Helpers ───────────────────────────────────────────────── */
 
@@ -696,6 +697,7 @@ const createTurnsBuilder = () => {
 
       if (eventType === "message.user") {
         const userText = payload.text ?? "";
+        const metadata = parseTurnMetadata(payload.metadata);
         const userSig = `${payload.message_id ?? ""}::${userText}`;
         if (userSig === lastUserSig) {
           continue;
@@ -745,6 +747,7 @@ const createTurnsBuilder = () => {
           messageId: payload.message_id || null,
           userMessageSeq: envelope.seq,
           userText,
+          ...(metadata ? { metadata } : {}),
           blocks: [],
           failedMessage: null,
           cancelled: false,

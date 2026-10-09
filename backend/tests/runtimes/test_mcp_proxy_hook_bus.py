@@ -26,6 +26,7 @@ import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
 
 from fastapi import FastAPI
 from mcp import ClientSession
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import CallToolResult, TextContent
@@ -333,3 +334,93 @@ async def test_the_cloud_sandbox_proxies_through_its_own_kernel_on_loopback(
     from src.runtimes.mcp_proxy.registry import proxy_url
 
     assert proxy_url("s", "srv").startswith("http://127.0.0.1:18080/mcp/proxy/s/srv/")
+
+
+async def test_warm_codex_refreshes_http_credentials_without_closing_native_client(
+    proxy_base: str,
+) -> None:
+    """Same advertised proxy token reaches a new real HTTP upstream context.
+
+    This also covers prepare() having registered a stale credential before
+    the first real turn materializes fresh owner authorization.
+    """
+    import dataclasses
+    from contextlib import asynccontextmanager
+    from src.runtimes.codex.runtime import CodexRuntime
+    from src.runtimes.mcp_proxy import get_session_proxy
+
+    upstream_server = FastMCP("headers", stateless_http=True)
+
+    @upstream_server.tool()
+    def identity(ctx: Context) -> str:
+        """Report the authorization context supplied by the proxy."""
+        return ctx.request_context.request.headers["x-owner-token"]
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):  # noqa: ANN202
+        async with upstream_server.session_manager.run():
+            yield
+
+    upstream_app = FastAPI(lifespan=lifespan)
+    upstream_app.mount("/", upstream_server.streamable_http_app())
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(upstream_app, host="127.0.0.1", port=port, log_level="error")
+    )
+    task = asyncio.create_task(server.serve())
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    upstream = McpHttpServerConfig(
+        name="remote", url=f"http://127.0.0.1:{port}/mcp", headers={"X-Owner-Token": "old"}
+    )
+    session = dataclasses.replace(_session(), mcp_servers=(upstream,), user_id="owner")
+    runtime = CodexRuntime.__new__(CodexRuntime)
+    native_client = object()  # _ensure_codex must neither replace nor close this live client.
+    runtime._codex = native_client
+    runtime._hook_session_ref = SessionRef.from_session(session)
+    runtime._mcp_proxy_session_id = None
+    runtime.toolkit = None
+    routed = await runtime._route_mcp_through_proxy(session)
+    [proxied] = routed.mcp_servers
+
+    async def identity_call(client: ClientSession) -> CallToolResult:
+        return await client.call_tool("identity", {})
+
+    try:
+        first = await _client_call(proxied, identity_call)
+        assert first.content[0].text == "old"
+        entry = get_session_proxy(session.id)
+        assert entry is not None
+        old_connection = entry.upstreams["remote"]
+        token = entry.token
+        fresh = dataclasses.replace(upstream, headers={"X-Owner-Token": "fresh"})
+        updated = dataclasses.replace(session, mcp_servers=(fresh,), permission_mode="default")
+        await runtime._ensure_codex(updated)
+        assert runtime._codex is native_client
+        assert entry.token == token and entry.authorized(proxied.headers["Authorization"])
+        assert entry.hooks.session.permission_mode == "default"
+        assert old_connection._closed
+        current_connection = entry.upstreams["remote"]
+        assert current_connection is not old_connection
+        second = await _client_call(proxied, identity_call)
+        assert second.content[0].text == "fresh"
+        await runtime._ensure_codex(updated)
+        assert entry.upstreams["remote"] is current_connection
+
+        # Revoke an MCP config while retaining the native process. The old
+        # proxy URL no longer exposes stale upstream credentials.
+        await runtime._ensure_codex(dataclasses.replace(updated, mcp_servers=()))
+        async with httpx.AsyncClient() as client:
+            response = await client.post(proxied.url, headers=proxied.headers, json={})
+        assert response.status_code == 404
+        assert current_connection._closed
+        # Re-enabling an originally advertised name keeps its stable URL.
+        await runtime._ensure_codex(updated)
+        third = await _client_call(proxied, identity_call)
+        assert third.content[0].text == "fresh"
+        assert runtime._codex is native_client
+    finally:
+        await runtime._release_mcp_proxy()
+        server.should_exit = True
+        await asyncio.wait_for(task, 10)

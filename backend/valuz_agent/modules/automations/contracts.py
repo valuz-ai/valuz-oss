@@ -92,8 +92,16 @@ InputContract = Annotated[
 class AgentExecution(BaseModel):
     """An agent turn: ``chat`` = one session, ``task`` = a project task."""
 
+    model_config = ConfigDict(extra="forbid")
     kind: Literal["agent"] = "agent"
     mode: Literal["chat", "task"] = "chat"
+    target_session_id: str | None = Field(default=None, min_length=1, max_length=36)
+
+    @model_validator(mode="after")
+    def _existing_chat_only(self) -> AgentExecution:
+        if self.target_session_id is not None and self.mode != "chat":
+            raise ValueError("target_session_id requires agent chat execution")
+        return self
 
 
 class CodeExecution(BaseModel):
@@ -106,6 +114,7 @@ class CodeExecution(BaseModel):
     automation before or while writing the file).
     """
 
+    model_config = ConfigDict(extra="forbid")
     kind: Literal["code"] = "code"
     runtime: Literal["python", "shell"] = "python"
     entry: str = Field(min_length=1, max_length=512)
@@ -205,11 +214,12 @@ def execution_contract_of(row: Any) -> AgentExecution | CodeExecution:
         )
     if getattr(row, "action_kind", "chat") == "task":
         return AgentExecution(mode="task")
-    return AgentExecution(mode="chat")
+    return AgentExecution(mode="chat", target_session_id=getattr(row, "target_session_id", None))
 
 
 def apply_execution_contract(row: Any, contract: AgentExecution | CodeExecution) -> None:
     if isinstance(contract, CodeExecution):
+        row.target_session_id = None
         row.execution_kind = "code"
         row.code_runtime = contract.runtime
         row.code_entry = contract.entry
@@ -221,6 +231,7 @@ def apply_execution_contract(row: Any, contract: AgentExecution | CodeExecution)
         row.agent_slug = None
         row.action_kind = "chat"
     else:
+        row.target_session_id = contract.target_session_id
         row.execution_kind = "agent"
         row.code_runtime = None
         row.code_entry = None

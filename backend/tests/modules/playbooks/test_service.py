@@ -315,3 +315,26 @@ async def test_delete_is_blocked_by_active_run_or_automation_binding(
             definition.id,
             expected_revision=definition.revision,
         )
+
+
+async def test_public_collaboration_is_owner_scoped_and_keeps_parent_transaction(db):
+    projects = FakeProjects()
+    service = PlaybookService(db, projects)
+    definition, version = await service.create_definition(USER, create_request())
+    await db.commit()
+    assert await service.find_definition("other", definition.id) is None
+    assert await service.find_version("other", definition.id, version.version) is None
+    assert (
+        await service.find_version(USER, definition.id, version.version)
+    ).content == version.content
+    run = await service.create_run(USER, PlaybookRunCreateRequest(definition_id=definition.id))
+    assert await service.find_run("other", run.id) is None
+    with pytest.raises(ValueError, match="owner mismatch"):
+        await service.prepare_automation_run("other", run)
+    original_id, definition_id = run.id, definition.id
+    assert (await service.prepare_automation_run(USER, run)).id == original_id
+    # An automation must commit the parent link and this row atomically. The
+    # public preparation boundary only flushes: rollback removes the new row.
+    await db.rollback()
+    assert await service.find_run(USER, original_id) is None
+    assert await service.find_definition(USER, definition_id) is not None

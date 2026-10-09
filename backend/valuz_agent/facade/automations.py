@@ -7,6 +7,8 @@ checks the stored owner before mutating execution state.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, fields
 from uuid import uuid4
 
@@ -14,11 +16,133 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.automations.contracts import AgentExecution
+from valuz_agent.modules.automations.errors import AutomationNotFound
 from valuz_agent.modules.automations.models import AutomationRow, AutomationRunRow
+from valuz_agent.modules.automations.schemas import (
+    AutomationCreatePayload as AutomationCreateSpec,
+)
+from valuz_agent.modules.automations.schemas import (
+    AutomationDetailResponse as AutomationDefinition,
+)
+from valuz_agent.modules.automations.schemas import (
+    AutomationRunAcceptedResponse,
+    CronTrigger,
+    EventTrigger,
+    IntervalTrigger,
+)
+from valuz_agent.modules.automations.schemas import (
+    AutomationUpdatePayload as AutomationUpdateSpec,
+)
+from valuz_agent.modules.automations.service import AutomationService
 from valuz_agent.ports.automation_runtime import (
     AutomationExecutionLease,
     AutomationRunCommand,
 )
+
+
+@asynccontextmanager
+async def _command_service(user_id: str) -> AsyncIterator[AutomationService]:
+    """Explicit owner counterpart of HTTP DI; never invokes ambient identity deps."""
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.infra.eventbus import event_bus
+    from valuz_agent.modules.agents.service import AgentService
+    from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+    from valuz_agent.modules.connectors.service import ConnectorService
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+    from valuz_agent.modules.projects.service import ProjectService
+    from valuz_agent.modules.settings.preferences import (
+        get_default_locale,
+        get_effective_default_timezone,
+    )
+
+    async with async_unit_of_work() as db:
+        yield AutomationService(
+            db=db,
+            event_bus=event_bus,
+            project_service=ProjectService(datastore=ProjectDatastore(db), event_bus=event_bus),
+            agent_service=AgentService(
+                db=db, connector_service=ConnectorService(datastore=ConnectorDatastore(db))
+            ),
+            locale=await get_default_locale(db, user_id=user_id),
+            default_timezone=await get_effective_default_timezone(db, user_id=user_id),
+        )
+
+
+class AutomationCommands:
+    """Canonical owner-explicit mutations; statuses and source subscribe stay service-owned."""
+
+    async def create(
+        self,
+        user_id: str,
+        spec: AutomationCreateSpec,
+        *,
+        origin_ref: str | None = None,
+        initially_paused: bool = False,
+    ) -> AutomationDefinition:
+        _require_read_identity(user_id, spec.name)
+        async with _command_service(user_id) as service:
+            return await service.create(
+                spec,
+                user_id=user_id,
+                origin_tool_call_id=origin_ref,
+                initial_status="paused" if initially_paused else "enabled",
+            )
+
+    async def get(self, user_id: str, automation_id: str) -> AutomationDefinition:
+        _require_read_identity(user_id, automation_id)
+        async with _command_service(user_id) as service:
+            return await service.get_automation_detail(automation_id, user_id=user_id)
+
+    async def find_created(self, user_id: str, origin_ref: str) -> AutomationDefinition | None:
+        """Recover a real created object by its original invocation, not prompt/name."""
+        _require_read_identity(user_id, origin_ref)
+        async with _command_service(user_id) as service:
+            ids = await service.confirmed_origin_map([origin_ref], user_id=user_id)
+            found = ids.get(origin_ref)
+            return await service.get_automation_detail(found, user_id=user_id) if found else None
+
+    async def update(
+        self, user_id: str, automation_id: str, spec: AutomationUpdateSpec
+    ) -> AutomationDefinition:
+        _require_read_identity(user_id, automation_id)
+        async with _command_service(user_id) as service:
+            return await service.update(automation_id, spec, user_id=user_id)
+
+    async def pause(self, user_id: str, automation_id: str) -> AutomationDefinition:
+        _require_read_identity(user_id, automation_id)
+        async with _command_service(user_id) as service:
+            return await service.pause(automation_id, user_id=user_id)
+
+    async def resume(self, user_id: str, automation_id: str) -> AutomationDefinition:
+        _require_read_identity(user_id, automation_id)
+        async with _command_service(user_id) as service:
+            return await service.resume(automation_id, user_id=user_id)
+
+    async def delete(self, user_id: str, automation_id: str) -> None:
+        _require_read_identity(user_id, automation_id)
+        async with _command_service(user_id) as service:
+            await service.delete(automation_id, user_id=user_id)
+
+    async def run_now(self, user_id: str, automation_id: str) -> AutomationRunAcceptedResponse:
+        _require_read_identity(user_id, automation_id)
+        async with _command_service(user_id) as service:
+            return await service.run_now(automation_id, user_id=user_id)
+
+    async def retry_failed_run(
+        self,
+        user_id: str,
+        automation_id: str,
+        source_run_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> AutomationRunAcceptedResponse:
+        _require_read_identity(user_id, automation_id)
+        _require_read_identity(user_id, source_run_id)
+        async with _command_service(user_id) as service:
+            return await service.retry_failed_run(
+                automation_id, source_run_id, user_id=user_id, run_id=run_id
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +182,8 @@ class AutomationRunRef:
     error_code: str | None
     session_id: str | None
     playbook_run_id: str | None
+    event_id: str | None = None
+    invoked_by_ref: str | None = None
 
 
 class AutomationLibrary:
@@ -296,6 +422,16 @@ async def run_failure_monitor_once(*, now: int | None = None) -> int:
 
 
 __all__ = [
+    "AutomationCommands",
+    "AutomationNotFound",
+    "AutomationCreateSpec",
+    "AutomationUpdateSpec",
+    "AutomationDefinition",
+    "AutomationRunAcceptedResponse",
+    "CronTrigger",
+    "IntervalTrigger",
+    "EventTrigger",
+    "AgentExecution",
     "AutomationLibrary",
     "AutomationRef",
     "AutomationRunRef",

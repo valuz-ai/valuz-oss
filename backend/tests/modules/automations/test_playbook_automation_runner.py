@@ -34,15 +34,15 @@ class _Playbooks:
         self.runs: dict[str, object] = {}
         self.pending: object | None = None
 
-    async def get_definition(self, user_id: str, definition_id: str):
+    async def find_definition(self, user_id: str, definition_id: str):
         return self.definition if definition_id == self.definition.id else None
 
-    async def get_version(self, user_id: str, definition_id: str, version: int):
+    async def find_version(self, user_id: str, definition_id: str, version: int):
         if definition_id == self.definition.id and version == self.version.version:
             return self.version
         return None
 
-    async def get_run(self, user_id: str, run_id: str):
+    async def find_run(self, user_id: str, run_id: str):
         return self.runs.get(run_id)
 
     def add(self, row: object) -> None:
@@ -52,6 +52,12 @@ class _Playbooks:
         assert self.pending is not None
         self.pending.id = "playbook-run-1"  # type: ignore[attr-defined]
         self.runs["playbook-run-1"] = self.pending
+
+    async def prepare_automation_run(self, user_id, row):
+        assert row.user_id == user_id
+        self.add(row)
+        await self.flush()
+        return row
 
 
 def _automation() -> SimpleNamespace:
@@ -137,7 +143,7 @@ async def test_pinned_playbook_creates_and_completes_linked_run() -> None:
             return_value=automation_ds,
         ),
         patch(
-            "valuz_agent.modules.playbooks.datastore.PlaybookDatastore",
+            "valuz_agent.modules.playbooks.service.PlaybookService",
             return_value=playbooks,
         ),
         patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow),
@@ -206,7 +212,7 @@ async def test_shutdown_stops_linked_playbook_run() -> None:
         checkpoint={},
     )
     playbooks = Mock()
-    playbooks.get_run = AsyncMock(return_value=playbook_run)
+    playbooks.find_run = AsyncMock(return_value=playbook_run)
     automation_run = SimpleNamespace(
         user_id="u1",
         playbook_run_id="playbook-run-1",

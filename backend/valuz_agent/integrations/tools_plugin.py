@@ -18,10 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from src.core import ToolDef, ToolResult
-from src.core.tools import ExecContext
-
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
+from valuz_agent.adapters.kernel_client import ExecContext, ToolDef, ToolResult
 from valuz_agent.infra.errors import ValuzError
 from valuz_agent.integrations.tools_entity_common import dump, run_with_skill_service
 from valuz_agent.ports.workspace_sync import ensure_readable

@@ -8,6 +8,7 @@ the small command surface needed to resolve a domain object into a Project.
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -21,6 +22,14 @@ class ProjectRef:
     id: str
     name: str
     kind: Literal["chat", "project"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMemberRef:
+    slug: str
+    name: str
+    source_agent_slug: str | None
+    available: bool
 
 
 @asynccontextmanager
@@ -70,6 +79,25 @@ class ProjectLibrary:
                 return None
         return _ref(row)
 
+    async def list_members(self, user_id: str, project_id: str) -> builtins.list[ProjectMemberRef]:
+        """Read the owned project's live roster without granting library agents membership."""
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.agents.service import AgentService
+
+        if await self.get(user_id, project_id) is None:
+            return []
+        async with async_unit_of_work(commit=False) as db:
+            rows = await AgentService(db).list_members(user_id, project_id)
+            return [
+                ProjectMemberRef(
+                    slug=item["member"].agent_slug,
+                    name=str(getattr(item["agent"], "name", None) or item["member"].agent_slug),
+                    source_agent_slug=item["member"].source_agent_slug,
+                    available=item["agent"] is not None,
+                )
+                for item in rows
+            ]
+
     async def create(
         self,
         user_id: str,
@@ -103,4 +131,4 @@ async def get_project_library() -> AsyncGenerator[ProjectLibrary, None]:
     yield ProjectLibrary()
 
 
-__all__ = ["ProjectLibrary", "ProjectRef", "get_project_library"]
+__all__ = ["ProjectLibrary", "ProjectRef", "ProjectMemberRef", "get_project_library"]

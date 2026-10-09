@@ -59,8 +59,34 @@ def _require_user_id(user_id: str | None) -> str:
 
 
 async def _resolve_session_owner(session_id: str) -> str | None:
-    sessions = await data_reader().list_all_sessions(ids=[session_id], limit=1)
-    return sessions[0].user_id if sessions else None
+    # A worker's HTTP reader cannot sweep all owners: its cross-owner list
+    # intentionally delegates to the local identity. The host queue already
+    # records the authenticated owner. Use its durable candidate when the
+    # reader cannot resolve the session; callers still verify via the kernel.
+    try:
+        sessions = await data_reader().list_all_sessions(ids=[session_id], limit=1)
+        if sessions:
+            owner: str | None = sessions[0].user_id
+            return owner
+    except Exception:
+        logger.debug("session owner read unavailable; checking durable input owner", exc_info=True)
+    from sqlalchemy import select
+
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.sessions.models import QueuedInputRow
+
+    async with async_unit_of_work(commit=False) as db:
+        owners = list(
+            (
+                await db.execute(
+                    select(QueuedInputRow.user_id)
+                    .where(QueuedInputRow.session_id == session_id)
+                    .distinct()
+                    .limit(2)
+                )
+            ).scalars()
+        )
+    return owners[0] if len(owners) == 1 and owners[0] else None
 
 
 def is_draining_queue(session_id: str) -> bool:
@@ -209,13 +235,11 @@ async def _run_agent_background(
         ),
         user_id=owner_user_id,
         host_ref=host_ref,
+        input_source="foreground",
     )
-    await _drain_queue_after_turn(
-        session_id,
-        event_bus,
-        on_message=meter,
-        user_id=owner_user_id,
-    )
+    # Every production drain uses the existing cross-process lease, including
+    # a chain started by a user turn (not only an idle/background enqueue).
+    schedule_drain(session_id, event_bus, user_id=owner_user_id)
 
 
 async def _drain_queue_after_turn(
@@ -262,6 +286,9 @@ async def _drain_queue_after_turn(
                 head = await SessionDatastore(db).peek_next_queued(session_id)
             if head is None:
                 return
+            if head.user_id != owner_user_id:
+                logger.error("queue drain owner mismatch for %s; refusing input", session_id)
+                return
 
             # Busy gate: dispatch only when the previous message is GENUINELY
             # done — no turn in flight AND no live background tasks (see
@@ -283,13 +310,70 @@ async def _drain_queue_after_turn(
 
             head_id = head.id
             payload = head.input or {}
+            from valuz_agent.modules.sessions.presentation import validate_presentation
+
+            input_metadata = None
+            if payload.get("source") == "background":
+                display = validate_presentation(payload.get("presentation"))
+                input_metadata = {
+                    "background_input": {
+                        "input_id": head_id,
+                        "source": "background",
+                        **({"presentation": display} if display is not None else {}),
+                    }
+                }
             check_config, host_ref = queued_check_input(payload, head_id)
             text = str(payload.get("text") or "")
             attachments = list(payload.get("attachments") or [])
 
             session = await kernel_client.get_session(owner_user_id, session_id)
-            if session is None:
+            if session is None or str(session.status) in {"cancelled", "archived", "terminated"}:
                 return
+
+            if payload.get("source") == "background":
+                from valuz_agent.ports.automation_run_guard import (
+                    BackgroundInputCommand,
+                    evaluate_background_input_guards,
+                )
+
+                admission = await evaluate_background_input_guards(
+                    BackgroundInputCommand(
+                        owner_user_id,
+                        head_id,
+                        session_id,
+                        str(head.project_id or ""),
+                    )
+                )
+                if not admission.allowed:
+                    async with async_unit_of_work() as db:
+                        await SessionDatastore(db).mark_queued_status(
+                            head_id,
+                            "failed" if admission.status == "failed" else "cancelled",
+                            error_message=admission.reason or "BACKGROUND_GUARD_DENIED",
+                        )
+                    continue
+
+            # Policy can change while an automation waits behind a user turn.
+            # Recheck at dispatch, not only when the automation was admitted.
+            if check_config.origin == "automation" and check_config.automation_id:
+                from valuz_agent.ports.automation_run_guard import evaluate_automation_run_guards
+                from valuz_agent.ports.automation_runtime import AutomationRunCommand
+
+                admission = await evaluate_automation_run_guards(
+                    AutomationRunCommand(
+                        owner_user_id, check_config.automation_id, check_config.run_id or head_id
+                    ),
+                    project_id=str(head.project_id or ""),
+                    target_session_id=session_id,
+                )
+                if not admission.allowed:
+                    async with async_unit_of_work() as db:
+                        await SessionDatastore(db).mark_queued_status(
+                            head_id,
+                            "failed" if admission.status == "failed" else "cancelled",
+                            error_message=admission.reason or "AUTOMATION_GUARD_DENIED",
+                        )
+                    continue
 
             try:
                 from valuz_agent.modules.sessions.service import _enforce_budget
@@ -299,7 +383,7 @@ async def _drain_queue_after_turn(
                 async with async_unit_of_work() as db:
                     await SessionDatastore(db).mark_queued_status(
                         head_id,
-                        "blocked",
+                        "failed" if payload.get("source") == "background" else "blocked",
                         error_message=getattr(exc, "message_key", None) or str(exc),
                     )
                 # Surface the stall: followers refetch the queue on a finish.
@@ -328,7 +412,24 @@ async def _drain_queue_after_turn(
             # yet exposed as the in-flight one.
             _dispatching_heads[session_id] = head_id
             async with async_unit_of_work() as db:
-                await SessionDatastore(db).mark_queued_status(head_id, "dispatched")
+                started = await SessionDatastore(db).mark_queued_status(
+                    head_id,
+                    "dispatched",
+                    expected_status="queued",
+                )
+            if not started:
+                _dispatching_heads.pop(session_id, None)
+                continue
+
+            async def record_outcome(
+                status: str,
+                message: Any,
+                error: BaseException | None,
+                input_id: str = head_id,
+            ) -> None:
+                from valuz_agent.modules.sessions.input_receipts import complete_input
+
+                await complete_input(input_id, status, message, error)
 
             try:
                 await run_session_to_idle(
@@ -337,16 +438,30 @@ async def _drain_queue_after_turn(
                     event_bus,
                     on_message=on_message,
                     queued_attachments=attachments,
+                    **({"input_metadata": input_metadata} if input_metadata is not None else {}),
+                    on_outcome=record_outcome,
                     # A queued follow-up is a chat turn like any other, and it
                     # can run arbitrarily long after the send that enqueued it
                     # — so it needs the same per-turn convergence, not just the
                     # credential re-stamp the default would give it.
                     pre_turn=chat_capability_hook(
-                        session_id, owner_user_id, host_ref=host_ref,
+                        session_id,
+                        owner_user_id,
+                        host_ref=host_ref,
                         task_check_config=check_config,
                     ),
                     user_id=owner_user_id,
                     host_ref=host_ref,
+                    input_id=head_id,
+                    # Only the host queue producer stamps source. Client
+                    # input_metadata/presentation cannot promote this label.
+                    input_source=(
+                        "background"
+                        if payload.get("source") == "background"
+                        else "foreground"
+                        if payload.get("source", "user") == "user"
+                        else "host"
+                    ),
                 )
             finally:
                 _dispatching_heads.pop(session_id, None)
@@ -355,11 +470,12 @@ async def _drain_queue_after_turn(
         _active_drains.discard(session_id)
 
 
-def schedule_drain(session_id: str, event_bus: EventBus) -> None:
+def schedule_drain(session_id: str, event_bus: EventBus, *, user_id: str | None = None) -> None:
     """Spawn a background queue drain for an idle session (idle-kick / resume).
 
-    Background path: resolve the owner from ``session_id`` before draining; do
-    not rely on request ContextVar propagation.
+    Preserve an authenticated caller's explicit owner. Ownerless recovery
+    resolves a durable candidate and verifies it against the kernel; never
+    rely on request ContextVar propagation or a remote cross-owner sweep.
     A no-op if a drain is already in flight for the session.
 
     Claims ``_active_drains`` SYNCHRONOUSLY (released by the spawned task) so
@@ -382,9 +498,17 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
 
     async def _spawn() -> None:
         try:
-            owner_user_id = await _resolve_session_owner(session_id)
+            owner_user_id = (
+                user_id if user_id is not None else await _resolve_session_owner(session_id)
+            )
             if not owner_user_id:
-                logger.warning("skip queue drain for %s: unknown session owner", session_id)
+                logger.warning("defer queue drain for %s: unknown session owner", session_id)
+                return
+            session = await kernel_client.get_session(owner_user_id, session_id)
+            if session is None or session.user_id != owner_user_id:
+                logger.warning(
+                    "defer queue drain for %s: owner has no matching session", session_id
+                )
                 return
             async with hold_lease(scope=DRAIN_LEASE_SCOPE, key=session_id) as lease:
                 if lease is None:
@@ -401,6 +525,10 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
                     user_id=owner_user_id,
                     claimed=True,
                 )
+        except Exception:
+            logger.warning(
+                "queue drain deferred for %s; durable inputs retained", session_id, exc_info=True
+            )
         finally:
             # ``_drain_queue_after_turn`` releases on its own; this covers the
             # early returns/raises before it runs. discard is idempotent.
@@ -500,6 +628,8 @@ async def _finalize_session(
     final_status: str,
     error: BaseException | None = None,
     interrupt_category: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Persist post-turn valuz metadata and the resolved kernel status.
 
@@ -524,7 +654,7 @@ async def _finalize_session(
     ``CancelledError`` case: an interruption category, no ``stop_reason_*``
     stamp, no failure notification.
     """
-    owner_user_id = await _resolve_session_owner(session_id)
+    owner_user_id = user_id if user_id is not None else await _resolve_session_owner(session_id)
     if not owner_user_id:
         logger.warning("skip finalize for %s: unknown session owner", session_id)
         return
@@ -600,10 +730,10 @@ async def _finalize_session(
         owner_user_id,
         session_id,
         FinalizeSessionRequest(
-            status=final_status,  # type: ignore[arg-type]
+            status=final_status,
             metadata=meta,
             error_event=error_event,
-            stop_reason_type=stop_reason_type,  # type: ignore[arg-type]
+            stop_reason_type=stop_reason_type,
             stop_reason_message=stop_reason_message,
         ),
     )
@@ -621,8 +751,8 @@ async def _finalize_session(
     # scheduler debounces, so it fires once the conversation goes quiet — not per
     # turn — and is a no-op until the runner is wired at boot. Never blocks a turn.
     try:
-        from valuz_agent.modules.memory.scheduler import idle_scheduler
+        from valuz_agent.modules.memory.scheduler import memory_scheduler
 
-        idle_scheduler.notify_turn(session_id, owner_user_id)
+        await memory_scheduler.notify_turn(session_id, owner_user_id)
     except Exception:  # noqa: BLE001 — memory triggering must never fail a turn
         logger.debug("memory idle trigger skipped for %s", session_id, exc_info=True)

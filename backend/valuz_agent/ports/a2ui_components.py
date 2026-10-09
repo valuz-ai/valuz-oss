@@ -93,7 +93,7 @@ class A2UIComponentRegistry:
             if dropped:
                 self._dropped_at_bind.extend(dropped)
                 logger.error(
-                "A2UI components dropped at baseline bind (layer=%s): %s",
+                    "A2UI components dropped at baseline bind (layer=%s): %s",
                     layer,
                     "; ".join(f"{name}: {reason}" for name, reason in dropped),
                 )
@@ -145,8 +145,7 @@ class A2UIComponentRegistry:
         holder = self._replacing_layer(except_layer=layer)
         if mode == "replace" and holder is not None:
             result.rejected = [
-                (name, f'layer "{holder}" already replaces the baseline')
-                for name, _ in entries
+                (name, f'layer "{holder}" already replaces the baseline') for name, _ in entries
             ]
             return result
 
@@ -252,9 +251,7 @@ class A2UIComponentRegistry:
         """
 
         selected = frozenset(names) if names is not None else None
-        selected_note_keys = (
-            frozenset(note_keys) if note_keys is not None else None
-        )
+        selected_note_keys = frozenset(note_keys) if note_keys is not None else None
         parts: list[str] = []
         if baseline and not self.baseline_suppressed() and self._baseline_catalog_text:
             if selected is None:
@@ -263,10 +260,7 @@ class A2UIComponentRegistry:
                 lines = [
                     line
                     for line in self._baseline_catalog_text.splitlines()
-                    if any(
-                        line.lstrip().startswith(f"- {name}(")
-                        for name in selected
-                    )
+                    if any(line.lstrip().startswith(f"- {name}(") for name in selected)
                 ]
                 if lines:
                     parts.append("\n".join(lines))
@@ -277,23 +271,17 @@ class A2UIComponentRegistry:
             entries = (
                 registration.entries
                 if selected is None
-                else tuple(
-                    (name, line)
-                    for name, line in registration.entries
-                    if name in selected
-                )
+                else tuple((name, line) for name, line in registration.entries if name in selected)
             )
-            if not entries and not (
-                include_notes_without_entries and registration.notes
-            ):
+            if not entries and not (include_notes_without_entries and registration.notes):
                 continue
-            lines = "\n".join(line for _, line in entries)
+            component_lines = "\n".join(line for _, line in entries)
             heading = (
                 f"- {registration.group} components:"
                 if entries
                 else f"- {registration.group} data and composition notes:"
             )
-            section = f"{heading}\n{lines}" if lines else heading
+            section = f"{heading}\n{component_lines}" if component_lines else heading
             notes_to_include = registration.notes
             if selected_note_keys is not None:
                 notes_to_include = tuple(

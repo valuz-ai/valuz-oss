@@ -28,6 +28,7 @@ from app.schemas import (
     ModelProviderUpdateSchema,
     ModelSettingsSchema,
     PrepareRuntimeRequest,
+    RecoverFailedSessionRequest,
     SessionListResponse,
     SessionResponse,
     SetSessionModeRequest,
@@ -581,6 +582,56 @@ async def append_session_event(
         Event(type=body.type, data=body.data),  # type: ignore[arg-type]
     )
     return {"data": AppendEventData(persisted=True)}
+
+
+@router.post("/{session_id}/recover-failed", response_model=SessionResponse)
+async def recover_failed_session(
+    session_id: str,
+    body: RecoverFailedSessionRequest,
+    store: StoreDep,
+    owner: OwnerDep,
+) -> dict[str, Any]:
+    """Explicit recovery of this exact failed conversation, with atomic store support."""
+    import hashlib
+    import json
+
+    session = await store.load_session(owner, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    serialized = _session_to_data(session).model_dump(mode="json")
+    fingerprint = hashlib.sha256(
+        json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    meta = (session.metadata or {}).get("valuz") or {}
+    from src.core.types import Error as ErrorStop
+
+    if (
+        fingerprint != body.expected_snapshot_hash
+        or session.status != "terminated"
+        or not isinstance(session.stop_reason, ErrorStop)
+        or session.stop_reason.category != "execution_error"
+        or session.stop_reason.retry_status != "exhausted"
+        or meta.get("task_id")
+        or meta.get("worktree")
+        or meta.get("project_id") != body.project_id
+        or meta.get("agent_slug") != body.agent_slug
+    ):
+        raise HTTPException(status_code=409, detail="Failed session recovery conditions changed")
+    recover = getattr(store, "recover_failed_session_if_current", None)
+    if not callable(recover):
+        raise HTTPException(status_code=501, detail="This store requires manual session recovery")
+    try:
+        changed = await recover(owner, session, body.failed_message_id)
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=501, detail="This store requires manual session recovery"
+        ) from exc
+    if not changed:
+        raise HTTPException(status_code=409, detail="Failed session recovery CAS lost")
+    current = await store.load_session(owner, session_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Session disappeared")
+    return {"data": _session_to_data(current)}
 
 
 @router.post("/{session_id}/finalize", response_model=SessionResponse)

@@ -46,6 +46,9 @@ from valuz_agent.integrations.skills_filesystem import (
 from valuz_agent.ports.workspace_sync import notify_written
 
 STAGING_META_FILENAME = ".staging-meta.json"
+# Unlike edit provenance, learning evidence MUST be part of the staged tree
+# hash. Removing/changing this file after submit invalidates that approval.
+LEARNING_META_FILENAME = ".skill-learning.json"
 VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+?)(?:-v(?P<n>\d+))?$")
 
 
@@ -162,8 +165,9 @@ async def _resolve_project_cwd_for_session(user_id: str, session_id: str) -> Pat
     project_root_path: str | None = None
     try:
         from valuz_agent.modules.projects.datastore import ProjectDatastore
+        from valuz_agent.modules.projects.models import ProjectRow
 
-        async def _read_ws():  # type: ignore[no-untyped-def]
+        async def _read_ws() -> ProjectRow | None:
             from valuz_agent.infra.db import async_unit_of_work
 
             async with async_unit_of_work(commit=False) as db:
@@ -217,6 +221,30 @@ async def staging_dir_for_session(user_id: str, session_id: str, *, mkdir: bool 
 
 
 # ── Hashing & meta ────────────────────────────────────────────────────
+
+
+def read_learning_context(slug_dir: Path) -> dict[str, object] | None:
+    """Read bounded learning ID/version claims, never caller-supplied approval.
+
+    Parsing does not verify authority; the existing submission operation
+    refreshes the same owner's MemoryLibrary before accepting these claims.
+    """
+    from valuz_agent.modules.memory.learning import SkillLearningSubmissionContext
+
+    path = slug_dir / LEARNING_META_FILENAME
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 16_000:
+        raise ValueError("Invalid learning submission metadata")
+    with path.open("rb") as stream:
+        encoded = stream.read(16_001)
+    if len(encoded) > 16_000:
+        raise ValueError("Invalid learning submission metadata")
+    try:
+        context = SkillLearningSubmissionContext.model_validate_json(encoded)
+    except ValueError as exc:
+        raise ValueError("Invalid learning submission metadata") from exc
+    return context.model_dump(mode="json")
 
 
 logger = logging.getLogger(__name__)

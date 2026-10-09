@@ -18,6 +18,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from starlette.types import ASGIApp
+
 # Model-visible server names are hyphenated, the spelling every catalog
 # connector already uses (``valuz-data``, ``valuz-search``, ``valuz-following``).
 # The built-ins used to be spelled with underscores, and living with both
@@ -92,4 +94,4 @@ class AlwaysOnMcpServerSpec:
 
     name: str
     path: str
-    app_factory: Callable[[], object] | None = None
+    app_factory: Callable[[], ASGIApp] | None = None

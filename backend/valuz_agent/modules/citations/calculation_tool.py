@@ -26,6 +26,7 @@ def _canonical_evidence_reference(value: str) -> str:
 
     return value.removeprefix("evidence://")
 
+
 _PARAMS = {
     "type": "object",
     "properties": {
@@ -183,12 +184,10 @@ async def _citation_calculate_handler(
             has_user_origin = origin == "user-input"
             if has_handle == has_user_origin:
                 raise ValueError("invalid_input_origin")
-            if has_handle:
+            if isinstance(handle, str) and handle:
                 handle = _canonical_evidence_reference(handle)
-            if has_handle and not (
-                _HANDLE_RE.fullmatch(handle) or _COLLECTION_ADDRESS_RE.fullmatch(handle)
-            ):
-                raise ValueError("invalid_evidence_handle")
+                if not (_HANDLE_RE.fullmatch(handle) or _COLLECTION_ADDRESS_RE.fullmatch(handle)):
+                    raise ValueError("invalid_evidence_handle")
             value = _decimal(raw.get("value"))
             values[name] = value
             item: dict[str, Any] = {

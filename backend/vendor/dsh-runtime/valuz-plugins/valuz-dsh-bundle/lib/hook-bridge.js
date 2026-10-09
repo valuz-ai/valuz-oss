@@ -31,9 +31,11 @@
  * Config: { endpoint, events: ["tool.call", "tool.check"] }.
  */
 
+// valuz-required-guard-v1: a monotonic execution guard follows the waterfall.
 export const name = "valuz-hook-bridge";
+export const inject = ["tools"];
 
-const KNOWN_KEYS = ["endpoint", "events"];
+const KNOWN_KEYS = ["endpoint", "events", "required"];
 
 export function apply(ctx, config = {}) {
   const unknown = Object.keys(config).filter((key) => !KNOWN_KEYS.includes(key));
@@ -43,7 +45,8 @@ export function apply(ctx, config = {}) {
         "config is { endpoint, events }",
     );
   }
-  const { endpoint, events } = config;
+  const { endpoint, events, required = false } = config;
+  if (typeof required !== "boolean") throw new Error("required must be boolean");
   if (endpoint === undefined) return; // not armed for this session
   if (typeof endpoint !== "string" || endpoint.trim() === "") {
     throw new Error("valuz-hook-bridge `endpoint` must be a non-empty string");
@@ -60,9 +63,21 @@ export function apply(ctx, config = {}) {
   const waiting = new Map();
   const keyOf = (exec) => String(exec.token ?? exec.callId ?? "");
   const isMcp = (exec) => exec.name.startsWith("mcp__");
+  const checked = new Map();
+  const signature = (exec) => JSON.stringify([exec.name, plain(exec.arguments)]);
+  if (required) {
+    if (typeof ctx.tools?.guard !== "function") throw new Error("required monotonic tools guard unavailable");
+    ctx.tools.guard((exec) => {
+      if (isMcp(exec)) return; // the mandatory MCP proxy owns the actual upstream boundary
+      const key = keyOf(exec);
+      const expected = checked.get(key);
+      checked.delete(key);
+      if (expected !== signature(exec)) return "required execution guard did not approve these final parameters";
+    });
+  }
 
   ctx.on("tools/pre-execute", async (exec, next) => {
-    if (typeof exec.name !== "string") return next();
+    if (typeof exec.name !== "string") return required ? { kind: "deny", reason: "required tool identity unavailable" } : next();
     const input = plain(exec.arguments);
     if (wantsCall && !isMcp(exec)) {
       let step;
@@ -73,16 +88,22 @@ export function apply(ctx, config = {}) {
         });
       } catch (error) {
         ctx.logger.warn("valuz-hook-bridge: tool.call start failed: %o", error);
+        if (required) return { kind: "deny", reason: "required execution guard unavailable" };
         step = null;
       }
       if (step && step.op === "done" && step.result) {
         // A handler answered without running the tool.
         return { kind: "deny", reason: contentText(step.result.content) };
       }
-      if (step && step.op === "core") waiting.set(keyOf(exec), step.id);
+      if (step && step.op === "core") {
+        if (required && (typeof step.id !== "string" || !sameJson(step.data?.input, input))) return { kind: "deny", reason: "required execution guard cannot safely apply rewritten parameters" };
+        waiting.set(keyOf(exec), step.id);
+      }
+      else if (required) return { kind: "deny", reason: "required execution guard returned an invalid decision" };
     }
-    if (wantsCheck) return check(exec, input, next);
-    return next();
+    const result = wantsCheck ? await check(exec, input, next) : await next();
+    if (required && result?.kind !== "deny") checked.set(keyOf(exec), signature(exec));
+    return result;
   });
 
   async function check(exec, input, next) {
@@ -102,7 +123,7 @@ export function apply(ctx, config = {}) {
     } catch (error) {
       ctx.logger.warn("valuz-hook-bridge: tool.check failed: %o", error);
     }
-    return ownDecision();
+    return required ? { kind: "deny", reason: "required execution guard unavailable" } : ownDecision();
   }
 
   if (wantsCall) {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from hashlib import sha256
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
@@ -114,7 +114,7 @@ async def _assert_nested_run_allowed(
     if parent_run_id is None:
         return
     seen_runs: set[str] = set()
-    cursor = parent_run_id
+    cursor: str | None = parent_run_id
     depth = 0
     while cursor:
         if cursor in seen_runs:
@@ -275,7 +275,11 @@ async def playbook_invoke(
             if action == "create":
                 if not name or not content:
                     raise ValueError("name_and_content_required")
-                create_status = status if status in {"draft", "active", "retired"} else "draft"
+                create_status: Literal["draft", "active", "retired"] = "draft"
+                if status == "active":
+                    create_status = "active"
+                elif status == "retired":
+                    create_status = "retired"
                 target = project_id or (current_project_id if project_kind == "project" else None)
                 payload = PlaybookCreateRequest(
                     name=name,

@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp
 
 from valuz_agent.api.middleware import (
     ErrorHandlerMiddleware,
@@ -227,7 +228,7 @@ def create_app(
     # pre-rename harness URL is self-healed by the always-on MCP re-stamp
     # (``modules/sessions/capabilities.refresh_always_on_mcp_for_session``
     # rewrites the persisted trio with current URLs on every turn).
-    def _mount_internal(path: str, subapp: object) -> None:
+    def _mount_internal(path: str, subapp: ASGIApp) -> None:
         for _p in resolved_prefixes:
             app.mount(f"{_p}{path}", subapp)
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { sessionsApi, type SessionAttachmentItem } from "../api/sessions-api";
 
@@ -139,7 +139,9 @@ export function useStagedAttachments(
   // Resolved per call. ``baseUrl`` is read through a ref so a caller passing an
   // inline arrow does not invalidate every callback on every render.
   const baseRef = useRef(baseUrl);
-  baseRef.current = baseUrl;
+  useLayoutEffect(() => {
+    baseRef.current = baseUrl;
+  }, [baseUrl]);
   const optsNow = useCallback((): { baseUrl: string } | undefined => {
     const b = baseRef.current;
     const resolved = typeof b === "function" ? b() : b;
@@ -263,7 +265,7 @@ export function useStagedAttachments(
       for (const r of items) mineRef.current.add(r.id);
       merge([...ref.current.filter((a) => !isPlaceholder(a)), ...items]);
     },
-    [merge, opts],
+    [merge, optsNow],
   );
 
   const remove = useCallback(

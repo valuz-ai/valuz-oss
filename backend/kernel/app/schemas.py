@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 # -- Response envelope primitives --
 
@@ -52,6 +52,7 @@ class AttachmentSchema(BaseModel):
 class UserMessageSchema(BaseModel):
     text: str
     attachments: list[AttachmentSchema] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class McpHttpServerConfigSchema(BaseModel):
@@ -264,6 +265,16 @@ class AppendEventData(BaseModel):
 class AppendEventResponse(BaseModel):
     data: AppendEventData
     error: ApiError | None = None
+
+
+class RecoverFailedSessionRequest(BaseModel):
+    """Explicit owned failed-input recovery; never periodic admission."""
+
+    model_config = ConfigDict(extra="forbid")
+    failed_message_id: str = Field(min_length=1, max_length=36)
+    project_id: str = Field(min_length=1, max_length=128)
+    agent_slug: str = Field(min_length=1, max_length=128)
+    expected_snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class FinalizeSessionRequest(BaseModel):

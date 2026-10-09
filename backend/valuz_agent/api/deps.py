@@ -89,16 +89,9 @@ async def get_provider_service() -> AsyncGenerator[ProviderService, None]:
 
 async def get_project_service() -> AsyncGenerator[ProjectService, None]:
     async with async_unit_of_work() as db:
-        yield ProjectService(
-            datastore=ProjectDatastore(db),
-            event_bus=event_bus,
-            session_datastore=SessionDatastore(db),
-            document_datastore=DocumentDatastore(db),
-            automation_datastore=AutomationDatastore(db),
-            skill_datastore=SkillDatastore(db),
-            connector_datastore=ConnectorDatastore(db),
-            member_datastore=ProjectMemberDatastore(db),
-        )
+        from valuz_agent.adapters.project_composition import build_project_service
+
+        yield build_project_service(db)
 
 
 async def get_skill_service_for_user(

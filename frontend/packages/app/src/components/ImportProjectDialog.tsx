@@ -394,6 +394,13 @@ function ImportResultView({ result }: { result: ImportProjectConfirmResult }) {
       </div>
     );
   }
+  const importErrors = [
+    ...(result.automation_errors ?? []),
+    ...(result.memory_errors ?? []).map((error) => ({
+      name: t(k("project.memoryImportItem")),
+      error: error.error,
+    })),
+  ];
   return (
     <div className="flex-1 space-y-4 overflow-y-auto py-1">
       <div className="flex items-center gap-2 rounded-md bg-success-light px-3 py-2 text-sm text-success-text">
@@ -404,16 +411,16 @@ function ImportResultView({ result }: { result: ImportProjectConfirmResult }) {
           agents: result.agents_created,
         })}
       </div>
-      {(result.automation_errors ?? []).length > 0 ? (
+      {importErrors.length > 0 ? (
         <div className="space-y-1.5 rounded-md border border-warning-light bg-warning-light/30 p-3">
           <div className="flex items-center gap-1.5 text-xs font-medium text-warning-text">
             <AlertTriangle className="h-3.5 w-3.5" />
-            {t(k("project.automationErrors"))}
+            {t(k("project.partialImportErrors"))}
           </div>
           <div className="space-y-1">
-            {(result.automation_errors ?? []).map((e) => (
+            {importErrors.map((e, index) => (
               <div
-                key={e.name}
+                key={`${e.name}:${index}`}
                 className="rounded-md bg-surface px-2 py-1 text-2xs text-ink-body"
               >
                 <span className="font-medium">{e.name}</span>

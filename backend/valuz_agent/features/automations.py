@@ -14,6 +14,12 @@ class AutomationsPlugin(OssPlugin):
     provides = ("oss.automations",)
 
     def register(self, ctx: PluginContext) -> None:
+        if ctx.wants("ports"):
+            from valuz_agent.modules.automations.app_plugin_guard import (
+                ManagedAutomationSourceGuard,
+            )
+
+            ctx.ports.append("automation_run_guards", ManagedAutomationSourceGuard(), unique=True)
         routes(ctx, "automations", "playbooks", "operations")
         ctx.internal_mounts.mount(mounts.AUTOMATIONS)
         ctx.internal_mounts.mount(mounts.PLAYBOOKS)

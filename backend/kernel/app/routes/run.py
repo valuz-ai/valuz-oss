@@ -39,8 +39,10 @@ def _parse_user_message(msg: dict[str, Any]) -> UserMessage:
 
     Accepts the structured shape
     ``{"text": str, "attachments": [{"source_path": str, "parsed_path": str?}],
-    "additional_context": str}``. ``attachments`` and ``additional_context`` are
-    optional; ``parsed_path`` is optional per attachment. The legacy ``filepath``
+    "additional_context": str, "metadata": object}``. ``metadata`` is an
+    optional trusted host envelope (JSON values only), not a user-facing send
+    field. ``attachments`` and ``additional_context`` are optional;
+    ``parsed_path`` is optional per attachment. The legacy ``filepath``
     key is still read (as ``source_path``) for callers mid-migration. The legacy
     string ``message`` form is rejected so callers migrate to the new contract.
     """
@@ -82,6 +84,7 @@ def _parse_user_message(msg: dict[str, Any]) -> UserMessage:
         text=text,
         attachments=tuple(attachments),
         additional_context=raw_additional,
+        metadata=raw.get("metadata", {}),
     )
 
 
@@ -115,6 +118,16 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
+    correlated_completion = websocket.headers.get("x-valuz-completion-correlation") == "1"
+    if correlated_completion:
+        await _send_safely(
+            websocket,
+            {
+                "type": "run_capabilities",
+                "data": {"completion_correlation": "execution_request_id-v1"},
+            },
+        )
+
     orchestrator = get_orchestrator()
     sink: EventSink = WebSocketEventSink(websocket)
 
@@ -127,25 +140,49 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
     current_run: asyncio.Task[Any] | None = None
 
     async def _execute_turn(
-        user_message: UserMessage, runtime_context: dict[str, str] | None = None
+        user_message: UserMessage,
+        runtime_context: dict[str, str] | None = None,
+        execution_request_id: str | None = None,
     ) -> None:
         try:
-            await orchestrator.run_turn(
+            message = await orchestrator.run_turn(
                 owner,
                 session_id,
                 user_message,
                 runtime_context=runtime_context,
             )
+            if execution_request_id is not None:
+                # This response belongs only to the submitted request, never
+                # to the session bus/replay; run_turn persisted this Message.
+                await _send_safely(
+                    websocket,
+                    {
+                        "type": "run_result",
+                        "data": {
+                            "execution_request_id": execution_request_id,
+                            "message_id": message.id,
+                        },
+                    },
+                )
         except SessionNotFoundError:
             await _send_safely(
                 websocket,
-                {"type": "error", "data": {"message": "Session not found"}},
+                {
+                    "type": "error",
+                    "data": {
+                        "message": "Session not found",
+                        "execution_request_id": execution_request_id,
+                    },
+                },
             )
         except Exception as run_exc:
             logger.exception("Runtime error for session %s", session_id)
             await _send_safely(
                 websocket,
-                {"type": "error", "data": {"message": str(run_exc)}},
+                {
+                    "type": "error",
+                    "data": {"message": str(run_exc), "execution_request_id": execution_request_id},
+                },
             )
 
     try:
@@ -177,10 +214,7 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
             if runtime_context is not None and (
                 not isinstance(runtime_context, dict)
                 or not all(
-                    isinstance(key, str)
-                    and key
-                    and isinstance(value, str)
-                    and value
+                    isinstance(key, str) and key and isinstance(value, str) and value
                     for key, value in runtime_context.items()
                 )
             ):
@@ -196,6 +230,23 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                 )
                 continue
 
+            execution_request_id = msg.get("execution_request_id")
+            if correlated_completion and (
+                not isinstance(execution_request_id, str) or not execution_request_id
+            ):
+                await _send_safely(
+                    websocket,
+                    {
+                        "type": "error",
+                        "data": {
+                            "message": "execution_request_id must be a non-empty string",
+                        },
+                    },
+                )
+                continue
+            if not correlated_completion:
+                execution_request_id = None
+
             # Wait for the prior turn to finish before dispatching a new
             # one. Awaiting closes the brief race window where ``done()``
             # is still False after the final sink emit.
@@ -204,7 +255,11 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                     await current_run
 
             current_run = asyncio.create_task(
-                _execute_turn(user_message, runtime_context=runtime_context)
+                _execute_turn(
+                    user_message,
+                    runtime_context=runtime_context,
+                    execution_request_id=execution_request_id,
+                )
             )
 
     except WebSocketDisconnect:

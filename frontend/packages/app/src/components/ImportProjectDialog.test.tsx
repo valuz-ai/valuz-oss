@@ -119,4 +119,38 @@ describe("ImportProjectDialog", () => {
     const arg = onImported.mock.calls[0][0] as { id: string };
     expect(arg.id).toBe("p1");
   });
+
+  it("shows memory failures even when the project itself was created", async () => {
+    previewMock.mockResolvedValue(basePreview);
+    confirmMock.mockResolvedValue({
+      ...createdResult,
+      memory_imported: 1,
+      memory_errors: [
+        {
+          entry_index: 1,
+          error_code: "memory.protected",
+          error: "The source was previously forgotten.",
+        },
+      ],
+    });
+    render(
+      <ImportProjectDialog
+        file={new File(["x"], "demo.valuzpack")}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Agent One")).toBeTruthy());
+    await act(async () => {
+      fireEvent.click(screen.getByText("Confirm import").closest("button")!);
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Some content could not be imported; the remaining content was kept:",
+        ),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByText(/The source was previously forgotten/)).toBeTruthy();
+  });
 });

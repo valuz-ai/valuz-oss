@@ -80,9 +80,7 @@ DSH_SESSION_MANAGER = (
 def build_data_service(app: Any) -> Any:
     from valuz_agent.boot.kernel import make_data_service_placeholder
 
-    # ``make_data_service_placeholder`` is untyped in boot/kernel.py (as it was when
-    # this lived in ``create_app``).
-    app.state.data_service_app = make_data_service_placeholder()  # type: ignore[no-untyped-call]
+    app.state.data_service_app = make_data_service_placeholder()
     return app.state.data_service_app
 
 

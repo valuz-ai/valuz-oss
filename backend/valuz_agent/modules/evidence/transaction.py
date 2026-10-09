@@ -9,5 +9,7 @@ def ensure_outer_transaction(connection: Connection) -> None:
     # writes even when the caller subsequently rolls back the SQLAlchemy UOW.
     if connection.dialect.name == "sqlite":
         driver = connection.connection.driver_connection
+        if driver is None:
+            raise RuntimeError("SQLite driver connection is unavailable")
         if not driver.in_transaction:
             connection.exec_driver_sql("BEGIN")

@@ -54,6 +54,7 @@ from valuz_agent.adapters.system_prompt_builder import (
 )
 from valuz_agent.i18n import t
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
+from valuz_agent.modules.agents.models import ProjectMemberRow
 from valuz_agent.modules.memory.injection import memory_instructions_block
 from valuz_agent.ports.instructions import (
     agent_inherits_global_instructions,
@@ -642,7 +643,9 @@ def summarize_role(instructions: str | None) -> str:
     return flat[:ROLE_SUMMARY_LIMIT].rstrip() + "…"
 
 
-async def _member_agent_config(member, members: ProjectMemberDatastore, user_id: str):  # noqa: ANN001, ANN202
+async def _member_agent_config(
+    member: ProjectMemberRow, members: ProjectMemberDatastore, user_id: str
+) -> AgentConfig | None:
     """Build the member's AgentConfig from its source library row.
 
     The kernel has no agents table — the library AgentRow is the single

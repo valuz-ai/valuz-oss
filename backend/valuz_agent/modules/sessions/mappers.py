@@ -59,11 +59,16 @@ def _copy_session(session: KernelSession, /, **overrides: object) -> KernelSessi
         "todos": getattr(session, "todos", None),
     }
     fields.update(overrides)
-    return KernelSession(**fields)  # type: ignore[arg-type]
+    return KernelSession(**fields)
+
+
+def _meta_text(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    return str(value) if value else None
 
 
 def _valuz_meta(session: KernelSession) -> dict[str, object]:
-    return session.metadata.get("valuz") or {}  # type: ignore[return-value]
+    return session.metadata.get("valuz") or {}
 
 
 def _worktree_ref(meta: dict[str, object]) -> WorktreeRef | None:
@@ -113,12 +118,12 @@ def _session_to_list_item(session: KernelSession) -> SessionListItem:
     return SessionListItem(
         id=session.id,
         project_id=str(meta.get("project_id") or ""),
-        name=meta.get("name") or None,  # type: ignore[arg-type]
+        name=_meta_text(meta, "name"),
         status=_map_kernel_status(session.status),
         origin=str(meta.get("origin") or "user"),
-        last_user_message_text=meta.get("last_user_message_text") or None,  # type: ignore[arg-type]
+        last_user_message_text=_meta_text(meta, "last_user_message_text"),
         locked_model_id=session.model or None,
-        locked_provider_id=meta.get("locked_provider_id") or None,  # type: ignore[arg-type]
+        locked_provider_id=_meta_text(meta, "locked_provider_id"),
         updated_at=session.created_at,
         runtime_provider=getattr(session, "runtime_provider", "deepagents") or "deepagents",
         permission_mode=getattr(session, "permission_mode", "full_access") or "full_access",
@@ -172,13 +177,13 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
     return SessionDetail(
         id=session.id,
         project_id=str(meta.get("project_id") or ""),
-        name=meta.get("name") or None,  # type: ignore[arg-type]
+        name=_meta_text(meta, "name"),
         status=_map_kernel_status(session.status),
         origin=str(meta.get("origin") or "user"),
-        last_user_message_text=meta.get("last_user_message_text") or None,  # type: ignore[arg-type]
+        last_user_message_text=_meta_text(meta, "last_user_message_text"),
         locked_model_id=session.model or None,
         updated_at=session.created_at,
-        locked_provider_id=meta.get("locked_provider_id") or None,  # type: ignore[arg-type]
+        locked_provider_id=_meta_text(meta, "locked_provider_id"),
         runtime_provider=getattr(session, "runtime_provider", "deepagents") or "deepagents",
         permission_mode=getattr(session, "permission_mode", "full_access") or "full_access",
         effort=effort,
@@ -190,7 +195,7 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
         trigger_meta=trigger_meta,
         todos=todos,
         instructions=session.instructions or None,
-        agent_slug=meta.get("agent_slug") or None,  # type: ignore[arg-type]
+        agent_slug=_meta_text(meta, "agent_slug"),
         worktree=_worktree_ref(meta),
         forked_from_session_id=_forked_from_session_id(session),
     )
@@ -226,7 +231,7 @@ _VALID_SESSION_PERMISSION_MODES = ("default", "auto_review", "full_access")
 
 def _coerce_session_permission_mode(value: str | None) -> str:
     if value in _VALID_SESSION_PERMISSION_MODES:
-        return value  # type: ignore[return-value]
+        return value
     return "full_access"
 
 

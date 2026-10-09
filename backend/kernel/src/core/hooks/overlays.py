@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ENV = "VALUZ_KERNEL_HOOK_MODULES"
+REQUIRED_ENV = "VALUZ_KERNEL_REQUIRED_HOOK_MODULES"
 
 
 def module_names(raw: str | None = None) -> list[str]:
@@ -36,6 +37,9 @@ def install_overlay_modules(registry: HookRegistry, raw: str | None = None) -> l
 
     Returns the names that installed.
     """
+    required = {
+        name.strip() for name in os.environ.get(REQUIRED_ENV, "").split(",") if name.strip()
+    }
     loaded: list[str] = []
     for name in module_names(raw):
         try:
@@ -45,10 +49,14 @@ def install_overlay_modules(registry: HookRegistry, raw: str | None = None) -> l
                 logger.warning("kernel hook module %s has no install(registry); skipped", name)
                 continue
             install(registry)
-        except Exception:  # noqa: BLE001 — an overlay module never blocks the kernel
+        except Exception:  # noqa: BLE001 — optional overlays preserve the old policy
+            if name in required:
+                raise RuntimeError(f"required kernel hook module {name} unavailable") from None
             logger.exception("kernel hook module %s failed to install; skipped", name)
             continue
         loaded.append(name)
+    if required - set(loaded):
+        raise RuntimeError("required kernel hook modules were not installed")
     if loaded:
         logger.info("kernel hook modules installed: %s", ", ".join(loaded))
     return loaded

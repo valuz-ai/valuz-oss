@@ -21,7 +21,7 @@ class ResourceFacade:
         if resource_type == "agent":
             from valuz_agent.modules.agents.service import AgentService
 
-            agent_svc = AgentService(self._db)  # type: ignore[arg-type]
+            agent_svc = AgentService(self._db)
             await agent_svc.delete_agent(user_id, resource_id)
         elif resource_type == "connector":
             from valuz_agent.modules.connectors.datastore import ConnectorDatastore

@@ -96,7 +96,7 @@ async def test_execute_run_marks_running_and_hands_off_code(
     finish = AsyncMock()
     with (
         patch("valuz_agent.modules.automations.datastore.AutomationDatastore", return_value=ds),
-        patch("valuz_agent.modules.playbooks.datastore.PlaybookDatastore", return_value=Mock()),
+        patch("valuz_agent.modules.playbooks.service.PlaybookService", return_value=Mock()),
         patch("valuz_agent.infra.db.async_unit_of_work", _uow_with(Mock())),
         patch.object(runner, "_finish_code_run", finish),
     ):
@@ -121,7 +121,7 @@ async def test_execute_run_skips_a_cancelled_run() -> None:
     ds.replace_run = AsyncMock()
     with (
         patch("valuz_agent.modules.automations.datastore.AutomationDatastore", return_value=ds),
-        patch("valuz_agent.modules.playbooks.datastore.PlaybookDatastore", return_value=Mock()),
+        patch("valuz_agent.modules.playbooks.service.PlaybookService", return_value=Mock()),
         patch("valuz_agent.infra.db.async_unit_of_work", _uow_with(Mock())),
     ):
         await runner._execute_run("u1", "auto-1", "run-1", detach_chat=False)
@@ -260,7 +260,7 @@ async def test_finish_chat_run_fails_when_artifact_result_never_recorded() -> No
     db = Mock()
     db.refresh = AsyncMock()
     playbooks = Mock()
-    playbooks.get_run = AsyncMock(return_value=None)
+    playbooks.find_run = AsyncMock(return_value=None)
     svc = _session_service(
         [
             SimpleNamespace(
@@ -274,7 +274,7 @@ async def test_finish_chat_run_fails_when_artifact_result_never_recorded() -> No
             side_effect=itertools.count(2000, 100),
         ),
         patch("valuz_agent.modules.automations.datastore.AutomationDatastore", return_value=ds),
-        patch("valuz_agent.modules.playbooks.datastore.PlaybookDatastore", return_value=playbooks),
+        patch("valuz_agent.modules.playbooks.service.PlaybookService", return_value=playbooks),
         patch("valuz_agent.infra.db.async_unit_of_work", _uow_with(db)),
         patch.object(runner, "_build_session_service", return_value=svc),
     ):
@@ -312,7 +312,7 @@ async def test_finish_chat_run_succeeds_with_recorded_artifact() -> None:
     db = Mock()
     db.refresh = AsyncMock()
     playbooks = Mock()
-    playbooks.get_run = AsyncMock(return_value=None)
+    playbooks.find_run = AsyncMock(return_value=None)
     svc = _session_service(
         [SimpleNamespace(event={"event_type": "message.assistant", "payload": {"text": "done"}})]
     )
@@ -322,7 +322,7 @@ async def test_finish_chat_run_succeeds_with_recorded_artifact() -> None:
             side_effect=itertools.count(2000, 100),
         ),
         patch("valuz_agent.modules.automations.datastore.AutomationDatastore", return_value=ds),
-        patch("valuz_agent.modules.playbooks.datastore.PlaybookDatastore", return_value=playbooks),
+        patch("valuz_agent.modules.playbooks.service.PlaybookService", return_value=playbooks),
         patch("valuz_agent.infra.db.async_unit_of_work", _uow_with(db)),
         patch.object(runner, "_build_session_service", return_value=svc),
     ):

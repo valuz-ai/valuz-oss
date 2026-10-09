@@ -108,6 +108,19 @@ class RemoteHookSession:
         self.toolkit_servers = toolkit_servers
         self._dispatches: dict[str, _Dispatch] = {}
 
+    def rebind(self, hooks: SessionHooks) -> None:
+        """Refresh the trusted turn scope without rotating a warm CLI token."""
+        before, after = self.hooks.session, hooks.session
+        if (before.user_id, before.session_id, before.runtime_provider) != (
+            after.user_id,
+            after.session_id,
+            after.runtime_provider,
+        ):
+            raise RemoteHookError("remote hook owner or session changed")
+        if self._dispatches:
+            raise RemoteHookError("remote hook dispatch remains active")
+        self.hooks = hooks
+
     def wants(self) -> list[str]:
         """The events worth a round trip right now."""
         return sorted(event for event in REMOTE_EVENTS if self.hooks.wants(event))
@@ -135,6 +148,7 @@ class RemoteHookSession:
                 "input": dict(arguments),
                 "tool_use_id": payload.get("tool_use_id"),
             }
+        hooks = self.hooks
         dispatch_id = secrets.token_hex(8)
         dispatch = _Dispatch(event=event)
         self._dispatches[dispatch_id] = dispatch
@@ -148,7 +162,7 @@ class RemoteHookSession:
 
         async def run() -> None:
             try:
-                result = await self.hooks.dispatch(event, data, core)
+                result = await hooks.dispatch(event, data, core)
                 await dispatch.steps.put({"op": "done", "result": _result_to_wire(result)})
             except asyncio.CancelledError:
                 raise
