@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import {
+  SlotRenderer,
   getDefaultExecutionTarget,
   sessionsApi,
+  useHasSlot,
   useTranslation,
   type ProjectListItem,
   type RuntimeId,
@@ -214,6 +216,20 @@ export function ComposerPane({
   // Chat/task mode only exists when the host provides a task kickoff.
   const [composerMode, setComposerMode] = useState<"chat" | "task">("chat");
 
+  // Composer extension points. ``Composer`` (``@valuz/ui``) cannot reach the
+  // slot registry and treats each node prop as present-or-absent (a toolbar
+  // gap, the "+" menu's separator, the attachments row's wrapper), so a node
+  // is handed over only while something occupies its slot. An always-present
+  // ``<SlotRenderer/>`` would be truthy even when empty.
+  const hasDock = useHasSlot("conversation.composer.dock");
+  const hasToolbarLeft = useHasSlot("conversation.composer.input.left");
+  const hasToolbarRight = useHasSlot("conversation.composer.input.right");
+  const hasPlusMenuItems = useHasSlot("conversation.composer.plus.menu-items");
+  const hasAttachmentsExtra = useHasSlot("conversation.composer.attachments");
+  // The project the conversation is in; ``null`` for a temporary chat (the
+  // page keeps the ``chat-default`` sentinel in ``selectedProjectId``).
+  const slotProjectId = isProjectProject ? selectedProjectId : null;
+
   return (
     <>
       {/* Scroll-to-bottom button + Composer share a relative wrapper so the
@@ -237,6 +253,14 @@ export function ComposerPane({
             <ArrowDown className="h-4 w-4 text-ink-body" />
           </button>
         )}
+
+        {/* Absolutely-positioned layers anchored to the composer (this
+            wrapper is its positioning context). The slot supplies no
+            wrapper of its own: the contribution positions itself. */}
+        <SlotRenderer
+          name="conversation.composer.overlay"
+          context={{ sessionId: selectedSessionId, draft, setDraft }}
+        />
 
         {!selectedSession &&
           (rosterEmpty || (channelLoaded && !hasChannel)) && (
@@ -298,6 +322,28 @@ export function ComposerPane({
               onResume={handleResumeQueue}
               onSteer={handleSteerQueued}
             />
+          </div>
+        ) : null}
+        {hasDock ? (
+          // Same ``px-5`` inset and ``mx-auto max-w-[760px]`` column as the
+          // input box, so a docked row lines up with it. Present only while
+          // something occupies the slot.
+          <div className="px-5">
+            <div className="mx-auto max-w-[760px]">
+              <SlotRenderer
+                name="conversation.composer.dock"
+                context={{
+                  sessionId: selectedSessionId,
+                  projectId: slotProjectId,
+                  agentSlug: selectedSession
+                    ? sessionAgentSlug
+                    : selectedAgentSlug,
+                  draft,
+                  setDraft,
+                  busy: displayBusy,
+                }}
+              />
+            </div>
           </div>
         ) : null}
         <Composer
@@ -414,6 +460,7 @@ export function ComposerPane({
           // ``null`` maps back to the sentinel. Frozen once a session exists.
           footerBar={
             <ExecutionLocationBar
+              surface="conversation"
               locked={execBarLocked || execTargetPinned}
               lockedOriginId={
                 sessionExecOrigin ??
@@ -472,6 +519,59 @@ export function ComposerPane({
               }}
             />
           }
+          toolbarLeft={
+            hasToolbarLeft ? (
+              <SlotRenderer
+                name="conversation.composer.input.left"
+                context={{
+                  sessionId: selectedSessionId,
+                  projectId: slotProjectId,
+                  draft,
+                  setDraft,
+                  surface: "conversation",
+                }}
+              />
+            ) : undefined
+          }
+          toolbarRight={
+            hasToolbarRight ? (
+              <SlotRenderer
+                name="conversation.composer.input.right"
+                context={{
+                  sessionId: selectedSessionId,
+                  projectId: slotProjectId,
+                  draft,
+                  setDraft,
+                  surface: "conversation",
+                }}
+              />
+            ) : undefined
+          }
+          plusMenuItems={
+            hasPlusMenuItems ? (
+              <SlotRenderer
+                name="conversation.composer.plus.menu-items"
+                context={{
+                  sessionId: selectedSessionId,
+                  projectId: slotProjectId,
+                  setDraft,
+                  surface: "conversation",
+                }}
+              />
+            ) : undefined
+          }
+          attachmentsExtra={
+            hasAttachmentsExtra ? (
+              <SlotRenderer
+                name="conversation.composer.attachments"
+                context={{
+                  sessionId: selectedSessionId,
+                  projectId: slotProjectId,
+                  surface: "conversation",
+                }}
+              />
+            ) : undefined
+          }
           onAddAgent={
             isProjectProject && selectedProjectId
               ? () =>
@@ -521,7 +621,7 @@ export function ComposerPane({
           // the next reconcile and emits ``mode_changed``); a new-session
           // toggle stages the value here and the send path PATCHes it onto
           // the freshly created session before the first message. Gated on
-          // the effective runtime — deepagents/dsh never see the toggle.
+          // the effective runtime (``PLAN_MODE_RUNTIMES``).
           sessionMode={selectedSessionMode}
           planModeAvailable={supportsPlanMode(
             selectedSession?.runtime_provider ?? selectedRuntimeId,

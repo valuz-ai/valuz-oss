@@ -1,42 +1,51 @@
-"""Launch resolution + per-session Cordis composition for the dsh runtime.
+"""Launch resolution, the managed dsh home, and per-session patches.
 
-The dsh runtime binary always demands an explicit plugin composition
-(``DSH_CORDIS_CONFIG``); the adapter generates one file per runtime instance
-so persona, tools, skills roots, and MCP servers are exactly what the kernel
-Session declares — nothing is inherited from a user-level dsh install.
+Valuz runs the **upstream dsh distribution as published** (``@deepseek-ai/dsh``
+— launcher, app-boot, plugin manager, every shipped bundle) plus its own layer
+as an ordinary dsh bundle (``valuz-dsh-bundle``). There is no hand-picked
+plugin closure any more: a kernel session boots the managed profile ``valuz``
+with ``dsh --profile valuz --patch <session.json>`` in the *session* role
+(``VALUZ_DSH_ROLE=session``), so everything a user installs into that profile
+the dsh way (``dsh plugin --profile valuz add …``, the Plugins page of the
+resident manager host, the ``plugin_manager`` agent tool) is live in Valuz
+sessions exactly as it is in dsh.
+
+The managed home (``VALUZ_DSH_HOME``) is Valuz-owned and separate from the
+user's own ``~/.dsh``. Its ``valuz`` profile lists, in order::
+
+    @deepseek-ai/dsh-base · @deepseek-ai/dsh-web-app · @deepseek-ai/dsh-sdk-app
+    · valuz-dsh-bundle · <bundles the user installed>
+
+— the same composition the dsh desktop app boots (base + web), plus the SDK
+app so one profile serves both process roles (the Valuz bundle switches the
+web rows off in session children and the SDK rows off in the manager).
+
+The per-session patch carries only what is genuinely per session — model
+endpoint, MCP servers, the kernel toolkit, and the kernel bridge (Valuz
+instructions, plan state, user questions, tool approvals). It never replaces
+an upstream row's ``config`` (patches replace ``config`` wholesale, which
+would silently drop upstream defaults on the next dsh release); it only
+inserts Valuz rows and sets ``llm-deepseek``'s ``baseURL``, a row upstream
+ships without config.
 
 Launch resolution (mirrored by ``availability.probe_runtime_availability``):
 
-1. ``VALUZ_DSH_RUNTIME_BIN`` — path to a single-file ``dsh-jsonrpc-agent``
-   executable (explicit override).
-2. ``VALUZ_DSH_RUNTIME_ENTRY`` — path to a ``packaged-bin.js`` inside an
-   installed runtime closure, run on Node. The packaged desktop's sidecar
+1. ``VALUZ_DSH_RUNTIME_BIN`` — an executable dsh-compatible launcher (tests,
+   or a launcher whose installation also resolves ``valuz-dsh-bundle``).
+2. ``VALUZ_DSH_RUNTIME_ENTRY`` — the launcher (``valuz-dsh-bundle/bin/dsh.mjs``)
+   of an installed runtime closure, run on Node. The packaged desktop's sidecar
    points this at the staged ``libexec/dsh-runtime`` tree and supplies
    ``VALUZ_NODE_PATH`` (+ ``VALUZ_NODE_IS_ELECTRON=1`` → the spawn gets
-   ``ELECTRON_RUN_AS_NODE=1``) — the same Electron-as-node contract the
-   browser engine uses.
+   ``ELECTRON_RUN_AS_NODE=1``).
 3. Vendored closure auto-detect — ``backend/vendor/dsh-runtime`` after
    ``npm ci`` (dev checkouts; refresh with ``scripts/vendor-dsh-runtime.sh``).
-4. ``VALUZ_DSH_ROOT`` — a deepseek-harness source checkout; launches
-   ``node --import tsx <root>/packages/examples/jsonrpc-demo/src/bin.ts``
-   with the checkout as process cwd (contributor carrier; needs
-   ``pnpm install`` in the checkout).
-
-Composition-file placement follows bare-plugin resolution. ``packaged-bin``
-carriers (tiers 1-3) resolve ``@deepseek-ai/dsh-*`` names from their own
-installed closure, so the config lives in a temp dir. The source carrier's
-``bin.js`` resolves relative to the config file's directory, so its file
-lives under ``<root>/examples/.valuz-dsh/`` (the ``examples`` project's
-node_modules carries every plugin we mount).
-
-The generated file is JSON — a JSON document is valid YAML, which sidesteps
-quoting/injection concerns for persona text and MCP header values.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -44,46 +53,68 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.core.hooks.classic.config import classic_hooks_allowed, load_workspace_hooks
 from src.core.types import (
     McpHttpServerConfig,
     McpStdioServerConfig,
-    ModelSettings,
     Session,
+    is_bare_completion,
+    is_workspace_untrusted,
 )
 from src.runtimes.mcp_env import resolve_stdio_env
 
 DSH_RUNTIME_BIN_ENV = "VALUZ_DSH_RUNTIME_BIN"
 DSH_RUNTIME_ENTRY_ENV = "VALUZ_DSH_RUNTIME_ENTRY"
-DSH_ROOT_ENV = "VALUZ_DSH_ROOT"
+DSH_HOME_ENV = "VALUZ_DSH_HOME"
 # Node resolution for JS-entry carriers — the same env contract the host's
 # browser engine uses (packaged desktop: the sidecar sets VALUZ_NODE_PATH to
 # its own Electron binary + VALUZ_NODE_IS_ELECTRON=1).
 NODE_PATH_ENV = "VALUZ_NODE_PATH"
 NODE_IS_ELECTRON_ENV = "VALUZ_NODE_IS_ELECTRON"
-_SOURCE_ENTRY = "packages/examples/jsonrpc-demo/src/bin.ts"
-_PACKAGED_BIN_REL = Path("@deepseek-ai") / "dsh-sdk-jsonrpc-demo" / "lib" / "packaged-bin.js"
+#: dsh reaches Node's internal module loader (profile package resolution, HMR).
+#: Profile resolution goes through dsh's native addon node-addon-require-builtin,
+#: which accepts node and only the exact Electron releases it fingerprints — so
+#: the desktop pins the Electron dsh's own desktop locks. dsh's HMR and plugin
+#: loader take --expose-internals first when it is present (HMR requires it).
+NODE_FLAGS: tuple[str, ...] = ("--expose-internals",)
+
+#: The launcher inside an installed closure: Valuz's thin wrapper over the
+#: upstream ``runCli`` (bundled pnpm + managed-profile init), shipped in
+#: valuz-dsh-bundle.
+_DSH_BIN_REL = Path("valuz-dsh-bundle") / "bin" / "dsh.mjs"
 # Dev-checkout vendored closure (backend/vendor/dsh-runtime after `npm ci`).
 _VENDOR_DIR = Path(__file__).resolve().parents[4] / "vendor" / "dsh-runtime"
 
-# ``EffortLevel`` -> the dsh DeepSeek adapter's ``reasoningEffort`` values
-# (low/medium/high/max observed; ``xhigh`` has no dsh spelling -> ``max``).
-_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "max", "max": "max"}
+#: The profile every Valuz process boots. Users install into it the dsh way.
+PROFILE_NAME = "valuz"
+#: The Valuz layer's package name (resolved from the installation anchor).
+VALUZ_BUNDLE = "valuz-dsh-bundle"
+#: Asks the launcher to initialize/repair the named managed profile.
+MANAGED_PROFILE_ENV = "VALUZ_DSH_MANAGED_PROFILE"
+#: The host's always-on MCP server fronting dsh plugin tools for non-dsh runtimes.
+DSH_PLUGINS_MCP_SERVER = "valuz-dsh-plugins"
+#: The kernel bridge row valuz-dsh-bundle declares; sessions override its config.
+KERNEL_BRIDGE_ROW = "valuz-kernel-bridge"
+HOOK_BRIDGE_ROW = "valuz-hook-bridge"
+#: Process-role switch read by the Valuz bundle's patch.
+ROLE_ENV = "VALUZ_DSH_ROLE"
+SESSION_ROLE = "session"
+MANAGER_ROLE = "manager"
 
 
 @dataclass(frozen=True)
 class DshLaunchSpec:
+    #: The launcher argv; the runtime appends ``--profile`` / ``--patch``.
     argv: tuple[str, ...]
-    cwd: str | None
-    config_parent_dir: str
+    cwd: str | None = None
     # Extra environment for the subprocess (e.g. ELECTRON_RUN_AS_NODE=1 when
     # the Node carrier is the desktop's own Electron binary).
     env: dict[str, str] = field(default_factory=dict)
-    # Whether the resolved closure carries the plan-mode plugin set
-    # (dsh-plan-mode + dsh-user-questions + dsh-tool-ask-user +
-    # valuz-dsh-kernel-bridge). Compositions referencing a missing bare
-    # plugin fail to boot, so the plan rows are only emitted when the
-    # closure actually has them — see ``_probe_plan_capable``.
-    plan_capable: bool = False
+    # The upstream distribution always ships plan mode, user questions and
+    # ask_user_question (base + web presets), and the Valuz bundle always
+    # ships the kernel bridge — so every real launcher is plan-capable. Test
+    # carriers that cannot boot the bridge set this False.
+    plan_capable: bool = True
 
 
 def _resolve_node() -> tuple[str, dict[str, str]] | None:
@@ -108,8 +139,8 @@ def _resolve_node() -> tuple[str, dict[str, str]] | None:
     return None
 
 
-def _packaged_entry() -> Path | None:
-    """The ``packaged-bin.js`` of an installed runtime closure, or None.
+def dsh_entry() -> Path | None:
+    """The ``dsh`` launcher (``bin.js``) of an installed runtime closure, or None.
 
     ``VALUZ_DSH_RUNTIME_ENTRY`` (staged libexec tree in the packaged desktop)
     wins over the dev checkout's ``backend/vendor/dsh-runtime`` auto-detect.
@@ -118,69 +149,23 @@ def _packaged_entry() -> Path | None:
     if entry_override:
         path = Path(entry_override)
         return path if path.is_file() else None
-    vendored = _VENDOR_DIR / "node_modules" / _PACKAGED_BIN_REL
+    vendored = _VENDOR_DIR / "node_modules" / _DSH_BIN_REL
     return vendored if vendored.is_file() else None
 
 
-# The bare-plugin names the plan feature composes on top of the base set.
-# All four must resolve from the closure or the subprocess fails to boot.
-_PLAN_PLUGIN_PROBES = (
-    Path("@deepseek-ai") / "dsh-plan-mode" / "lib" / "index.js",
-    Path("@deepseek-ai") / "dsh-user-questions" / "lib" / "index.js",
-    Path("@deepseek-ai") / "dsh-tool-ask-user" / "lib" / "index.js",
-    Path("valuz-dsh-kernel-bridge") / "lib" / "index.js",
-)
-
-
-def _probe_plan_capable(entry: Path) -> bool:
-    """Whether the packaged closure around ``entry`` carries the plan set.
-
-    ``entry`` is ``<closure>/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/
-    lib/packaged-bin.js``; bare plugins resolve from that ``node_modules``.
-    """
-    node_modules = entry.parents[3]
-    return all((node_modules / probe).is_file() for probe in _PLAN_PLUGIN_PROBES)
-
-
 def resolve_launch() -> DshLaunchSpec | None:
-    """Resolve how to spawn the dsh runtime on this machine, or None."""
+    """Resolve how to spawn the dsh launcher on this machine, or None."""
     bin_override = os.environ.get(DSH_RUNTIME_BIN_ENV, "").strip()
     if bin_override:
         if not (shutil.which(bin_override) or os.path.isfile(bin_override)):
             return None
-        # A single-file executable's embedded plugin set is opaque — assume
-        # no plan plugins rather than emit a composition that cannot boot.
-        return DshLaunchSpec(
-            argv=(bin_override,),
-            cwd=None,
-            config_parent_dir=tempfile.gettempdir(),
-        )
-    entry = _packaged_entry()
+        return DshLaunchSpec(argv=(bin_override,))
+    entry = dsh_entry()
     if entry is not None:
         node = _resolve_node()
         if node is not None:
             node_bin, extra_env = node
-            return DshLaunchSpec(
-                argv=(node_bin, str(entry)),
-                cwd=None,
-                config_parent_dir=tempfile.gettempdir(),
-                env=extra_env,
-                plan_capable=_probe_plan_capable(entry),
-            )
-    root = os.environ.get(DSH_ROOT_ENV, "").strip()
-    if root:
-        source_entry = Path(root) / _SOURCE_ENTRY
-        node = shutil.which("node")
-        if source_entry.is_file() and node is not None:
-            # The source checkout resolves plugins from the examples
-            # project's node_modules, which has no valuz-dsh-kernel-bridge —
-            # plan rows would fail the boot, so the contributor carrier
-            # stays plan-incapable.
-            return DshLaunchSpec(
-                argv=(node, "--import", "tsx", str(source_entry)),
-                cwd=root,
-                config_parent_dir=str(Path(root) / "examples" / ".valuz-dsh"),
-            )
+            return DshLaunchSpec(argv=(node_bin, *NODE_FLAGS, str(entry)), env=extra_env)
     return None
 
 
@@ -191,62 +176,107 @@ def launch_unavailable_reason() -> str | None:
         if shutil.which(bin_override) or os.path.isfile(bin_override):
             return None
         return f"{DSH_RUNTIME_BIN_ENV}={bin_override!r} is not executable"
-    if _packaged_entry() is not None:
+    if dsh_entry() is not None:
         if _resolve_node() is not None:
             return None
         return "node (>= 22.19) not found for the installed dsh runtime closure"
-    root = os.environ.get(DSH_ROOT_ENV, "").strip()
-    if root:
-        if not (Path(root) / _SOURCE_ENTRY).is_file():
-            return f"{DSH_ROOT_ENV}={root!r} has no {_SOURCE_ENTRY}"
-        if shutil.which("node") is None:
-            return "node (>= 22.19) not found on PATH"
-        return None
     return (
         "install the vendored dsh runtime (scripts/vendor-dsh-runtime.sh), or set "
-        f"{DSH_RUNTIME_BIN_ENV} to a dsh-jsonrpc-agent executable, or "
-        f"{DSH_ROOT_ENV} to a deepseek-harness checkout"
+        f"{DSH_RUNTIME_ENTRY_ENV} to an installed closure's "
+        "node_modules/valuz-dsh-bundle/bin/dsh.mjs"
     )
 
 
-def write_composition(
-    session: Session,
-    *,
-    config_parent_dir: str,
-    workspace_root: str,
-    skills_root: str | None,
-    model_settings: ModelSettings | None,
-    kernel_toolkit: bool = False,
-    plan_capable: bool = False,
-    user_questions_url: str | None = None,
-) -> str:
-    """Write this session's composition file; returns the ``cordis.yml`` path.
+# -- managed home ----------------------------------------------------------------
 
-    The caller owns cleanup of the returned file's parent directory
-    (``cleanup_composition``).
+
+def resolve_dsh_home(state_dir: str | os.PathLike[str] | None = None) -> Path:
+    """The Valuz-managed ``DSH_HOME``.
+
+    ``VALUZ_DSH_HOME`` wins (the host sets it next to kernel.db; the desktop
+    sidecar to the app data dir). Otherwise ``dsh-home`` beside the transcript
+    state dir, so a bare kernel never writes into the user's ``~/.dsh``. The
+    profile inside it is initialized by the launcher (``managed-profile.json``
+    in valuz-dsh-bundle is the one definition of its bundle layers).
     """
-    config_dir = Path(config_parent_dir) / f"valuz-dsh-{session.id}-{uuid.uuid4().hex[:8]}"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / "cordis.yml"
-    rows = build_composition_rows(
-        session,
-        workspace_root=workspace_root,
-        skills_root=skills_root,
-        model_settings=model_settings,
-        kernel_toolkit=kernel_toolkit,
-        plan_capable=plan_capable,
-        user_questions_url=user_questions_url,
-    )
-    path.write_text(json.dumps(rows, ensure_ascii=False, indent=1))
-    path.chmod(0o600)
-    return str(path)
+    override = os.environ.get(DSH_HOME_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    base = Path(state_dir).expanduser().resolve() if state_dir else Path.cwd() / "dsh_state"
+    return base.parent / "dsh-home"
 
 
-def cleanup_composition(config_path: str | None) -> None:
-    if not config_path:
-        return
-    shutil.rmtree(Path(config_path).parent, ignore_errors=True)
+def process_env(
+    *,
+    home: Path,
+    role: str,
+    permission_mode: str | None = None,
+) -> dict[str, str]:
+    """Environment every Valuz dsh process gets, on top of the caller's."""
+    env = {
+        "DSH_HOME": str(home),
+        # skill-filesystem's user root defaults to ~/.agents/skills — the
+        # user's personal skills, shared with other agent CLIs, which bypass
+        # the Valuz skill library and its enabled state. Point it at a
+        # Valuz-owned directory nothing writes skills into; session skills
+        # reach dsh only through <cwd>/.agents/skills, materialized from the
+        # library. (Only skill-filesystem reads this variable.)
+        "DSH_AGENTS_HOME": str(home / "agents"),
+        # The launcher initializes/repairs this profile before boot.
+        MANAGED_PROFILE_ENV: PROFILE_NAME,
+        ROLE_ENV: role,
+        # Any non-empty value opts out of OTel session telemetry (app-boot).
+        "DSH_TELEMETRY_DISABLED": "1",
+    }
+    if permission_mode is not None:
+        env["DSH_PERMISSION_MODE"] = dsh_permission_mode(permission_mode)
+    return env
 
+
+def dsh_permission_mode(permission_mode: str) -> str:
+    """Kernel ``permission_mode`` → dsh's permission preset.
+
+    ``full_access`` keeps the long-standing unattended behavior (dsh
+    ``danger-full-access``: no sandbox, approvals ``never``). ``default`` runs
+    dsh's own ``workspace-write`` preset — writes confined to the workspace,
+    anything else asks, and the kernel bridge parks each ask as a Valuz
+    approval card.
+    """
+    return "danger-full-access" if permission_mode == "full_access" else "workspace-write"
+
+
+# ``EffortLevel`` → the dsh DeepSeek adapter's ``reasoningEffort`` ids
+# (``off | low | high | max`` since dsh 0.2; ``medium`` has no spelling and
+# rounds up, ``xhigh`` maps to ``max``). Passed through SDK ``initialize``.
+_EFFORT_MAP = {"low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max"}
+
+
+#: Output cap for a non-DeepSeek model that declares none. dsh's llm-deepseek
+#: adapter otherwise sends DeepSeek's own default (256000), which other
+#: Messages endpoints reject (GLM via the Valuz gateway: "max_tokens … [1,131072]").
+#: 32000 is the claude runtime's CLI default and within every current model's
+#: output limit.
+NON_DEEPSEEK_DEFAULT_MAX_TOKENS = 32000
+
+
+def dsh_max_tokens(model: str | None, declared: int | None) -> int | None:
+    """The ``maxTokens`` to initialize a dsh session with.
+
+    A declared output cap wins. A DeepSeek model keeps dsh's own default
+    (``None``); any other model gets ``NON_DEEPSEEK_DEFAULT_MAX_TOKENS``.
+    """
+    if declared is not None:
+        return declared
+    if (model or "").strip().lower().startswith("deepseek"):
+        return None
+    return NON_DEEPSEEK_DEFAULT_MAX_TOKENS
+
+
+def dsh_reasoning_effort(effort: str | None) -> str | None:
+    return _EFFORT_MAP.get(effort) if effort else None
+
+
+# -- per-session patch -----------------------------------------------------------
 
 # The kernel's ``/mcp/toolkit/{session_id}`` bridge — kernel-owned ToolDefs
 # (e.g. PTC's execute_code). The env name keeps the legacy codex spelling:
@@ -279,144 +309,136 @@ def user_questions_endpoint(token: str) -> str:
     return f"{base.rstrip('/')}/{token}"
 
 
-# ``dsh-plan-mode``'s mandatory ``section`` — the deployment-owned plan
-# discipline the model sees (prompt order 50) while plan mode is active.
-# Same product contract as the Claude runtime's ``PLAN_MODE_DISCIPLINE``:
-# plan-first applies to EVERY task type, not just code changes. dsh's plan
-# mode is soft guidance by design (sandbox/approval enforce independently),
-# so this text carries the whole behavioral contract.
-PLAN_MODE_SECTION = """\
-You are in plan mode: the user wants to align on a plan BEFORE you produce
-anything. This applies to EVERY kind of task — research, analysis, and
-writing included, not just code changes.
-
-1. Keep reconnaissance lightweight and read-only: check which data sources /
-   files / tools exist and what shape they have. Do NOT run the full
-   analysis, execute code, mutate files, or draft the deliverable yet.
-2. If key decisions are unclear, ask the user with the ask_user_question
-   tool first.
-3. When the plan is ready, you MUST present it by calling the
-   exit_plan_mode tool with the complete plan as markdown (starting with a
-   # heading): goal, steps, data sources, deliverable format, and any open
-   choices. That tool call is the ONLY way to present the plan and request
-   approval — NEVER paste the plan as a normal message and NEVER ask for
-   approval in prose. After calling it, stop and wait for the review.
-4. Execute only after exit_plan_mode returns approval. If the user tells
-   you to proceed but the plan was never approved through exit_plan_mode,
-   call exit_plan_mode first.
-
-Exception: a trivial exchange that plainly needs no plan (a greeting, a
-one-line factual question) may be answered directly."""
+def hook_bridge_endpoint(token: str) -> str:
+    """The kernel's hook-bridge URL for one spawn (same host as user questions)."""
+    base = (
+        os.environ.get(USER_QUESTIONS_ENDPOINT_ENV, "").strip() or USER_QUESTIONS_ENDPOINT_DEFAULT
+    )
+    base = base.rstrip("/")
+    suffix = "/dsh/user-questions"
+    if base.endswith(suffix):
+        base = base[: -len(suffix)]
+    return f"{base}/hook-bridge/{token}"
 
 
-def build_composition_rows(
+#: DSH's own classic-hook bridges, by dialect. Native-first (ADR-033 §9): DSH
+#: runs a trusted workspace's ``hooks`` config itself; DeepAgents gets the bus
+#: executor (``core/hooks/classic``); Claude and Codex read the files directly.
+CLASSIC_HOOK_PLUGINS = {
+    "claude": "@deepseek-ai/dsh-hooks-claude-code",
+    "codex": "@deepseek-ai/dsh-hooks-codex",
+}
+CLASSIC_HOOKS_ROW = "valuz-classic-hooks"
+#: Claude Code tool names → DSH's own. The bridges match on the tool's real
+#: name, so a ``"Bash"`` matcher would never select DSH's ``bash``.
+_DSH_TOOL_ALIASES: dict[str, tuple[str, ...]] = {
+    "Bash": ("bash", "pwsh"),
+    "Read": ("read", "read_image"),
+    "Write": ("write",),
+    "Edit": ("edit", "str_replace_editor"),
+    "MultiEdit": ("edit", "str_replace_editor"),
+    "Glob": ("glob",),
+    "Grep": ("grep",),
+    "WebFetch": ("web_fetch",),
+    "WebSearch": ("web_search",),
+    "TodoWrite": ("todo_write",),
+}
+_WORD_ALTERNATIVES = re.compile(r"^[A-Za-z0-9_|]+$")
+
+
+def dsh_matcher(matcher: str | None) -> str | None:
+    """A word-and-pipe matcher widened with DSH's names for the same tools."""
+    if matcher is None or not _WORD_ALTERNATIVES.match(matcher):
+        return matcher
+    names = matcher.split("|")
+    extra = [alias for name in names for alias in _DSH_TOOL_ALIASES.get(name, ())]
+    return "|".join(dict.fromkeys([*names, *extra]))
+
+
+def write_classic_hooks(session: Session, config_dir: Path) -> dict[str, Any] | None:
+    """The bridge row for the workspace's classic hooks (its config written to
+    *config_dir*), or ``None`` — untrusted workspace (H0), not a local
+    workstation (``classic_hooks_allowed``), or no hooks."""
+    if not session.cwd or is_workspace_untrusted(session) or is_bare_completion(session):
+        return None
+    if not classic_hooks_allowed():
+        return None
+    hooks = load_workspace_hooks(session.cwd)
+    if hooks is None:
+        return None
+    config = hooks.to_config()
+    for groups in config["hooks"].values():
+        for group in groups:
+            if "matcher" in group:
+                group["matcher"] = dsh_matcher(group["matcher"])
+    path = config_dir / "classic-hooks.json"
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=1))
+    path.chmod(0o600)
+    row_config: dict[str, Any] = {"configPath": str(path)}
+    if hooks.dialect == "claude":
+        row_config["projectDir"] = session.cwd
+    else:
+        row_config["model"] = session.model or ""
+    return {
+        "id": CLASSIC_HOOKS_ROW,
+        "name": CLASSIC_HOOK_PLUGINS[hooks.dialect],
+        "config": row_config,
+    }
+
+
+def build_session_patch(
     session: Session,
     *,
-    workspace_root: str,
-    skills_root: str | None,
-    model_settings: ModelSettings | None,
+    model_base_url: str | None = None,
     kernel_toolkit: bool = False,
-    plan_capable: bool = False,
+    plan_capable: bool = True,
     user_questions_url: str | None = None,
+    hook_bridge: dict[str, Any] | None = None,
+    classic_hooks: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """The plugin tree for one kernel session (pure; unit-testable).
+    """The ``--patch`` layer for one kernel session (pure; unit-testable).
 
-    No dsh-side session persistence is mounted: the kernel events table is
-    the system of record and cross-process continuation is replayed by the
-    adapter's transcript sidecar (the SDK server cannot rehydrate persisted
-    logs anyway — see docs/references/deepseek-harness/runtime-gap-analysis.md).
+    Upstream rows are only toggled or given config they ship without; Valuz
+    behavior arrives as inserted rows. Tools, persona, skills discovery
+    (``<cwd>/.agents/skills``, where the kernel materializes session skills)
+    and plan mode come from the profile's agent preset, as in dsh itself.
     """
-    llm_config: dict[str, Any] = {}
-    effort = model_settings.effort if model_settings is not None else None
-    if effort is not None:
-        llm_config["thinking"] = "enabled"
-        llm_config["reasoningEffort"] = _EFFORT_MAP[effort]
+    patch: list[dict[str, Any]] = []
+    if model_base_url:
+        # ``llm-deepseek`` ships with no config; its baseURL wins over the
+        # trusted-env fallback and the public endpoint.
+        patch.append({"id": "llm-deepseek", "config": {"baseURL": model_base_url}})
 
-    skills_config: dict[str, Any]
-    if skills_root is not None:
-        skills_config = {
-            "enabled": True,
-            "filesystem": {
-                "includeDefaultRoots": False,
-                "customSkillDirs": [skills_root],
-                "watch": False,
-            },
-        }
-    else:
-        skills_config = {"enabled": False}
-
-    spine_config: dict[str, Any] = {
-        "workspaceContext": False,
-        "skills": skills_config,
-        "toolJobs": False,
-    }
+    bridge_config: dict[str, Any] = {}
     if session.instructions.strip():
-        spine_config["persona"] = session.instructions
-
-    rows: list[dict[str, Any]] = [
-        {"id": "sdk-jsonrpc-server", "name": "@deepseek-ai/dsh-sdk-jsonrpc-server"},
-        {
-            "id": "agent-core",
-            "name": "@deepseek-ai/dsh-agent-spine-demo",
-            "config": spine_config,
-        },
-        {"id": "llm-deepseek", "name": "@deepseek-ai/dsh-llm-deepseek", "config": llm_config},
-        {"id": "subprocess", "name": "@deepseek-ai/dsh-subprocess-local"},
-        {
-            "id": "bash",
-            "name": "@deepseek-ai/dsh-bash-local",
-            "config": {"cwd": workspace_root},
-        },
-        {
-            "id": "fs-local",
-            "name": "@deepseek-ai/dsh-fs-local",
-            "config": {"cwd": workspace_root},
-        },
-        {"id": "fs-observation-policy", "name": "@deepseek-ai/dsh-fs-observation-policy"},
-        {"id": "tool-fs", "name": "@deepseek-ai/dsh-tool-fs"},
-        {
-            "id": "tool-todo",
-            "name": "@deepseek-ai/dsh-tool-todo",
-            # Required field (dsh's no-hardcoded-tunables doctrine): matches
-            # the kernel's own TaskCreate semantics (parallel in-progress ok).
-            "config": {"allowParallelInProgress": True},
-        },
-        {"id": "token-meter", "name": "@deepseek-ai/dsh-token-meter"},
-        {"id": "compaction-basic", "name": "@deepseek-ai/dsh-compaction-basic"},
-    ]
+        bridge_config["instructions"] = session.instructions
     if plan_capable:
-        # Plan set — ALWAYS composed on a capable closure, never gated on
-        # ``session.mode``: dsh-plan-mode keeps ``exit_plan_mode`` registered
-        # in both states (stable tool catalog), plan state is per-session
-        # durable (``plan/mode`` log events, default inactive), and the
-        # bridge plugin converges it to the kernel-desired value at the
-        # first pre-step. ``ask_user_question`` (dsh-tool-ask-user) rides
-        # along in every mode — parity with Claude's AskUserQuestion /
-        # codex's request_user_input clarifying path.
-        rows.append({"id": "user-questions", "name": "@deepseek-ai/dsh-user-questions"})
-        rows.append({"id": "tool-ask-user", "name": "@deepseek-ai/dsh-tool-ask-user"})
-        rows.append(
-            {
-                "id": "plan-mode",
-                "name": "@deepseek-ai/dsh-plan-mode",
-                "config": {"section": PLAN_MODE_SECTION},
-            }
-        )
-        bridge_config: dict[str, Any] = {"planActive": session.mode == "plan"}
+        bridge_config["planActive"] = session.mode == "plan"
         if user_questions_url:
             bridge_config["userQuestionsEndpoint"] = user_questions_url
-        rows.append(
+    if bridge_config:
+        # The bridge row is declared by valuz-dsh-bundle (session role only);
+        # overriding a Valuz-owned row's config never drifts from upstream.
+        patch.append({"id": KERNEL_BRIDGE_ROW, "config": bridge_config})
+
+    if hook_bridge:
+        # Valuz hook bus for dsh's built-in tools (row declared by
+        # valuz-dsh-bundle, session role only); present only while a
+        # handler listens.
+        patch.append(
             {
-                "id": "valuz-kernel-bridge",
-                "name": "valuz-dsh-kernel-bridge",
-                "config": bridge_config,
+                "id": HOOK_BRIDGE_ROW,
+                "config": dict(hook_bridge),
+                **({"disabled": False} if hook_bridge.get("required") else {}),
             }
         )
-    rows.extend(_mcp_rows(session))
+
+    inserted: list[dict[str, Any]] = []
+    inserted.extend(_mcp_rows(session))
     if kernel_toolkit:
         # Kernel ToolDefs (registered by the runtime in mcp_bridge) surface
         # like any other MCP server: ``mcp__harness_toolkit__<tool>``.
-        rows.append(
+        inserted.append(
             {
                 "id": "kernel-toolkit",
                 "name": "@deepseek-ai/dsh-mcp-client",
@@ -427,21 +449,49 @@ def build_composition_rows(
                 },
             }
         )
-    return rows
+    if classic_hooks:
+        inserted.append(classic_hooks)
+    if inserted:
+        patch.append({"insert": inserted})
+    return patch
+
+
+def write_session_patch(session: Session, **kwargs: Any) -> str:
+    """Write this session's patch file; returns its path.
+
+    JSON — a JSON document is valid YAML, which sidesteps quoting/injection
+    concerns for instruction text and MCP header values. The caller owns
+    cleanup (``cleanup_session_patch``).
+    """
+    config_dir = Path(tempfile.gettempdir()) / f"valuz-dsh-{session.id}-{uuid.uuid4().hex[:8]}"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / "session.patch.json"
+    patch = build_session_patch(
+        session, classic_hooks=write_classic_hooks(session, config_dir), **kwargs
+    )
+    path.write_text(json.dumps(patch, ensure_ascii=False, indent=1))
+    path.chmod(0o600)
+    return str(path)
+
+
+def cleanup_session_patch(patch_path: str | None) -> None:
+    if not patch_path:
+        return
+    shutil.rmtree(Path(patch_path).parent, ignore_errors=True)
 
 
 def _mcp_rows(session: Session) -> list[dict[str, Any]]:
     """One ``dsh-mcp-client`` row per session MCP server.
 
     dsh registers each server's tools as ``mcp__<serverName>__<tool>`` — the
-    same shape the other runtimes consume. NOTE: ``dsh-mcp-client`` is not yet
-    part of the stock runtime closures (neither the examples project nor the
-    sdk-runtime deploy root lists it); until the upstream dependency lands,
-    a composition carrying these rows fails to boot. Sessions without MCP
-    servers are unaffected.
+    same shape the other runtimes consume.
     """
     rows: list[dict[str, Any]] = []
     for index, server in enumerate(session.mcp_servers):
+        if server.name == DSH_PLUGINS_MCP_SERVER:
+            # dsh plugin tools reach other runtimes through this server; a dsh
+            # session loads the same plugins natively from the profile.
+            continue
         if isinstance(server, McpHttpServerConfig):
             config: dict[str, Any] = {
                 "serverName": _server_name(server.name, index),

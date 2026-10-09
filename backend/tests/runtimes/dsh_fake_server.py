@@ -11,6 +11,12 @@ every scenario:
 * ``FAKE_DSH_MODE=bigframe`` — like ``ok`` but the committed assistant message
   is a single ~1 MiB NDJSON line (regression: asyncio's default 64 KiB
   readline limit killed the reader on real dsh ``request/header`` frames)
+* ``FAKE_DSH_MODE=subagent`` — like ``ok`` but mid-turn the agent spawns a
+  child (``subagent.started``), the child runs one step of its own in its own
+  session (7 in / 5 out tokens) and finishes (``subagent.finished``) — the
+  real SDK server's notifications for an in-process subagent
+* ``FAKE_DSH_MODE=compaction`` — like ``ok`` but dsh compacts mid-turn
+  (``compaction/end``)
 """
 
 from __future__ import annotations
@@ -67,16 +73,52 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
         )
         notify("session.status", {"sessionId": session_id, "status": "idle"})
         return
-    answer = "42" if mode != "bigframe" else ("4" + "2" * 1_000_000)
-    for delta in ("4", "2"):
+    if mode == "compaction":
+        session_event(session_id, {"type": "compaction/end", "seq": next(seq), "data": {}})
+    if mode == "subagent":
+        child = f"{session_id}-child"
+        notify("subagent.started", {"parentSessionId": session_id, "childSessionId": child})
         session_event(
-            session_id,
+            child,
             {
-                "type": "assistant/chunk",
-                "seq": next(seq),
+                "type": "assistant/message",
+                "seq": 0,
                 "data": {
                     "turn": 1,
                     "step": 1,
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "x"}]},
+                    "usage": {"inputTokens": 7, "outputTokens": 5, "cacheReadTokens": 0},
+                },
+            },
+        )
+        notify(
+            "subagent.finished",
+            {
+                "parentSessionId": session_id,
+                "childSessionId": child,
+                "agentId": child,
+                "provider": "spawn",
+                "status": "completed",
+                "stopReason": "completed",
+            },
+        )
+    answer = "42" if mode != "bigframe" else ("4" + "2" * 1_000_000)
+    # dsh >= 0.2 (session-log v4) streams tokens as live frames, forwarded by
+    # valuz-dsh-bundle's stream-forwarder as ``valuz.assistant-stream``.
+    notify(
+        "valuz.assistant-stream",
+        {"sessionId": session_id, "frame": {"type": "start", "attemptId": "a1", "revision": 1}},
+    )
+    for index, delta in enumerate(("4", "2")):
+        notify(
+            "valuz.assistant-stream",
+            {
+                "sessionId": session_id,
+                "frame": {
+                    "type": "chunk",
+                    "attemptId": "a1",
+                    "revision": 1,
+                    "index": index,
                     "chunk": {"type": "text-delta", "index": 0, "text": delta},
                 },
             },
@@ -106,7 +148,14 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
 
 def main() -> None:
     mode = os.environ.get("FAKE_DSH_MODE", "ok")
-    assert os.environ.get("DSH_CORDIS_CONFIG"), "runtime always demands an explicit config"
+    # The launch contract: the managed profile in the session role, plus one
+    # per-session patch file (composition.process_env / runtime argv).
+    argv = sys.argv[1:]
+    assert argv[argv.index("--profile") + 1] == "valuz", argv
+    assert os.path.isfile(argv[argv.index("--patch") + 1]), argv
+    assert os.environ.get("DSH_HOME"), "runtime always pins the managed DSH_HOME"
+    assert os.environ.get("VALUZ_DSH_ROLE") == "session"
+    assert os.environ.get("DSH_TELEMETRY_DISABLED") == "1"
     prompt_count = 0
     for line in sys.stdin:
         line = line.strip()

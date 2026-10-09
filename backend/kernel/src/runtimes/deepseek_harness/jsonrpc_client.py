@@ -148,11 +148,14 @@ class DshRuntimeClient:
         provider: str,
         model: str,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         timeout: float | None = 60.0,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"cwd": cwd, "provider": provider, "model": model}
         if max_tokens is not None:
             params["maxTokens"] = max_tokens
+        if reasoning_effort is not None:
+            params["reasoningEffort"] = reasoning_effort
         result = await self.request("initialize", params, timeout=timeout)
         return result if isinstance(result, dict) else {}
 

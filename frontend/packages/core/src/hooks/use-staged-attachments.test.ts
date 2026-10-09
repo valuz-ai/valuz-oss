@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SessionAttachmentItem } from "../api/sessions-api";
@@ -202,6 +203,47 @@ describe("useStagedAttachments", () => {
     });
 
     expect(uploadAttachment).toHaveBeenLastCalledWith(expect.any(File), {
+      baseUrl: "http://second.example",
+    });
+  });
+
+  it("retains attachment callbacks while routing to the newly committed resolver", async () => {
+    addKbAttachments.mockResolvedValue({ items: [row({ source_kind: "kb_doc" })] });
+    const first = () => "http://first.example";
+    const second = () => "http://second.example";
+    const { result, rerender } = renderHook(
+      ({ resolve }) => useStagedAttachments(resolve),
+      { initialProps: { resolve: first } },
+    );
+    const attachKbDocs = result.current.attachKbDocs;
+    const attachLocalFiles = result.current.attachLocalFiles;
+
+    rerender({ resolve: second });
+    expect(result.current.attachKbDocs).toBe(attachKbDocs);
+    expect(result.current.attachLocalFiles).toBe(attachLocalFiles);
+    await act(async () => attachKbDocs(["doc-1"]));
+    expect(addKbAttachments).toHaveBeenLastCalledWith(["doc-1"], {
+      baseUrl: "http://second.example",
+    });
+  });
+
+  it("uses the new backend when attachment work starts in a layout effect", async () => {
+    addKbAttachments.mockResolvedValue({ items: [] });
+    const { rerender } = renderHook(
+      ({ base, attach }) => {
+        const staged = useStagedAttachments(base);
+        useLayoutEffect(() => {
+          if (attach) void staged.attachKbDocs(["doc-2"]);
+        }, [attach, staged.attachKbDocs]);
+        return staged;
+      },
+      { initialProps: { base: "http://first.example", attach: false } },
+    );
+
+    await act(async () => {
+      rerender({ base: "http://second.example", attach: true });
+    });
+    expect(addKbAttachments).toHaveBeenLastCalledWith(["doc-2"], {
       baseUrl: "http://second.example",
     });
   });

@@ -1,8 +1,8 @@
 import type { ServiceInfo, ServiceStatusType } from "@valuz/shared";
 import { t } from "@valuz/shared/i18n";
 import { assetUrl } from "@valuz/shared";
-import { WindowDragRegion, WindowControls } from "@valuz/ui";
-import { useEffect, useRef, useState } from "react";
+import { WindowDragRegion, WindowControls, tokens } from "@valuz/ui";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePlatform } from "@valuz/app/platform";
 
 interface StartupScreenProps {
@@ -104,12 +104,14 @@ function useBootProgress({
   onComplete?: () => void;
 }): number {
   const [display, setDisplay] = useState(0);
-  const startRef = useRef<number>(Date.now());
-  const estimateRef = useRef<number>(estimateBootSeconds());
+  const [startedAt] = useState(Date.now);
+  const [estimateSeconds] = useState(estimateBootSeconds);
   const recordedRef = useRef(false);
   const completedRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
-  onCompleteRef.current = onComplete;
+  useLayoutEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
   const done =
     !error &&
     (complete ?? (!loading && (total === 0 || ready === total)));
@@ -118,14 +120,14 @@ function useBootProgress({
   useEffect(() => {
     if (!done || total === 0 || recordedRef.current) return;
     recordedRef.current = true;
-    recordBootDurationMs(Date.now() - startRef.current);
-  }, [done, total]);
+    recordBootDurationMs(Date.now() - startedAt);
+  }, [done, total, startedAt]);
 
   useEffect(() => {
     if (error) return; // freeze where we are — the error strip explains why
     const timer = setInterval(() => {
-      const elapsed = (Date.now() - startRef.current) / 1000;
-      const paced = pacedTarget(elapsed, estimateRef.current);
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const paced = pacedTarget(elapsed, estimateSeconds);
       const readiness = total > 0 ? (ready / total) * BOOT_CEIL : 0;
       const target = done ? 100 : Math.min(BOOT_CEIL, Math.max(paced, readiness));
       setDisplay((prev) => {
@@ -137,7 +139,7 @@ function useBootProgress({
       });
     }, BOOT_TICK_MS);
     return () => clearInterval(timer);
-  }, [done, error, ready, total]);
+  }, [done, error, ready, total, startedAt, estimateSeconds]);
 
   // Bar visibly at 100% and everything running → tell the host (once), after
   // a short dwell so "100%" is actually seen.
@@ -589,7 +591,7 @@ const SPLASH_CSS = `
   margin-bottom: 8px;
 }
 .splash-progress-pct {
-  color: #725CF9;
+  color: ${tokens.color.brand};
   font-variant-numeric: tabular-nums;
 }
 .splash-progress-meta { font-variant-numeric: tabular-nums; }

@@ -11,6 +11,7 @@ from app import config_gate
 from app.config import AppConfig
 from app.dependencies import init_dependencies, shutdown_dependencies
 from app.dsh_user_questions_router import router as dsh_uq_router
+from app.hook_bridge_router import router as hook_bridge_router
 from app.mcp_toolkit_router import mcp_router_lifespan, mount_mcp_router
 from app.ptc_router import router as ptc_router
 from app.routes.events import router as events_router
@@ -113,6 +114,15 @@ async def _require_bearer_token(request: Request, call_next: Any) -> Any:
     # path IS the credential. See app/dsh_user_questions_router.py.
     if token and "/v1/dsh/user-questions/" in request.url.path:
         return await call_next(request)
+    # The hook bus's MCP proxy checks its own per-session bearer token (the
+    # CLI subprocess holds that one, never the kernel's). See
+    # app/mcp_proxy_router.py.
+    if token and request.url.path.startswith("/mcp/proxy/"):
+        return await call_next(request)
+    # Out-of-process runtimes on the hook bus: per-spawn token in the path.
+    # See app/hook_bridge_router.py.
+    if token and "/v1/hook-bridge/" in request.url.path:
+        return await call_next(request)
     if token and request.url.path != "/health":
         supplied = request.headers.get("authorization", "")
         if supplied != f"Bearer {token}":
@@ -131,6 +141,7 @@ app.include_router(run_router)
 app.include_router(events_router)
 app.include_router(ptc_router)
 app.include_router(dsh_uq_router)
+app.include_router(hook_bridge_router)
 app.include_router(usage_router)
 app.include_router(runtimes_router)
 mount_mcp_router(app)

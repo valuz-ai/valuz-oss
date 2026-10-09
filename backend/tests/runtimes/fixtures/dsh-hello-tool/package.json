@@ -1,0 +1,19 @@
+{
+  "name": "dsh-hello-tool",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "0.2.1-alpha.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "description": "A standard third-party dsh bundle (one root tool) used by test_dsh_upstream_compat to prove a plugin installed the dsh way is live in Valuz sessions. Its peer pin is rewritten to the installed dsh version at test time."
+}

@@ -231,6 +231,21 @@ class AutomationCreatePayload(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_managed_source_input(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(
+            key in value
+            for key in (
+                "app_plugin_id",
+                "app_plugin_name",
+                "app_plugin_source_kind",
+                "app_plugin_catalog_binding",
+            )
+        ):
+            raise ValueError("App Plugin ownership is internal and cannot be supplied by callers")
+        return value
+
     @field_validator("event_refs")
     @classmethod
     def _check_event_refs(cls, value: list[str] | None) -> list[str] | None:
@@ -253,6 +268,8 @@ class AutomationCreatePayload(BaseModel):
             # Keep the legacy column in step so readers that still branch on
             # ``action_kind`` see the same mode the contract declares.
             self.action_kind = execution.mode
+            if execution.target_session_id and self.worktree:
+                raise ValueError("target_session_id is incompatible with worktree execution")
         return self
 
     @property
@@ -311,6 +328,21 @@ class AutomationUpdatePayload(BaseModel):
     execution: ExecutionContract | None = None
     input: InputContract | None = None
     result: ResultContract | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_managed_source_input(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(
+            key in value
+            for key in (
+                "app_plugin_id",
+                "app_plugin_name",
+                "app_plugin_source_kind",
+                "app_plugin_catalog_binding",
+            )
+        ):
+            raise ValueError("App Plugin ownership is internal and cannot be supplied by callers")
+        return value
 
     @field_validator("event_refs")
     @classmethod
@@ -376,6 +408,10 @@ class AutomationItemResponse(BaseModel):
     # subscribed to anything — the common case while OSS ships no source.
     event_source: str | None = None
     event_refs: list[str] | None = None
+    # Set when a third-party plugin declared this automation in its manifest
+    # (created on install, deleted on uninstall); ``None`` otherwise.
+    app_plugin_id: str | None = None
+    app_plugin_name: str | None = None
 
     status: str
     next_run_at: int | None

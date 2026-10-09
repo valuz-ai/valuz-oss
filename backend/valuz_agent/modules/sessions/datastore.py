@@ -109,9 +109,7 @@ class SessionDatastore:
         if not attachment_ids:
             return []
         rows = [
-            r
-            for r in await self.get_attachments(user_id, attachment_ids)
-            if r.session_id is None
+            r for r in await self.get_attachments(user_id, attachment_ids) if r.session_id is None
         ]
         for row in rows:
             row.session_id = session_id
@@ -194,7 +192,7 @@ class SessionDatastore:
 
     async def delete_attachment(self, user_id: str, attachment_id: str) -> None:
         await self._db.execute(
-            SessionAttachmentRow.__table__.delete().where(
+            delete(SessionAttachmentRow).where(
                 SessionAttachmentRow.id == attachment_id,
                 SessionAttachmentRow.user_id == user_id,
             )
@@ -203,7 +201,7 @@ class SessionDatastore:
 
     async def delete_attachments_for_session(self, user_id: str, session_id: str) -> None:
         await self._db.execute(
-            SessionAttachmentRow.__table__.delete().where(
+            delete(SessionAttachmentRow).where(
                 SessionAttachmentRow.session_id == session_id,
                 SessionAttachmentRow.user_id == user_id,
             )
@@ -285,12 +283,20 @@ class SessionDatastore:
         return row
 
     async def delete_queued(self, user_id: str, session_id: str, queue_id: str) -> bool:
-        row = await self.get_queued(user_id, session_id, queue_id)
-        if row is None:
-            return False
-        await self._db.delete(row)
+        # Claim and cancellation race across host processes. A conditional
+        # update keeps a stale queued read from cancelling an already-run turn.
+        result = await self._db.execute(
+            update(QueuedInputRow)
+            .where(
+                QueuedInputRow.id == queue_id,
+                QueuedInputRow.user_id == user_id,
+                QueuedInputRow.session_id == session_id,
+                QueuedInputRow.status.in_(("queued", "blocked")),
+            )
+            .values(status="cancelled", completed_at=now_ms(), updated_at=now_ms())
+        )
         await self._db.commit()
-        return True
+        return bool(getattr(result, "rowcount", 0))
 
     async def delete_queue_for_session(self, user_id: str, session_id: str) -> None:
         await self._db.execute(
@@ -346,15 +352,31 @@ class SessionDatastore:
         )
 
     async def mark_queued_status(
-        self, queue_id: str, status: str, error_message: str | None = None
-    ) -> None:
-        """Transition a queued row (SYSTEM / drain path), keyed on its unique id."""
-        await self._db.execute(
-            update(QueuedInputRow)
-            .where(QueuedInputRow.id == queue_id)
-            .values(status=status, error_message=error_message, updated_at=now_ms())
+        self,
+        queue_id: str,
+        status: str,
+        error_message: str | None = None,
+        *,
+        expected_status: str | None = None,
+        output_message_id: str | None = None,
+        result_summary: str | None = None,
+    ) -> bool:
+        """Transition a queued row, optionally claiming only its expected state."""
+        statement = update(QueuedInputRow).where(QueuedInputRow.id == queue_id)
+        if expected_status is not None:
+            statement = statement.where(QueuedInputRow.status == expected_status)
+        result = await self._db.execute(
+            statement.values(
+                status=status,
+                error_message=error_message,
+                updated_at=now_ms(),
+                completed_at=now_ms() if status in {"completed", "failed", "cancelled"} else None,
+                output_message_id=output_message_id,
+                result_summary=result_summary,
+            )
         )
         await self._db.commit()
+        return bool(getattr(result, "rowcount", 0))
 
     async def list_queued_session_owners(self) -> list[tuple[str, str]]:
         """Distinct ``(session_id, user_id)`` pairs that still have ``queued``

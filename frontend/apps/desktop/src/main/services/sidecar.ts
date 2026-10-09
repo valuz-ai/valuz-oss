@@ -381,16 +381,15 @@ function resolveCdtEntry(): string | null {
  * "node" is this Electron binary under ELECTRON_RUN_AS_NODE=1.
  *
  * Returns null when not bundled (dev), so the backend falls back to the
- * dev-checkout vendor tree / VALUZ_DSH_ROOT source mode.
+ * dev-checkout vendor tree.
  */
 function resolveDshRuntimeEntry(): string | null {
   const rel = path.join(
     "dsh-runtime",
     "node_modules",
-    "@deepseek-ai",
-    "dsh-sdk-jsonrpc-demo",
-    "lib",
-    "packaged-bin.js",
+    "valuz-dsh-bundle",
+    "bin",
+    "dsh.mjs",
   );
 
   const bundled = path.join(process.resourcesPath, "libexec", rel);
@@ -399,6 +398,57 @@ function resolveDshRuntimeEntry(): string | null {
   const devEntry = path.join(__dirname, "..", "..", "resources", "libexec", rel);
   if (fs.existsSync(devEntry)) return devEntry;
 
+  return null;
+}
+
+/**
+ * Locate the bundled session Python (staged at libexec/python-runtime by
+ * scripts/build-desktop.sh Phase A6): CPython plus the libraries the bundled
+ * skills import. The backend exposes it to every agent session as
+ * ``valuz-python`` (backend/valuz_agent/infra/session_tools.py).
+ *
+ * Returns null when not bundled (dev), so the backend falls back to the
+ * dev-checkout vendor tree (backend/vendor/python-runtime/dist).
+ */
+function resolvePythonRuntime(): string | null {
+  const bundled = path.join(process.resourcesPath, "libexec", "python-runtime");
+  if (fs.existsSync(bundled)) return bundled;
+
+  const devRuntime = path.join(__dirname, "..", "..", "resources", "libexec", "python-runtime");
+  if (fs.existsSync(devRuntime)) return devRuntime;
+
+  return null;
+}
+
+/** libexec-relative entry of the staged plugin SDK CLI distribution. */
+export const PLUGIN_SDK_ENTRY_REL = path.join(
+  "plugin-sdk",
+  "bin",
+  "valuz-plugin.mjs",
+);
+
+/**
+ * Locate the staged plugin SDK CLI (``valuz-plugin``: the self-contained
+ * distribution scripts/build-desktop.sh Phase B1 stages at
+ * libexec/plugin-sdk — CLI, pre-bundled SDK runtime, pinned esbuild/React).
+ * Same Electron-as-node contract as chrome-devtools-mcp: the backend's
+ * session wrapper runs ``node <entry>`` where "node" is this Electron binary
+ * under ELECTRON_RUN_AS_NODE=1 (backend/valuz_agent/infra/session_tools.py).
+ *
+ * ``libexecDirs`` defaults to the packaged libexec, then the dev resources
+ * one. Returns null when not staged (dev), so the backend falls back to the
+ * source checkout's frontend/packages/plugin-sdk/bin.
+ */
+export function resolvePluginSdkEntry(
+  libexecDirs: string[] = [
+    path.join(process.resourcesPath, "libexec"),
+    path.join(__dirname, "..", "..", "resources", "libexec"),
+  ],
+): string | null {
+  for (const dir of libexecDirs) {
+    const entry = path.join(dir, PLUGIN_SDK_ENTRY_REL);
+    if (fs.existsSync(entry)) return entry;
+  }
   return null;
 }
 
@@ -516,12 +566,30 @@ export const startSidecar = async (
   // Point the kernel's deepseek_harness runtime at the staged dsh closure,
   // run under the same Electron-as-node contract as the browser engine.
   // Entry absent (dev) → the backend falls back to the dev vendor tree /
-  // VALUZ_DSH_ROOT source mode.
+  // (backend/vendor/dsh-runtime).
   const dshEntry = resolveDshRuntimeEntry();
   if (dshEntry) {
     env.VALUZ_NODE_PATH = process.execPath;
     env.VALUZ_NODE_IS_ELECTRON = "1";
     env.VALUZ_DSH_RUNTIME_ENTRY = dshEntry;
+  }
+
+  // Bundled session Python → `valuz-python` on every session's PATH. Absent
+  // (dev) → the backend falls back to backend/vendor/python-runtime/dist.
+  const pythonRuntime = resolvePythonRuntime();
+  if (pythonRuntime) {
+    env.VALUZ_PYTHON_RUNTIME = pythonRuntime;
+  }
+
+  // Staged plugin SDK CLI → `valuz-plugin` on every session's PATH, run under
+  // this Electron as Node (sets VALUZ_NODE_PATH/IS_ELECTRON itself so it works
+  // without the browser / dsh closures). Absent (dev) → the backend falls back
+  // to the source checkout's frontend/packages/plugin-sdk/bin.
+  const pluginSdkEntry = resolvePluginSdkEntry();
+  if (pluginSdkEntry) {
+    env.VALUZ_NODE_PATH = process.execPath;
+    env.VALUZ_NODE_IS_ELECTRON = "1";
+    env.VALUZ_PLUGIN_SDK_ENTRY = pluginSdkEntry;
   }
 
   if (serverBinary) {

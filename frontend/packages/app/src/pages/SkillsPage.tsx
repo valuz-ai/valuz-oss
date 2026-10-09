@@ -31,6 +31,7 @@ import {
   ResourceDetailActionSlot,
 } from "../components/ResourceActionSlot";
 import {
+  SlotRenderer,
   skillsApi,
   usePanelStore,
   useResourceCategories,
@@ -641,6 +642,11 @@ export const SkillsPage = () => {
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {/* ``resource.skill.list.actions`` — h-7 icon buttons. */}
+          <SlotRenderer
+            name="resource.skill.list.actions"
+            context={{ navigate }}
+          />
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"

@@ -55,6 +55,12 @@ export function registerNotificationHandlers(): void {
         });
       }
     });
+    // Electron 42+ shows macOS notifications through UNUserNotificationCenter,
+    // which refuses them for an unsigned or unauthorised app; without this a
+    // missing notification leaves no trace.
+    notification.on("failed", (_e, error) => {
+      console.warn(`[notify] native notification failed: ${error}`);
+    });
     notification.show();
     return true;
   });
@@ -63,12 +69,12 @@ export function registerNotificationHandlers(): void {
     "desktop_set_badge_count",
     async (_event, payload: { count?: number }) => {
       const count = Math.max(0, Math.floor(payload?.count ?? 0));
-      // ``app.setBadgeCount`` is macOS + Linux (Unity); on macOS 0 clears the
-      // dock badge. Windows has no numeric app badge without an overlay icon,
-      // so this is a graceful no-op there.
+      // macOS dock badge; 0 clears it. Electron 44 dropped the Linux (Unity)
+      // badge and Windows has no numeric badge without an overlay icon, so
+      // elsewhere this is a no-op that says so.
+      if (process.platform !== "darwin") return false;
       try {
-        app.setBadgeCount(count);
-        return true;
+        return app.setBadgeCount(count);
       } catch {
         return false;
       }

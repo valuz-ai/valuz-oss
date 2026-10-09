@@ -51,6 +51,8 @@ import { ForkIcon } from "../components/common/ForkIcon";
 import type { NavLinkComponent } from "./AppShell";
 import { useI18n } from "../hooks/use-i18n";
 import { Spinner } from "../components/ui/spinner";
+import { DesktopSidebarNavigation } from "./DesktopSidebarNavigation";
+import { initialSidebarMenu, sidebarDirectItems, sidebarItemIsActive, sidebarMenuItems, sidebarRowClassName } from "./desktop-sidebar-navigation";
 
 export interface DesktopSidebarItem {
   id: string;
@@ -131,6 +133,9 @@ export interface DesktopSidebarBottomItem {
 export interface DesktopSidebarNavGroup {
   id: string;
   label: string;
+  presentation?: "menu";
+  icon?: string;
+  itemIds?: string[];
 }
 
 // Lucide's Bot glyph is 16/24 tall while its neighbours (Puzzle, BookOpen and
@@ -145,6 +150,7 @@ const AgentsIcon = forwardRef<SVGSVGElement, LucideProps>(function AgentsIcon(
 
 const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   assistant: MessageSquare,
+  projects: FolderOpen,
   knowledge: BookOpen,
   skills: Zap,
   scheduled: Clock,
@@ -354,15 +360,7 @@ const SidebarLink = ({
   // rgba(0,0,0,0.03). Dark mode keeps the flat surface-muted state.
   <LinkComponent
     to={href}
-    className={cn(
-      "relative mx-1 flex cursor-default items-center gap-[9px] px-[10px] py-[7px] text-sm font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
-      editing ? "" : "rounded-[7px]",
-      editing
-        ? ""
-        : active
-          ? "z-20 bg-card shadow-[0_6px_16px_rgba(17,24,39,0.12)] dark:bg-surface-muted dark:shadow-none"
-          : "hover:bg-[rgba(0,0,0,0.03)] dark:hover:bg-surface-muted",
-    )}
+    className={sidebarRowClassName(active, editing)}
     onContextMenu={onContextMenu}
     onClick={onClick}
   >
@@ -402,6 +400,9 @@ interface ProjectRowProps {
   onProjectOpenInFinder?: (projectId: string) => void;
   onProjectExport?: (projectId: string) => void;
   onProjectRemove?: (projectId: string) => void;
+  /** Extra items for this project's "..." menu, after Open-in-Finder and before
+   * Remove. Counts as an action: a row with nothing else still gets the "..." */
+  projectMenuItems?: (projectId: string) => ReactNode;
 }
 
 const ProjectRow = ({
@@ -420,6 +421,7 @@ const ProjectRow = ({
   onProjectOpenInFinder,
   onProjectExport,
   onProjectRemove,
+  projectMenuItems,
 }: ProjectRowProps) => {
   const { t } = useI18n();
   const isActiveProject = isActivePath(activePath, project.href);
@@ -428,7 +430,8 @@ const ProjectRow = ({
     !!onProjectOpenInFinder ||
     !!onProjectRenameStart ||
     !!onProjectRemove ||
-    !!onProjectExport;
+    !!onProjectExport ||
+    !!projectMenuItems;
 
   return (
     <div className="mx-1">
@@ -583,6 +586,7 @@ const ProjectRow = ({
                   {t("sidebar.openInFinder")}
                 </DropdownMenuItem>
               )}
+              {projectMenuItems?.(project.id)}
               {onProjectRemove && (
                 <>
                   <DropdownMenuSeparator />
@@ -658,6 +662,12 @@ export interface DesktopSidebarProps {
    * account switcher. Rendered in both collapsed and expanded states. */
   sidebarHeader?: ReactNode;
   sidebarExtraItems?: ReactNode;
+  /** Extra sections rendered after the Chats group inside the scrollable list.
+   * Expanded sidebar only — the collapsed rail has no section list. */
+  sidebarSections?: ReactNode;
+  /** Actions on the Chats section label (right-aligned, like the Projects
+   * "+"). Omit to leave the label bare. */
+  chatsActions?: ReactNode;
   /** Optional content pinned at the very bottom of the sidebar, below the
    * Library / Settings nav block. Overlay editions use this to inject a
    * bottom-left account / org menu. Rendered in both collapsed and expanded
@@ -691,6 +701,10 @@ export interface DesktopSidebarProps {
    * just persists the rename. */
   onProjectRename?: (projectId: string, newName: string) => void;
   onProjectRemove?: (projectId: string) => void;
+  /** Extra items in a project row's "..." menu, after Open-in-Finder and before
+   * Remove. Providing it also makes the "..." appear on rows that would
+   * otherwise have no actions, so pass it only when there is something to show. */
+  projectMenuItems?: (projectId: string) => ReactNode;
   /** When provided, chat rows in RECENTS show a "..." menu with a Rename
    * entry that swaps the title for an inline input. Tasks are skipped —
    * no task-rename endpoint exists yet. */
@@ -702,6 +716,11 @@ export interface DesktopSidebarProps {
   /** When provided, chat rows whose ``canFork`` is true show a Fork entry
    * (whole-session fork — docs/design/session-fork.md). */
   onRecentFork?: (recentId: string) => void;
+  /** Extra items in a chat row's "..." menu, after Fork and before Delete.
+   * Chats only, like the other row actions; providing it also makes the "..."
+   * appear on rows that would otherwise have no menu, so pass it only when
+   * there is something to show. */
+  recentMenuItems?: (item: DesktopSidebarRecentItem) => ReactNode;
   /** Row whose fork request is in flight (forks can take seconds on
    * remote-kernel deployments — #879). That row's right-edge slot shows a
    * spinner, and every Fork entry is disabled until the request settles. */
@@ -718,6 +737,8 @@ export const DesktopSidebar = ({
   chats = [],
   sidebarHeader,
   sidebarExtraItems,
+  sidebarSections,
+  chatsActions,
   sidebarFooter,
   LinkComponent = DefaultNavLink,
   primaryActionHref = "/conversation/new",
@@ -730,13 +751,64 @@ export const DesktopSidebar = ({
   onProjectExport,
   onProjectRename,
   onProjectRemove,
+  projectMenuItems,
   onRecentRename,
   onRecentDelete,
   onRecentFork,
+  recentMenuItems,
   recentForkPendingId = null,
   collapsed = false,
 }: DesktopSidebarProps) => {
   const { t } = useI18n();
+  const contextual = navGroups.some((group) => group.presentation === "menu");
+  const [menuId, setMenuId] = useState<string | null>(() =>
+    initialSidebarMenu(activePath, bottomItems, navGroups),
+  );
+  const menuInitialized = useRef(contextual);
+  const inferredMenuPath = useRef(menuId ? activePath : null);
+  const selectedMenu = navGroups.find((group) =>
+    group.presentation === "menu" && group.id === menuId &&
+    sidebarMenuItems(bottomItems, group).length > 0,
+  );
+  useEffect(() => {
+    // A plugin may register menus after the shell mounts. Resolve its initial
+    // deep link once; a manual Back must remain at home on later renders.
+    if (contextual && !menuInitialized.current) {
+      menuInitialized.current = true;
+      const inferred = initialSidebarMenu(activePath, bottomItems, navGroups);
+      inferredMenuPath.current = inferred ? activePath : null;
+      setMenuId(inferred);
+    } else if (menuId && !selectedMenu) {
+      inferredMenuPath.current = null;
+      setMenuId(null);
+    } else if (menuId && inferredMenuPath.current === activePath &&
+      sidebarDirectItems(bottomItems, navGroups).some((item) => sidebarItemIsActive(activePath, item))) {
+      // The direct entry may validate its destination asynchronously. Correct
+      // only our initial inference, never the user's deliberate menu choice.
+      inferredMenuPath.current = null;
+      setMenuId(null);
+    }
+  }, [contextual, activePath, bottomItems, navGroups, menuId, selectedMenu]);
+  const menuItemIds = new Set(navGroups.filter((group) => group.presentation === "menu")
+    .flatMap((group) => sidebarMenuItems(bottomItems, group).map((item) => item.id)));
+  const ordinaryItems = bottomItems.filter((item) => !menuItemIds.has(item.id));
+  const ordinaryGroups = navGroups.filter((group) => group.presentation !== "menu");
+  const contextualNavigation = (
+    <DesktopSidebarNavigation
+      items={bottomItems}
+      groups={navGroups}
+      selectedGroup={selectedMenu}
+      onSelectGroup={(id) => {
+        inferredMenuPath.current = null;
+        setMenuId(id);
+      }}
+      activePath={activePath}
+      collapsed={collapsed}
+      backLabel={t("common.back")}
+      LinkComponent={LinkComponent}
+      iconFor={bottomIcon}
+    />
+  );
   const [projectRenamingId, setProjectRenamingId] = useState<string | null>(
     null,
   );
@@ -765,9 +837,9 @@ export const DesktopSidebar = ({
   // before the show-more toggle appears.
   const RUNS_COLLAPSED = 5;
   const CHATS_COLLAPSED = 10;
-  // The project list itself collapses the same way as the Chats group: the
-  // first ten projects show, the rest sit behind a show-more toggle.
-  const PROJECTS_COLLAPSED = 10;
+  // The project list shows the first five projects; the rest sit behind
+  // a show-more toggle.
+  const PROJECTS_COLLAPSED = 5;
 
   // Collapse-on-navigate: selecting any menu item outside an open project
   // collapses it. On every navigation keep only the active project's accordion
@@ -865,7 +937,7 @@ export const DesktopSidebar = ({
     }
     const showRowMenu =
       item.kind === "chat" &&
-      (onRecentRename || onRecentDelete || onRecentFork);
+      (onRecentRename || onRecentDelete || onRecentFork || recentMenuItems);
     // This row's fork request is in flight — the right-edge slot swaps to a
     // spinner (replacing the dot / "…" menu) until the request settles.
     const forkPending = recentForkPendingId === item.id;
@@ -938,6 +1010,7 @@ export const DesktopSidebar = ({
                       {t("sidebar.fork")}
                     </DropdownMenuItem>
                   )}
+                  {recentMenuItems?.(item)}
                   {onRecentDelete && (
                     <>
                       <DropdownMenuSeparator />
@@ -981,7 +1054,7 @@ export const DesktopSidebar = ({
     );
   };
 
-  const libraryItems = bottomItems.filter((item) => item.group === "library");
+  const libraryItems = ordinaryItems.filter((item) => item.group === "library");
 
   return (
     <>
@@ -996,6 +1069,7 @@ export const DesktopSidebar = ({
             {/* Top: 快速对话 + 知识库 / 技能库 / 自动化 + 项目入口 */}
             <div className="flex flex-col items-center gap-2 px-0 pt-2">
               {sidebarHeader}
+              {contextual ? contextualNavigation : <>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <LinkComponent
@@ -1065,6 +1139,8 @@ export const DesktopSidebar = ({
                   {t("sidebar.projects")}
                 </TooltipContent>
               </Tooltip>
+              </>}
+              {contextual && !selectedMenu && sidebarExtraItems}
             </div>
             <div className="flex-1" />
             {/* Bottom: Library (Agents / Skills / Connectors / Knowledge) then
@@ -1072,9 +1148,7 @@ export const DesktopSidebar = ({
                 ``Assistant`` and other project verbs; configuration-y
                 resources sit together near Settings. */}
             <div className="flex flex-col items-center gap-2 pb-4">
-              {bottomItems
-                .filter((item) => item.group === "library")
-                .map((item) => {
+              {!selectedMenu && libraryItems.map((item) => {
                   const Icon = bottomIcon(item.icon);
                   return (
                     <Tooltip key={item.id}>
@@ -1096,7 +1170,7 @@ export const DesktopSidebar = ({
               {/* Spacer keeps Library and Settings visually distinct in the
                   collapsed rail too. */}
               <div className="h-3" aria-hidden />
-              {bottomItems
+              {ordinaryItems
                 .filter((item) => item.group === "settings")
                 .map((item) => {
                   const Icon = bottomIcon(item.icon);
@@ -1129,8 +1203,9 @@ export const DesktopSidebar = ({
               className="relative z-10 flex min-h-0 flex-1 flex-col px-3 pt-2"
               aria-label="Prototype desktop sidebar"
             >
-              <div className="flex shrink-0 flex-col gap-0.5">
+              <div className={cn("flex shrink-0 flex-col gap-0.5", selectedMenu && "min-h-0 flex-1 shrink overflow-y-auto")}>
                 {sidebarHeader}
+                {contextual ? contextualNavigation : <>
                 <SidebarLink
                   href={primaryActionHref}
                   active={isActivePath(activePath, primaryActionHref)}
@@ -1180,12 +1255,14 @@ export const DesktopSidebar = ({
                       </SidebarLink>
                     );
                   })}
-                {sidebarExtraItems}
+
+                </>}
+                {!selectedMenu && sidebarExtraItems}
                 {/* Custom labeled groups (edition-declared, e.g. 市场) —
                     Library-style heading + items, pinned between the main
                     verbs and the scrollable project list. */}
-                {navGroups.map((groupDef) => {
-                  const groupItems = bottomItems.filter(
+                {!selectedMenu && ordinaryGroups.map((groupDef) => {
+                  const groupItems = ordinaryItems.filter(
                     (item) => item.group === groupDef.id,
                   );
                   if (groupItems.length === 0) return null;
@@ -1232,6 +1309,7 @@ export const DesktopSidebar = ({
                   the bar rides the edge instead of overlapping the row text.
                   ``pl-1.5 -ml-1.5`` keeps row text visually aligned while
                   giving active-row shadows room to paint on the left edge. */}
+              {!selectedMenu && (
               <div className="-mr-3 -ml-1.5 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pr-3 pl-1.5">
                 <SectionLabel
                   open={projectsSectionOpen}
@@ -1335,6 +1413,7 @@ export const DesktopSidebar = ({
                             onProjectOpenInFinder={onProjectOpenInFinder}
                             onProjectExport={onProjectExport}
                             onProjectRemove={onProjectRemove}
+                            projectMenuItems={projectMenuItems}
                           />
                           {expanded &&
                             project.items &&
@@ -1364,6 +1443,7 @@ export const DesktopSidebar = ({
                   <SectionLabel
                     open={chatsSectionOpen}
                     onToggle={() => setChatsSectionOpen((v) => !v)}
+                    action={chatsActions}
                   >
                     {t("sidebar.chats")}
                   </SectionLabel>
@@ -1371,7 +1451,9 @@ export const DesktopSidebar = ({
                     chats.length > 0 &&
                     renderGroupItems("chats", chats, "chats")}
                 </>
+                {sidebarSections}
               </div>
+              )}
             </nav>
 
             {/* Bottom-pinned: Library + Settings. Library (Agents / Skills /
@@ -1382,7 +1464,7 @@ export const DesktopSidebar = ({
                 scrollable nav when a long list scrolls up behind it instead of
                 letting the text bleed through. */}
             <div className="relative z-10 flex flex-col gap-0.5 bg-background px-3 pb-4 pt-2">
-              {libraryItems.length > 0 && (
+              {!selectedMenu && libraryItems.length > 0 && (
                 <>
                   <div className="pb-1 pl-[14px] pr-3 pt-1">
                     <span className="text-[11.5px] font-normal uppercase tracking-[0.06em] text-ink-body">
@@ -1418,7 +1500,7 @@ export const DesktopSidebar = ({
                   Settings is "app config" — even though they share the bottom
                   pinned slot. */}
               <div className="h-3" aria-hidden />
-              {bottomItems
+              {ordinaryItems
                 .filter((item) => item.group === "settings")
                 .map((item) => {
                   const Icon = bottomIcon(item.icon);

@@ -1250,15 +1250,13 @@ class PluginService:
         deriving it means a member that becomes protected later cannot leave a
         stale ``False`` on the parent.
         """
-        from valuz_agent.modules.skills.datastore import SkillDatastore
         from valuz_agent.modules.skills.errors import SkillProtected
 
         components = await self._ds.list_components(user_id, row.id)
         member_slugs = {c.slug for c in components if c.kind == "skill"}
         if not member_slugs:
             return
-        skills = SkillDatastore(self._ds.session)
-        for skill_row in await skills.list_skills(user_id):
+        for skill_row in await self._skills.list_indexed_skills(user_id):
             if skill_row.slug in member_slugs and getattr(skill_row, "protected", False):
                 raise SkillProtected()
 

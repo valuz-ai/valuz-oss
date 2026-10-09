@@ -1,4 +1,10 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Settings } from "lucide-react";
 import { sessionsApi, useTranslation } from "@valuz/core";
@@ -27,7 +33,13 @@ import type { useConversationHistory } from "./useConversationHistory";
 import type { useConversationScroll } from "./useConversationScroll";
 import type { useConversationSend } from "./useConversationSend";
 import type { useToolCallCards } from "./useToolCallCards";
-import { SlotRenderer, useCapabilities } from "@valuz/core";
+import {
+  SingleSlot,
+  SlotRenderer,
+  useCapabilities,
+  useHasSlot,
+} from "@valuz/core";
+import type { ConversationViewVariant } from "./useConversationRouting";
 
 type ComposerConfig = ReturnType<typeof useComposerConfig>;
 type ConversationHistory = ReturnType<typeof useConversationHistory>;
@@ -59,6 +71,7 @@ type ConversationBodyProps = {
   handleTurnListVirtualApiReady: ConversationScroll["handleTurnListVirtualApiReady"];
   scrollToTurnIndex: ConversationScroll["scrollToTurnIndex"];
   renderToolCall: ToolCallCards["renderToolCall"];
+  isToolCardTrailing?: ToolCallCards["isToolCardTrailing"];
   isToolCardFoldable: ToolCallCards["isToolCardFoldable"];
   revealInFinder: ReturnType<typeof usePlatform>["revealInFinder"];
   localFileLinks: ReturnType<typeof useArtifactPane>["localFileLinks"];
@@ -77,9 +90,10 @@ type ConversationBodyProps = {
     hideMascot?: boolean;
   };
   /** Message-granularity fork (docs/design/session-fork.md): fork the
-   *  session through the hovered turn, inclusive. Rendered only when the
-   *  session's runtime has a wired native fork (codex today); a stale
-   *  turn without a stored anchor is caught server-side (409 → toast).
+   *  session through the hovered turn, inclusive. Rendered only when
+   *  ``canForkSession`` allows it — a non-task session on a runtime with a
+   *  wired native fork (codex, claude_agent, deepagents); a stale turn
+   *  without a stored anchor is caught server-side (409 → toast).
    *  Absent (embedded hosts) → no fork affordance. */
   canForkFromTurn?: boolean;
   forkInFlight?: boolean;
@@ -112,6 +126,14 @@ type ConversationBodyProps = {
   >;
   /** Send path for the auto "start executing" turn after plan approval. */
   performSend?: (overrideText?: string) => Promise<void>;
+  /** Real project the conversation is in (``null`` for a temporary chat) —
+   *  context for the ``conversation.empty.*`` slots. */
+  projectId?: string | null;
+  /** Agent the conversation is (or will be) bound to — slot context. */
+  agentSlug?: string | null;
+  /** Which shell mounts this body; the embedded ``panel`` is narrow, so
+   *  contributions can adapt. Defaults to ``page``. */
+  variant?: ConversationViewVariant;
 };
 
 /**
@@ -146,6 +168,7 @@ export function ConversationBody({
   handleTurnListVirtualApiReady,
   scrollToTurnIndex,
   renderToolCall,
+  isToolCardTrailing,
   isToolCardFoldable,
   revealInFinder,
   localFileLinks,
@@ -167,6 +190,9 @@ export function ConversationBody({
   selectedSessionMode,
   setSelectedSessionMode,
   performSend,
+  projectId = null,
+  agentSlug = null,
+  variant = "page",
 }: ConversationBodyProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -194,6 +220,29 @@ export function ConversationBody({
     !displayBusy &&
     selectedSessionId !== null &&
     performSend !== undefined;
+  // Extension points. A slot node is passed on only while something occupies
+  // it: ``PlanProposalCard`` draws a footer whenever it is handed ANY actions,
+  // and ``ConversationTurnList`` swaps its mascot / title for any hero node,
+  // so an always-present (but empty-rendering) ``<SlotRenderer/>`` would change
+  // the layout of an unextended build.
+  const hasPlanActionsSlot = useHasSlot("conversation.plan.actions");
+  const hasUserActionsSlot = useHasSlot("conversation.user-message.actions");
+  const hasTurnTailSlot = useHasSlot("conversation.turn.tail");
+  // The single slots around each tool card and message. Unoccupied, the
+  // wrappers are not passed at all and every card / message renders as is.
+  const hasToolCallSlot = useHasSlot("conversation.tool-call");
+  const hasUserMessageSlot = useHasSlot("conversation.message.user");
+  const hasUserRowSlot = useHasSlot("conversation.message.user-row");
+  const hasAssistantMessageSlot = useHasSlot("conversation.message.assistant");
+  const hasEmptyHeroSlot = useHasSlot("conversation.empty.hero");
+  const hasEmptyBrandMarkSlot = useHasSlot("conversation.empty.brand-mark");
+  const hasEmptyExtraSlot = useHasSlot("conversation.empty.extra");
+  // An embedding host's own welcome override wins over a plugin: a custom
+  // title is a statement about what the hero says, and ``hideMascot`` about
+  // what it shows, so neither is replaced from underneath the host.
+  const emptyHeroOverridden =
+    emptyStateOverride?.title !== undefined ||
+    emptyStateOverride?.hideMascot === true;
   const handleApprovePlan = async () => {
     if (!planActionable || !selectedSessionId || planApproving) return;
     setPlanApproving(true);
@@ -219,21 +268,23 @@ export function ConversationBody({
         providerStatus: providerChannelState.status,
       }) ? (
         <div className="flex flex-1 items-center justify-center p-8">
-          <EmptyState
-            icon={<Settings />}
-            title={t("conversation.noModel" as Parameters<typeof t>[0])}
-            message={t("conversation.noModelHint" as Parameters<typeof t>[0])}
-            action={
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                onClick={() => navigate("/settings")}
-              >
-                {t("conversation.goToSettings" as Parameters<typeof t>[0])}
-              </Button>
-            }
-          />
+          <SingleSlot name="conversation.empty.no-model" context={{ navigate }}>
+            <EmptyState
+              icon={<Settings />}
+              title={t("conversation.noModel" as Parameters<typeof t>[0])}
+              message={t("conversation.noModelHint" as Parameters<typeof t>[0])}
+              action={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="default"
+                  onClick={() => navigate("/settings")}
+                >
+                  {t("conversation.goToSettings" as Parameters<typeof t>[0])}
+                </Button>
+              }
+            />
+          </SingleSlot>
         </div>
       ) : (
         <>
@@ -317,6 +368,22 @@ export function ConversationBody({
                     planActionable
                       ? `plan:${lastPlanTurnId}:${planApproving}`
                       : "",
+                    // Context the row-level slots read from OUTSIDE the turn.
+                    // Each part appears only while its slot is occupied, so an
+                    // unextended build keeps the key it always had; a slot
+                    // becoming occupied (or its context changing) re-renders
+                    // the memoized non-latest rows.
+                    hasPlanActionsSlot
+                      ? `plan-slot:${lastPlanTurnId ?? ""}:${selectedSessionId ?? ""}:${selectedSessionMode ?? ""}`
+                      : "",
+                    hasUserActionsSlot ||
+                    hasTurnTailSlot ||
+                    hasToolCallSlot ||
+                    hasUserMessageSlot ||
+                    hasUserRowSlot ||
+                    hasAssistantMessageSlot
+                      ? `row-slot:${selectedSessionId ?? ""}`
+                      : "",
                   ]
                     .filter(Boolean)
                     .join("|") || null
@@ -383,26 +450,129 @@ export function ConversationBody({
                     context={{ turn, role }}
                   />
                 )}
-                renderPlanActions={(turn) =>
-                  planActionable && turn.id === lastPlanTurnId ? (
-                    <Button
-                      size="sm"
-                      onClick={() => void handleApprovePlan()}
-                      disabled={planApproving}
-                      className="bg-brand text-white hover:bg-brand-hover"
-                    >
-                      {planApproving ? (
-                        <Spinner className="mr-1.5" />
-                      ) : (
-                        <CheckCircle2 className="mr-1.5 h-3 w-3" />
-                      )}
-                      {t(
-                        "conversation.planApproveAndRun" as Parameters<
-                          typeof t
-                        >[0],
-                      )}
-                    </Button>
-                  ) : null
+                renderPlanActions={(turn) => {
+                  if (turn.id !== lastPlanTurnId) return null;
+                  // The card draws its footer for any non-null return, so
+                  // hand it something only when there is something to show.
+                  if (!planActionable && !hasPlanActionsSlot) return null;
+                  return (
+                    <>
+                      {hasPlanActionsSlot ? (
+                        <SlotRenderer
+                          name="conversation.plan.actions"
+                          context={{
+                            turn,
+                            sessionId: selectedSessionId,
+                            sessionMode: selectedSessionMode,
+                          }}
+                        />
+                      ) : null}
+                      {planActionable ? (
+                        <Button
+                          size="sm"
+                          onClick={() => void handleApprovePlan()}
+                          disabled={planApproving}
+                          className="bg-brand text-white hover:bg-brand-hover"
+                        >
+                          {planApproving ? (
+                            <Spinner className="mr-1.5" />
+                          ) : (
+                            <CheckCircle2 className="mr-1.5 h-3 w-3" />
+                          )}
+                          {t(
+                            "conversation.planApproveAndRun" as Parameters<
+                              typeof t
+                            >[0],
+                          )}
+                        </Button>
+                      ) : null}
+                    </>
+                  );
+                }}
+                renderUserMessageActions={(turn) => (
+                  <SlotRenderer
+                    name="conversation.user-message.actions"
+                    context={{ turn, sessionId: selectedSessionId }}
+                  />
+                )}
+                renderTurnTail={(turn, { isLatest, inFlight }) => (
+                  <SlotRenderer
+                    name="conversation.turn.tail"
+                    context={{
+                      turn,
+                      sessionId: selectedSessionId,
+                      isLatest,
+                      inFlight,
+                    }}
+                  />
+                )}
+                wrapToolCall={
+                  hasToolCallSlot
+                    ? (tool, card) => (
+                        <SingleSlot
+                          name="conversation.tool-call"
+                          context={{
+                            tool,
+                            toolUseId: tool.id,
+                            toolName: tool.title,
+                            status: tool.status ?? "success",
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {card}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                wrapUserTurn={
+                  hasUserRowSlot
+                    ? (turn, row) => (
+                        <SingleSlot
+                          name="conversation.message.user-row"
+                          context={{
+                            turn,
+                            turnId: turn.id,
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {row}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                wrapUserMessage={
+                  hasUserMessageSlot
+                    ? (turn, message) => (
+                        <SingleSlot
+                          name="conversation.message.user"
+                          context={{
+                            turn,
+                            turnId: turn.id,
+                            text: turn.userText,
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {message}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                wrapAssistantMessage={
+                  hasAssistantMessageSlot
+                    ? (turn, messageId, message) => (
+                        <SingleSlot
+                          name="conversation.message.assistant"
+                          context={{
+                            turn,
+                            turnId: turn.id,
+                            messageId,
+                            sessionId: selectedSessionId,
+                          }}
+                        >
+                          {message}
+                        </SingleSlot>
+                      )
+                    : undefined
                 }
                 // Remount on true session switches so the virtualizer's
                 // internal state starts fresh. The /conversation/new → real-id
@@ -423,6 +593,7 @@ export function ConversationBody({
                 skillsBySlug={skillsBySlug}
                 onVirtualApiReady={handleTurnListVirtualApiReady}
                 renderToolCall={renderToolCall}
+                isToolCardTrailing={isToolCardTrailing}
                 isToolCardFoldable={isToolCardFoldable}
                 onRevealFile={revealInFinder}
                 isLocalFileHref={localFileLinks.isLocalFileHref}
@@ -461,6 +632,42 @@ export function ConversationBody({
                 }
                 onEmptySuggestionClick={(text) => setDraft(text)}
                 hideEmptyMascot={emptyStateOverride?.hideMascot}
+                // Both slots get the turn list's own drawing as their default,
+                // so an occupant can keep or wrap it (``renderDefault``).
+                welcomeHero={
+                  hasEmptyHeroSlot && !emptyHeroOverridden
+                    ? (defaultHero: ReactNode) => (
+                        <SingleSlot
+                          name="conversation.empty.hero"
+                          context={{
+                            projectId,
+                            agentSlug,
+                            setDraft,
+                            variant,
+                          }}
+                        >
+                          {defaultHero}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                welcomeMascot={
+                  hasEmptyBrandMarkSlot
+                    ? (defaultMascot: ReactNode) => (
+                        <SingleSlot name="conversation.empty.brand-mark">
+                          {defaultMascot}
+                        </SingleSlot>
+                      )
+                    : undefined
+                }
+                welcomeExtra={
+                  hasEmptyExtraSlot ? (
+                    <SlotRenderer
+                      name="conversation.empty.extra"
+                      context={{ projectId, agentSlug, setDraft }}
+                    />
+                  ) : undefined
+                }
                 // Only a genuinely new chat (URL is /conversation/new) shows the
                 // welcome. An existing conversation keyed by id has no turns yet
                 // while its transcript loads — gate on the URL, not the transient

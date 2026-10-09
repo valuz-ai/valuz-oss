@@ -8,9 +8,10 @@ The caller owns the outer transaction; each bounded batch is also atomic.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from sqlalchemy import Connection, select
+from pydantic import BaseModel
+from sqlalchemy import Connection, Table, select
 from sqlalchemy.exc import IntegrityError
 
 from valuz_agent.modules.evidence.identity import bounded_payload
@@ -27,10 +28,10 @@ from valuz_agent.modules.evidence.schemas import (
 from valuz_agent.modules.evidence.transaction import ensure_outer_transaction
 
 EvidenceRecordKind = Literal["snapshot", "provenance", "seal"]
-_CONTRACTS = {
-    "snapshot": (EvidenceSnapshotRow.__table__, EvidenceSnapshot),
-    "provenance": (ProvenanceRecordRow.__table__, ProvenanceRecord),
-    "seal": (PendingEvidenceSealRow.__table__, PendingEvidenceSeal),
+_CONTRACTS: dict[EvidenceRecordKind, tuple[Table, type[BaseModel]]] = {
+    "snapshot": (cast(Table, EvidenceSnapshotRow.__table__), EvidenceSnapshot),
+    "provenance": (cast(Table, ProvenanceRecordRow.__table__), ProvenanceRecord),
+    "seal": (cast(Table, PendingEvidenceSealRow.__table__), PendingEvidenceSeal),
 }
 
 

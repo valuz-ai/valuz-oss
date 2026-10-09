@@ -25,6 +25,7 @@ import react from "@vitejs/plugin-react";
 import type { PluginOption, UserConfig } from "vite";
 import { i18nHmrPlugin } from "./i18n-hmr-plugin.ts";
 import { pdfjsAssetsPlugin } from "./pdfjs-assets-plugin.ts";
+import { routerInstancePlugin } from "./router-instance-plugin.ts";
 
 const edition = process.env.EDITION ?? "personal";
 
@@ -53,6 +54,7 @@ export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
   return {
     plugins: [
       react(),
+      routerInstancePlugin(options.configDir),
       tailwindcss(),
       options.editionOverlay,
       i18nHmrPlugin({
@@ -74,6 +76,7 @@ export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
       include: canResolve("xlsx", options.configDir) ? ["xlsx"] : [],
     },
     resolve: {
+      dedupe: ["react", "react-dom"],
       alias: {
         "@valuz/shared": path.resolve(
           options.configDir,
@@ -85,6 +88,10 @@ export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
         ),
         "@valuz/ui": path.resolve(options.configDir, "../../packages/ui/src"),
         "@valuz/app": path.resolve(options.configDir, "../../packages/app/src"),
+        "@valuz/plugin-sdk": path.resolve(
+          options.configDir,
+          "../../packages/plugin-sdk/src",
+        ),
       },
     },
   };

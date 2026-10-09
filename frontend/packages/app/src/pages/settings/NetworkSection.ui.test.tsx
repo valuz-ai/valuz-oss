@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@valuz/core", () => ({
+  SlotRenderer: () => null,
+  useHasSlot: () => false,
   useRunningRuns: () => ({ runs: [{}, {}], count: 2 }),
   useTranslation: () => ({
     t: (key: string, values?: { count?: number }) =>

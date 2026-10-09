@@ -48,7 +48,7 @@ class DesktopNetworkEgressInterruptResponse(BaseModel):
 
 
 def _require_desktop_control(token: str | None) -> None:
-    from src.runtimes.network_egress import desktop_control_authorized
+    from valuz_agent.boot.kernel import desktop_control_authorized
 
     if not desktop_control_authorized(token):
         raise HTTPException(status_code=401, detail="desktop_control_unauthorized")
@@ -71,30 +71,17 @@ async def reconfigure_network_egress(
     x_valuz_desktop_token: str | None = Header(default=None),
 ) -> NetworkEgressReconfigureResponse:
     """Replace desktop model networking without restarting the API process."""
-    from app.dependencies import get_orchestrator
-    from src.runtimes.network_egress import replace_network_egress
+    from valuz_agent.adapters import kernel_client
 
     _require_desktop_control(x_valuz_desktop_token)
-
-    orchestrator = get_orchestrator()
-    if orchestrator.active_sessions:
-        raise HTTPException(status_code=409, detail="model_runtimes_still_active")
-
-    candidates = orchestrator.warm_runtime_candidates(limit=body.prewarm_limit)
-    await orchestrator.evict_all_warm_runtimes()
-    await replace_network_egress(
-        body.bootstrap,
-        required_unavailable=body.required_unavailable,
-    )
-
-    prewarmed: list[str] = []
-    failed: list[str] = []
-    for owner_id, session_id in candidates:
-        try:
-            await orchestrator.prepare_runtime(owner_id, session_id)
-            prewarmed.append(session_id)
-        except Exception:  # noqa: BLE001 - networking is already reconfigured
-            failed.append(session_id)
+    try:
+        prewarmed, failed = await kernel_client.reconfigure_desktop_network_egress(
+            body.bootstrap,
+            required_unavailable=body.required_unavailable,
+            prewarm_limit=body.prewarm_limit,
+        )
+    except kernel_client.KernelConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     return NetworkEgressReconfigureResponse(
         configured=True,
         prewarmed_session_ids=prewarmed,
@@ -110,11 +97,11 @@ async def get_network_egress_activity(
     x_valuz_desktop_token: str | None = Header(default=None),
 ) -> DesktopNetworkEgressActivityResponse:
     """Return process-local active sessions without an owner-scoped DB read."""
-    from app.dependencies import get_orchestrator
+    from valuz_agent.adapters import kernel_client
 
     _require_desktop_control(x_valuz_desktop_token)
     return DesktopNetworkEgressActivityResponse(
-        active_session_ids=sorted(get_orchestrator().active_sessions),
+        active_session_ids=kernel_client.desktop_network_egress_activity(),
     )
 
 
@@ -127,17 +114,12 @@ async def interrupt_network_egress_activity(
     x_valuz_desktop_token: str | None = Header(default=None),
 ) -> DesktopNetworkEgressInterruptResponse:
     """Interrupt only the explicitly confirmed sessions that remain active."""
-    from app.dependencies import get_orchestrator
+    from valuz_agent.adapters import kernel_client
 
     _require_desktop_control(x_valuz_desktop_token)
-    orchestrator = get_orchestrator()
-    interrupted: list[str] = []
-    inactive: list[str] = []
-    for session_id in dict.fromkeys(body.session_ids):
-        if await orchestrator.interrupt(session_id):
-            interrupted.append(session_id)
-        else:
-            inactive.append(session_id)
+    interrupted, inactive = await kernel_client.interrupt_desktop_network_egress_activity(
+        body.session_ids
+    )
     return DesktopNetworkEgressInterruptResponse(
         interrupted_session_ids=interrupted,
         inactive_session_ids=inactive,

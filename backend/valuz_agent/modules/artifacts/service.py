@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -553,7 +554,7 @@ class BoundHostRevision:
 
 
 @asynccontextmanager
-async def _reader(db: AsyncSession | None, *, commit: bool = False):
+async def _reader(db: AsyncSession | None, *, commit: bool = False) -> AsyncIterator[AsyncSession]:
     """Run on the caller's session, or open one when called standalone.
 
     ``async_unit_of_work`` is NOT re-entrant: it builds a fresh session, which
@@ -578,6 +579,17 @@ async def _reader(db: AsyncSession | None, *, commit: bool = False):
 
     async with async_unit_of_work(commit=commit) as own:
         yield own
+
+
+async def find_artifact_id(
+    scope: Scope, *, rel_path: str, display_name: str, db: AsyncSession | None = None
+) -> str | None:
+    """Resolve a deliverable's existing identity in its explicit owner scope."""
+    async with _reader(db) as session:
+        row = await ArtifactDatastore(session).find_by_keys(
+            scope, rel_path=rel_path, display_name=display_name
+        )
+        return row.id if row is not None else None
 
 
 async def load_bound_host_revision(

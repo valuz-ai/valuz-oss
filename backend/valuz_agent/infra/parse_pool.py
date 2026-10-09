@@ -153,7 +153,7 @@ def warm() -> None:
 
 def _warm_worker() -> bool:
     try:
-        import pymupdf4llm  # type: ignore[import-untyped]  # noqa: F401
+        import pymupdf4llm  # noqa: F401
     except Exception:  # noqa: BLE001
         pass
     return True

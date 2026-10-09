@@ -29,7 +29,7 @@ from src.ptc.execution_registry import (
     take_sub_call_slot,
 )
 from src.ptc.results import build_trace_entry, source_metadata_of, unwrap_tool_result
-from src.ptc.upstream import UpstreamPool
+from src.ptc.upstream import UpstreamPool, attach_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ async def forward_call(token: str, request: PtcCallRequest) -> Any:
     pool = record.upstream_pool
     if pool is None:
         pool = UpstreamPool(record.servers)
+        attach_hooks(pool, record.hooks)
         record.upstream_pool = pool
 
     started_at = time.monotonic()

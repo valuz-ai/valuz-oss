@@ -27,7 +27,7 @@ from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.modules.sessions.pre_turn import PreTurnHook, always_on_mcp_hook
-from valuz_agent.ports.message_context import HostRef
+from valuz_agent.ports.message_context import HostRef, TurnContextRequest, TurnInputSource
 
 logger = logging.getLogger(__name__)
 
@@ -162,9 +162,13 @@ async def run_session_to_idle(
     on_message: Any | None = None,
     *,
     queued_attachments: list[dict[str, Any]] | None = None,
+    on_outcome: Any | None = None,
     pre_turn: PreTurnHook | None = None,
     user_id: str,
     host_ref: HostRef | None = None,
+    input_metadata: dict[str, Any] | None = None,
+    input_id: str | None = None,
+    input_source: TurnInputSource = "host",
 ) -> str:
     """Drive one agent turn to completion and return the final session status.
 
@@ -203,6 +207,7 @@ async def run_session_to_idle(
     from valuz_agent.modules.sessions.events import SESSION_FINISHED
 
     final_status: str = "idle"
+    message: Any | None = None
     encountered_error = False
     turn_error: BaseException | None = None
     # Set only on the non-raising interrupt path (the user pressed Stop and the
@@ -275,6 +280,19 @@ async def run_session_to_idle(
                 user_id=user_id,
                 worktree=worktree_name_of(loaded_session),
                 host_ref=host_ref,
+                turn=(
+                    TurnContextRequest(
+                        user_id=user_id,
+                        session_id=session_id,
+                        project_id=project_id,
+                        host_ref=host_ref,
+                        input_text=content,
+                        input_id=input_id,
+                        input_source=input_source,
+                    )
+                    if loaded_session is not None
+                    else None
+                ),
             )
         except Exception:  # noqa: BLE001
             additional_context = ""
@@ -301,6 +319,7 @@ async def run_session_to_idle(
                     for source, parsed in attachment_specs
                 ],
                 additional_context=additional_context,
+                **({"input_metadata": input_metadata} if input_metadata is not None else {}),
                 # Converge capabilities INSIDE run_turn — after the turn's
                 # kernel is allocated, so the write reaches the instance that
                 # runs the turn instead of only the durable.
@@ -347,6 +366,11 @@ async def run_session_to_idle(
                             type="user_message",
                             data={
                                 "message": content,
+                                **(
+                                    {"metadata": input_metadata}
+                                    if input_metadata is not None
+                                    else {}
+                                ),
                                 "attachments": [
                                     {"source_path": source, "parsed_path": parsed}
                                     for source, parsed in attachment_specs
@@ -428,6 +452,7 @@ async def run_session_to_idle(
                     kernel_status,
                     error=turn_error,
                     interrupt_category=interrupt_category,
+                    user_id=user_id,
                 )
             except KernelUnavailableError:
                 # Backend shutting down — kernel store already torn down. Finalize
@@ -455,4 +480,6 @@ async def run_session_to_idle(
         status="failed" if encountered_error else final_status,
     )
 
+    if on_outcome is not None:
+        await on_outcome(final_status, message, turn_error)
     return final_status

@@ -93,9 +93,7 @@ class ResourceLibrary:
             from valuz_agent.modules.agents.service import AgentService
 
             async with async_unit_of_work() as db:
-                # AgentService annotates db as sync Session but uses it async
-                # (so does the OSS agents route) — OSS annotation bug, harmless here.
-                rows = await AgentService(db).list_agents(user_id)  # type: ignore[arg-type]
+                rows = await AgentService(db).list_agents(user_id)
             return [ResourceRef(kind="agent", key=r.slug, name=r.name) for r in rows]
 
         if kind == "skill":
@@ -168,7 +166,7 @@ class ResourceLibrary:
 
             async with async_unit_of_work() as db:
                 try:
-                    row = await AgentService(db).get_agent(user_id, key)  # type: ignore[arg-type]
+                    row = await AgentService(db).get_agent(user_id, key)
                 except AgentNotFoundError:
                     return None
             return ResourceSnapshot(
@@ -427,7 +425,7 @@ class ResourceLibrary:
             from valuz_agent.modules.agents.service import AgentService, MemberAlreadyExistsError
 
             async with async_unit_of_work() as db:
-                svc = AgentService(db)  # type: ignore[arg-type]
+                svc = AgentService(db)
                 try:
                     row = await svc.create_agent(user_id, snapshot.data)
                 except MemberAlreadyExistsError:

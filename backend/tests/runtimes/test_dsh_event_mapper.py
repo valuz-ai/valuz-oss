@@ -146,3 +146,63 @@ class TestExtractors:
             }
         )
         assert reason is not None and reason["kind"] == "error"
+
+
+class TestSessionLogV4:
+    """dsh >= 0.2 shapes (session-log v4)."""
+
+    def test_tool_result_message_is_the_result(self) -> None:
+        from src.runtimes.deepseek_harness.event_mapper import DshEventMapper
+
+        mapper = DshEventMapper()
+        events = mapper.map_session_event(
+            {
+                "type": "tool/result",
+                "data": {
+                    "turn": 1,
+                    "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "toolCallId": "call-1",
+                        "isError": True,
+                        "content": [{"type": "text", "text": "boom"}],
+                    },
+                },
+            }
+        )
+        assert [(e.type, e.data) for e in events] == [
+            ("tool_result", {"id": "call-1", "content": "boom", "is_error": True})
+        ]
+
+    def test_v4_todo_result_stays_suppressed(self) -> None:
+        from src.runtimes.deepseek_harness.event_mapper import DshEventMapper
+
+        mapper = DshEventMapper()
+        mapper.map_session_event(
+            {
+                "type": "tool/call",
+                "data": {"callId": "t1", "name": "todo_write", "arguments": "{}"},
+            }
+        )
+        events = mapper.map_session_event(
+            {
+                "type": "tool/result",
+                "data": {"message": {"role": "tool", "toolCallId": "t1", "content": []}},
+            }
+        )
+        assert events == []
+
+    def test_stream_frames(self) -> None:
+        from src.runtimes.deepseek_harness.event_mapper import DshEventMapper
+
+        mapper = DshEventMapper()
+        assert mapper.map_stream_frame({"type": "start", "attemptId": "a"}) == []
+        events = mapper.map_stream_frame(
+            {"type": "chunk", "chunk": {"type": "text-delta", "index": 0, "text": "hi"}}
+        )
+        assert [(e.type, e.data) for e in events] == [("text_delta", {"text": "hi"})]
+        thinking = mapper.map_stream_frame(
+            {"type": "chunk", "chunk": {"type": "reasoning-delta", "index": 0, "text": "hm"}}
+        )
+        assert [(e.type, e.data) for e in thinking] == [("thinking_delta", {"text": "hm"})]
+        assert mapper.map_stream_frame({"type": "end", "attemptId": "a", "index": 1}) == []

@@ -32,8 +32,9 @@ export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
  * docs/design/session-modes.md). ``plan`` = the runtime plans before
  * touching anything (Claude lowers to SDK ``permissionMode="plan"`` +
  * the ``ExitPlanMode`` approval card); ``goal`` = the runtime loops
- * until a goal condition is met (task lead/member sessions). Only
- * ``claude_agent`` / ``codex`` sessions accept non-default modes.
+ * until a goal condition is met (task lead/member sessions). Plan runs on
+ * every runtime (``PLAN_MODE_RUNTIMES``); goal only on ``claude_agent`` /
+ * ``codex``.
  *
  * Mutable mid-session via ``PATCH /v1/sessions/{id}/mode``. The runtime
  * can also exit a mode on its own (approved plan / completed goal) —
@@ -51,14 +52,17 @@ export type SessionMode = "default" | "plan" | "goal";
  * ``deepseek_harness`` via the vendored ``dsh-plan-mode`` plugin (the
  * ``exit_plan_mode`` review parks as the same ``exit_plan_mode``
  * approval card Claude uses — approval continues the same turn
- * natively). deepagents has no native primitive and the server 400s
- * it. UI affordances gate on this list so users never see a toggle
- * the backend would reject.
+ * natively). ``deepagents`` has no native primitive, so the hook bus
+ * fills it (ADR-033 §9): mutating tools are refused while planning and the
+ * plan arrives as ``session.plan_proposed``, approved like codex's. UI
+ * affordances gate on this list so users never see a toggle the backend
+ * would reject.
  */
 export const PLAN_MODE_RUNTIMES: readonly string[] = [
   "claude_agent",
   "codex",
   "deepseek_harness",
+  "deepagents",
 ];
 
 /** Whether the composer should offer the plan-mode toggle for a runtime. */

@@ -32,13 +32,11 @@ from src.runtimes.deepseek_harness.approval_bridge import (
     classify_dsh_subject,
 )
 from src.runtimes.deepseek_harness.composition import (
-    DSH_ROOT_ENV,
     DSH_RUNTIME_BIN_ENV,
     DSH_RUNTIME_ENTRY_ENV,
     NODE_IS_ELECTRON_ENV,
     NODE_PATH_ENV,
-    PLAN_MODE_SECTION,
-    build_composition_rows,
+    build_session_patch,
     resolve_launch,
 )
 from src.runtimes.deepseek_harness.event_mapper import DshEventMapper
@@ -50,7 +48,6 @@ def _isolated_launch_env(monkeypatch, tmp_path: Path):
     for env in (
         DSH_RUNTIME_BIN_ENV,
         DSH_RUNTIME_ENTRY_ENV,
-        DSH_ROOT_ENV,
         NODE_PATH_ENV,
         NODE_IS_ELECTRON_ENV,
     ):
@@ -88,7 +85,7 @@ def _runtime(sink: _CollectSink | None = None) -> DeepSeekHarnessRuntime:
         model="deepseek-v4-flash",
         event_sink=sink or _CollectSink(),
         workspace_root="/tmp/ws",
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(api_key="k", api_protocol="anthropic"),
     )
 
 
@@ -129,79 +126,58 @@ CLARIFYING_QUESTIONS: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
-class TestPlanComposition:
-    def test_plan_rows_absent_by_default(self) -> None:
-        rows = build_composition_rows(
-            _session(),
-            workspace_root="/tmp/ws",
-            skills_root=None,
-            model_settings=None,
-        )
-        names = [r["name"] for r in rows]
-        assert "@deepseek-ai/dsh-plan-mode" not in names
-        assert "valuz-dsh-kernel-bridge" not in names
+def _inserted(patch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Inserted rows plus id-targeted overrides, flattened."""
+    rows: list[dict[str, Any]] = []
+    for entry in patch:
+        rows.extend(entry.get("insert", []))
+        if "id" in entry:
+            rows.append(entry)
+    return rows
 
-    def test_plan_capable_composes_the_full_set(self) -> None:
-        rows = build_composition_rows(
-            _session(mode="plan"),
-            workspace_root="/tmp/ws",
-            skills_root=None,
-            model_settings=None,
-            plan_capable=True,
-            user_questions_url="http://127.0.0.1:8000/kernel/v1/dsh/user-questions/tok",
+
+class TestPlanComposition:
+    def test_no_plan_bridge_on_an_incapable_carrier(self) -> None:
+        rows = _inserted(build_session_patch(_session(), plan_capable=False))
+        assert not any(r["id"] == "valuz-kernel-bridge" for r in rows)
+
+    def test_plan_capable_session_carries_the_bridge(self) -> None:
+        rows = _inserted(
+            build_session_patch(
+                _session(mode="plan"),
+                plan_capable=True,
+                user_questions_url="http://127.0.0.1:8000/kernel/v1/dsh/user-questions/tok",
+            )
         )
-        by_name = {r["name"]: r for r in rows}
-        assert "@deepseek-ai/dsh-user-questions" in by_name
-        assert "@deepseek-ai/dsh-tool-ask-user" in by_name
-        # dsh-plan-mode's `section` is mandatory non-empty (fail-fast at
-        # plugin load) — pin that we always send a real one.
-        assert by_name["@deepseek-ai/dsh-plan-mode"]["config"]["section"] == PLAN_MODE_SECTION
-        assert PLAN_MODE_SECTION.strip()
-        bridge = by_name["valuz-dsh-kernel-bridge"]["config"]
-        assert bridge == {
+        names = {r.get("name") for r in rows}
+        # Plan mode, user questions and ask_user_question ship in the
+        # upstream distribution's presets — the patch never re-mounts them.
+        assert "@deepseek-ai/dsh-plan-mode" not in names
+        assert "@deepseek-ai/dsh-user-questions" not in names
+        bridge = next(r for r in rows if r["id"] == "valuz-kernel-bridge")
+        assert bridge["config"] == {
             "planActive": True,
             "userQuestionsEndpoint": "http://127.0.0.1:8000/kernel/v1/dsh/user-questions/tok",
         }
 
     def test_bridge_plan_active_tracks_session_mode(self) -> None:
-        rows = build_composition_rows(
-            _session(mode="default"),
-            workspace_root="/tmp/ws",
-            skills_root=None,
-            model_settings=None,
-            plan_capable=True,
-        )
-        bridge = next(r for r in rows if r["name"] == "valuz-dsh-kernel-bridge")
-        # Always composed (stable tool catalog); inactive until the user
-        # enters plan. No endpoint → key absent, plugin half-disabled.
+        rows = _inserted(build_session_patch(_session(mode="default"), plan_capable=True))
+        bridge = next(r for r in rows if r["id"] == "valuz-kernel-bridge")
+        # Inactive until the user enters plan. No endpoint → key absent.
         assert bridge["config"] == {"planActive": False}
 
-    def test_probe_marks_vendored_closure_capable_only_with_plan_plugins(
-        self, monkeypatch, tmp_path: Path
-    ) -> None:
-        node_modules = tmp_path / "closure" / "node_modules"
-        entry = node_modules / "@deepseek-ai" / "dsh-sdk-jsonrpc-demo" / "lib" / "packaged-bin.js"
+    def test_installed_closures_are_plan_capable(self, monkeypatch, tmp_path: Path) -> None:
+        entry = tmp_path / "closure" / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
         entry.parent.mkdir(parents=True)
         entry.write_text("// entry")
         monkeypatch.setenv(DSH_RUNTIME_ENTRY_ENV, str(entry))
         monkeypatch.setenv(NODE_PATH_ENV, "")  # fall through to PATH node
-
         launch = resolve_launch()
-        if launch is None:  # no node on PATH — probe logic still testable below
+        if launch is None:
             pytest.skip("node not available on PATH")
-        assert launch.plan_capable is False
-
-        for rel in (
-            Path("@deepseek-ai") / "dsh-plan-mode" / "lib" / "index.js",
-            Path("@deepseek-ai") / "dsh-user-questions" / "lib" / "index.js",
-            Path("@deepseek-ai") / "dsh-tool-ask-user" / "lib" / "index.js",
-            Path("valuz-dsh-kernel-bridge") / "lib" / "index.js",
-        ):
-            target = node_modules / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("// plugin")
-        launch = resolve_launch()
-        assert launch is not None and launch.plan_capable is True
+        # The upstream distribution always ships the plan set and the Valuz
+        # bundle always ships the bridge.
+        assert launch.plan_capable is True
 
 
 # ---------------------------------------------------------------------------

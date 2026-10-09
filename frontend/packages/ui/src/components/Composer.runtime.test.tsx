@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -191,6 +191,149 @@ describe("Composer agent selector layering", () => {
     fireEvent.mouseDown(agentMenu!);
     expect(document.body.contains(agentMenu!)).toBe(true);
   });
+});
+
+describe("Composer frozen agent brain", () => {
+  const agent = {
+    slug: "valurion",
+    name: "小万",
+    runtimeLabel: "Claude Code",
+    modelLabel: "Valuz Pro",
+  };
+  const providers = [
+    {
+      providerId: "native",
+      providerName: "Native",
+      modelId: "gpt-6.1-sol",
+      isDefault: false,
+    },
+  ];
+  const frozen = {
+    agents: [agent],
+    selectedAgentSlug: "valurion",
+    allowAgentBrainOverride: true,
+    agentLocked: true,
+    modelLocked: true,
+    runtimes: sampleRuntimes,
+    selectedRuntimeId: "codex",
+    providers,
+    selectedProviderId: "native",
+    selectedModelId: "gpt-6.1-sol",
+  };
+
+  it("shows the conversation's Codex override and keeps its brain frozen", () => {
+    const onAgentChange = vi.fn();
+    const onModelChange = vi.fn();
+    const onRuntimeChange = vi.fn();
+    render(
+      <Composer
+        {...frozen}
+        onAgentChange={onAgentChange}
+        onModelChange={onModelChange}
+        onRuntimeChange={onRuntimeChange}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /小万/ });
+    expect(trigger.textContent).toContain("GPT 6.1 Sol");
+    expect(trigger.textContent).not.toContain("Valuz Pro");
+    fireEvent.click(trigger);
+    const menu = document.querySelector('[data-slot="composer-agent-menu"]')!;
+    const bound = within(menu as HTMLElement).getByRole("button", {
+      name: /小万/,
+    });
+    expect(bound.textContent).toContain("Codex Agent");
+    expect(bound.textContent).toContain("GPT 6.1 Sol");
+    expect((bound as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(bound);
+    expect(onAgentChange).not.toHaveBeenCalled();
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(onRuntimeChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps frozen labels after the library agent's defaults change", () => {
+    const view = render(<Composer {...frozen} />);
+    view.rerender(
+      <Composer
+        {...frozen}
+        agents={[
+          {
+            ...agent,
+            runtimeLabel: "Other runtime",
+            modelLabel: "Updated default",
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /小万/ });
+    expect(trigger.textContent).toContain("GPT 6.1 Sol");
+    fireEvent.click(trigger);
+    const menu = document.querySelector('[data-slot="composer-agent-menu"]')!;
+    expect(menu.textContent).toContain("Codex Agent");
+    expect(menu.textContent).not.toContain("Updated default");
+    expect(menu.textContent).not.toContain("Other runtime");
+  });
+
+  it.each([
+    { scenario: "an empty catalog", catalog: [] },
+    {
+      scenario: "a catalog with only today's default",
+      catalog: [
+        {
+          providerId: "valuz",
+          providerName: "Valuz",
+          modelId: "valuz-pro",
+          isDefault: true,
+        },
+      ],
+    },
+  ])("names frozen model/runtime with $scenario", ({ catalog }) => {
+    render(
+      <Composer
+        {...frozen}
+        runtimes={sampleRuntimes.filter((r) => r.id !== "codex")}
+        selectedProviderId="removed"
+        selectedModelId="private-model-v7"
+        providers={catalog}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /小万/ });
+    expect(trigger.textContent).toContain("private-model-v7");
+    expect(trigger.textContent).not.toContain("Valuz Pro");
+    fireEvent.click(trigger);
+    const menu = document.querySelector('[data-slot="composer-agent-menu"]')!;
+    const bound = within(menu as HTMLElement).getByRole("button", {
+      name: /小万/,
+    });
+    expect(bound.textContent).toContain("codex");
+    expect(bound.textContent).not.toContain("Claude Agent");
+  });
+
+  it.each([
+    {
+      agentLocked: false,
+      allowAgentBrainOverride: true,
+      scenario: "new conversation",
+    },
+    {
+      agentLocked: true,
+      allowAgentBrainOverride: false,
+      scenario: "project conversation",
+    },
+  ])(
+    "retains the host-computed agent label for a $scenario",
+    ({ agentLocked, allowAgentBrainOverride }) => {
+      render(
+        <Composer
+          {...frozen}
+          agentLocked={agentLocked}
+          allowAgentBrainOverride={allowAgentBrainOverride}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: /小万/ }).textContent,
+      ).toContain("Valuz Pro");
+    },
+  );
 });
 
 describe("Composer IME submission guard", () => {
@@ -414,5 +557,77 @@ describe("Composer mode guidance", () => {
     // Plain wrapping, not the base tooltip's balanced line breaking.
     expect(tooltip!.classList.contains("text-wrap")).toBe(true);
     expect(tooltip!.classList.contains("text-balance")).toBe(false);
+  });
+});
+
+describe("Composer host extension nodes", () => {
+  const plusTrigger = () =>
+    screen.getByRole("button", { name: "添加附件、技能和连接器" });
+
+  it("adds no element, wrapper or separator while the nodes are unset", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Composer />);
+
+    expect(container.querySelector("[data-testid^='ext-']")).toBeNull();
+    // No attachments row: it only exists for chips or a host node.
+    expect(container.querySelector(".mb-3.flex.flex-wrap")).toBeNull();
+
+    await user.click(plusTrigger());
+    await screen.findByRole("menu");
+    // The menu's own separators only (the one ahead of the skills entry); an
+    // unset ``plusMenuItems`` contributes none.
+    expect(screen.getAllByRole("separator")).toHaveLength(1);
+    expect(screen.queryByTestId("ext-plus")).toBeNull();
+  });
+
+  it("renders the toolbar nodes at the end of the left cluster and before Send", () => {
+    render(
+      <Composer
+        toolbarLeft={<span data-testid="ext-left">L</span>}
+        toolbarRight={<span data-testid="ext-right">R</span>}
+      />,
+    );
+    const left = screen.getByTestId("ext-left");
+    const right = screen.getByTestId("ext-right");
+    const send = screen.getByRole("button", { name: "发送" });
+
+    // Left cluster and right cluster are the two children of the toolbar row.
+    expect(left.parentElement!.nextElementSibling).toBe(right.parentElement);
+    // The left node is the LAST item of its cluster (no wrapper added).
+    expect(left.parentElement!.lastElementChild).toBe(left);
+    // The right node sits directly before the Send button, same cluster.
+    expect(right.nextElementSibling).toBe(send);
+  });
+
+  it("renders attachmentsExtra in its own row between the chips and the editor", () => {
+    render(
+      <Composer
+        pinnedAttachments={[{ id: "a1", name: "notes.pdf" }]}
+        attachmentsExtra={<span data-testid="ext-att">chip</span>}
+      />,
+    );
+    const row = screen.getByTestId("ext-att").parentElement!;
+    expect(row.className).toContain("mb-3");
+    expect(row.className).toContain("flex-wrap");
+    const chips = screen.getByText("notes.pdf").closest(".mb-3")!;
+    const editor = screen.getByRole("textbox");
+    // chips row -> extra row -> editor block, in document order.
+    expect(chips.nextElementSibling).toBe(row);
+    expect(row.nextElementSibling!.contains(editor)).toBe(true);
+  });
+
+  it("appends plusMenuItems after one extra separator at the end of the + menu", async () => {
+    const user = userEvent.setup();
+    render(<Composer plusMenuItems={<div data-testid="ext-plus">item</div>} />);
+
+    await user.click(plusTrigger());
+    const item = await screen.findByTestId("ext-plus");
+    const menu = item.closest("[role='menu']")!;
+    expect(menu.lastElementChild).toBe(item);
+    // The menu's own separator (1, see the unset case) plus the one added
+    // directly before the contributed item.
+    const separators = screen.getAllByRole("separator");
+    expect(separators).toHaveLength(2);
+    expect(item.previousElementSibling).toBe(separators[1]);
   });
 });

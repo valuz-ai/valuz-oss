@@ -39,6 +39,15 @@ class AutomationDatastore:
         stmt = stmt.order_by(AutomationRow.created_at)
         return list((await self._db.execute(stmt)).scalars().all())
 
+    async def list_by_app_plugin(self, user_id: str, app_plugin_id: str) -> list[AutomationRow]:
+        """The automations a third-party plugin declared for this owner."""
+        stmt = (
+            select(AutomationRow)
+            .where(AutomationRow.user_id == user_id, AutomationRow.app_plugin_id == app_plugin_id)
+            .order_by(AutomationRow.created_at)
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
     async def get_automation(self, user_id: str, automation_id: str) -> AutomationRow | None:
         return (
             (
@@ -273,18 +282,61 @@ class AutomationDatastore:
             .first()
         )
 
+    async def get_run_by_input_id(self, user_id: str, input_id: str) -> AutomationRunRow | None:
+        """Exact durable background correlation; never select a session's latest run."""
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow).where(
+                        AutomationRunRow.id == input_id, AutomationRunRow.user_id == user_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+
     async def get_run_by_session(self, user_id: str, session_id: str) -> AutomationRunRow | None:
-        """The run whose agent turn is ``session_id`` — how the ``automation``
-        tool's ``output`` action finds the run it is speaking for."""
+        """Resolve the run actually executing on a reusable session.
+
+        Fresh-session runs retain their historical lookup. A reusable session
+        can have many queued runs, so newest is insufficient: only the input
+        currently dispatched by the durable session queue may write output.
+        """
+        result = (
+            await self._db.execute(
+                select(AutomationRunRow, AutomationRow.target_session_id)
+                .outerjoin(AutomationRow, AutomationRow.id == AutomationRunRow.automation_id)
+                .where(
+                    AutomationRunRow.session_id == session_id, AutomationRunRow.user_id == user_id
+                )
+                .order_by(AutomationRunRow.triggered_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if result is None:
+            return None
+        # SQLAlchemy's mixed ORM/scalar Row loses the mapped entity type at
+        # tuple unpacking; its first selected value is the AutomationRunRow.
+        run: AutomationRunRow
+        run, target = result
+        if target is None:
+            return run
+        from valuz_agent.modules.sessions.models import QueuedInputRow
+
         return (
             (
                 await self._db.execute(
                     select(AutomationRunRow)
+                    .join(QueuedInputRow, QueuedInputRow.id == AutomationRunRow.id)
                     .where(
                         AutomationRunRow.session_id == session_id,
                         AutomationRunRow.user_id == user_id,
+                        AutomationRunRow.status == "running",
+                        QueuedInputRow.session_id == session_id,
+                        QueuedInputRow.user_id == user_id,
+                        QueuedInputRow.status == "dispatched",
                     )
-                    .order_by(AutomationRunRow.triggered_at.desc())
                 )
             )
             .scalars()

@@ -1,3 +1,4 @@
+import { tokens } from "../../../tailwind.preset";
 import {
   Children,
   memo,
@@ -1280,7 +1281,7 @@ const FULLSCREEN_TABLE_CSS = `
   [data-streamdown="table-fullscreen"] [data-streamdown="table-cell"] {
     padding: 9px 14px;
     font-size: 13px;
-    color: var(--color-ink-heading, #131313);
+    color: var(--color-ink-heading, ${tokens.color.foreground});
     text-align: right;
   }
   [data-streamdown="table-fullscreen"] [data-streamdown="table-cell"]:first-child {

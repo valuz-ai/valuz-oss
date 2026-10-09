@@ -46,7 +46,7 @@ One **runtime subprocess per kernel session**, owned by a new
 | `interrupt()` | **no wire method** — only subprocess kill (loses the turn tail; JSONL persistence keeps checkpointed events) | ❌ gap #1 |
 | `submit_action(...)` / `requires_action` | **no approval flow on the wire**; tools execute unattended. In-core approval seam + transport server→client requests both exist but are unused | ❌ gap #3 |
 | `fork_session(...)` | `ctx.sessions.fork(source, boundary?)` exists in-core; not on the wire | ❌ gap #4 (`NotImplementedError` initially — the port explicitly allows this) |
-| `consume_turn_anchor()` | event `seq` is a natural anchor (fork-by-boundary in-core takes one); nothing consumable on the wire yet | ⚠️ follows gap #4 |
+| `consume_turn_anchor()` | event `seq` is a natural anchor (fork-by-boundary in-core takes one); the adapter stamps `{provider, native_session_id, seq}` (last event seq of the turn) and the kernel persists it under `messages.metadata.runtime_native` | ✅ anchor persisted; fork itself still blocked on gap #4 |
 | `run_task_coverage(no_op_tool)` | needs per-turn tool injection; dsh tools are cordis-composed, not per-request | ⚠️ needs design (an MCP-exposed no-op tool scoped to the coverage turn is the likely route) |
 | `approval_rule_matcher` | exact-args fallback until approvals exist | ✅ default |
 
@@ -123,6 +123,16 @@ in event metadata.
   Point the custom roots at our per-session materialized skills dir
   (`skills_materialize.py` output), disable user-root discovery to avoid
   leaking `~/.claude/skills` (verified leak in the default composition).
+
+  > **As built (dsh 0.2, managed profile)**: the custom-roots route is not
+  > available — the `skill-filesystem` a session uses is nested in the agent
+  > preset's `config.plugins`, which a root `--patch` cannot address. Session
+  > skills are materialized into `<cwd>/.agents/skills` (a default project
+  > root, re-materialized on every spawn so switched-off skills are cleared),
+  > and `DSH_AGENTS_HOME` points the user root at a Valuz-owned directory
+  > under the managed home, keeping `~/.agents/skills` out
+  > (`deepseek_harness/composition.py::process_env`). Still discoverable:
+  > `$DSH_HOME/skills` and the git root's `.dsh/skills` / `.agents/skills`.
 - **System prompt**: agent-spine `persona` config (env `DSH_SYSTEM_PROMPT` in
   the examples composition) ← `system_prompt_builder`.
 - **max_input_tokens / compaction**: dsh `compaction-basic`
@@ -140,8 +150,9 @@ lockfile are committed; `npm ci` fetches the tree at build
 `libexec/dsh-runtime`, and the packaged app runs `packaged-bin.js` under its
 own Electron binary as plain Node (`VALUZ_DSH_RUNTIME_ENTRY` +
 `VALUZ_NODE_PATH` + `VALUZ_NODE_IS_ELECTRON=1` — the chrome-devtools-mcp
-pattern; Electron 36's embedded Node 22.19.0 exactly meets dsh's `^22.19`
-floor, watch that coupling on Electron upgrades). Because we own the
+pattern; the desktop pins the exact Electron dsh's own desktop locks —
+44.0.0 for dsh 0.2.1 — because dsh's native addon accepts only the Electron
+releases it fingerprints). Because we own the
 manifest, the closure includes `dsh-mcp-client` (which the upstream
 runtime-bin closure lacks) — `packaged-bin` resolves bare plugins from its
 own installed tree, so the composition file lives in a temp dir.

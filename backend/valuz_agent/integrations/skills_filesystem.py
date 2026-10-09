@@ -46,7 +46,7 @@ def _folder_birthtime(path: Path) -> int | None:
         return None
 
 
-def _default_user_skill_root(user_id: str | None = None) -> Path:
+def _default_user_skill_root(user_id: str = "") -> Path:
     """Canonical write-target for promoted user skills.
 
     Delegates to ``FsRegistry.user_skill_root()`` so the destination obeys

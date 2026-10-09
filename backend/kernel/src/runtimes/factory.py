@@ -27,9 +27,9 @@ from src.core.agent_config import AgentConfig
 from src.core.events import EventSink
 from src.core.runtime_port import RuntimePort
 from src.core.tool_registry import build_toolkit_for_config
-from src.ptc.executor import maybe_expose_execute_code
 from src.core.tools import ToolKit
 from src.core.types import ApiProtocol, RuntimeProvider, Session
+from src.ptc.executor import maybe_expose_execute_code
 from src.runtimes.network_egress import (
     EgressDescriptor,
     ForwardProxyDescriptor,
@@ -47,14 +47,14 @@ from src.runtimes.network_egress import (
 # * ``deepagents`` — three langchain backends:
 #   ``anthropic`` (ChatAnthropic), ``openai_completion`` (ChatOpenAI
 #   chat completions), ``gemini`` (ChatGoogleGenerativeAI).
-# * ``deepseek_harness`` — the dsh DeepSeek adapter speaks an
-#   OpenAI-compatible chat-completions SSE endpoint (``DEEPSEEK_BASE_URL``
-#   overrides the gateway), so only ``openai_completion``.
+# * ``deepseek_harness`` — dsh 0.2's DeepSeek adapter (``llm-deepseek``)
+#   speaks only the Anthropic Messages API (``<baseURL>/v1/messages``,
+#   ``x-api-key``; "protocol is not configurable"), so only ``anthropic``.
 ALLOWED_PROTOCOLS_BY_RUNTIME: dict[RuntimeProvider, frozenset[ApiProtocol]] = {
     "claude_agent": frozenset({"anthropic"}),
     "codex": frozenset({"openai_response"}),
     "deepagents": frozenset({"anthropic", "openai_completion", "gemini"}),
-    "deepseek_harness": frozenset({"openai_completion"}),
+    "deepseek_harness": frozenset({"anthropic"}),
 }
 
 

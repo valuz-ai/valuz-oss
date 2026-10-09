@@ -117,6 +117,32 @@ install_backend() {
     uv sync --extra dev --extra postgres --extra tracing
     ok "backend deps ready"
     install_dsh_runtime
+    install_python_runtime
+}
+
+install_python_runtime() {
+    # The bundled session Python (backend/vendor/python-runtime): CPython plus
+    # the libraries the bundled skills import, exposed to every session as
+    # `valuz-python` (backend/valuz_agent/infra/session_tools.py). Pins are
+    # committed; dist/ is built on demand. The script compares a stamp of the
+    # pins and returns at once when dist/ is current.
+    #
+    # Fail-open: without uv or network the backend still starts; the Office
+    # skills report `valuz-python` as unavailable.
+    if [[ -n "${VALUZ_PYTHON_RUNTIME:-}" ]]; then
+        return 0  # explicit runtime (packaged layout / another checkout)
+    fi
+    if ! command -v uv >/dev/null 2>&1; then
+        warn "uv not found — the bundled session Python stays unavailable" \
+            "(install uv, then run scripts/vendor-python-runtime.sh)"
+        return 0
+    fi
+    if bash "$ROOT_DIR/scripts/vendor-python-runtime.sh" >/dev/null; then
+        ok "session python ready"
+    else
+        warn "session python build failed — valuz-python stays unavailable" \
+            "(run scripts/vendor-python-runtime.sh manually to see why)"
+    fi
 }
 
 install_dsh_runtime() {
@@ -129,13 +155,13 @@ install_dsh_runtime() {
     # Fail-open on purpose: a missing npm or an offline install leaves the dsh
     # runtime unavailable (exactly today's behavior) without blocking the
     # backend/frontend the other three runtimes need.
-    if [[ -n "${VALUZ_DSH_RUNTIME_BIN:-}" || -n "${VALUZ_DSH_ROOT:-}" ]]; then
+    if [[ -n "${VALUZ_DSH_RUNTIME_BIN:-}" || -n "${VALUZ_DSH_RUNTIME_ENTRY:-}" ]]; then
         # Explicit launch override (packaged bin / source checkout) — the
         # closure is not what composition.py will use, don't fetch it.
         return 0
     fi
     local vendor_dir="$BACKEND_DIR/vendor/dsh-runtime"
-    local entry="$vendor_dir/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+    local entry="$vendor_dir/node_modules/valuz-dsh-bundle/bin/dsh.mjs"
     local installed_lock="$vendor_dir/node_modules/.package-lock.json"
     # ``npm ci`` writes node_modules/.package-lock.json; a committed lockfile
     # newer than it means the pins moved (e.g. git pull) → refresh.

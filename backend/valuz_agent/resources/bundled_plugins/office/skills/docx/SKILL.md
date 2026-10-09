@@ -1,590 +1,226 @@
 ---
 name: docx
-description: "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."
-license: Proprietary. LICENSE.txt has complete terms
+description: Create, read, edit, review, convert and check Word documents (.docx, also .doc/.odt input) - reports, letters, contracts and formatted tables, with headings, lists, tables, images, footnotes, hyperlinks, multi-column sections, page numbers and tables of contents, Chinese/Japanese/Korean text, tracked changes (insert/delete/replace with author and date, accept or reject all) and comments. Use when a Word file is an input or the requested deliverable. Runs on the bundled valuz-python and dsoffice commands; do not search for another Python or LibreOffice.
 ---
 
-# DOCX creation, editing, and analysis
+# Word documents
 
-## Overview
+Use `python-docx` for creating documents and ordinary edits, and this skill's
+scripts for what python-docx cannot do. Follow an explicit user or AGENTS.md
+requirement for a project environment or another library when there is one.
 
-A .docx file is a ZIP archive containing XML files.
+In this file `<skill>` means this skill's directory; the scripts are in
+`<skill>/scripts/`. Keep source scripts, intermediate files and final documents
+in the task workspace; the runtime and the skill directory are read-only. Use the
+user's language and keep an existing document's design unless a redesign is
+requested. Save to a new file unless the user asks for an in-place edit.
 
-## Quick Reference
+## Environment
 
-| Task | Approach |
-|------|----------|
-| Read/analyze content | `pandoc` or unpack for raw XML |
-| Create new document | Use `docx-js` - see Creating New Documents below |
-| Edit existing document | Unpack → edit XML → repack - see Editing Existing Documents below |
+- `valuz-python` is the bundled Python 3.12 with python-docx 1.2, lxml, Pillow,
+  openpyxl, pandas. Run every script and snippet with it:
+  `valuz-python build.py`, `valuz-python - <<'PY' ... PY`. It is read-only; if a
+  task really needs another package, make a task venv that keeps the bundled
+  libraries: `valuz-python -m venv --system-site-packages .venv && .venv/bin/pip install <pkg>`.
+  If `valuz-python` is not on PATH, install what it provides and use that
+  interpreter wherever this file says `valuz-python`: Python 3.12 with
+  python-docx, lxml, Pillow, openpyxl and pandas
+  (plan the installation yourself, e.g. a venv).
+- `dsoffice` is the bundled LibreOffice engine: `convert`, `render`,
+  `capabilities`. Outputs must be new paths/directories. Its JSON result lists
+  `missingFonts`. Never search for or call a system LibreOffice, `soffice`,
+  `pdftoppm` or a downloaded converter unless the user explicitly asks; if
+  `dsoffice` fails, report that.
+  If `dsoffice` is not on PATH, install it: it is the `dsoffice` command of
+  the npm package `@deepseek-ai/libreoffice-kit@0.1.5` (Node.js 22.19 or
+  newer; plan the installation yourself).
 
-### Converting .doc to .docx
+## Choose the workflow
 
-Legacy `.doc` files must be converted before editing:
+| Task | Tool |
+|---|---|
+| Read, summarize, extract | `docx_inspect.py text` |
+| See revisions / comments | `docx_inspect.py changes` / `comments` |
+| `.doc` / `.odt` input | `dsoffice convert` to `.docx` first |
+| New document | python-docx + `docx_helpers.py` ([reference/building.md](reference/building.md)) |
+| Change wording or formatting, no revision marks | python-docx run-level edits, `replace_text` |
+| Tracked changes, comments, accept/reject all | `docx_review.py` ([reference/review.md](reference/review.md)) |
+| Table of contents | `add_toc` in the build script, then `docx_toc.py` |
+| Something python-docx cannot reach | `docx_pack.py` unpack, edit XML, pack ([reference/xml-editing.md](reference/xml-editing.md)) |
+| PDF or page images | `dsoffice convert` / `dsoffice render` |
 
-```bash
-python scripts/office/soffice.py --headless --convert-to docx document.doc
+## Read
+
+```sh
+valuz-python <skill>/scripts/docx_inspect.py text report.docx            # outline
+valuz-python <skill>/scripts/docx_inspect.py text report.docx --view markup
+valuz-python <skill>/scripts/docx_inspect.py changes report.docx
+valuz-python <skill>/scripts/docx_inspect.py comments report.docx
 ```
 
-### Reading Content
+`text` prints the body in reading order as a light Markdown outline: `#`
+headings, list items with their numbers, `| table | rows |`, `[image: alt]`,
+footnote markers `[^1]` with the notes listed after the body, external links
+as `[text](url)`, page-number fields as `{PAGE}`, fields without a stored
+result as `{CODE}`, and headers/footers per section.
+Tracked changes are shown accepted (`--view final`); `--view original` shows
+them rejected and `--view markup` shows `{+inserted+}` and `{-deleted-}`.
+`changes` lists type, author, date, part, paragraph number and text of every
+revision; `comments` lists author, date, the anchored text, the comment, reply
+parent and resolved state. Add `--json` for machine-readable output. Copy
+search text for edits from this output: it is exactly what the review script
+matches against.
 
-```bash
-# Text extraction with tracked changes
-pandoc --track-changes=all document.docx -o output.md
+## Convert
 
-# Raw XML access
-python scripts/office/unpack.py document.docx unpacked/
+```sh
+dsoffice convert --input old.doc --output old.docx       # .doc/.odt -> .docx, then work on the .docx
+dsoffice convert --input report.docx --output report.pdf
+dsoffice render  --input report.docx --output-dir pages-v1 --pages 1,3 --dpi 144
 ```
 
-### Converting to Images
+`render` writes one PNG per page plus `manifest.json` (page count, image paths,
+missing fonts). Output files and directories must be new; use `-v2`, `-v3` names
+after changes. Check a converted `.doc` with `docx_inspect.py text` before
+editing it, and deliver `.docx` unless the user asks for another format.
 
-```bash
-python scripts/office/soffice.py --headless --convert-to pdf document.docx
-pdftoppm -jpeg -r 150 document.pdf page
+## Create
+
+Write a build script; import the helpers before creating or opening documents:
+
+```python
+import sys
+sys.path.insert(0, "<skill>/scripts")          # this skill's absolute path
+from docx import Document
+from docx.shared import Cm, Pt
+from docx_helpers import *
+
+doc = Document()
+set_page_layout(doc.sections[0], "A4", margins=Cm(2.5))   # python-docx defaults to US Letter
+set_document_fonts(doc, latin="Calibri", east_asia="Microsoft YaHei", size=11, east_asia_lang="zh-CN")
+set_style_font(doc, "Heading 1", latin="Arial", east_asia="SimHei", size=16, color="1F3864")
+add_page_number_footer(doc.sections[0], "第 {PAGE} 页 / 共 {NUMPAGES} 页")
+
+doc.add_paragraph("2026 年度报告", style="Title")
+add_toc(doc, "1-3", title="目录")
+doc.add_page_break()
+doc.add_heading("1 概述 Overview", level=1)
+p = doc.add_paragraph("Revenue grew 12%")
+add_footnote(p, "Source: company filings, 2026-09-30.")
+p.add_run(". Details: ")
+add_hyperlink(p, "investor site", "https://example.com/ir")
+items = create_list(doc, "bullet")
+for text in ("Revenue: 1.2 bn", "Margin: 41%"):
+    add_list_item(doc, text, items)
+add_table(doc, [["Region", "Revenue"], ["Asia", "1,234"]], col_widths=[Cm(8), Cm(4)], align=["left", "right"])
+add_picture_fit(doc, "chart.png")
+doc.save("draft.docx")
 ```
 
-### Accepting Tracked Changes
-
-To produce a clean document with all tracked changes accepted (requires LibreOffice):
-
-```bash
-python scripts/accept_changes.py input.docx output.docx
+```sh
+valuz-python <skill>/scripts/docx_toc.py draft.docx report.docx   # only when the document has add_toc
 ```
 
----
+Rules:
 
-## Creating New Documents
+- Use paragraph styles for headings (`add_heading` / `Heading N`) and body text;
+  the TOC, the navigation pane and outline readers depend on them.
+- Lists must be real Word lists (`create_list` + `add_list_item`, or the
+  "List Bullet"/"List Number" styles). Never type "•", "-" or "1." into the text.
+  Each `create_list` call starts a new list, so numbering restarts.
+- Set page size and margins explicitly. Fix table column widths
+  (`add_table(col_widths=...)` / `set_col_widths`) and repeat header rows on
+  long tables. Fit pictures to the text area (`add_picture_fit`).
+- CJK text needs an East Asian font (`w:eastAsia`) in addition to the Latin
+  font: `set_document_fonts(..., east_asia=...)` for the whole document,
+  `set_run_font(run, east_asia=...)` for single runs. Prefer the fonts Word users
+  have: SimSun/宋体, SimHei/黑体, Microsoft YaHei/微软雅黑, KaiTi/楷体, FangSong/仿宋;
+  `dsoffice` maps these to installed equivalents when it renders. For other
+  fonts, check `missingFonts` in the `dsoffice` result.
+- Built-in heading/title styles use theme fonts and colours; `set_style_font`
+  and `set_document_fonts` remove those theme references so your values apply.
+- Fields are computed by the program that displays the file. `PAGE`,
+  `NUMPAGES` and `SECTIONPAGES` (from `add_page_number_footer`/`add_field`)
+  are correct in Word, LibreOffice and `dsoffice` output without any update
+  step. A table of contents is different: python-docx cannot paginate and
+  LibreOffice does not rebuild a TOC field when it opens a file, so run
+  `docx_toc.py` after saving. It writes one entry per heading inside the TOC
+  field and stores the page numbers from a `dsoffice` layout pass. Word shows
+  those stored entries as they are until someone updates the table (F9 /
+  Update Table); `--update-on-open` makes Word offer to refresh all fields on
+  open (it asks the user first). Re-run `docx_toc.py` after content changes.
+- python-docx does not paginate or render. Keep the document's own structure:
+  sections, headers/footers, numbering and styles are easier to keep than to
+  rebuild.
 
-Generate .docx files with JavaScript, then validate. Install: `npm install -g docx`
+See [reference/building.md](reference/building.md) for every helper
+(sections and columns, orientation changes, tab stops with dot leaders,
+bookmarks and internal links, cell shading/borders/merging, endnotes, fields)
+with examples.
 
-### Setup
-```javascript
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
-        Header, Footer, AlignmentType, PageOrientation, LevelFormat, ExternalHyperlink,
-        InternalHyperlink, Bookmark, FootnoteReferenceRun, PositionalTab,
-        PositionalTabAlignment, PositionalTabRelativeTo, PositionalTabLeader,
-        TabStopType, TabStopPosition, Column, SectionType,
-        TableOfContents, HeadingLevel, BorderStyle, WidthType, ShadingType,
-        VerticalAlign, PageNumber, PageBreak } = require('docx');
+## Edit an existing document
 
-const doc = new Document({ sections: [{ children: [/* content */] }] });
-Packer.toBuffer(doc).then(buffer => fs.writeFileSync("doc.docx", buffer));
+Inspect paragraphs, runs, tables, sections, headers and footers before changing
+the affected content. Assigning `paragraph.text` destroys run formatting; change
+the relevant runs, or use `replace_text(doc, old, new)` which keeps the
+formatting of the run where each match starts (body, tables, headers, footers).
+Reconstructing a whole document loses features python-docx does not model, so
+edit in place. When real revisions or features python-docx cannot reach matter
+(content controls, fields, text boxes, SmartArt), keep their package parts
+untouched and edit the XML directly: [reference/xml-editing.md](reference/xml-editing.md).
+
+## Review: tracked changes and comments
+
+Use real revisions only when the user asks for tracked changes, a redline or a
+review; do not imitate them with coloured or struck-through text, and do not
+turn ordinary edits into revisions.
+
+```sh
+S=<skill>/scripts
+valuz-python $S/docx_review.py replace  in.docx out.docx --find "30 days" --with "45 days" --author "Jane Doe" --comment "Per legal"
+valuz-python $S/docx_review.py delete   in.docx out.docx --find " in full"
+valuz-python $S/docx_review.py insert   in.docx out.docx --anchor "Annex A" --text " and Annex B"
+valuz-python $S/docx_review.py comment  in.docx out.docx --find "Section 4" --text "Please confirm the date."
+valuz-python $S/docx_review.py apply    in.docx out.docx --author "Jane Doe" --ops edits.json
+valuz-python $S/docx_review.py accept-all in.docx clean.docx      # or reject-all
 ```
 
-### Validation
-After creating the file, validate it. If validation fails, unpack, fix the XML, and repack.
-```bash
-python scripts/office/validate.py doc.docx
+Revisions are `w:ins`/`w:del` with author and date and keep the formatting of
+the text they replace; comments are anchored to the matched range. Keep each
+change as small as the meaning allows (replace "30 days", not the sentence), use
+the user's name as author when known, and batch many edits with `apply`.
+Paragraph-level operations and the ops file format are in
+[reference/review.md](reference/review.md). Verify with
+`docx_inspect.py changes`/`comments` and a render.
+
+## Check and deliver
+
+Run the checker with `valuz-python`:
+
+```sh
+valuz-python <skill>/scripts/check_office.py report.docx --out checks.json --contains "Revenue"
 ```
 
-### Page Size
-
-```javascript
-// CRITICAL: docx-js defaults to A4, not US Letter
-// Always set page size explicitly for consistent results
-sections: [{
-  properties: {
-    page: {
-      size: {
-        width: 12240,   // 8.5 inches in DXA
-        height: 15840   // 11 inches in DXA
-      },
-      margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } // 1 inch margins
-    }
-  },
-  children: [/* content */]
-}]
-```
-
-**Common page sizes (DXA units, 1440 DXA = 1 inch):**
-
-| Paper | Width | Height | Content Width (1" margins) |
-|-------|-------|--------|---------------------------|
-| US Letter | 12,240 | 15,840 | 9,360 |
-| A4 (default) | 11,906 | 16,838 | 9,026 |
-
-**Landscape orientation:** docx-js swaps width/height internally, so pass portrait dimensions and let it handle the swap:
-```javascript
-size: {
-  width: 12240,   // Pass SHORT edge as width
-  height: 15840,  // Pass LONG edge as height
-  orientation: PageOrientation.LANDSCAPE  // docx-js swaps them in the XML
-},
-// Content width = 15840 - left margin - right margin (uses the long edge)
-```
-
-### Styles (Override Built-in Headings)
-
-Use Arial as the default font (universally supported). Keep titles black for readability.
-
-```javascript
-const doc = new Document({
-  styles: {
-    default: { document: { run: { font: "Arial", size: 24 } } }, // 12pt default
-    paragraphStyles: [
-      // IMPORTANT: Use exact IDs to override built-in styles
-      { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true,
-        run: { size: 32, bold: true, font: "Arial" },
-        paragraph: { spacing: { before: 240, after: 240 }, outlineLevel: 0 } }, // outlineLevel required for TOC
-      { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true,
-        run: { size: 28, bold: true, font: "Arial" },
-        paragraph: { spacing: { before: 180, after: 180 }, outlineLevel: 1 } },
-    ]
-  },
-  sections: [{
-    children: [
-      new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("Title")] }),
-    ]
-  }]
-});
-```
-
-### Lists (NEVER use unicode bullets)
-
-```javascript
-// ❌ WRONG - never manually insert bullet characters
-new Paragraph({ children: [new TextRun("• Item")] })  // BAD
-new Paragraph({ children: [new TextRun("\u2022 Item")] })  // BAD
-
-// ✅ CORRECT - use numbering config with LevelFormat.BULLET
-const doc = new Document({
-  numbering: {
-    config: [
-      { reference: "bullets",
-        levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT,
-          style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
-      { reference: "numbers",
-        levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT,
-          style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
-    ]
-  },
-  sections: [{
-    children: [
-      new Paragraph({ numbering: { reference: "bullets", level: 0 },
-        children: [new TextRun("Bullet item")] }),
-      new Paragraph({ numbering: { reference: "numbers", level: 0 },
-        children: [new TextRun("Numbered item")] }),
-    ]
-  }]
-});
-
-// ⚠️ Each reference creates INDEPENDENT numbering
-// Same reference = continues (1,2,3 then 4,5,6)
-// Different reference = restarts (1,2,3 then 1,2,3)
-```
-
-### Tables
-
-**CRITICAL: Tables need dual widths** - set both `columnWidths` on the table AND `width` on each cell. Without both, tables render incorrectly on some platforms.
-
-```javascript
-// CRITICAL: Always set table width for consistent rendering
-// CRITICAL: Use ShadingType.CLEAR (not SOLID) to prevent black backgrounds
-const border = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
-const borders = { top: border, bottom: border, left: border, right: border };
-
-new Table({
-  width: { size: 9360, type: WidthType.DXA }, // Always use DXA (percentages break in Google Docs)
-  columnWidths: [4680, 4680], // Must sum to table width (DXA: 1440 = 1 inch)
-  rows: [
-    new TableRow({
-      children: [
-        new TableCell({
-          borders,
-          width: { size: 4680, type: WidthType.DXA }, // Also set on each cell
-          shading: { fill: "D5E8F0", type: ShadingType.CLEAR }, // CLEAR not SOLID
-          margins: { top: 80, bottom: 80, left: 120, right: 120 }, // Cell padding (internal, not added to width)
-          children: [new Paragraph({ children: [new TextRun("Cell")] })]
-        })
-      ]
-    })
-  ]
-})
-```
-
-**Table width calculation:**
-
-Always use `WidthType.DXA` — `WidthType.PERCENTAGE` breaks in Google Docs.
-
-```javascript
-// Table width = sum of columnWidths = content width
-// US Letter with 1" margins: 12240 - 2880 = 9360 DXA
-width: { size: 9360, type: WidthType.DXA },
-columnWidths: [7000, 2360]  // Must sum to table width
-```
-
-**Width rules:**
-- **Always use `WidthType.DXA`** — never `WidthType.PERCENTAGE` (incompatible with Google Docs)
-- Table width must equal the sum of `columnWidths`
-- Cell `width` must match corresponding `columnWidth`
-- Cell `margins` are internal padding - they reduce content area, not add to cell width
-- For full-width tables: use content width (page width minus left and right margins)
-
-### Images
-
-```javascript
-// CRITICAL: type parameter is REQUIRED
-new Paragraph({
-  children: [new ImageRun({
-    type: "png", // Required: png, jpg, jpeg, gif, bmp, svg
-    data: fs.readFileSync("image.png"),
-    transformation: { width: 200, height: 150 },
-    altText: { title: "Title", description: "Desc", name: "Name" } // All three required
-  })]
-})
-```
-
-### Page Breaks
-
-```javascript
-// CRITICAL: PageBreak must be inside a Paragraph
-new Paragraph({ children: [new PageBreak()] })
-
-// Or use pageBreakBefore
-new Paragraph({ pageBreakBefore: true, children: [new TextRun("New page")] })
-```
-
-### Hyperlinks
-
-```javascript
-// External link
-new Paragraph({
-  children: [new ExternalHyperlink({
-    children: [new TextRun({ text: "Click here", style: "Hyperlink" })],
-    link: "https://example.com",
-  })]
-})
-
-// Internal link (bookmark + reference)
-// 1. Create bookmark at destination
-new Paragraph({ heading: HeadingLevel.HEADING_1, children: [
-  new Bookmark({ id: "chapter1", children: [new TextRun("Chapter 1")] }),
-]})
-// 2. Link to it
-new Paragraph({ children: [new InternalHyperlink({
-  children: [new TextRun({ text: "See Chapter 1", style: "Hyperlink" })],
-  anchor: "chapter1",
-})]})
-```
-
-### Footnotes
-
-```javascript
-const doc = new Document({
-  footnotes: {
-    1: { children: [new Paragraph("Source: Annual Report 2024")] },
-    2: { children: [new Paragraph("See appendix for methodology")] },
-  },
-  sections: [{
-    children: [new Paragraph({
-      children: [
-        new TextRun("Revenue grew 15%"),
-        new FootnoteReferenceRun(1),
-        new TextRun(" using adjusted metrics"),
-        new FootnoteReferenceRun(2),
-      ],
-    })]
-  }]
-});
-```
-
-### Tab Stops
-
-```javascript
-// Right-align text on same line (e.g., date opposite a title)
-new Paragraph({
-  children: [
-    new TextRun("Company Name"),
-    new TextRun("\tJanuary 2025"),
-  ],
-  tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
-})
-
-// Dot leader (e.g., TOC-style)
-new Paragraph({
-  children: [
-    new TextRun("Introduction"),
-    new TextRun({ children: [
-      new PositionalTab({
-        alignment: PositionalTabAlignment.RIGHT,
-        relativeTo: PositionalTabRelativeTo.MARGIN,
-        leader: PositionalTabLeader.DOT,
-      }),
-      "3",
-    ]}),
-  ],
-})
-```
-
-### Multi-Column Layouts
-
-```javascript
-// Equal-width columns
-sections: [{
-  properties: {
-    column: {
-      count: 2,          // number of columns
-      space: 720,        // gap between columns in DXA (720 = 0.5 inch)
-      equalWidth: true,
-      separate: true,    // vertical line between columns
-    },
-  },
-  children: [/* content flows naturally across columns */]
-}]
-
-// Custom-width columns (equalWidth must be false)
-sections: [{
-  properties: {
-    column: {
-      equalWidth: false,
-      children: [
-        new Column({ width: 5400, space: 720 }),
-        new Column({ width: 3240 }),
-      ],
-    },
-  },
-  children: [/* content */]
-}]
-```
-
-Force a column break with a new section using `type: SectionType.NEXT_COLUMN`.
-
-### Table of Contents
-
-```javascript
-// CRITICAL: Headings must use HeadingLevel ONLY - no custom styles
-new TableOfContents("Table of Contents", { hyperlink: true, headingStyleRange: "1-3" })
-```
-
-### Headers/Footers
-
-```javascript
-sections: [{
-  properties: {
-    page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } // 1440 = 1 inch
-  },
-  headers: {
-    default: new Header({ children: [new Paragraph({ children: [new TextRun("Header")] })] })
-  },
-  footers: {
-    default: new Footer({ children: [new Paragraph({
-      children: [new TextRun("Page "), new TextRun({ children: [PageNumber.CURRENT] })]
-    })] })
-  },
-  children: [/* content */]
-}]
-```
-
-### Critical Rules for docx-js
-
-- **Set page size explicitly** - docx-js defaults to A4; use US Letter (12240 x 15840 DXA) for US documents
-- **Landscape: pass portrait dimensions** - docx-js swaps width/height internally; pass short edge as `width`, long edge as `height`, and set `orientation: PageOrientation.LANDSCAPE`
-- **Never use `\n`** - use separate Paragraph elements
-- **Never use unicode bullets** - use `LevelFormat.BULLET` with numbering config
-- **PageBreak must be in Paragraph** - standalone creates invalid XML
-- **ImageRun requires `type`** - always specify png/jpg/etc
-- **Always set table `width` with DXA** - never use `WidthType.PERCENTAGE` (breaks in Google Docs)
-- **Tables need dual widths** - `columnWidths` array AND cell `width`, both must match
-- **Table width = sum of columnWidths** - for DXA, ensure they add up exactly
-- **Always add cell margins** - use `margins: { top: 80, bottom: 80, left: 120, right: 120 }` for readable padding
-- **Use `ShadingType.CLEAR`** - never SOLID for table shading
-- **Never use tables as dividers/rules** - cells have minimum height and render as empty boxes (including in headers/footers); use `border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "2E75B6", space: 1 } }` on a Paragraph instead. For two-column footers, use tab stops (see Tab Stops section), not tables
-- **TOC requires HeadingLevel only** - no custom styles on heading paragraphs
-- **Override built-in styles** - use exact IDs: "Heading1", "Heading2", etc.
-- **Include `outlineLevel`** - required for TOC (0 for H1, 1 for H2, etc.)
-
----
-
-## Editing Existing Documents
-
-**Follow all 3 steps in order.**
-
-### Step 1: Unpack
-```bash
-python scripts/office/unpack.py document.docx unpacked/
-```
-Extracts XML, pretty-prints, merges adjacent runs, and converts smart quotes to XML entities (`&#x201C;` etc.) so they survive editing. Use `--merge-runs false` to skip run merging.
-
-### Step 2: Edit XML
-
-Edit files in `unpacked/word/`. See XML Reference below for patterns.
-
-**Use "Claude" as the author** for tracked changes and comments, unless the user explicitly requests use of a different name.
-
-**Use the Edit tool directly for string replacement. Do not write Python scripts.** Scripts introduce unnecessary complexity. The Edit tool shows exactly what is being replaced.
-
-**CRITICAL: Use smart quotes for new content.** When adding text with apostrophes or quotes, use XML entities to produce smart quotes:
-```xml
-<!-- Use these entities for professional typography -->
-<w:t>Here&#x2019;s a quote: &#x201C;Hello&#x201D;</w:t>
-```
-| Entity | Character |
-|--------|-----------|
-| `&#x2018;` | ‘ (left single) |
-| `&#x2019;` | ’ (right single / apostrophe) |
-| `&#x201C;` | “ (left double) |
-| `&#x201D;` | ” (right double) |
-
-**Adding comments:** Use `comment.py` to handle boilerplate across multiple XML files (text must be pre-escaped XML):
-```bash
-python scripts/comment.py unpacked/ 0 "Comment text with &amp; and &#x2019;"
-python scripts/comment.py unpacked/ 1 "Reply text" --parent 0  # reply to comment 0
-python scripts/comment.py unpacked/ 0 "Text" --author "Custom Author"  # custom author name
-```
-Then add markers to document.xml (see Comments in XML Reference).
-
-### Step 3: Pack
-```bash
-python scripts/office/pack.py unpacked/ output.docx --original document.docx
-```
-Validates with auto-repair, condenses XML, and creates DOCX. Use `--validate false` to skip.
-
-**Auto-repair will fix:**
-- `durableId` >= 0x7FFFFFFF (regenerates valid ID)
-- Missing `xml:space="preserve"` on `<w:t>` with whitespace
-
-**Auto-repair won't fix:**
-- Malformed XML, invalid element nesting, missing relationships, schema violations
-
-### Common Pitfalls
-
-- **Replace entire `<w:r>` elements**: When adding tracked changes, replace the whole `<w:r>...</w:r>` block with `<w:del>...<w:ins>...` as siblings. Don't inject tracked change tags inside a run.
-- **Preserve `<w:rPr>` formatting**: Copy the original run's `<w:rPr>` block into your tracked change runs to maintain bold, font size, etc.
-
----
-
-## XML Reference
-
-### Schema Compliance
-
-- **Element order in `<w:pPr>`**: `<w:pStyle>`, `<w:numPr>`, `<w:spacing>`, `<w:ind>`, `<w:jc>`, `<w:rPr>` last
-- **Whitespace**: Add `xml:space="preserve"` to `<w:t>` with leading/trailing spaces
-- **RSIDs**: Must be 8-digit hex (e.g., `00AB1234`)
-
-### Tracked Changes
-
-**Insertion:**
-```xml
-<w:ins w:id="1" w:author="Claude" w:date="2025-01-01T00:00:00Z">
-  <w:r><w:t>inserted text</w:t></w:r>
-</w:ins>
-```
-
-**Deletion:**
-```xml
-<w:del w:id="2" w:author="Claude" w:date="2025-01-01T00:00:00Z">
-  <w:r><w:delText>deleted text</w:delText></w:r>
-</w:del>
-```
-
-**Inside `<w:del>`**: Use `<w:delText>` instead of `<w:t>`, and `<w:delInstrText>` instead of `<w:instrText>`.
-
-**Minimal edits** - only mark what changes:
-```xml
-<!-- Change "30 days" to "60 days" -->
-<w:r><w:t>The term is </w:t></w:r>
-<w:del w:id="1" w:author="Claude" w:date="...">
-  <w:r><w:delText>30</w:delText></w:r>
-</w:del>
-<w:ins w:id="2" w:author="Claude" w:date="...">
-  <w:r><w:t>60</w:t></w:r>
-</w:ins>
-<w:r><w:t> days.</w:t></w:r>
-```
-
-**Deleting entire paragraphs/list items** - when removing ALL content from a paragraph, also mark the paragraph mark as deleted so it merges with the next paragraph. Add `<w:del/>` inside `<w:pPr><w:rPr>`:
-```xml
-<w:p>
-  <w:pPr>
-    <w:numPr>...</w:numPr>  <!-- list numbering if present -->
-    <w:rPr>
-      <w:del w:id="1" w:author="Claude" w:date="2025-01-01T00:00:00Z"/>
-    </w:rPr>
-  </w:pPr>
-  <w:del w:id="2" w:author="Claude" w:date="2025-01-01T00:00:00Z">
-    <w:r><w:delText>Entire paragraph content being deleted...</w:delText></w:r>
-  </w:del>
-</w:p>
-```
-Without the `<w:del/>` in `<w:pPr><w:rPr>`, accepting changes leaves an empty paragraph/list item.
-
-**Rejecting another author's insertion** - nest deletion inside their insertion:
-```xml
-<w:ins w:author="Jane" w:id="5">
-  <w:del w:author="Claude" w:id="10">
-    <w:r><w:delText>their inserted text</w:delText></w:r>
-  </w:del>
-</w:ins>
-```
-
-**Restoring another author's deletion** - add insertion after (don't modify their deletion):
-```xml
-<w:del w:author="Jane" w:id="5">
-  <w:r><w:delText>deleted text</w:delText></w:r>
-</w:del>
-<w:ins w:author="Claude" w:id="10">
-  <w:r><w:t>deleted text</w:t></w:r>
-</w:ins>
-```
-
-### Comments
-
-After running `comment.py` (see Step 2), add markers to document.xml. For replies, use `--parent` flag and nest markers inside the parent's.
-
-**CRITICAL: `<w:commentRangeStart>` and `<w:commentRangeEnd>` are siblings of `<w:r>`, never inside `<w:r>`.**
-
-```xml
-<!-- Comment markers are direct children of w:p, never inside w:r -->
-<w:commentRangeStart w:id="0"/>
-<w:del w:id="1" w:author="Claude" w:date="2025-01-01T00:00:00Z">
-  <w:r><w:delText>deleted</w:delText></w:r>
-</w:del>
-<w:r><w:t> more text</w:t></w:r>
-<w:commentRangeEnd w:id="0"/>
-<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r>
-
-<!-- Comment 0 with reply 1 nested inside -->
-<w:commentRangeStart w:id="0"/>
-  <w:commentRangeStart w:id="1"/>
-  <w:r><w:t>text</w:t></w:r>
-  <w:commentRangeEnd w:id="1"/>
-<w:commentRangeEnd w:id="0"/>
-<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r>
-<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="1"/></w:r>
-```
-
-### Images
-
-1. Add image file to `word/media/`
-2. Add relationship to `word/_rels/document.xml.rels`:
-```xml
-<Relationship Id="rId5" Type=".../image" Target="media/image1.png"/>
-```
-3. Add content type to `[Content_Types].xml`:
-```xml
-<Default Extension="png" ContentType="image/png"/>
-```
-4. Reference in document.xml:
-```xml
-<w:drawing>
-  <wp:inline>
-    <wp:extent cx="914400" cy="914400"/>  <!-- EMUs: 914400 = 1 inch -->
-    <a:graphic>
-      <a:graphicData uri=".../picture">
-        <pic:pic>
-          <pic:blipFill><a:blip r:embed="rId5"/></pic:blipFill>
-        </pic:pic>
-      </a:graphicData>
-    </a:graphic>
-  </wp:inline>
-</w:drawing>
-```
-
----
-
-## Dependencies
-
-- **pandoc**: Text extraction
-- **docx**: `npm install -g docx` (new documents)
-- **LibreOffice**: PDF conversion (auto-configured for sandboxed environments via `scripts/office/soffice.py`)
-- **Poppler**: `pdftoppm` for images
+It checks ZIP/XML integrity and internal relationships, and reports paragraphs,
+logical table dimensions and sections. `--contains TEXT` asserts required text.
+A passing structural check does not verify pagination, clipping, fonts or visual
+appearance. Compare the summary and the reopened document with the request,
+including unchanged content that matters to an edit.
+
+Render for a requested image/PDF deliverable or an actionable layout check.
+Before generating images only for inspection, make sure the current model accepts
+images and open the PNGs with your own file/image reading tool. If image input
+is unavailable, finish the structural and content checks and say that visual
+layout was not inspected. Choose the pages the request affects; inspect all
+pages when whole-document layout matters. Check page breaks, clipped text,
+headings, table widths, footnotes at page bottoms, columns and page numbers.
+A direct `.docx` render also shows LibreOffice's non-printing marks (grey field
+shading behind a TOC, thin frames around sections and pictures, comment
+anchors and a comment margin); for the printed look, convert to PDF and render
+the PDF. LibreOffice pagination can differ slightly from Microsoft Word. Reuse
+images of an unchanged document; render again only after a change.
+
+Deliver the final file with the session tool:
+`deliver_artifacts({"attachments":[{"filePath":"/abs/path/report.docx"}]})`
+(absolute path inside the working directory). If that tool is unavailable, give
+the final path. Do not deliver drafts, renders or check reports unless asked.

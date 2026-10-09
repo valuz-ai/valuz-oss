@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { useTranslation } from "@valuz/core";
+import { tokens } from "@valuz/ui";
 
 /**
  * Inline task-status label shown under the title on the project task list
@@ -29,7 +30,7 @@ const TASK_STATUS_KEY: Record<string, string> = {
 // while a highlight glints over it — matches the page's active-state color.
 const RUNNING_SHIMMER: CSSProperties = {
   backgroundImage:
-    "linear-gradient(90deg, #725cf9 0%, #725cf9 35%, #c9beff 50%, #725cf9 65%, #725cf9 100%)",
+    `linear-gradient(90deg, ${tokens.color.brand} 0%, ${tokens.color.brand} 35%, #c9beff 50%, ${tokens.color.brand} 65%, ${tokens.color.brand} 100%)`,
   backgroundSize: "200% 100%",
   backgroundClip: "text",
   WebkitBackgroundClip: "text",

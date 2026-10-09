@@ -751,3 +751,106 @@ describe("ProjectDetailContextPanel — Project deliverables section", () => {
     expect(screen.queryByText("交付物")).toBeNull();
   });
 });
+
+describe("ProjectDetailContextPanel — host extension points", () => {
+  // The generated-files section header wraps ``generatedFilesAction`` in a
+  // ``div.pr-3`` only when the action is truthy.
+  const headerActionBox = (container: HTMLElement) =>
+    container.querySelector("div.pr-3");
+
+  it("renders no action box in the generated-files header when no action is passed", () => {
+    const { container } = render(
+      <ProjectDetailContextPanel generatedFiles={[]} />,
+    );
+    expect(screen.getByText("产物")).toBeTruthy();
+    expect(headerActionBox(container)).toBeNull();
+  });
+
+  it("renders a passed generated-files action inside the section header", () => {
+    const { container } = render(
+      <ProjectDetailContextPanel
+        generatedFiles={[]}
+        generatedFilesAction={<button type="button">share-all</button>}
+      />,
+    );
+    const box = headerActionBox(container);
+    expect(box).not.toBeNull();
+    expect(box?.textContent).toBe("share-all");
+  });
+
+  it("adds no tab trigger, header wrapper or extra section when the new props are absent", () => {
+    const { container } = render(
+      <ProjectDetailContextPanel generatedFiles={[]} projectMemory={[]} />,
+    );
+    // Built-in tabs only: the project tab and the memory tab.
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(container.querySelector("header .ml-auto")).toBeNull();
+  });
+
+  it("adds a trigger for each extra tab and shows its content once selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectDetailContextPanel
+        projectMemory={[]}
+        extraTabs={[
+          {
+            id: "plugin-tab",
+            label: "Plugin tab",
+            content: <p>plugin tab body</p>,
+          },
+        ]}
+      />,
+    );
+    const tabs = screen.getAllByRole("tab");
+    // After the built-in tabs, in order.
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "项目",
+      "项目记忆",
+      "Plugin tab",
+    ]);
+    expect(screen.queryByText("plugin tab body")).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Plugin tab" }));
+    expect(screen.getByText("plugin tab body")).toBeTruthy();
+  });
+
+  it("ignores an extra tab that reuses a built-in tab value", () => {
+    render(
+      <ProjectDetailContextPanel
+        projectMemory={[]}
+        extraTabs={[
+          { id: "memory", label: "Impostor", content: <p>impostor body</p> },
+        ]}
+      />,
+    );
+    expect(screen.queryByRole("tab", { name: "Impostor" })).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("places header actions at the right end of the tab header", () => {
+    const { container } = render(
+      <ProjectDetailContextPanel
+        headerActions={<button type="button">panel-action</button>}
+      />,
+    );
+    const wrapper = container.querySelector("header .ml-auto");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("self-center");
+    expect(wrapper?.textContent).toBe("panel-action");
+  });
+
+  it("renders extra sections after the generated-files section", () => {
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[]}
+        extraSections={<section>plugin section</section>}
+      />,
+    );
+    const generated = screen.getByText("产物");
+    const extra = screen.getByText("plugin section");
+    expect(
+      generated.compareDocumentPosition(extra) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

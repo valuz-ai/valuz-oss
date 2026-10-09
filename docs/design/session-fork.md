@@ -4,8 +4,11 @@
 > `RuntimePort.fork_session` 全部接线(codex `thread/fork` / claude
 > 离线 transcript fork / deepagents sqlite checkpoint 链复制),kernel
 > fork 路由、host seam + REST、前端两个入口(会话头部菜单 "Fork 会话"、
-> 消息 hover "从此处 Fork")就绪。实现细节见 §6,交互全貌与已敲定的
-> 决策见 §6.5;遗留跟进项见 §6.5 末尾。
+> 消息 hover "从此处 Fork")就绪。后接入的第四个 runtime deepseek_harness
+> (DSH)**未接线**:逐轮锚点(`seq`)照常落库,但 `fork_session` 抛
+> `NotImplementedError` → kernel 路由 422,前端按 runtime 门控不展示入口
+> (从未运行过的源会话走纯配置复制、不经 runtime,任何 runtime 均可)。
+> 实现细节见 §6,交互全貌与已敲定的决策见 §6.5;遗留跟进项见 §6.5 末尾。
 >
 > 调研基线(2026-08,均为本仓库实际锁定/捆绑的版本,关键结论经实测验证):
 > `claude-agent-sdk` 0.2.128(bundled CLI 2.1.220)· `openai-codex` 0.144.4(捆绑二进制
@@ -206,6 +209,12 @@ langfuse overlay 已在用同一通道(`langfuse_session_id`),两者共存无冲
 
 ## 4. 能力矩阵
 
+> 下表是 2026-08 的**调研基线**(当时 DSH 尚未接入;"锚点已落库"一行是彼时
+> 状态,§2 表与 §5.2 缺口清单同理)。现状:四个 runtime 的逐轮锚点均已落在
+> `messages.metadata.runtime_native`(codex `turn_id` / claude `message_uuid` /
+> deepagents `checkpoint_id` / DSH `seq`);fork 接线 codex / claude / deepagents,
+> DSH 未接线(422)——见文首状态与 §6。
+
 | | Claude Agent | Codex | DeepAgents |
 |---|---|---|---|
 | Session 级 fork | ✅ 官方 `resume` + `fork_session` | ✅ `thread/fork` 不带锚点 | ⚠️ 无官方实现;自实现 `acopy_thread`(2 条 SQL / 目录拷贝) |
@@ -262,8 +271,9 @@ langfuse overlay 已在用同一通道(`langfuse_session_id`),两者共存无冲
    缺失当场报错(502)且零回滚成本;成功后 `runtime_session_id` 已回填、
    runtime 留温,历史复制后 session 行**最后落库作为提交点**。副作用:
    fork 调用包含一次 codex 子进程冷启动(约 1–2s),首次 Send 直接复用
-   温 runtime。三个 runtime 都实现该方法(claude/deepagents 在 P2/P1
-   落地前显式 `NotImplementedError` → 路由译为 422,落地后路由零改动)。
+   温 runtime。各 runtime 都实现该方法:codex / claude / deepagents 已接线;
+   未接线的(现为 DSH,以及 deepagents 的非 sqlite checkpoint 后端)显式
+   `NotImplementedError` → 路由译为 422,日后接线路由零改动。
 3. **deepagents 的 `thread_id == session.id` 硬绑定**
    (`kernel/src/runtimes/deepagents/runtime.py`:`runtime_session_id`
    为空时无条件回填 `session.id`)需解耦为"优先读已有值",
@@ -385,8 +395,8 @@ Client                Host                        Kernel                     Run
   │                        │                                     → 回填 runtime_session_id,
   │                        │                                     runtime 留温
   │                        │                    失败 → 502(此时零落库,无需回滚;
-  │                        │                    NotImplementedError → 422,P1/P2
-  │                        │                    落地后路由零改动)
+  │                        │                    NotImplementedError → 422:DSH、
+  │                        │                    deepagents 非 sqlite 后端)
   │                        │                 ② copy_history(messages/events 重铸,
   │                        │                    store 双写,durable 镜像自动同步)
   │                        │                 ③ save_session ← 提交点(最后落库)
@@ -422,13 +432,18 @@ Kernel → orchestrator.run_turn → _ensure_runtime:
 
 ### 前端可用性判定(零新增 API)
 
-- **消息级入口**:`message.metadata.runtime_native?.provider === "codex"` 且
-  `status === "completed"` 时启用——`MessageData` wire 已带 `metadata`,
-  列表接口现成;锚点缺失(存量老消息)显示禁用态 + tooltip。
-- **会话级入口**:`runtime_provider === "codex"` 且非 running;running 时
-  会话级禁用(kernel 409 兜底),消息级仍可对历史已完成消息使用。
-- 错误映射:409(锚点无效/运行中)→ toast;422(runtime 未支持)→
-  入口本就不显示;502(原生 fork 失败,已回滚)→ toast "Fork 失败,请重试"。
+- **统一门控**:`canForkSession`(`useTitleActions.ts`)——`runtime_provider`
+  ∈ `FORKABLE_RUNTIMES`(codex / claude_agent / deepagents)且非 task 会话
+  (`task_id` 为空)。会话头部与消息 hover 共用这一个谓词;DSH 不在集合内。
+- **消息级入口**:门控通过,且该轮 `forkAnchor !== false`(终结
+  `session_update` 的 `fork_anchor` 信号,见 §6.5 末尾)、未取消/中断、有
+  自己的 message;信号缺失(老事件)视为 unknown 照常显示,锚点缺失由 kernel
+  409 兜底 → toast。DSH 轮次锚点照常落库、信号为 `true`,靠的是 runtime 门控。
+- **会话级入口**:门控通过;running 或 fork in-flight 时禁用(kernel 409 兜底),
+  消息级仍可对历史已完成消息使用。
+- 错误映射:409(锚点无效/运行中)→ toast;422(runtime 未支持)→ 入口
+  本就不显示,漏网的(如 deepagents 非 sqlite 后端)→ toast;502(原生 fork
+  失败,已回滚)→ toast "Fork 失败,请重试"。
 
 ### 决策点(已对齐,2026-08-12 敲定)
 
@@ -461,7 +476,8 @@ Kernel → orchestrator.run_turn → _ensure_runtime:
    `project_index.record` + `SESSION_CREATED`;
 4. 前端(webui/desktop 共用 `@valuz/app`):`sessionsApi.fork`
    (`packages/core/src/api/sessions-api.ts`,120s 超时 + 列表缓存失效)、
-   会话头部菜单 "Fork 会话"(codex 会话可见,running/in-flight 禁用)、
+   会话头部菜单 "Fork 会话"(非 task 的 codex / claude_agent / deepagents
+   会话可见,running/in-flight 禁用)、
    消息 hover "从此处 Fork"(`ConversationBody.renderTurnActions`,
    锚点 message_id 取自 `turn.id` 的 `turn-` 前缀剥离)、
    `useTitleActions.handleFork`(成功 toast + 跳转 `/conversation/{id}`,
@@ -476,10 +492,11 @@ Kernel → orchestrator.run_turn → _ensure_runtime:
   `ConversationTurn.forkAnchor`——`false` 禁用 "从此处 Fork";信号缺失
   (该字段之前录制的事件)= unknown,维持"显示 + 409 兜底"。
 - **侧边栏 Recents 行菜单 + Activity/项目详情行菜单 Fork 入口(已实现)**:
-  侧边栏按 `RunSummary`(runtime/origin/running)精确门控;Activity 的
-  `ActivityItem` 不带 runtime/origin——现在三个 runtime 全部可 fork,
-  运行时门控已无意义,仅按 status 排除 running,automation 来源行由
-  host 422 → toast 兜底。
+  侧边栏按 `RunSummary`(runtime/origin/running)精确门控;Activity/项目
+  详情行按 `ActivityItem.runtime`(chat 行由 kernel 会话补全)走同一
+  `canForkSession`,并排除 running 与 automation 来源行(chat 行本就不含
+  task 会话)。门控仍然必要:DSH 不可 fork,此前这些行对 DSH 会话照样显示
+  Fork,点了只得到 422 toast。
 - **D6 "forked from" 回链 chip(已实现)**:`forked_from_session_id`
   透出到 `SessionListItem`/`SessionDetail`(openapi 同步),会话头部
   渲染可点击 Badge 跳转源会话(源已删除时由目标页自身的 not-found 处理)。

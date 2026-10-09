@@ -33,13 +33,14 @@ from app.schemas import (  # type: ignore[import-not-found]
     CreateSessionRequest,
     EventPayload,
     FinalizeSessionRequest,
+    RecoverFailedSessionRequest,
     UpdateSessionRequest,
 )
 
-from valuz_agent.adapters.kernel_client import KernelClientError
+from valuz_agent.adapters.kernel_client import KernelClientError, KernelConflictError
 from valuz_agent.adapters.kernel_client_http import HttpKernelClient
 
-from conftest import reimported_modules
+from tests.module_reimports import reimported_modules
 
 TOKEN = "test-kernel-token"
 
@@ -138,6 +139,18 @@ async def test_rest_round_trip_against_standalone_kernel(kernel_proc) -> None:
             owner, session_id, FinalizeSessionRequest(status="idle")
         )
         assert finalized.status == "idle"
+        # Real owned HTTP route refuses a nonfailed/unknown-message snapshot.
+        with pytest.raises(KernelConflictError):
+            await client.recover_failed_session(
+                owner,
+                session_id,
+                RecoverFailedSessionRequest(
+                    failed_message_id="unknown-message",
+                    project_id="chat",
+                    agent_slug="valurion",
+                    expected_snapshot_hash="0" * 64,
+                ),
+            )
 
         # No message rows yet → out-of-band append reports not-persisted.
         assert (
@@ -261,9 +274,21 @@ def test_http_client_covers_the_full_protocol_surface() -> None:
         "reset_stranded_session",
         "run_ephemeral_review_in_scope",
         "cleanup_runtime",
+        # Desktop capability-token control always stays in the host process;
+        # it must not be projected onto a remote project/session transport.
+        "reconfigure_desktop_network_egress",
+        "interrupt_desktop_network_egress_activity",
     }
     for name in (set(EXPECTED_ROUTES) | set(EXPECTED_STREAMS)) - in_process_only:
         assert hasattr(HttpKernelClient, name), f"HttpKernelClient lacks {name}"
+
+
+def test_desktop_control_operations_are_not_remote_http_methods() -> None:
+    for name in (
+        "reconfigure_desktop_network_egress",
+        "interrupt_desktop_network_egress_activity",
+    ):
+        assert not hasattr(HttpKernelClient, name)
 
 
 @pytest.mark.asyncio

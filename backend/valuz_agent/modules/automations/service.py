@@ -33,6 +33,7 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.facade.projects import ProjectLibrary
 from valuz_agent.i18n import t
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.time_utils import now_ms
@@ -124,7 +125,7 @@ from valuz_agent.modules.automations.triggers import (
     MIN_INTERVAL_SECONDS,
     TriggerEvaluator,
 )
-from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+from valuz_agent.modules.playbooks.service import PlaybookService
 from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.ports.automation_event_source import EventSubscription, UnknownEventSourceError
 from valuz_agent.ports.automation_runtime import AutomationRunCommand
@@ -188,7 +189,7 @@ class AutomationService:
         self._ds = AutomationDatastore(db)
         self._members = ProjectMemberDatastore(db)
         self._agents = AgentDatastore(db)
-        self._playbooks = PlaybookDatastore(db)
+        self._playbooks = PlaybookService(db, ProjectLibrary())
         self._bus = event_bus
         self._ws = project_service
         self._agent_svc = agent_service
@@ -386,11 +387,11 @@ class AutomationService:
             return None, None
         if action_kind != "chat":
             raise AutomationPlaybookTaskUnsupported()
-        definition = await self._playbooks.get_definition(user_id, definition_id)
+        definition = await self._playbooks.find_definition(user_id, definition_id)
         if definition is None:
             raise AutomationPlaybookNotFound()
         resolved_version = version or definition.current_version
-        if await self._playbooks.get_version(user_id, definition.id, resolved_version) is None:
+        if await self._playbooks.find_version(user_id, definition.id, resolved_version) is None:
             raise AutomationPlaybookVersionNotFound()
         return definition.id, resolved_version
 
@@ -446,6 +447,8 @@ class AutomationService:
             trigger_human_readable=self._trigger_human(row),
             event_source=row.event_source,
             event_refs=row.event_refs,
+            app_plugin_id=row.app_plugin_id,
+            app_plugin_name=row.app_plugin_name,
             status=row.status,
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
@@ -717,6 +720,22 @@ class AutomationService:
         """
         user_id = self._require_user_id(user_id)
         code_execution = isinstance(payload.effective_execution, CodeExecution)
+        target = getattr(payload.effective_execution, "target_session_id", None)
+        if target is not None:
+            from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+            session = await validate_chat_target(
+                user_id,
+                target,
+                project_id=payload.project_id,
+                agent_slug=payload.agent_slug,
+                worktree=payload.worktree,
+            )
+            project_id = str((session.metadata.get("valuz") or {}).get("project_id") or "")
+            _, ws_kind = await self._get_project_info(project_id, user_id)
+            if ws_kind != payload.project_kind:
+                raise AutomationProjectNotFound()
+            return project_id, payload.agent_slug or ""
         # ── Chat path ───────────────────────────────────────────────────
         if payload.project_kind == "chat":
             if self._ws is None:
@@ -1097,8 +1116,15 @@ class AutomationService:
         calling_session_project_id: str | None = None,
         origin_tool_call_id: str | None = None,
         user_id: str | None = None,
+        app_plugin_id: str | None = None,
+        app_plugin_name: str | None = None,
+        initial_status: Literal["enabled", "paused"] = "enabled",
     ) -> AutomationDetailResponse:
         """Create a new automation row.
+
+        ``app_plugin_id`` / ``app_plugin_name`` mark a row a third-party plugin
+        declared in its manifest (``modules/app_plugins``); ``None`` for every
+        other automation.
 
         ``calling_session_project_id`` is the project of the kernel
         session that's making the call — relevant only when the
@@ -1107,6 +1133,8 @@ class AutomationService:
         以当前 chat project 为准" decision). HTTP create requests pass
         ``None``, which falls back to lazy-create for chat-kind payloads.
         """
+        if initial_status not in {"enabled", "paused"}:
+            raise ValueError("invalid initial automation status")
         user_id = self._require_user_id(user_id)
         name = payload.name.strip()
         if not name:
@@ -1163,10 +1191,12 @@ class AutomationService:
             playbook_definition_id=playbook_definition_id,
             playbook_version=playbook_version,
             trigger_kind="cron",  # overwritten by _apply_trigger
-            status="enabled",
+            status=initial_status,
             next_run_at=None,
             last_run_at=None,
             origin_tool_call_id=origin_tool_call_id,
+            app_plugin_id=app_plugin_id,
+            app_plugin_name=app_plugin_name,
             event_source=payload.event_source,
             event_refs=payload.event_refs,
             created_at=now,
@@ -1176,7 +1206,9 @@ class AutomationService:
         apply_input_contract(row, payload.input)
         apply_result_contract(row, result)
         self._apply_trigger(row, payload.trigger)
-        row.next_run_at = self._triggers.initial_next_fire(row, now=now)
+        row.next_run_at = (
+            self._triggers.initial_next_fire(row, now=now) if initial_status == "enabled" else None
+        )
 
         await self._ds.create_automation(user_id, row)
         self._bus.publish(
@@ -1286,6 +1318,8 @@ class AutomationService:
             trigger_human_readable=self._trigger_human(row),
             event_source=row.event_source,
             event_refs=row.event_refs,
+            app_plugin_id=row.app_plugin_id,
+            app_plugin_name=row.app_plugin_name,
             status=row.status,
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
@@ -1345,9 +1379,22 @@ class AutomationService:
                 candidate = (payload.agent_slug or row.agent_slug or "").strip()
                 if not candidate:
                     raise AutomationAgentRequired()
-                member = await self._members.get(user_id, row.project_id, candidate)
-                if member is None:
-                    raise AgentNotInProject()
+                if payload.execution.target_session_id:
+                    from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+                    await validate_chat_target(
+                        user_id,
+                        payload.execution.target_session_id,
+                        project_id=row.project_id,
+                        agent_slug=candidate,
+                        worktree=bool(
+                            payload.worktree if payload.worktree is not None else row.worktree
+                        ),
+                    )
+                else:
+                    member = await self._members.get(user_id, row.project_id, candidate)
+                    if member is None:
+                        raise AgentNotInProject()
                 apply_execution_contract(row, payload.execution)
                 row.agent_slug = candidate
                 row.agent_kind = row.agent_kind or "project_member"
@@ -1373,9 +1420,20 @@ class AutomationService:
             new_slug = payload.agent_slug.strip()
             if not new_slug:
                 raise AutomationAgentRequired()
-            member = await self._members.get(user_id, row.project_id, new_slug)
-            if member is None:
-                raise AgentNotInProject()
+            current_target = row.target_session_id
+            if current_target:
+                from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+                await validate_chat_target(
+                    user_id,
+                    current_target,
+                    project_id=row.project_id,
+                    agent_slug=new_slug,
+                )
+            else:
+                member = await self._members.get(user_id, row.project_id, new_slug)
+                if member is None:
+                    raise AgentNotInProject()
             row.agent_slug = new_slug
 
         if payload.action_kind is not None and not is_code and payload.execution is None:
@@ -1384,6 +1442,12 @@ class AutomationService:
             # trusting any cached value — projects don't change kind
             # post-create today, but the lookup is cheap.
             if payload.action_kind == "task":
+                if getattr(row, "target_session_id", None):
+                    from valuz_agent.modules.automations.errors import AutomationContractInvalid
+
+                    raise AutomationContractInvalid(
+                        "target_session_id requires agent chat execution"
+                    )
                 _, ws_kind = await self._get_project_info(row.project_id, user_id)
                 if ws_kind != "project":
                     raise AutomationTaskOnlyOnProject()
@@ -1424,6 +1488,22 @@ class AutomationService:
 
         if payload.worktree is not None and not is_code:
             row.worktree = bool(payload.worktree)
+
+        final_target = row.target_session_id
+        if final_target:
+            from valuz_agent.modules.sessions.background_targets import validate_chat_target
+
+            if row.execution_kind != "agent" or row.action_kind != "chat":
+                from valuz_agent.modules.automations.errors import AutomationContractInvalid
+
+                raise AutomationContractInvalid("target_session_id requires agent chat execution")
+            await validate_chat_target(
+                user_id,
+                final_target,
+                project_id=row.project_id,
+                agent_slug=row.agent_slug,
+                worktree=row.worktree,
+            )
 
         # ── Event subscription ──────────────────────────────────────────
         # Both fields patchable, but only as a pair (schema-enforced): to
@@ -1563,6 +1643,7 @@ class AutomationService:
         extra_input: str | None = None,
         input_json: dict[str, Any] | None = None,
         invoked_by_ref: str | None = None,
+        run_id: str | None = None,
     ) -> AutomationRunRow:
         """Shared enqueue path: write the run row, publish, hand to the
         runtime port. Every entrance that starts a run — ``run_now`` and
@@ -1571,7 +1652,7 @@ class AutomationService:
         """
         now = now_ms()
         run = AutomationRunRow(
-            id=uuid4().hex,
+            id=run_id or uuid4().hex,
             automation_id=row.id,
             project_id=row.project_id,
             trigger_type=trigger_type,
@@ -1621,6 +1702,8 @@ class AutomationService:
         run_input: Any = None,
         invoked_by_ref: str | None = None,
         user_id: str | None = None,
+        _retry_source_run_id: str | None = None,
+        _retry_run_id: str | None = None,
     ) -> AutomationRunAcceptedResponse:
         """Enqueue an immediate, off-schedule run for this automation.
 
@@ -1652,10 +1735,19 @@ class AutomationService:
         guards against the cron-triggered path; this DB-side check guards
         against two rapid "run now" clicks racing each other.
         """
+        if (
+            _retry_source_run_id is None
+            and invoked_by_ref
+            and invoked_by_ref.startswith("retry-failed:")
+        ):
+            raise ValueError("reserved retry provenance requires the canonical retry factory")
         user_id = self._require_user_id(user_id)
         row = await self._ds.get_automation_for_update(user_id, automation_id)
         if row is None:
             raise AutomationNotFound()
+        from .app_plugin_authorization import authorize_managed_automation
+
+        await authorize_managed_automation(row, user_id=user_id)
         # ``paused`` only suspends the schedule. An explicit "run now" — a
         # human clicking a workbench card or an agent invoking the tool — is
         # the opposite of the tick loop, so it runs regardless; the row stays
@@ -1665,12 +1757,37 @@ class AutomationService:
             run_input = extra_input
         text_input, json_input = self._effective_run_input(row, run_input)
 
+        if _retry_run_id is not None:
+            if _retry_source_run_id is None or not _retry_run_id:
+                raise ValueError("retry run identity requires the canonical retry factory")
+            replay = await self._db.get(AutomationRunRow, _retry_run_id)
+            if replay is not None:
+                if (
+                    replay.user_id != user_id
+                    or replay.automation_id != automation_id
+                    or replay.invoked_by_ref != f"retry-failed:{_retry_source_run_id}"
+                ):
+                    raise ValueError("retry run identity has a different owner or source")
+                source = await self._ds.get_run(user_id, automation_id, _retry_source_run_id)
+                if source is None or source.status not in {"failed", "cancelled"}:
+                    raise ValueError("retry source is no longer a terminal failure")
+                # Persisted queue is the authority. Never enqueue a second run on an
+                # uncertain dispatch reply; normal queue recovery owns this run.
+                return AutomationRunAcceptedResponse(
+                    run_id=replay.id, automation_id=automation_id, status="queued"
+                )
         existing = await self._ds.active_run(user_id, automation_id)
         if existing is not None:
             if existing.status == "queued":
                 raise AutomationAlreadyQueued()
             if existing.status == "running":
                 raise AutomationAlreadyRunning()
+
+        if _retry_source_run_id is not None:
+            source_run = await self._ds.get_run(user_id, automation_id, _retry_source_run_id)
+            if source_run is None or source_run.status not in {"failed", "cancelled"}:
+                raise ValueError("retry requires an owned terminal failure of this automation")
+            invoked_by_ref = f"retry-failed:{source_run.id}"
 
         run = await self._enqueue_run(
             row,
@@ -1680,9 +1797,28 @@ class AutomationService:
             extra_input=text_input,
             input_json=json_input,
             invoked_by_ref=invoked_by_ref,
+            run_id=_retry_run_id,
         )
         return AutomationRunAcceptedResponse(
             run_id=run.id, automation_id=automation_id, status="queued"
+        )
+
+    async def retry_failed_run(
+        self,
+        automation_id: str,
+        source_run_id: str,
+        *,
+        user_id: str | None = None,
+        run_id: str | None = None,
+    ) -> AutomationRunAcceptedResponse:
+        """Explicit retry references the owned failed run and its immutable source event.
+
+        It uses the original single-flight/enqueue path and creates no new event,
+        watch subscription or alternate execution ledger. Unknown or successful
+        source runs cannot be retried through this interface.
+        """
+        return await self.run_now(
+            automation_id, user_id=user_id, _retry_source_run_id=source_run_id, _retry_run_id=run_id
         )
 
     # ── Runs: read / wait / cancel / artifact ─────────────────────────
@@ -1769,7 +1905,7 @@ class AutomationService:
             run.completed_at = now
             await self._ds.replace_run(run)
         elif run.status == "running":
-            if row.execution_kind != "code":
+            if row.execution_kind != "code" and not getattr(row, "target_session_id", None):
                 raise AutomationCancelUnsupported()
             if run.cancel_requested_at is None:
                 run.cancel_requested_at = now

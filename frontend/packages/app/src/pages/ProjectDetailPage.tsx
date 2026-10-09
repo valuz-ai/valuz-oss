@@ -4,7 +4,6 @@ import {
   Composer,
   type ComposerAgentItem,
   DeleteConfirmDialog,
-  ProjectDetailContextPanel,
   type FileTreeNode,
   type ProjectMemberItem,
   type WorktreeSummary,
@@ -68,7 +67,16 @@ import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
-import { RUNTIME_DISPLAY_NAME, memoryApi, useTranslation } from "@valuz/core";
+import {
+  RUNTIME_DISPLAY_NAME,
+  SlotContribution,
+  SlotRenderer,
+  memoryApi,
+  useHasSlot,
+  useSlotRegistrations,
+  useTranslation,
+} from "@valuz/core";
+import { SlottedProjectContextPanel } from "./conversation/SlottedProjectContextPanel";
 import { useAgentEffectiveSkills } from "../hooks/use-agent-effective-skills";
 import { preserveLoadedChildren, toFileTree } from "../lib/file-tree";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
@@ -81,6 +89,15 @@ import {
 import { useForkSession } from "../hooks/use-fork-session";
 import { useProjectPlaybooks } from "../hooks/use-project-playbooks";
 import { toAbsoluteProjectPath } from "../lib/project-paths";
+
+/** Tab values the project home's history tabs use; plugin tabs may not reuse them. */
+const PROJECT_HOME_TAB_IDS = [
+  "all",
+  "chat",
+  "tasks",
+  "automation",
+  "playbook",
+] as const;
 
 /** Bytes as the rail shows them. Local because the two other copies of this in
  *  the app are equally local; unifying them is not this change's business. */
@@ -149,6 +166,33 @@ export const ProjectDetailPage = () => {
   } = useProjectOutlet();
   const panelCollapsed = usePanelStore((s) => s.collapsed);
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
+
+  // Extension points on the project home. Read here (top level, not inside the
+  // render below) and turned into elements only while something is registered,
+  // so an empty slot adds no wrapper, trigger or tab body to the page.
+  const hasHeaderActions = useHasSlot("project.detail.header.actions");
+  // ``Composer`` adds a separator / row wrapper whenever these are passed, so
+  // they go in only while something occupies the slot.
+  const hasComposerPlusItems = useHasSlot(
+    "conversation.composer.plus.menu-items",
+  );
+  const hasComposerAttachments = useHasSlot(
+    "conversation.composer.attachments",
+  );
+  const detailTabRegistrations = useSlotRegistrations("project.detail.tabs");
+  // One tab per registration, keyed by its slot key. A key that repeats or that
+  // names one of this page's own tabs would hand Radix two triggers for one
+  // value, so the page's own tabs win and the higher-priority registration of a
+  // repeated key wins.
+  const detailExtraTabs = useMemo(() => {
+    const seen = new Set<string>(PROJECT_HOME_TAB_IDS);
+    return detailTabRegistrations.flatMap((registration) => {
+      const tabId = registration.key ?? registration.id;
+      if (seen.has(tabId)) return [];
+      seen.add(tabId);
+      return [{ tabId, registration }];
+    });
+  }, [detailTabRegistrations]);
 
   // Rename / delete a chat session — used by the activity feed's row actions.
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -1521,7 +1565,12 @@ export const ProjectDetailPage = () => {
     setContentInnerClassName("p-0");
 
     setRightPanel(
-      <ProjectDetailContextPanel
+      <SlottedProjectContextPanel
+        // Slot context for the context-panel extension points; ``id`` is
+        // already a dependency of this effect.
+        projectId={id}
+        sessionId={null}
+        surface="project-home"
         title={t("project.contextTab" as Parameters<typeof t>[0])}
         instructionsTitle={t("project.instruction" as Parameters<typeof t>[0])}
         scheduledTasksTitle={t("sidebar.automation" as Parameters<typeof t>[0])}
@@ -1745,6 +1794,16 @@ export const ProjectDetailPage = () => {
                 <p className="mt-2 text-sm text-muted-foreground">
                   {t("project.askAgent" as Parameters<typeof t>[0])}
                 </p>
+                {/* ``project.detail.header.actions`` — the row exists only while
+                    a plugin has registered for it. */}
+                {hasHeaderActions && (
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    <SlotRenderer
+                      name="project.detail.header.actions"
+                      context={{ projectId: id, project, navigate }}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="w-full" id="project-composer">
@@ -1758,6 +1817,7 @@ export const ProjectDetailPage = () => {
                   // project" is answered while working inside one.
                   footerBar={
                     <ExecutionLocationBar
+                      surface="project-home"
                       locked
                       lockedOriginId={project?.exec_origin ?? "local"}
                       targetId={null}
@@ -1776,6 +1836,59 @@ export const ProjectDetailPage = () => {
                       selectedProjectId={project ? project.id : null}
                       onProjectChange={() => {}}
                     />
+                  }
+                  // Toolbar slots are rendered bare by ``Composer`` (no
+                  // wrapper, no separator), so an empty ``SlotRenderer`` adds
+                  // nothing and needs no ``useHasSlot`` gate here. The project
+                  // home has no session yet, hence ``sessionId: null``.
+                  toolbarLeft={
+                    <SlotRenderer
+                      name="conversation.composer.input.left"
+                      context={{
+                        sessionId: null,
+                        projectId: project?.id ?? null,
+                        draft: composerValue,
+                        setDraft: setComposerValue,
+                        surface: "project-home",
+                      }}
+                    />
+                  }
+                  toolbarRight={
+                    <SlotRenderer
+                      name="conversation.composer.input.right"
+                      context={{
+                        sessionId: null,
+                        projectId: project?.id ?? null,
+                        draft: composerValue,
+                        setDraft: setComposerValue,
+                        surface: "project-home",
+                      }}
+                    />
+                  }
+                  plusMenuItems={
+                    hasComposerPlusItems ? (
+                      <SlotRenderer
+                        name="conversation.composer.plus.menu-items"
+                        context={{
+                          sessionId: null,
+                          projectId: project?.id ?? null,
+                          setDraft: setComposerValue,
+                          surface: "project-home",
+                        }}
+                      />
+                    ) : undefined
+                  }
+                  attachmentsExtra={
+                    hasComposerAttachments ? (
+                      <SlotRenderer
+                        name="conversation.composer.attachments"
+                        context={{
+                          sessionId: null,
+                          projectId: project?.id ?? null,
+                          surface: "project-home",
+                        }}
+                      />
+                    ) : undefined
                   }
                   value={composerValue}
                   onChange={setComposerValue}
@@ -1868,6 +1981,15 @@ export const ProjectDetailPage = () => {
                       <TabsTrigger value="playbook">
                         {t("playbook.title" as Parameters<typeof t>[0])}
                       </TabsTrigger>
+                      {/* ``project.detail.tabs`` — a trigger per registration. */}
+                      {detailExtraTabs.map(({ tabId, registration }) => (
+                        <TabsTrigger key={tabId} value={tabId}>
+                          {t(
+                            (registration.label ??
+                              registration.id) as Parameters<typeof t>[0],
+                          )}
+                        </TabsTrigger>
+                      ))}
                     </TabsList>
                   </div>
                   <TabsContent value="all" className="mt-5">
@@ -1961,8 +2083,25 @@ export const ProjectDetailPage = () => {
                       )}
                     />
                   </TabsContent>
+                  {detailExtraTabs.map(({ tabId, registration }) => (
+                    <TabsContent key={tabId} value={tabId} className="mt-5">
+                      <SlotContribution
+                        name="project.detail.tabs"
+                        registration={registration}
+                        context={{ projectId: id, navigate }}
+                      />
+                    </TabsContent>
+                  ))}
                 </Tabs>
               </div>
+
+              {/* ``project.detail.sections`` — contributions are direct children
+                  of the column, so they take its ``gap-5`` rhythm; an empty slot
+                  renders nothing and adds no gap. */}
+              <SlotRenderer
+                name="project.detail.sections"
+                context={{ projectId: id, project }}
+              />
             </div>
           </div>
         </>

@@ -17,6 +17,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "~4.0.5-alpha.1",
     "@valuz/shared": "workspace:*",
     "react": "^19.2.7",
     "zustand": "^5.0.8"

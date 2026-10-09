@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 # reflects the full host schema at autogenerate time.
 import valuz_agent.infra.execution_lease  # noqa: F401,E402
 import valuz_agent.modules.agents.models  # noqa: F401,E402
+import valuz_agent.modules.app_plugins.models  # noqa: F401,E402
 import valuz_agent.modules.artifacts.models  # noqa: F401,E402
 import valuz_agent.modules.automations.models  # noqa: F401,E402
 import valuz_agent.modules.citations.models  # noqa: F401,E402
@@ -49,6 +50,7 @@ import valuz_agent.modules.connectors.models  # noqa: F401,E402
 import valuz_agent.modules.docs.models  # noqa: F401,E402
 import valuz_agent.modules.evidence.models  # noqa: F401,E402
 import valuz_agent.modules.marketplace.install_store  # noqa: F401,E402
+import valuz_agent.modules.memory.journal  # noqa: F401,E402
 import valuz_agent.modules.notifications.models  # noqa: F401,E402
 import valuz_agent.modules.operations.models  # noqa: F401,E402
 import valuz_agent.modules.parser.models  # noqa: F401,E402

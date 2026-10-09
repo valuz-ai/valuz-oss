@@ -23,7 +23,7 @@ from src.adapters.sqlalchemy_store.models import Base
 from src.adapters.sqlalchemy_store.store import SQLAlchemyStore
 from src.core.agent_config import AgentConfig
 from src.core.events import Event
-from src.core.types import Message, Session, UserMessage
+from src.core.types import Error, Message, Session, UserMessage
 
 
 class FlakyMirror:
@@ -104,6 +104,103 @@ async def _seed(store, owner, tmp_path):
         ),
     )
     return sid, mid
+
+
+async def _failed_recovery_source(store, tmp_path):
+    session = _sess("failed-main", "owner", str(tmp_path))
+    session.status = "terminated"
+    session.stop_reason = Error(
+        category="execution_error", retry_status="exhausted", message="temporary synthetic failure"
+    )
+    session.instructions = "Frozen instructions"
+    session.runtime_session_id = "original-native-thread"
+    session.metadata = {"valuz": {"project_id": "chat", "agent_slug": "valurion"}}
+    await store.save_session(session)
+    await store.save_message(
+        "owner",
+        Message(
+            id="failed-output",
+            session_id=session.id,
+            user_message=UserMessage(text="original background"),
+            started_at=100,
+            status="errored",
+            stop_reason=session.stop_reason,
+            error_message={"recovery": "explicit_owner_retry"},
+        ),
+    )
+    return await store.load_session("owner", session.id)
+
+
+async def test_recovery_cas_on_live_sql_mirrors_only_current_state(rt, tmp_path):
+    store, runtime, _mirror, mirror_inner = rt
+    expected = await _failed_recovery_source(store, tmp_path)
+    assert await store.recover_failed_session_if_current("owner", expected, "failed-output")
+    live = await runtime.load_session("owner", expected.id)
+    mirrored = await mirror_inner.load_session("owner", expected.id)
+    assert live.status == mirrored.status == "idle"
+    assert live.instructions == mirrored.instructions == "Frozen instructions"
+    assert live.runtime_session_id == mirrored.runtime_session_id == "original-native-thread"
+    assert len(await mirror_inner.list_messages_for_session("owner", expected.id)) == 1
+
+
+async def test_recovery_cas_failure_never_writes_mirror(rt, tmp_path, monkeypatch):
+    store, runtime, mirror, _mirror_inner = rt
+    expected = await _failed_recovery_source(store, tmp_path)
+    changed = await runtime.load_session("owner", expected.id)
+    changed.status = "running"
+    await runtime.save_session(changed)
+    from unittest.mock import AsyncMock
+
+    write = AsyncMock()
+    monkeypatch.setattr(mirror, "save_session", write)
+    assert not await store.recover_failed_session_if_current("owner", expected, "failed-output")
+    write.assert_not_called()
+
+
+async def test_recovery_mirror_outage_does_not_undo_live_cas(rt, tmp_path):
+    store, runtime, mirror, mirror_inner = rt
+    expected = await _failed_recovery_source(store, tmp_path)
+    mirror.fail = True
+    assert await store.recover_failed_session_if_current("owner", expected, "failed-output")
+    assert (await runtime.load_session("owner", expected.id)).status == "idle"
+    assert (await mirror_inner.load_session("owner", expected.id)).status == "terminated"
+
+
+async def test_recovery_rereads_foreground_current_after_cas_before_mirror(
+    rt, tmp_path, monkeypatch
+):
+    store, runtime, _mirror, mirror_inner = rt
+    expected = await _failed_recovery_source(store, tmp_path)
+    actual_recover = runtime.recover_failed_session_if_current
+
+    async def foreground_after_cas(*args):
+        changed = await actual_recover(*args)
+        current = await runtime.load_session("owner", expected.id)
+        current.status = "running"
+        current.metadata = {**current.metadata, "new_foreground": True}
+        await runtime.save_session(current)
+        return changed
+
+    monkeypatch.setattr(runtime, "recover_failed_session_if_current", foreground_after_cas)
+    assert await store.recover_failed_session_if_current("owner", expected, "failed-output")
+    mirrored = await mirror_inner.load_session("owner", expected.id)
+    assert mirrored.status == "running" and mirrored.metadata["new_foreground"] is True
+    assert mirrored.instructions == "Frozen instructions"
+
+
+async def test_recovery_unsupported_live_store_does_not_use_a_capable_mirror(rt, tmp_path):
+    store, runtime, _mirror, mirror_inner = rt
+    expected = await _failed_recovery_source(store, tmp_path)
+
+    class UnsupportedLive:
+        async def load_session(self, *args):
+            return await runtime.load_session(*args)
+
+    wrapped = RuntimeStore(UnsupportedLive(), mirror_inner)
+    with pytest.raises(NotImplementedError):
+        await wrapped.recover_failed_session_if_current("owner", expected, "failed-output")
+    assert (await runtime.load_session("owner", expected.id)).status == "terminated"
+    assert (await mirror_inner.load_session("owner", expected.id)).status == "terminated"
 
 
 async def test_writes_dual_write_to_mirror_inline(rt, tmp_path):

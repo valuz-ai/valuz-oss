@@ -1,6 +1,7 @@
 export {
+  getResolvedDesktopRoutes,
+  registerRouteComponent,
   resolveRoutes,
-  resolvedDesktopRoutes,
   type ResolvedRoute,
 } from "./route-registry";
 export {

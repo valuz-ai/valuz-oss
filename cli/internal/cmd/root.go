@@ -103,6 +103,7 @@ func Root() *cobra.Command {
 		newEnvCmd(),
 		newModelCmd(),
 		newAgentCmd(),
+		newPluginCmd(),
 	)
 	return root
 }
@@ -141,10 +142,18 @@ func resolveRootOptions(cmd *cobra.Command) (*RootOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	cloudURL := os.Getenv("VALUZ_CLOUD_URL")
+	// Control-plane URL: --cloud-url > env VALUZ_CLOUD_URL > dev default.
+	cloudURL, err := cmd.Flags().GetString(flagCloudURL)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", flagCloudURL, err)
+	}
+	if cloudURL == "" {
+		cloudURL = os.Getenv("VALUZ_CLOUD_URL")
+	}
 	if cloudURL == "" {
 		cloudURL = "http://127.0.0.1:8001/cloud"
 	}
+	cloudURL = strings.TrimRight(cloudURL, "/")
 
 	p, err := (&RootOptions{ProfileName: profile}).ResolveProfile()
 	if err != nil {

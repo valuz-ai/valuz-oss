@@ -1,12 +1,14 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { routerInstancePlugin } from "./packages/shared/src/vite/router-instance-plugin.ts";
 
 const resolvePath = (segment: string) => path.resolve(__dirname, segment);
 
 export default defineConfig({
   plugins: [
     react(),
+    routerInstancePlugin(resolvePath("./apps/webui")),
     {
       // PDF.js exposes its worker through Vite's `?url` loader. The commercial
       // workspace may resolve that package from a parent pnpm store outside
@@ -48,6 +50,7 @@ export default defineConfig({
       "@valuz/ui": resolvePath("./packages/ui/src"),
       "@valuz/a2ui": resolvePath("./packages/a2ui/src"),
       "@valuz/app": resolvePath("./packages/app/src"),
+      "@valuz/plugin-sdk": resolvePath("./packages/plugin-sdk/src"),
     },
   },
   test: {
@@ -56,7 +59,7 @@ export default defineConfig({
     setupFiles: [resolvePath("./vitest.setup.ts")],
     server: {
       deps: {
-        inline: [/@a2ui\//],
+        inline: [/@a2ui\//, /^react-router(?:-dom)?(?:\/|$)/],
       },
     },
     include: [

@@ -132,6 +132,7 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     #   protocol. Only valid for projects — chat projects don't
     #   have the multi-member context the task protocol needs.
     action_kind: Mapped[str] = mapped_column(String(16), default="chat")
+    target_session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # Worktree isolation (design §5) — valid for BOTH action kinds, gated on
     # the bound project being a git repo. ``chat`` fires each run in its own
     # git worktree of the project repo; ``task`` runs the whole task (lead +
@@ -192,6 +193,17 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     # reload can map historical proposing tool-calls → their created rows and
     # show "already added" instead of a fresh Confirm button.
     origin_tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+
+    # ── Plugin ownership ──────────────────────────────────────────────
+    # Set on the code automations a third-party plugin declares in its manifest
+    # (created on install, deleted on uninstall — modules/app_plugins). NULL for
+    # every automation a user or an agent made.
+    app_plugin_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    app_plugin_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    app_plugin_source_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    app_plugin_catalog_binding: Mapped[dict[str, Any] | None] = mapped_column(
+        _JSON_VARIANT, nullable=True
+    )
 
     # ── Schedule state ────────────────────────────────────────────────
     status: Mapped[str] = mapped_column(String(32), default="enabled")

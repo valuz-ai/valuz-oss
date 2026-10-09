@@ -10,7 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "@valuz/shared/i18n";
 import type { ChatProjectBinding, Task } from "@valuz/core";
-import { channelsApi, useSessionStore } from "@valuz/core";
+import { channelsApi, useRegistryStore, useSessionStore } from "@valuz/core";
 import type { SessionListItem } from "@valuz/shared";
 
 // ── Shared, hoisted test state the module mocks read from ────────────────────
@@ -476,6 +476,7 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
   });
   afterEach(() => {
     vi.clearAllMocks();
+    useRegistryStore.setState({ slots: {} });
   });
 
   it("renders rows with data-anchor-key on all three tabs", async () => {
@@ -802,5 +803,100 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     await waitFor(() => expect(container.textContent).toContain("BravoTask"));
     expect(container.querySelector('[data-anchor-key="task-t1"]')).toBeNull();
     expect(container.textContent).not.toContain("Alpha");
+  });
+  describe("extension slots", () => {
+    beforeEach(() => {
+      useRegistryStore.setState({ slots: {} });
+    });
+
+    const loaded = async () => {
+      const view = renderPage();
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-anchor-key="task-t1"]'),
+        ).toBeTruthy(),
+      );
+      return view;
+    };
+
+    it("adds no title-block row, history tab or trailing section while the slots are empty", async () => {
+      const { container } = await loaded();
+      // The five built-in history tabs, nothing more.
+      expect(container.querySelectorAll('[role="tab"]')).toHaveLength(5);
+      expect(container.querySelector("h2")?.parentElement?.children).toHaveLength(
+        2, // title + subtitle: no actions row
+      );
+    });
+
+    it("hands the context panel the project-home slot context", async () => {
+      await loaded();
+      const props = (h.rightPanel as { props: Record<string, unknown> }).props;
+      expect(props.surface).toBe("project-home");
+      expect(props.projectId).toBe("A");
+      expect(props.sessionId).toBeNull();
+    });
+
+    it("renders header actions under the subtitle with the documented context", async () => {
+      useRegistryStore.getState().registerSlot("project.detail.header.actions", {
+        id: "hdr",
+        component: (props: Record<string, unknown>) => (
+          <button type="button" data-testid="hdr-action">
+            {String(props.projectId)}:{typeof props.navigate}:
+            {(props.project as { name?: string } | null)?.name ?? "none"}
+          </button>
+        ),
+      });
+      const { container } = await loaded();
+      const action = await screen.findByTestId("hdr-action");
+      const titleBlock = container.querySelector("h2")?.parentElement;
+      expect(titleBlock?.contains(action)).toBe(true);
+      // After the subtitle.
+      expect(
+        titleBlock?.querySelector("p")?.compareDocumentPosition(action),
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(action.textContent).toMatch(/^A:function:/);
+    });
+
+    it("adds a history tab per registration and shows its content when selected", async () => {
+      useRegistryStore.getState().registerSlot("project.detail.tabs", {
+        id: "board-tab",
+        key: "board",
+        label: "Board",
+        component: (props: Record<string, unknown>) => (
+          <p data-testid="board-body">
+            {String(props.projectId)}:{typeof props.navigate}
+          </p>
+        ),
+      });
+      const { container } = await loaded();
+      expect(container.querySelectorAll('[role="tab"]')).toHaveLength(6);
+      expect(screen.queryByTestId("board-body")).toBeNull();
+
+      // Radix tabs select on mousedown, not click.
+      fireEvent.mouseDown(screen.getByRole("tab", { name: "Board" }));
+      expect((await screen.findByTestId("board-body")).textContent).toBe(
+        "A:function",
+      );
+    });
+
+    it("renders sections at the end of the column, after the history", async () => {
+      useRegistryStore.getState().registerSlot("project.detail.sections", {
+        id: "sec",
+        component: (props: Record<string, unknown>) => (
+          <section data-testid="detail-section">
+            {String(props.projectId)}
+          </section>
+        ),
+      });
+      const { container } = await loaded();
+      const section = await screen.findByTestId("detail-section");
+      expect(section.textContent).toBe("A");
+      const history = container.querySelector('[role="tablist"]');
+      expect(history).not.toBeNull();
+      expect(
+        history!.compareDocumentPosition(section) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
   });
 });

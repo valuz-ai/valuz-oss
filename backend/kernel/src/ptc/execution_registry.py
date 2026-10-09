@@ -55,6 +55,8 @@ class ExecutionRecord:
     # Per-execution upstream client pool; typed loosely to keep this module
     # import-light (the pool imports the ``mcp`` client stack).
     upstream_pool: Any | None = None
+    # The session's hook bus (``SessionHooks``) for forwarded calls.
+    hooks: Any | None = None
 
 
 _REGISTRY: dict[str, ExecutionRecord] = {}

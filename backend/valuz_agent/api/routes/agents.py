@@ -272,7 +272,7 @@ async def list_agents(
     user_id: str = Depends(get_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
-) -> dict:
+) -> dict[str, Any]:
     """List agents, optionally filtered by source (official|custom)."""
     from valuz_agent.ports.extensions import ext
 
@@ -302,7 +302,7 @@ async def list_agent_deployments(
     slug: str,
     user_id: str = Depends(get_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
-) -> dict:
+) -> dict[str, Any]:
     """List the projects (projects) this agent is派驻'd into (live-reference).
 
     Powers the agent detail「派驻于 N 个项目」panel + delete-guard UX.

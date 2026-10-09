@@ -19,7 +19,6 @@ from valuz_agent.modules.settings.model_options import (
 from valuz_agent.modules.settings.preferences import (
     detect_system_timezone,
     get_conversation_citations_enabled,
-    get_ptc_enabled,
     get_conversation_task_coverage_enabled,
     get_conversation_verification_enabled,
     get_default_effort,
@@ -29,9 +28,9 @@ from valuz_agent.modules.settings.preferences import (
     get_default_runtime,
     get_default_timezone,
     get_font_size,
+    get_ptc_enabled,
     get_theme,
     set_conversation_citations_enabled,
-    set_ptc_enabled,
     set_conversation_task_coverage_enabled,
     set_conversation_verification_enabled,
     set_default_effort,
@@ -41,6 +40,7 @@ from valuz_agent.modules.settings.preferences import (
     set_default_runtime,
     set_default_timezone,
     set_font_size,
+    set_ptc_enabled,
     set_theme,
 )
 from valuz_agent.modules.settings.service import (
@@ -205,7 +205,7 @@ async def _mirror_to_default_assistant(
     from valuz_agent.modules.agents.service import AgentNotFoundError, AgentService
 
     try:
-        await AgentService(db).update_agent(  # type: ignore[arg-type]
+        await AgentService(db).update_agent(
             user_id,
             DEFAULT_ASSISTANT_SLUG,
             {

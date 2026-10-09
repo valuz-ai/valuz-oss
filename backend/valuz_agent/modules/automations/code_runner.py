@@ -478,7 +478,13 @@ async def run_code_automation(
     from valuz_agent.infra.config import settings
     from valuz_agent.infra.db import async_unit_of_work
 
+    from .app_plugin_authorization import (
+        AppPluginAutomationForbiddenError,
+        authorize_managed_automation,
+    )
+
     try:
+        await authorize_managed_automation(row, user_id=user_id)
         async with async_unit_of_work(commit=False) as db:
             project_cwd = await resolve_project_cwd(db, user_id, row.project_id)
         # The entry is usually a file the agent just wrote in its sandbox:
@@ -506,6 +512,12 @@ async def run_code_automation(
             locale=locale,
         )
         write_run_inputs(paths, ctx=ctx, effective_input=ctx["input"])
+    except AppPluginAutomationForbiddenError as exc:
+        return CodeRunResult(
+            status="failed",
+            error_code="app_plugin_source_unavailable",
+            error_message=str(exc)[:500],
+        )
     except CodeRunPreparationError as exc:
         return CodeRunResult(status="failed", error_code=exc.code, error_message=exc.message)
     except OSError as exc:

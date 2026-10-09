@@ -30,7 +30,10 @@ dependencies = [
     # >=0.2.128 bundles CLI 2.1.220 — required for the claude-opus-5 model
     # (added in CLI 2.1.219 / first bundled by 0.2.127); also picks up the
     # premature-stdin-closure fix for in-flight background tasks (0.2.127).
-    "claude-agent-sdk>=0.2.128",
+    # >=0.2.164 bundles CLI 2.1.292. CLI 2.1.220 (SDK 0.2.128) hangs
+    # even at --version under macOS Rosetta; upgrade the complete SDK so the
+    # Python transport and officially bundled CLI stay paired.
+    "claude-agent-sdk>=0.2.164",
     "openai-agents>=0.14.6",
     # Routes OpenAI-compatible models (incl. Reportify proxy on
     # http://172.20.2.240:8080) through the kernel's deepagents runtime.
@@ -218,6 +221,11 @@ dev = [
     # from Python, so openpyxl belongs here and must NOT return to the runtime
     # dependency list.
     "openpyxl>=3.1",
+    # tests/resources/office_skills/test_office_pptx_skill.py inspects the
+    # decks the bundled pptx skill builds. The skill itself runs in the bundled
+    # session python, so these stay test-only.
+    "lxml>=5.0",
+    "python-pptx>=1.0",
 ]
 # PostgreSQL async driver for the remote data-service deployment (SaaS / B-real).
 # Opt-in: OSS local-first runs on SQLite (aiosqlite) and never needs this, so the
@@ -296,7 +304,7 @@ select = ["E", "F", "I", "N", "UP", "B"]
 python_version = "3.12"
 strict = true
 warn_return_any = true
-mypy_path = "$MYPY_CONFIG_FILE_DIR/kernel/src"
+mypy_path = ["$MYPY_CONFIG_FILE_DIR/kernel/src", "$MYPY_CONFIG_FILE_DIR/typings"]
 exclude = [
     "^kernel/",
     "^valuz_agent/resources/",

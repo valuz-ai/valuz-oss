@@ -85,9 +85,60 @@ async def create_project(
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectDetail:
     try:
-        return await svc.create_project(user_id, payload.name, payload.root_path)
+        return await svc.create_project(
+            user_id, payload.name, payload.root_path, payload.trust_workspace
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class WorkspaceHooksPreviewRequest(BaseModel):
+    root_path: str
+
+
+class WorkspaceTrustUpdate(BaseModel):
+    trusted: bool
+
+
+@router.post("/workspace-hooks/preview")
+async def preview_workspace_hooks(
+    payload: WorkspaceHooksPreviewRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Hook commands a folder would run on its own, before it is bound.
+
+    The bind dialog asks the user to trust the folder only when this is
+    non-empty (docs: workspace trust, H0).
+    """
+    from valuz_agent.modules.projects.workspace_trust import detect_workspace_hooks
+
+    return {"hooks": [hook.to_dict() for hook in detect_workspace_hooks(payload.root_path)]}
+
+
+@router.get("/{project_id}/workspace-trust")
+async def get_workspace_trust(
+    project_id: str,
+    user_id: str = Depends(get_current_user_id),
+    svc: ProjectService = Depends(get_project_service),
+) -> dict[str, Any]:
+    try:
+        return await svc.workspace_trust(user_id, project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}") from exc
+
+
+@router.put("/{project_id}/workspace-trust")
+async def set_workspace_trust(
+    project_id: str,
+    payload: WorkspaceTrustUpdate,
+    user_id: str = Depends(get_current_user_id),
+    svc: ProjectService = Depends(get_project_service),
+) -> dict[str, Any]:
+    """Trust the folder's own hooks (or stop) — applies to sessions started after."""
+    try:
+        return await svc.set_workspace_trust(user_id, project_id, payload.trusted)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}") from exc
 
 
 @router.post("/{project_id}/files", status_code=201)
@@ -368,6 +419,12 @@ class ConnectorToConfigure(BaseModel):
     requires_setup: bool
 
 
+class MemoryImportError(BaseModel):
+    entry_index: int | None = None
+    error_code: str
+    error: str
+
+
 class ImportProjectConfirmResponse(BaseModel):
     status: str
     project: dict[str, Any] | None = None
@@ -379,6 +436,8 @@ class ImportProjectConfirmResponse(BaseModel):
     agents_skipped: int = 0
     automations_created: int = 0
     automation_errors: list[dict[str, str]] = []
+    memory_imported: int = 0
+    memory_errors: list[MemoryImportError] = []
     members: list[dict[str, Any]] = []
     automations: list[dict[str, Any]] = []
     connectors_to_configure: list[ConnectorToConfigure] = []
@@ -487,6 +546,8 @@ async def import_project_confirm(
         agents_skipped=result.get("agents_skipped", 0),
         automations_created=result.get("automations_created", 0),
         automation_errors=result.get("automation_errors", []),
+        memory_imported=result.get("memory_imported", 0),
+        memory_errors=[MemoryImportError(**item) for item in result.get("memory_errors", [])],
         members=result.get("members", []),
         automations=result.get("automations", []),
         connectors_to_configure=[

@@ -10,9 +10,7 @@ import { DesktopProjectLayout } from "../layouts/DesktopProjectLayout";
 import { PageLoader } from "@valuz/ui";
 import {
   createAppRouteObjects,
-  createAppRouter,
   resolveRoutes,
-  resolvedDesktopRoutes,
   useAppSetupReady,
   type ResolvedRoute,
 } from "./route-registry";
@@ -97,7 +95,7 @@ const DeepLinkRoot = () => {
   return <Outlet />;
 };
 
-const buildRouteObjects = (resolved: ResolvedRoute[]): RouteObject[] =>
+export const buildRouteObjects = (resolved: ResolvedRoute[]): RouteObject[] =>
   createAppRouteObjects({
     routes: resolved,
     Root: DeepLinkRoot,
@@ -105,23 +103,10 @@ const buildRouteObjects = (resolved: ResolvedRoute[]): RouteObject[] =>
   });
 
 /**
- * Static route snapshot built at module load from the build-time profile.
- * Used by tests (router.test.tsx) and any non-reactive consumer.
- */
-// eslint-disable-next-line react-refresh/only-export-components
-export const routes: RouteObject[] = buildRouteObjects(resolvedDesktopRoutes);
-// eslint-disable-next-line react-refresh/only-export-components
-export const router = createAppRouter({
-  createRouter: createHashRouter,
-  routes: resolvedDesktopRoutes,
-  Root: DeepLinkRoot,
-  layout: DesktopProjectLayout,
-});
-
-/**
- * Reactive router. Subscribes to the runtime registry store so that plugins
- * registering new routes (or edition hot-swap) take effect without an app
- * reload. Note: `createHashRouter` is recreated when the route list
+ * The app router. Routes come from the runtime registry store — the OSS
+ * plugins (and an edition overlay's) register them, and one switched off or
+ * loaded later takes effect without an app reload; there is no static route
+ * list. Note: `createHashRouter` is recreated when the route list
  * changes, which resets navigation state — acceptable for plugin load
  * events, which are rare.
  */

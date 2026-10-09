@@ -22,7 +22,12 @@ import {
   IconBox,
   ModelSelectionHint,
 } from "@valuz/ui";
-import { useCapabilities, useTranslation } from "@valuz/core";
+import {
+  SlotRenderer,
+  useCapabilities,
+  useHasSlot,
+  useTranslation,
+} from "@valuz/core";
 import { assetUrl } from "@valuz/shared";
 import {
   useCliLoginFlow,
@@ -50,6 +55,7 @@ import {
   type EffortLevel,
   type RuntimeId,
 } from "@valuz/core";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 // REP-107 Slice 4d: CLI login is now the entry path for *subscription*
 // providers only (claude-subscription, codex-subscription). Surfacing
@@ -93,6 +99,8 @@ export const ModelSection = () => {
   // CLI-login flow stays exposed regardless — those credentials live in
   // the CLI's keychain and remain reachable outside Valuz anyway.
   const { configureModelChannel } = useCapabilities();
+  const headerActions = useSectionHeaderActions("model");
+  const hasChannelActions = useHasSlot("settings.model.channels.actions");
 
   const [modelDefaults, setModelDefaults] = useState<ModelDefaults>({
     default_runtime: "claude_agent",
@@ -513,11 +521,24 @@ export const ModelSection = () => {
     ),
   );
 
+  const addChannelButton = (
+    <Button
+      variant="outline"
+      size="sm"
+      className="gap-1.5"
+      onClick={() => setAddOpen(true)}
+    >
+      <Plus className="h-3.5 w-3.5" />
+      {t("common.add" as Parameters<typeof t>[0])}
+    </Button>
+  );
+
   return (
     <>
       <SettingsSection
         title={t("settings.model.title")}
         desc={t("settings.model.desc")}
+        actions={headerActions}
       >
         {/* No-model warning — gated on what the picker can actually select
             (model-options), so it disappears the moment a usable model exists,
@@ -642,9 +663,6 @@ export const ModelSection = () => {
                             disabled={!r.available}
                           >
                             {r.display_name}
-                            {!r.available && r.unavailable_reason
-                              ? ` · ${r.unavailable_reason}`
-                              : ""}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -790,15 +808,19 @@ export const ModelSection = () => {
                   )}
                 </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => setAddOpen(true)}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {t("common.add" as Parameters<typeof t>[0])}
-              </Button>
+              {hasChannelActions ? (
+                // Keeps ``justify-between`` at two children; the wrapper only
+                // exists while something occupies the slot.
+                <div className="flex items-center gap-2">
+                  <SlotRenderer
+                    name="settings.model.channels.actions"
+                    context={{ openAdd: () => setAddOpen(true) }}
+                  />
+                  {addChannelButton}
+                </div>
+              ) : (
+                addChannelButton
+              )}
             </div>
 
             <Card className="rounded-xl shadow-xs">
@@ -1013,6 +1035,11 @@ export const ModelSection = () => {
                               />
                             );
                           })()}
+
+                        <SlotRenderer
+                          name="settings.model.provider.actions"
+                          context={{ provider, isSystem, isConfigured }}
+                        />
 
                         {/* Actions -- system providers are read-only. The hosted
                         "managed" (Reportify) provider path was removed with the

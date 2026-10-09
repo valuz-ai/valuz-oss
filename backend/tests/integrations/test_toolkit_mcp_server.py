@@ -75,6 +75,22 @@ def test_build_server_drops_declarations_and_keeps_schemas() -> None:
     assert echo.inputSchema == {"type": "object", "properties": {"text": {"type": "string"}}}
 
 
+def test_only_canonical_app_plugin_tool_is_available() -> None:
+    tk.install_toolkit_toolsets(base=(_echo_tool("app_plugin_manager"),), lead=())
+    server = tk._build_server("base")
+    assert {tool.name for tool in asyncio.run(_list_tools(server))} == {"app_plugin_manager"}
+    token = _mcp_asgi.set_current_mcp_context(session_id="sess-1", user_id="u1")
+    try:
+        removed = asyncio.run(_call_tool(server, "extension_manager", {}))
+        canonical = asyncio.run(_call_tool(server, "app_plugin_manager", {"text": "current"}))
+    finally:
+        _mcp_asgi.reset_current_mcp_context(token)
+    assert removed.root.isError
+    assert "unknown tool: extension_manager" in removed.root.content[0].text
+    assert not canonical.root.isError
+    assert canonical.root.content[0].text == "app_plugin_manager:current@sess-1"
+
+
 async def _list_tools(server: Any) -> list[Any]:
     from mcp.types import ListToolsRequest
 
@@ -399,9 +415,7 @@ def test_always_on_set_includes_harness_per_toolkit() -> None:
     assert by_name["harness"].url.endswith("/_internal/mcp/toolkit/base/mcp")
     assert by_name["harness"].headers["X-Valuz-Session-Id"] == "sess-1"
 
-    lead_set = asyncio.run(
-        always_on_http_mcp_servers("sess-1", owner_user_id="u1", toolkit="lead")
-    )
+    lead_set = asyncio.run(always_on_http_mcp_servers("sess-1", owner_user_id="u1", toolkit="lead"))
     assert {m.name for m in lead_set} == set(by_name)
     assert next(m for m in lead_set if m.name == "harness").url.endswith(
         "/_internal/mcp/toolkit/lead/mcp"
@@ -436,14 +450,10 @@ def test_always_on_set_resolves_one_opaque_credential_for_every_builtin_mcp() ->
     credential_port = _CredentialPort()
     set_sandbox_credential_verifier(credential_port)
     try:
-        servers = asyncio.run(
-            always_on_http_mcp_servers("sess-1", owner_user_id="owner-1")
-        )
+        servers = asyncio.run(always_on_http_mcp_servers("sess-1", owner_user_id="owner-1"))
     finally:
         set_sandbox_credential_verifier(original)
 
     assert credential_port.owners == ["owner-1"]
     assert servers
-    assert {
-        server.headers["X-Valuz-Internal"] for server in servers
-    } == {"vzs_owner_credential"}
+    assert {server.headers["X-Valuz-Internal"] for server in servers} == {"vzs_owner_credential"}

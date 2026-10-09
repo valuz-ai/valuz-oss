@@ -129,8 +129,14 @@ class _Store:
         return self.sessions.pop(session_id, None) is not None
 
 
+# Runtimes whose ``RuntimePort.fork_session`` still raises
+# ``NotImplementedError`` — mirrored by the fake below.
+_UNWIRED_PROVIDERS = frozenset({"deepseek_harness"})
+
+
 class _Orchestrator:
-    """Fake ``fork_session``: backfills the native id like the codex port."""
+    """Fake ``fork_session``: backfills the native id like the codex port;
+    an unwired provider raises ``NotImplementedError`` like its real port."""
 
     def __init__(self, store: _Store, *, error: Exception | None = None) -> None:
         self.store = store
@@ -153,6 +159,8 @@ class _Orchestrator:
         self.runtime_contexts.append(runtime_context)
         if self.error is not None:
             raise self.error
+        if session.runtime_provider in _UNWIRED_PROVIDERS:
+            raise NotImplementedError(f"{session.runtime_provider} has no wire-level fork yet")
         session.runtime_session_id = "th-forked"
         return "th-forked"
 
@@ -314,18 +322,34 @@ async def test_native_fork_failure_persists_nothing() -> None:
     assert store.deleted == []
 
 
-async def test_unwired_runtime_maps_to_422_and_persists_nothing() -> None:
-    source = _session(runtime_provider="claude_agent")
-    store = _Store(source, [])
-    orchestrator = _Orchestrator(
-        store, error=NotImplementedError("claude_agent native fork is not implemented yet")
-    )
+@pytest.mark.parametrize("message_id", [None, "m1"])
+async def test_unwired_runtime_maps_to_422_and_persists_nothing(message_id: str | None) -> None:
+    # deepseek_harness stamps a ``seq`` anchor on every turn but has no
+    # wire-level fork: both a whole-session and an anchored fork resolve a
+    # native source, reach the runtime, and come back as 422.
+    source = _session(runtime_provider="deepseek_harness", runtime_session_id="dsh-src")
+    anchored = _message(1)
+    anchored.metadata = {
+        "runtime_native": {
+            "provider": "deepseek_harness",
+            "native_session_id": "dsh-src",
+            "seq": 42,
+        }
+    }
+    store = _Store(source, [anchored])
+    orchestrator = _Orchestrator(store)
 
     with pytest.raises(HTTPException) as exc:
-        await fork_session("src-sess", ForkSessionRequest(), store, orchestrator, "owner")
+        await fork_session(
+            "src-sess", ForkSessionRequest(message_id=message_id), store, orchestrator, "owner"
+        )
 
     assert exc.value.status_code == 422
+    assert "deepseek_harness" in str(exc.value.detail)
+    assert [f[1:] for f in orchestrator.forked] == [("dsh-src", "42" if message_id else None)]
     assert store.saved_sessions == []
+    assert store.saved_messages == []
+    assert store.appended == []
 
 
 async def test_mid_copy_failure_sweeps_orphans() -> None:

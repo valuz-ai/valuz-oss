@@ -41,8 +41,24 @@ import {
   renderChatplanStatusPill,
   resolveGenUiHost,
 } from "./tool-card-helpers";
+import { AppPluginOperationCard } from "./AppPluginOperationCard";
 import { skillSubmissionView } from "./skill-submission-view";
 import { useToolCallCardActions } from "./useToolCallCardActions";
+
+type ToolCallCard = {
+  id: string;
+  title: string;
+  input?: string;
+  output?: string;
+  status?: string;
+  thinking?: string;
+};
+
+function isInstallConfirmationTool(tool: ToolCallCard): boolean {
+  if (!isToolNamed(tool.title, "app_plugin_manager")) return false;
+  const type = parseOperationToolOutput(tool.output)?.operation?.operation_type;
+  return type === "app_plugin.install" || type === "app_plugin.dev_link";
+}
 
 type ToolCallCardsParams = {
   events: SessionEventDTO[];
@@ -197,14 +213,7 @@ export function useToolCallCards({
   const registeredSlots = useRegisteredSlotNames();
 
   const renderToolCall = useCallback(
-    (tool: {
-      id: string;
-      title: string;
-      input?: string;
-      output?: string;
-      status?: string;
-      thinking?: string;
-    }) => {
+    (tool: ToolCallCard) => {
       const name = tool.title || "";
 
       // ── Edition tool cards ────────────────────────────────────────────
@@ -397,6 +406,28 @@ export function useToolCallCards({
         // Read-only queries and run lifecycle actions do not create an
         // OperationRecord. Let them reach the generic tool renderer so the
         // user can still inspect the Agent's Playbook call and result.
+      }
+
+      // ``app_plugin_manager`` (third-party plugins): ``dev_link`` / ``install`` /
+      // ``uninstall`` / ``publish`` return an operation record the user
+      // confirms on this card. The read-only actions (list, status, logs,
+      // reload, enable, disable, submissions) carry no operation and fall
+      // through to the generic tool renderer.
+      if (isToolNamed(name, "app_plugin_manager")) {
+        const result = parseOperationToolOutput(tool.output);
+        const snapshot = result?.operation;
+        if (snapshot?.operation_type.startsWith("app_plugin.")) {
+          const operation = operationStates[snapshot.id] ?? snapshot;
+          return (
+            <AppPluginOperationCard
+              operation={operation}
+              action={result?.action}
+              busy={operationBusy[operation.id] ?? null}
+              onConfirm={() => void handleConfirmOperation(operation)}
+              onCancel={() => void handleCancelOperation(operation)}
+            />
+          );
+        }
       }
 
       // ADR-021: automation tool result → AutomationToolCard. The MCP
@@ -854,5 +885,5 @@ export function useToolCallCards({
     ],
   );
 
-  return { isToolCardFoldable, renderToolCall };
+  return { isToolCardFoldable, renderToolCall, isToolCardTrailing: isInstallConfirmationTool };
 }

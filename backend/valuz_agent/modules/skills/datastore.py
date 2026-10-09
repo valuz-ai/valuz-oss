@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from sqlalchemy import case, select
 from sqlalchemy import delete as sa_delete
@@ -377,7 +377,7 @@ class SkillDatastore:
         return items
 
     def enabled_skill_paths(self, project: _ProjectLike) -> set[str]:
-        if project.kind != "project":
+        if project.kind != "project" or not project.root_path:
             return set()
 
         config = self._project_config_path(project)
@@ -405,7 +405,7 @@ class SkillDatastore:
         skill_path: str,
         enabled: bool,
     ) -> set[str]:
-        if project.kind != "project":
+        if project.kind != "project" or not project.root_path:
             return set()
 
         current = self.enabled_skill_paths(project)
@@ -422,7 +422,7 @@ class SkillDatastore:
         project: _ProjectLike,
         skill_paths: list[str],
     ) -> set[str]:
-        if project.kind != "project":
+        if project.kind != "project" or not project.root_path:
             return set()
 
         resolved: set[str] = set()
@@ -455,15 +455,20 @@ class SkillDatastore:
     # ------------------------------------------------------------------
 
     def _project_config_path(self, project: _ProjectLike) -> Path:
+        if not project.root_path:
+            raise ValueError("project root_path is required for skill configuration")
         return Path(project.root_path) / ".claude" / self._config_name
 
-    def _read_config(self, project: _ProjectLike) -> dict:
+    def _read_config(self, project: _ProjectLike) -> dict[str, object]:
         config = self._project_config_path(project)
         if not config.exists():
             return {}
-        return json.loads(config.read_text(encoding="utf-8"))
+        raw = json.loads(config.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("project skill configuration must be an object")
+        return cast(dict[str, object], raw)
 
-    def _write_config(self, project: _ProjectLike, data: dict) -> None:
+    def _write_config(self, project: _ProjectLike, data: dict[str, object]) -> None:
         config_path = self._project_config_path(project)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

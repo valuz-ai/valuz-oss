@@ -54,6 +54,7 @@ from valuz_agent.adapters.system_prompt_builder import (
 )
 from valuz_agent.i18n import t
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
+from valuz_agent.modules.agents.models import ProjectMemberRow
 from valuz_agent.modules.memory.injection import memory_instructions_block
 from valuz_agent.ports.instructions import (
     agent_inherits_global_instructions,
@@ -642,7 +643,9 @@ def summarize_role(instructions: str | None) -> str:
     return flat[:ROLE_SUMMARY_LIMIT].rstrip() + "…"
 
 
-async def _member_agent_config(member, members: ProjectMemberDatastore, user_id: str):  # noqa: ANN001, ANN202
+async def _member_agent_config(
+    member: ProjectMemberRow, members: ProjectMemberDatastore, user_id: str
+) -> AgentConfig | None:
     """Build the member's AgentConfig from its source library row.
 
     The kernel has no agents table — the library AgentRow is the single
@@ -1015,6 +1018,7 @@ async def build_member_session(
     brief: str,
     project_name: str = "",
     project_instructions_md: str | None = None,
+    workspace_trust: str | None = None,
     model_override: str | None = None,
     providers: object | None = None,
     lead_session_id: str | None = None,
@@ -1367,6 +1371,7 @@ async def build_member_session(
     )
     valuz_metadata: dict[str, object] = {
         "project_id": project_id,
+        "workspace_trust": workspace_trust or "trusted",
         "agent_slug": agent_slug,
         "task_id": task_id,
         # Snapshot the durable Task label into every lead/member execution

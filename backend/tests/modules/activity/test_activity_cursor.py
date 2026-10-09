@@ -1,8 +1,13 @@
 """Unit coverage for the activity feed's keyset cursor + tab routing — the
-tricky pure logic behind ``modules/activity/service`` (the end-to-end merge is
-exercised via the ``/v1/activity`` route in the browser)."""
+tricky pure logic behind ``modules/activity/service`` — plus the chat-row kernel
+enrichment (the end-to-end merge is exercised via the ``/v1/activity`` route in
+the browser)."""
 
 from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
 
 from valuz_agent.modules.activity import service as svc
 
@@ -61,3 +66,43 @@ def test_tab_source_and_automation_routing() -> None:
     assert svc._automation_filter("chat") is False
     assert svc._automation_filter("task") is False
     assert svc._automation_filter("all") is None
+
+
+async def test_chat_rows_carry_kernel_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The row's Fork entry is gated client-side on the runtime
+    # (deepseek_harness cannot fork), so enrichment passes the kernel's
+    # ``runtime_provider`` through.
+    rows = [
+        SimpleNamespace(session_id="s-dsh", updated_at=2, project_id="p", origin="user"),
+        SimpleNamespace(session_id="s-codex", updated_at=1, project_id="p", origin="user"),
+    ]
+    sessions = [
+        SimpleNamespace(
+            id="s-dsh", metadata={}, status="idle", runtime_provider="deepseek_harness"
+        ),
+        SimpleNamespace(id="s-codex", metadata={}, status="idle", runtime_provider="codex"),
+    ]
+
+    async def _noop(*_a: object, **_k: object) -> None:
+        return None
+
+    async def _rows(*_a: object, **_k: object) -> list[SimpleNamespace]:
+        return rows
+
+    async def _sessions(*_a: object, **_k: object) -> list[SimpleNamespace]:
+        return sessions
+
+    async def _names(*_a: object, **_k: object) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(svc.project_index, "ensure_legacy_session_index", _noop)
+    monkeypatch.setattr(svc.project_index, "list_chat_index_rows", _rows)
+    monkeypatch.setattr(svc.kernel_client, "list_sessions", _sessions)
+    monkeypatch.setattr(svc, "project_name_map", _names)
+
+    page = await svc.list_activity("owner", tab="chat")
+
+    assert {i.id: i.runtime for i in page.items} == {
+        "s-dsh": "deepseek_harness",
+        "s-codex": "codex",
+    }

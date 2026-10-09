@@ -22,7 +22,7 @@
  * there, the dialog opens that project instead of creating a duplicate.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   getDefaultExecutionTarget,
   projectsApi,
@@ -32,12 +32,14 @@ import {
   useTranslation,
   type ExecutionTarget,
   type ExecutionTargetDirectory,
+  type ProjectCreateRequest,
   type ProjectDetail,
 } from "@valuz/core";
 import { Button } from "@valuz/ui";
 import { FolderUp, X } from "lucide-react";
 import { usePlatform } from "../platform";
 import { ExecutionLocationPicker } from "./ExecutionLocationPicker";
+import { useWorkspaceTrustPrompt } from "./WorkspaceTrust";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 
@@ -114,6 +116,11 @@ export interface ProjectExecutionLocation {
     name: string;
     root_path?: string;
   }) => Promise<ProjectDetail>;
+  /**
+   * The workspace-trust question (H0), asked by ``createProjectAt`` when the
+   * picked folder runs its own hook commands. Render it inside the dialog.
+   */
+  trustDialog: ReactNode;
   /** Batched multipart upload of the picked folder. Throws on failure. */
   uploadInitialFiles: (projectId: string) => Promise<number>;
   reset: () => void;
@@ -175,10 +182,29 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
     setPickError("");
   }, []);
 
+  const trustPrompt = useWorkspaceTrustPrompt();
+  const askTrust = trustPrompt.ask;
+
   const createProjectAt = useCallback(
     async (payload: { name: string; root_path?: string }) => {
       const target = effectiveTarget;
-      const body = targetUsesManagedCwd(target) ? { name: payload.name } : payload;
+      let body: ProjectCreateRequest = targetUsesManagedCwd(target)
+        ? { name: payload.name }
+        : payload;
+      if (body.root_path) {
+        // Workspace trust (H0): a folder that runs its own hook commands is
+        // bound only after the user says whether to trust it. A backend that
+        // cannot answer (older build) keeps today's behaviour.
+        const hooks = await projectsApi
+          .previewWorkspaceHooks(
+            body.root_path,
+            target ? { baseUrl: target.baseUrl } : undefined,
+          )
+          .catch(() => []);
+        if (hooks.length > 0) {
+          body = { ...body, trust_workspace: await askTrust(hooks) };
+        }
+      }
       const created = await projectsApi.create(
         body,
         target ? { baseUrl: target.baseUrl } : undefined,
@@ -188,7 +214,7 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
       if (target) recordEntityOrigin(created.id, target.id);
       return created;
     },
-    [effectiveTarget],
+    [effectiveTarget, askTrust],
   );
 
   const uploadInitialFiles = useCallback(
@@ -229,6 +255,7 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
     clearInitialFiles,
     pickError,
     createProjectAt,
+    trustDialog: trustPrompt.dialog,
     uploadInitialFiles,
     reset,
   };

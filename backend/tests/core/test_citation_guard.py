@@ -3704,6 +3704,53 @@ def test_guard_rebinds_one_wrong_sibling_field_to_unique_exact_evidence() -> Non
     assert citation["evidence"]["field"] == "revenue"
     assert citation["annotations"]["binding"]["autoReboundClaimIds"]
     assert result.bundle["quality"]["claims"][0]["status"] == "auto-bound"
+    # The published Markdown keeps the wrong link, which the renderer cannot
+    # resolve; the corrected Citation must carry its own anchor or it is
+    # never shown.
+    projection = result.bundle["projection"]
+    assert "ev_end_date_12345678" not in projection["evidenceHandleToCitationId"]
+    assert [anchor["citationId"] for anchor in projection["anchors"]] == [citation["citationId"]]
+    rebound_claim_ids = citation["annotations"]["binding"]["autoReboundClaimIds"]
+    assert projection["anchors"][0]["claimId"] in rebound_claim_ids
+    assert projection["anchors"][0]["origin"] == "auto-bound"
+
+
+def test_guard_anchors_a_claim_rebound_from_an_unknown_evidence_id() -> None:
+    """A Runtime that cites a chunk id instead of the Evidence handle (seen
+    with Codex) gets its claim rebound; the Citation needs an anchor."""
+    margin = _item("ev_margin_12345678")
+    margin["source"] = {
+        "sourceId": "financials:600519:2024",
+        "providerId": "market-data",
+        "sourceType": "dataset",
+        "title": "Financial data",
+        "retrievedAt": "2026-08-01T08:00:00Z",
+    }
+    margin["evidence"] = {
+        "kind": "structured-data",
+        "datasetId": "financials",
+        "toolName": "company_income_statement",
+        "recordKey": "600519|2024 FY",
+        "field": "gross_margin",
+        "value": 23.5,
+        "unit": "%",
+        "period": "2024 FY",
+        "capturedAt": "2026-08-01T08:00:00Z",
+    }
+    guard = CitationGuard(
+        _registry(margin),
+        message_id="msg-unknown-id",
+        user_prompt="What was gross margin?",
+        policy_available=True,
+    )
+
+    result = guard.finalize("Gross margin was 23.5% in 2024 [source](evidence://732474331513385).")
+
+    assert result.bundle is not None
+    citations = result.bundle["citations"]
+    assert len(citations) == 1
+    anchors = result.bundle["projection"]["anchors"]
+    assert [anchor["citationId"] for anchor in anchors] == [citations[0]["citationId"]]
 
 
 def test_guard_rebinds_calculation_inputs_to_unique_value_and_unit_fields() -> None:

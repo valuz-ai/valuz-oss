@@ -42,7 +42,7 @@ def _session(session_id: str = "s-dsh", cwd: str = "/tmp") -> Session:
         cwd=cwd,
         runtime_provider="deepseek_harness",
         model="deepseek-v4-flash",
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(api_key="k", api_protocol="anthropic"),
     )
 
 
@@ -54,12 +54,12 @@ def _runtime(
         "deepseek-v4-flash",
         sink,
         workspace_root=str(tmp_path / "ws"),
-        model_provider=ModelProvider(api_key="k", api_protocol="openai_completion"),
+        model_provider=ModelProvider(api_key="k", api_protocol="anthropic"),
         state_dir=str(tmp_path / "state"),
         launch_spec=DshLaunchSpec(
             argv=(sys.executable, FAKE_SERVER),
             cwd=None,
-            config_parent_dir=str(tmp_path / "cfg"),
+            plan_capable=False,
         ),
     )
 
@@ -104,6 +104,105 @@ async def test_mcp_sessions_get_a_cold_start_grace(tmp_path: Path, monkeypatch) 
         await runtime2.close()
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_sent_while_the_runtime_warms_up_waits_for_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Opening an idle session warms its runtime (``prepare``); a message sent
+    before that spawn finishes must wait for it, not find a half-started
+    process (client set, native session not yet) and fail the turn."""
+    from src.core.types import McpHttpServerConfig
+    from src.runtimes.deepseek_harness import runtime as runtime_mod
+
+    starts: list[int] = []
+    real_start = runtime_mod.DshRuntimeClient.start
+
+    async def counting_start(self) -> None:  # noqa: ANN001
+        starts.append(1)
+        await real_start(self)
+
+    monkeypatch.setattr(runtime_mod.DshRuntimeClient, "start", counting_start)
+    # The MCP readiness grace is the window the race used to fall into.
+    monkeypatch.setenv("VALUZ_DSH_MCP_READY_GRACE_SEC", "0.3")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    session.mcp_servers = (McpHttpServerConfig(name="harness", url="http://x/mcp"),)
+    try:
+        warming = asyncio.create_task(runtime.prepare(session))
+        await asyncio.sleep(0.15)  # spawned, inside the grace
+        await runtime.run(session, UserMessage(text="what is 6*7?"))
+        await warming
+    finally:
+        await runtime.close()
+
+    assert isinstance(session.stop_reason, EndTurn)
+    assert "error" not in sink.types()
+    assert len(starts) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_subagents_usage_counts_toward_the_turn_and_announces_the_spawn(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """dsh runs a subagent as a child agent in its own session. Its steps are
+    billed to the turn (they were dropped with the other sessions' frames),
+    its transcript stays its own, and its start is the bus's ``agent.spawn``."""
+    from src.core.hooks import AGENT_SPAWN, hook_registry
+
+    monkeypatch.setenv("FAKE_DSH_MODE", "subagent")
+    spawned: list[str] = []
+
+    async def on_spawn(ctx, event, next_):  # noqa: ANN001, ANN202
+        spawned.append(str(event.get("agent_type")))
+        return await next_()
+
+    remove = hook_registry.register(AGENT_SPAWN, on_spawn, owner="test-dsh-spawn")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    try:
+        await runtime.run(session, UserMessage(text="delegate"))
+    finally:
+        remove()
+        await runtime.close()
+
+    usage = next(e for e in sink.events if e.type == "usage_update")
+    assert usage.data["input_tokens"] == 10 + 7
+    assert usage.data["output_tokens"] == 2 + 5
+    assert [e.data.get("text") for e in sink.events if e.type == "assistant_message"] == ["42"]
+    assert spawned == ["subagent"]
+
+
+@pytest.mark.asyncio
+async def test_a_dsh_compaction_is_announced_like_the_other_runtimes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from src.core.hooks import SESSION_COMPACT, hook_registry
+
+    monkeypatch.setenv("FAKE_DSH_MODE", "compaction")
+    compacted: list[str] = []
+
+    async def on_compact(ctx, event, next_):  # noqa: ANN001, ANN202
+        compacted.append(str(event.get("trigger")))
+        return await next_()
+
+    remove = hook_registry.register(SESSION_COMPACT, on_compact, owner="test-dsh-compact")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    try:
+        await runtime.run(_session(), UserMessage(text="long task"))
+    finally:
+        remove()
+        await runtime.close()
+
+    assert sink.types().count("compaction") == 1
+    assert compacted == ["auto"]
 
 
 @pytest.mark.asyncio

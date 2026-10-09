@@ -571,3 +571,37 @@ async def test_deepagents_proxy_is_scoped_to_model_http_client() -> None:
     await runtime.close()
     assert runtime._egress_http_client is None
     assert runtime._egress_http_async_client is None
+
+
+async def test_deepagents_subagent_model_is_built_like_the_main_model() -> None:
+    """A sub-agent naming its own model gets a chat model built the same way as
+    the session's (gateway, egress proxy, session header, effort, max_tokens) —
+    never a bare model string that deepagents would resolve on its own."""
+    from src.core.agent_config import SubAgentDef
+
+    session = _session("deepagents", "openai_completion")
+    descriptor = ForwardProxyDescriptor(
+        kind="forward_proxy",
+        proxy_url="http://random:secret@127.0.0.1:43124",
+        client_id="random-client",
+        expires_at=2**62,
+    )
+    runtime = DeepAgentsRuntime(
+        session.agent_config,
+        session.model,
+        event_sink=object(),  # type: ignore[arg-type]
+        model_provider=session.model_provider,
+        egress_descriptor=descriptor,
+    )
+    try:
+        with patch.dict("os.environ", {}, clear=True):
+            entry = runtime._to_subagent(
+                SubAgentDef(name="researcher", description="r", model="other-model"),
+                session=session,
+            )
+        model = entry["model"]
+        assert not isinstance(model, str)
+        assert model.model_name == "other-model"
+        assert model.http_async_client is runtime._egress_http_async_client
+    finally:
+        await runtime.close()

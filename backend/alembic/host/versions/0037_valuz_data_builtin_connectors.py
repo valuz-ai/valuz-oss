@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0037"
@@ -40,7 +41,9 @@ def upgrade() -> None:
     # Project bindings are a set. Avoid a PK collision when a user already
     # installed valuz-data manually before this migration.
     old_bindings = bind.execute(
-        sa.text("SELECT project_id, user_id FROM valuz_project_connector WHERE slug = 'valuz-stock'")
+        sa.text(
+            "SELECT project_id, user_id FROM valuz_project_connector WHERE slug = 'valuz-stock'"
+        )
     ).mappings()
     for row in old_bindings:
         exists = bind.execute(
@@ -73,14 +76,11 @@ def upgrade() -> None:
     for row in old_rows:
         duplicate = bind.execute(
             sa.text(
-                "SELECT id FROM valuz_connector "
-                "WHERE user_id = :user_id AND slug = 'valuz-data'"
+                "SELECT id FROM valuz_connector WHERE user_id = :user_id AND slug = 'valuz-data'"
             ),
             row,
         ).first()
-        bind.execute(
-            sa.text("DELETE FROM valuz_connector_oauth WHERE connector_id = :id"), row
-        )
+        bind.execute(sa.text("DELETE FROM valuz_connector_oauth WHERE connector_id = :id"), row)
         if duplicate:
             bind.execute(sa.text("DELETE FROM valuz_connector_attr WHERE connector_id = :id"), row)
             bind.execute(sa.text("DELETE FROM valuz_connector WHERE id = :id"), row)

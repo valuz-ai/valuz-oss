@@ -33,9 +33,27 @@ from src.core.citation import (
     compact_citation_tool_content,
     private_citation_tool_content,
 )
+from src.core.citation_mcp_projection import forget_session as forget_citation_projections
+from src.core.citation_mcp_projection import take_projection
 from src.core.claim_evidence_resolution import SemanticVerifierPort
 from src.core.claim_normalization import ClaimNormalizerPort
 from src.core.events import Event, EventSink, GlobalEventTap
+from src.core.hooks import (
+    COMMAND_RUN,
+    PROMPT_SUBMIT,
+    SESSION_END,
+    SESSION_START,
+    TURN_COMPLETE,
+    TURN_START,
+    CommandOutput,
+    CommandSpec,
+    HookEvent,
+    PromptDecision,
+    SessionRef,
+    command_registry,
+    hook_registry,
+    run_command,
+)
 from src.core.prompt_builder import wrap_for_mode
 from src.core.runtime_port import RuntimePort
 from src.core.session_approval_cache import SessionApprovalCache, SessionRule
@@ -50,6 +68,7 @@ from src.core.task_coverage_continuation import (
 from src.core.time_utils import now_ms
 from src.core.tracing import TurnTracingSink, start_turn_trace, turn_trace_context
 from src.core.types import (
+    EndTurn,
     Error,
     Message,
     Session,
@@ -626,9 +645,16 @@ class _MessageObserverSink:
         task_coverage_enabled: bool = False,
         private_tool_patterns: tuple[str, ...] = (),
         mode_persist: Callable[[str], Awaitable[None]] | None = None,
+        session_id: str = "",
+        input_metadata: dict[str, Any] | None = None,
+        defer_terminal_events: bool = False,
     ) -> None:
+        self._defer_terminal_events = defer_terminal_events
+        self._pending_error_events: list[Event] = []
+        self._input_metadata = copy.deepcopy(input_metadata or {})
         self._inner = inner
         self._message_id = message_id
+        self._session_id = session_id
         self._private_tool_patterns = private_tool_patterns
         self._private_tool_ids: set[str] = set()
         self._user_prompt = user_prompt
@@ -727,6 +753,12 @@ class _MessageObserverSink:
         return False
 
     async def emit(self, event: Event) -> None:
+        if event.type == "user_message":
+            # Runtime-authored data cannot forge or erase host presentation.
+            data = {k: v for k, v in event.data.items() if k != "metadata"}
+            if self._input_metadata:
+                data["metadata"] = copy.deepcopy(self._input_metadata)
+            event = Event(type=event.type, data=data, timestamp=event.timestamp)
         # Host-declared private tools (protected-builtins v2 decrypt): the model
         # already consumed the output inside the runtime loop, so dropping the
         # normalized echo here keeps the plaintext off BOTH the transcript
@@ -819,7 +851,7 @@ class _MessageObserverSink:
                 )
             self._task_coverage_continuation_active = False
             self._pending_idle_event = event
-            if not self._task_coverage_enabled:
+            if not self._task_coverage_enabled and not self._defer_terminal_events:
                 await self.finalize_sidecars()
                 await self.release_session_idle()
             return
@@ -829,6 +861,14 @@ class _MessageObserverSink:
                 "category": str(event.data.get("category") or "execution_error"),
                 "message": str(event.data.get("message") or ""),
             }
+            if (
+                self.error_payload["category"] == "execution_error"
+                and event.data.get("recovery") == "explicit_owner_retry"
+            ):
+                self.error_payload["recovery"] = "explicit_owner_retry"
+            if self._defer_terminal_events:
+                self._pending_error_events.append(event)
+                return
 
         elif event.type == "usage_update":
             current = {
@@ -906,6 +946,13 @@ class _MessageObserverSink:
         citation_content = event.data.get("_citation_content")
         citation_model_content = event.data.get("_citation_model_content")
         visible_content = event.data.get("content")
+        if not isinstance(citation_content, str):
+            # Runtimes whose MCP results are projected on the hook bus (Codex,
+            # DSH) cannot carry the private side on their own event; it waits
+            # in the side channel, keyed by the handles the model saw.
+            stashed = take_projection(self._session_id, visible_content)
+            if stashed is not None:
+                citation_content, citation_model_content = stashed
         compacted_content = compact_citation_tool_content(visible_content)
         private_projection = (
             citation_content
@@ -1422,10 +1469,79 @@ class _MessageObserverSink:
 
     async def release_session_idle(self) -> None:
         await self._complete_post_run_verification()
+        error_events = self._pending_error_events
+        self._pending_error_events = []
+        for error_event in error_events:
+            await self._inner.emit(error_event)
         event = self._pending_idle_event
         self._pending_idle_event = None
         if event is not None:
             await self._inner.emit(event)
+
+
+async def _observed(_event: HookEvent) -> None:
+    return None
+
+
+async def _fire_observe(event: str, ref: SessionRef, data: dict[str, Any]) -> None:
+    """Dispatch a notification event; never lets a hook break the turn."""
+    if not hook_registry.wants(event, ref):
+        return
+    try:
+        await hook_registry.dispatch(event, ref, data, _observed)
+    except Exception:  # noqa: BLE001 — handlers are contained by the chain already
+        logger.warning("hook dispatch of %s failed", event, exc_info=True)
+
+
+def _turn_complete_data(message: Message) -> dict[str, Any]:
+    stop = message.stop_reason
+    return {
+        "message_id": message.id,
+        "status": message.status,
+        "stop_reason": getattr(stop, "type", None),
+        "assistant_text": message.assistant_message or "",
+    }
+
+
+async def _dispatch_prompt_submit(
+    ref: SessionRef, user_message: UserMessage
+) -> tuple[UserMessage, str | None]:
+    """Run ``prompt.submit``; the (possibly rewritten) message, or a drop reason."""
+
+    async def core(event: HookEvent) -> PromptDecision:
+        return PromptDecision(text=str(event.get("text") or ""))
+
+    try:
+        decision = await hook_registry.dispatch(
+            PROMPT_SUBMIT,
+            ref,
+            {
+                "text": user_message.text,
+                "attachments": [a.source_path for a in user_message.attachments],
+            },
+            core,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("prompt.submit dispatch failed; sending the prompt as typed", exc_info=True)
+        return user_message, None
+    if not isinstance(decision, PromptDecision):
+        return user_message, None
+    if decision.drop:
+        return user_message, decision.drop
+    changes: dict[str, str] = {}
+    if decision.text != user_message.text:
+        changes["text"] = decision.text
+    if decision.context:
+        # Context is for the model, not words the user typed: it rides the
+        # message's ``additional_context`` block (every runtime renders it
+        # through ``build_user_prompt``), so the transcript shows the prompt
+        # alone — Claude Code's ``additionalContext`` behaves the same way.
+        changes["additional_context"] = "\n\n".join(
+            part for part in (user_message.additional_context, *decision.context) if part
+        )
+    if changes:
+        user_message = dataclasses.replace(user_message, **changes)
+    return user_message, None
 
 
 class SessionOrchestrator:
@@ -1525,6 +1641,9 @@ class SessionOrchestrator:
         self._global_taps: list[GlobalEventTap] = []
         self._semantic_verifier_factory = semantic_verifier_factory
         self._claim_normalizer_factory = claim_normalizer_factory
+        # Hook bus: the session each warm runtime serves, so ``session.end``
+        # can be dispatched when the runtime goes away.
+        self._runtime_hook_refs: dict[str, SessionRef] = {}
 
     @property
     def active_sessions(self) -> set[str]:
@@ -1817,6 +1936,14 @@ class SessionOrchestrator:
         # clarification decisions, so discard that obsolete control state at
         # the turn boundary without changing the user's current message.
         _clear_legacy_pending_task_clarification(session)
+        # Hook bus, host level (the same for every runtime): a registered
+        # ``/command`` is answered without the model; otherwise the prompt
+        # goes through ``prompt.submit`` before anything else sees it.
+        hook_ref = SessionRef.from_session(session, user_id=user_id)
+        invoked_command = None if hook_ref.bare else command_registry.match(user_message.text)
+        prompt_drop: str | None = None
+        if invoked_command is None and hook_registry.wants(PROMPT_SUBMIT, hook_ref):
+            user_message, prompt_drop = await _dispatch_prompt_submit(hook_ref, user_message)
         citation_policy_snapshot = _session_citation_quality_policy(session)
         document_scope = _session_document_scope(session)
         task_coverage_enabled = _session_task_coverage_enabled(session)
@@ -1844,6 +1971,7 @@ class SessionOrchestrator:
             user_message=user_message,
             started_at=now_ms(),
             status="running",
+            metadata=copy.deepcopy(user_message.metadata),
         )
         # Keep the trusted host snapshot with this message, not just the
         # mutable Session. Later turns can choose another policy without
@@ -1864,6 +1992,7 @@ class SessionOrchestrator:
                 message.metadata["optional_check_snapshot"] = copy.deepcopy(check_snapshot)
         await self._store.save_message(user_id, message)
         self._active_message[session_id] = message
+        session.execution_message_id = message.id
 
         # Persist ``session.status = "running"`` so the DB row reflects
         # the in-flight state for the duration of the turn. Before this,
@@ -1936,7 +2065,10 @@ class SessionOrchestrator:
         observer = _MessageObserverSink(
             coalesced,
             message_id=message.id,
+            session_id=session.id,
             user_prompt=current_task_prompt,
+            input_metadata=user_message.metadata,
+            defer_terminal_events=True,
             citation_policy_available=any(Path(path).name == "citation" for path in session.skills),
             citation_quality_policy=citation_policy_snapshot,
             allowed_document_ids=document_scope,
@@ -1949,6 +2081,25 @@ class SessionOrchestrator:
             private_tool_patterns=_session_private_tool_patterns(session),
             mode_persist=_make_mode_persist(self._store, user_id, session_id),
         )
+
+        if invoked_command is not None or prompt_drop is not None:
+            try:
+                return await self._complete_turn_without_runtime(
+                    user_id,
+                    session,
+                    message,
+                    observer,
+                    user_message,
+                    hook_ref,
+                    command=invoked_command,
+                    drop=prompt_drop,
+                )
+            finally:
+                if turn_trace is not None:
+                    turn_trace.end(error=None)
+                trace_scope.close()
+                self._active_message.pop(session_id, None)
+                session.execution_message_id = None
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
         # creation. Seed the workspace stub lazily (idempotent, one stat on
@@ -2006,6 +2157,8 @@ class SessionOrchestrator:
             self._finalize_message(message, session, observer)
             await self._store.save_session(session)
             await self._store.save_message(user_id, message)
+            # Terminal consumers may read this exact Message immediately.
+            await observer.release_session_idle()
             await observer.emit(
                 Event(
                     type="session_update",
@@ -2013,6 +2166,7 @@ class SessionOrchestrator:
                 )
             )
             self._active_message.pop(session_id, None)
+            session.execution_message_id = None
             return message
         self._active[session_id] = runtime
 
@@ -2041,6 +2195,9 @@ class SessionOrchestrator:
                     type="session_update",
                     data={"status": "running", "message_id": message.id},
                 )
+            )
+            await _fire_observe(
+                TURN_START, hook_ref, {"message_id": message.id, "text": user_message.text}
             )
             with self._lend_runtime_context(session, runtime_context):
                 await runtime.run(session, user_message)
@@ -2135,10 +2292,13 @@ class SessionOrchestrator:
                         runtime.update_sink(observer)
             await observer.ensure_partial_assistant_message()
             await observer.finalize_sidecars()
-            await observer.release_session_idle()
+            await observer._complete_post_run_verification()
             # Native per-turn fork anchor (codex turn id / Claude transcript
-            # uuid / deepagents checkpoint id), captured by the runtime during
-            # ``run()``. Consumed AFTER the optional coverage continuation so
+            # uuid / deepagents checkpoint id / deepseek_harness event seq),
+            # captured by the runtime during ``run()``. deepseek_harness
+            # stamps one although it cannot fork yet, so its turns still
+            # signal ``fork_anchor: true`` — the frontend runtime gate keeps
+            # "Fork from here" off for it. Consumed AFTER the optional coverage continuation so
             # the anchor reflects the LAST native turn this Message drove.
             # ``getattr`` keeps runtimes (and test fakes) without the hook
             # working unchanged. Persisted under
@@ -2177,6 +2337,8 @@ class SessionOrchestrator:
                     session.mode = fresh.mode
             await self._store.save_session(session)
             await self._store.save_message(user_id, message)
+            # Terminal consumers may read this exact Message immediately.
+            await observer.release_session_idle()
             await observer.emit(
                 Event(
                     type="session_update",
@@ -2193,6 +2355,7 @@ class SessionOrchestrator:
                     },
                 )
             )
+            await _fire_observe(TURN_COMPLETE, hook_ref, _turn_complete_data(message))
             return message
         finally:
             if turn_trace is not None:
@@ -2208,6 +2371,7 @@ class SessionOrchestrator:
             trace_scope.close()
             self._active.pop(session_id, None)
             self._active_message.pop(session_id, None)
+            session.execution_message_id = None
             # Mark the runtime freshly-used at turn END too, not just at entry.
             # A long-running turn (in ``_active``, so never swept) could finish
             # well past the idle TTL measured from its start; without this bump
@@ -2229,6 +2393,99 @@ class SessionOrchestrator:
                         "orchestrator: defensive status reset save_session failed for %s",
                         session_id,
                     )
+
+    async def _complete_turn_without_runtime(
+        self,
+        user_id: str,
+        session: Session,
+        message: Message,
+        observer: _MessageObserverSink,
+        user_message: UserMessage,
+        hook_ref: SessionRef,
+        *,
+        command: tuple[CommandSpec, str] | None,
+        drop: str | None,
+    ) -> Message:
+        """Finish a turn the model never sees: a ``/command`` or a dropped prompt.
+
+        Emits the same event sequence a runtime turn does (user message,
+        running, answer or error, idle, final status), so every client
+        renders it like any other turn.
+        """
+        await observer.emit(
+            Event(
+                type="user_message",
+                data={
+                    "message": user_message.text,
+                    "attachments": [
+                        {"source_path": a.source_path, "parsed_path": a.parsed_path}
+                        for a in user_message.attachments
+                    ],
+                },
+            )
+        )
+        await observer.emit(
+            Event(type="session_update", data={"status": "running", "message_id": message.id})
+        )
+        if command is not None:
+            spec, args = command
+
+            async def core(event: HookEvent) -> CommandOutput:
+                return await run_command(spec, event.session, str(event.get("args") or ""))
+
+            try:
+                output = await hook_registry.dispatch(
+                    COMMAND_RUN, hook_ref, {"name": spec.name, "args": args}, core
+                )
+            except Exception as exc:  # noqa: BLE001 — a broken command fails its own turn
+                logger.warning("command /%s failed: %s", spec.name, exc, exc_info=True)
+                output = CommandOutput(text=f"/{spec.name} failed: {exc}", is_error=True)
+            if not isinstance(output, CommandOutput):
+                output = CommandOutput(text=f"/{spec.name} returned no output", is_error=True)
+            if output.is_error:
+                session.stop_reason = Error(
+                    category="command_failed", retry_status="terminal", message=output.text
+                )
+                await observer.emit(
+                    Event(
+                        type="session_error",
+                        data={"category": "command_failed", "message": output.text},
+                    )
+                )
+            else:
+                await observer.emit(Event(type="assistant_message", data={"text": output.text}))
+                session.stop_reason = EndTurn()
+        else:
+            reason = drop or "blocked by a hook"
+            session.stop_reason = Error(
+                category="prompt_blocked", retry_status="terminal", message=reason
+            )
+            await observer.emit(
+                Event(type="session_error", data={"category": "prompt_blocked", "message": reason})
+            )
+        session.status = "idle"
+        await observer.emit(
+            Event(
+                type="session_idle",
+                data={"stop_reason": dataclasses.asdict(session.stop_reason), "num_turns": 0},
+            )
+        )
+        await observer.ensure_partial_assistant_message()
+        await observer.finalize_sidecars()
+        await observer._complete_post_run_verification()
+        self._finalize_message(message, session, observer)
+        await self._store.save_session(session)
+        await self._store.save_message(user_id, message)
+        # Terminal consumers may read this exact Message immediately.
+        await observer.release_session_idle()
+        await observer.emit(
+            Event(
+                type="session_update",
+                data={"status": session.status, "message_id": message.id, "fork_anchor": False},
+            )
+        )
+        await _fire_observe(TURN_COMPLETE, hook_ref, _turn_complete_data(message))
+        return message
 
     def active_message_id(self, session_id: str) -> str | None:
         message = self._active_message.get(session_id)
@@ -2291,6 +2548,7 @@ class SessionOrchestrator:
 
     async def cleanup(self, session_id: str) -> None:
         self._active.pop(session_id, None)
+        forget_citation_projections(session_id)
         self._buses.pop(session_id, None)
         # Session-scoped approval rules are tied to the runtime's lifecycle —
         # clearing here means a cold-reload (PATCH that drops the cache,
@@ -2302,11 +2560,14 @@ class SessionOrchestrator:
         self._runtime_last_used.pop(session_id, None)
         self._runtime_owners.pop(session_id, None)
         self._runtime_create_locks.pop(session_id, None)
+        hook_ref = self._runtime_hook_refs.pop(session_id, None)
         if runtime is not None:
             try:
                 await runtime.close()
             except Exception:
                 logger.debug("Error closing runtime for session %s", session_id, exc_info=True)
+            if hook_ref is not None:
+                await _fire_observe(SESSION_END, hook_ref, {"reason": "closed"})
         from src.runtimes.network_egress import get_network_egress_registry
 
         registry = get_network_egress_registry()
@@ -2434,6 +2695,17 @@ class SessionOrchestrator:
             self._runtime_last_used[session_id] = time.monotonic()
             if user_id is not None:
                 self._runtime_owners[session_id] = user_id
+            hook_ref = SessionRef.from_session(runtime_session, user_id=user_id)
+            self._runtime_hook_refs[session_id] = hook_ref
+            await _fire_observe(
+                SESSION_START,
+                hook_ref,
+                {
+                    "source": "resume"
+                    if getattr(runtime_session, "runtime_session_id", None)
+                    else "new"
+                },
+            )
             # Enforce the hard LRU ceiling after admitting the new runtime.
             await self._enforce_runtime_cap(exclude=session_id)
             return runtime
@@ -2566,6 +2838,7 @@ class SessionOrchestrator:
         self._runtime_owners.pop(session_id, None)
         self._runtime_create_locks.pop(session_id, None)
         self._session_approval_cache.clear(session_id)
+        hook_ref = self._runtime_hook_refs.pop(session_id, None)
         if runtime is not None:
             try:
                 await runtime.close()
@@ -2573,6 +2846,8 @@ class SessionOrchestrator:
                 logger.debug("Error evicting runtime for session %s", session_id, exc_info=True)
             else:
                 logger.info("Evicted warm runtime for idle/over-cap session %s", session_id)
+            if hook_ref is not None:
+                await _fire_observe(SESSION_END, hook_ref, {"reason": "evicted"})
         from src.runtimes.network_egress import get_network_egress_registry
 
         registry = get_network_egress_registry()
@@ -2849,7 +3124,9 @@ class SessionOrchestrator:
                 resolved = ev
         return pending, resolved
 
-    async def scan_orphan_pendings(self) -> int:
+    async def scan_orphan_pendings(
+        self, *, session_alive: Callable[[str, str], Awaitable[bool]] | None = None
+    ) -> int:
         """Seal every still-open ``requires_action`` with a synthetic
         ``action_resolved(decision="expired", resolved_by="system")``.
 
@@ -2859,6 +3136,20 @@ class SessionOrchestrator:
         do better. Returns the number of synthetic resolutions emitted.
         """
         sealed = 0
+        candidates = getattr(self._store, "list_pending_action_session_keys", None)
+        if callable(candidates):
+            cursor = None
+            while True:
+                keys = await candidates(after_session_id=cursor, limit=500)
+                if keys is None:  # older/remote adapters retain their existing sweep
+                    break
+                for owner, sid in keys:
+                    if session_alive is not None and await session_alive(owner, sid):
+                        continue
+                    sealed += await self._seal_session_pendings(owner, sid)
+                if len(keys) < 500:
+                    return sealed
+                cursor = keys[-1][1]
         # Own-lineage sweep: ``self._store`` reads are the kernel's runtime
         # sqlite (RuntimeStore authority) — sessions live on other processes
         # are structurally out of reach, so this is safe in every deployment.
@@ -2871,6 +3162,8 @@ class SessionOrchestrator:
         while True:
             sessions = await self._store.list_sessions(None, limit=page_size, offset=offset)
             for session in sessions:
+                if session_alive is not None and await session_alive(session.user_id, session.id):
+                    continue
                 sealed += await self._seal_session_pendings(session.user_id, session.id)
             if len(sessions) < page_size:
                 break

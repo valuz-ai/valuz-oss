@@ -28,6 +28,8 @@ backend/build/
 backend/_pyinstaller_entry.py
 cli/build/
 docs/**/dist
+# self-contained valuz-plugin CLI distribution (scripts/build-plugin-sdk-dist.mjs)
+frontend/packages/plugin-sdk/dist-cli/
 *.egg-info/
 
 # Test artefacts

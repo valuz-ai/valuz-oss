@@ -115,7 +115,7 @@ class LocalCitationDocumentResolver:
 
         detail = await self._service.get_document(owner_user_id, document_id)
         preview = await self._service.get_document_preview(owner_user_id, document_id)
-        chunks = _markdown_chunks(preview)
+        chunks = _markdown_chunks(preview.markdown)
 
         stored_hash = _normalized_hash(detail.content_hash)
         cited_hash = _normalized_hash(

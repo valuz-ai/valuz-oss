@@ -393,11 +393,13 @@ export function useToolCallCardActions({
           toast.success(
             next.operation_type === "skill.submit"
               ? t("skill.savedToLib")
-              : t(
-                  next.preview.change === "delete"
-                    ? "playbook.operation.deleted"
-                    : "playbook.operation.succeeded",
-                ),
+              : next.operation_type.startsWith("app_plugin.")
+                ? t("toolCall.appPluginManager.succeeded")
+                : t(
+                    next.preview.change === "delete"
+                      ? "playbook.operation.deleted"
+                      : "playbook.operation.succeeded",
+                  ),
           );
         } else if (next.error_message) {
           toast.error(next.error_message);

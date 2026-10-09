@@ -8,6 +8,8 @@ expressed explicitly in ``boot/lifespan.py``.
 
 import asyncio
 import logging
+from collections.abc import Sequence
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -162,6 +164,26 @@ async def enrich_login_shell_path() -> None:
     from valuz_agent.boot.login_path import enrich_login_shell_path as _enrich
 
     await _enrich()
+
+
+def install_session_tools() -> None:
+    """Put the bundled session commands (``valuz-python``, ``dsoffice``) on PATH.
+
+    Every runtime's agent subprocess inherits this process's PATH at spawn, so
+    the wrappers must exist before the first session starts. Fail-open: a
+    missing tool only means the skills that use it report it as unavailable —
+    see ``infra/session_tools.py``.
+    """
+    from valuz_agent.infra.fs_registry import FsRegistry
+    from valuz_agent.infra.session_tools import ensure_session_tools_on_path
+
+    try:
+        installed = ensure_session_tools_on_path(FsRegistry().session_bin_dir())
+    except Exception:  # noqa: BLE001 — a convenience wrapper must not break boot
+        logger.warning("failed to install session command wrappers", exc_info=True)
+        return
+    if installed:
+        logger.info("session commands on PATH: %s", ", ".join(installed))
 
 
 def migrate_data_dir() -> None:
@@ -353,31 +375,19 @@ def init_tracing() -> None:
 
 
 def initialize_network_egress() -> None:
-    # Desktop egress bootstrap is delivered once over the sidecar's stdin.
-    # Consume it before the kernel creates any runtime or child process; the
-    # non-secret marker is removed from os.environ inside the helper.
-    # Import for its path-injection side effect before resolving ``src``.
-    __import__("kernel")
+    from valuz_agent.boot.kernel import initialize_kernel_network_egress
 
-    from src.runtimes.network_egress import (
-        configure_network_egress,
-        consume_network_egress_bootstrap,
-        get_network_egress_registry,
-    )
-
-    try:
-        consume_network_egress_bootstrap()
-    except RuntimeError:
-        # A malformed/stale one-shot payload is an egress failure, not a
-        # reason to take the renderer and non-model backend APIs down. Keep
-        # booting with the same fail-loud boundary as manager startup failure.
-        logger.error("desktop egress bootstrap rejected; admitted model traffic is blocked")
-        configure_network_egress(None, required_unavailable=True)
-    if registry := get_network_egress_registry():
-        registry.start_keepalive()
+    initialize_kernel_network_egress()
 
 
-async def init_kernel(app: FastAPI) -> None:
+async def init_kernel(app: FastAPI, toolkit: Sequence[Any] | None = None) -> None:
+    """Bring the in-process kernel up and install the harness toolsets.
+
+    ``toolkit`` is the tool groups the composed plugins contributed (the registry's
+    ``ToolGroup`` entries, canonical order). ``None`` -- the headless
+    ``execution_runtime`` and direct callers -- installs every group the OSS
+    features define, i.e. the all-features-enabled surface.
+    """
     initialize_network_egress()
 
     # In-process kernel singletons (store + orchestrator) are NOT created
@@ -396,92 +406,49 @@ async def init_kernel(app: FastAPI) -> None:
     # and referenced from ``session.mcp_servers`` — every runtime consumes
     # them through its standard MCP client path, in-process and remote
     # alike. Toolset partition mirrors the former per-agent declarations:
-    # ``base`` (every session) = orchestration launchers + memory +
-    # submit_skill; ``lead`` (task leads) = dispatch set + memory +
-    # submit_skill. The lead gate stays enforced inside each handler.
+    # ``base`` (every session) = orchestration launchers + the shared tools;
+    # ``lead`` (task leads) = dispatch set + the shared tools. The lead gate
+    # stays enforced inside each handler. Which tools exist is decided by the
+    # plugins: each feature contributes its own groups (``features/toolkit.py``).
+    from valuz_agent.features.toolkit import all_tool_groups, compose_toolsets
     from valuz_agent.integrations.toolkit_mcp_server import install_toolkit_toolsets
-    from valuz_agent.integrations.tools_agent_proposal import build_agent_proposal_tool_defs
-    from valuz_agent.integrations.tools_plugin import build_plugin_tool_defs
-    from valuz_agent.integrations.tools_skill_creator import build_submit_skill_tool_defs
-    from valuz_agent.integrations.tools_skill_library import build_skill_library_tool_defs
-    from valuz_agent.modules.browser.tools import build_browser_tool_defs
-    from valuz_agent.modules.citations.calculation_tool import (
-        build_citation_calculation_tool_defs,
-    )
-    from valuz_agent.modules.genui.tools import build_generative_ui_tool_defs
-    from valuz_agent.modules.memory.tools import build_memory_tool_defs
-    from valuz_agent.modules.projects.tools import (
-        build_project_instructions_tool_defs,
-        build_project_tool_defs,
-    )
-    from valuz_agent.modules.sessions.artifacts_tool import build_deliver_artifacts_tool_defs
-    from valuz_agent.modules.tasks.orchestrator import task_orchestrator
-    from valuz_agent.modules.tasks.tools.declarations import (
-        DISPATCH_TOOL_DECLARATIONS,
-        ORCHESTRATION_TOOL_DECLARATIONS,
-    )
-    from valuz_agent.modules.tasks.tools.handlers import build_task_tool_defs
 
-    task_defs = build_task_tool_defs(task_orchestrator)
-    by_name = {t.name: t for t in task_defs}
-    orchestration_names = [d.name for d in ORCHESTRATION_TOOL_DECLARATIONS]
-    dispatch_names = [d.name for d in DISPATCH_TOOL_DECLARATIONS]
-    shared = (
-        build_memory_tool_defs()
-        + build_project_instructions_tool_defs()
-        + build_submit_skill_tool_defs()
-        + build_agent_proposal_tool_defs()
-        # Entity management (agent/UI parity): projects, skill library, plugins.
-        + build_project_tool_defs()
-        + build_skill_library_tool_defs()
-        + build_plugin_tool_defs()
-        + build_deliver_artifacts_tool_defs()
-        + build_citation_calculation_tool_defs()
-        + build_generative_ui_tool_defs()
-    )
-    # browser_start/browser_stop only work when the bound engine can run the
-    # daemon (local: Node + chrome-devtools-mcp on this host; a remote-sandbox
-    # engine declares it for its image); don't expose dead tools otherwise
-    # (e.g. headless/TUI without Node). See docs/design/browser-feature.md §8/§9.
-    from valuz_agent.ports.extensions import ext
+    base, lead = compose_toolsets(all_tool_groups() if toolkit is None else toolkit)
+    install_toolkit_toolsets(base=base, lead=lead)
 
-    if ext.browser_engine.available():
-        shared = shared + build_browser_tool_defs()
-        # Engine boot setup now, before any session spawns its agent subprocess
-        # (which inherits env at spawn time): the local engine installs the
-        # friendly ``chrome-devtools`` wrapper on PATH so the agent runs a
-        # clean ``chrome-devtools <tool>``.
-        if not _startup_user_content_enabled():
-            logger.info(
-                "startup user-content initialization disabled; browser engine bootstrap skipped"
-            )
-        else:
-            ext.browser_engine.bootstrap()
-    else:
-        logger.info("browser engine unavailable — browser_start/browser_stop not registered")
-    install_toolkit_toolsets(
-        base=tuple(by_name[n] for n in orchestration_names if n in by_name) + shared,
-        lead=tuple(by_name[n] for n in dispatch_names if n in by_name) + shared,
+
+def wire_memory_triggers() -> None:
+    """Wire the background memory extractor to its triggers (``oss-memory``).
+
+    Idle trigger (memory-system-design §7): once a session goes quiet, review it and
+    write durable memories through the same MemoryStore pipeline as the foreground
+    tool. Task-finish trigger (§7.1): when a multi-agent task completes, graduate
+    its durable multi-agent lessons + project progress into project memory.
+    Runs right after ``init_kernel`` (which builds the toolkit the memory tools
+    live in).
+    """
+    from valuz_agent.modules.memory.scheduler import (
+        idle_scheduler,
+        memory_scheduler,
+        task_finish_scheduler,
     )
 
-    # Wire the background memory extractor to the idle trigger (memory-system-design
-    # §7): once a session goes quiet, review it and write durable memories through
-    # the same MemoryStore pipeline as the foreground tool.
-    from valuz_agent.modules.memory.runner import (
-        run_extraction_for_session,
-        run_task_finish_extraction,
-    )
-    from valuz_agent.modules.memory.scheduler import idle_scheduler, task_finish_scheduler
+    # Real finalizers await the durable scheduler. Do not arm process-only timers.
+    memory_scheduler.registered = True
+    idle_scheduler._runner = None
+    task_finish_scheduler._runner = None
 
-    idle_scheduler.set_runner(run_extraction_for_session)
-    # Task-finish trigger (§7.1): when a multi-agent task completes, graduate its
-    # durable multi-agent lessons + project progress into project memory.
-    task_finish_scheduler.set_runner(run_task_finish_extraction)
-    # Event-first memory trigger: graduate a completed task's lessons when
-    # tasks/events.finalize_task announces task.finalized.
-    from valuz_agent.modules.memory.scheduler import wire_task_finalized_trigger
 
-    wire_task_finalized_trigger()
+async def start_memory_recovery() -> None:
+    from valuz_agent.modules.memory.scheduler import memory_scheduler
+
+    await memory_scheduler.start()
+
+
+async def stop_memory_recovery() -> None:
+    from valuz_agent.modules.memory.scheduler import memory_scheduler
+
+    await memory_scheduler.stop()
 
 
 async def bind_data_service(app: FastAPI) -> None:
@@ -664,7 +631,23 @@ async def seal_orphan_pendings() -> None:
     if settings.is_http_kernel:
         return
 
+    if settings.deployment_type == "cloud":
+        from valuz_agent.adapters import kernel_client
+        from valuz_agent.modules.sessions.recovery import _sandbox_alive
+
+        try:
+            await kernel_client.scan_orphan_pendings(session_alive=_sandbox_alive)
+        except Exception:  # recovery is best effort; failed liveness never expires actions
+            logging.getLogger(__name__).exception("cloud pending recovery failed")
+        return
+
     from valuz_agent.adapters import kernel_client
+
+    # init_kernel already recovered this orchestrator. Repeating the sweep
+    # scales boot with history twice and can expire newly resumed approvals.
+    # Keep the retry when dependency initialization could not finish recovery.
+    if kernel_client.boot_orphan_recovery_complete():
+        return
 
     try:
         sealed = await kernel_client.scan_orphan_pendings()
@@ -772,8 +755,56 @@ async def resolve_informational_notification_backlog() -> None:
         logging.getLogger(__name__).exception("informational notification sweep failed")
 
 
-async def start_mcp_session_managers(app: FastAPI) -> None:
-    """Bring the in-process docs MCP session manager online.
+async def start_ui_push_transport() -> None:
+    """Receive UI bus pushes made by other backend processes (OSS: no-op)."""
+    from collections.abc import Mapping
+    from typing import Any
+
+    from valuz_agent.modules.plugin_ui.push import ui_push_hub
+    from valuz_agent.ports.extensions import ext
+
+    def deliver(message: Mapping[str, Any]) -> None:
+        ui_push_hub.deliver_remote(message)
+
+    await ext.ui_push_transport.start(deliver)
+
+
+async def stop_ui_push_transport() -> None:
+    from valuz_agent.ports.extensions import ext
+
+    await ext.ui_push_transport.stop()
+
+
+def warn_unreachable_plugin_hooks() -> None:
+    """Name the plugins whose ``ctx.hooks`` / ``ctx.commands`` sessions won't see.
+
+    They register in this process; a session runs in a separate kernel when the
+    sandbox allocator is not the in-process one, or with ``VALUZ_KERNEL_MODE=
+    http``. Such handlers belong in the kernel image (``VALUZ_KERNEL_HOOK_MODULES``).
+    """
+    import os
+
+    from valuz_agent.plugin_host.hooks_api import plugin_hook_owners
+    from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.sandbox_allocator import BootSingletonAllocator
+
+    remote_mode = os.environ.get("VALUZ_KERNEL_MODE", "inprocess").strip().lower() == "http"
+    sandboxed = not isinstance(ext.sandbox_allocator, BootSingletonAllocator)
+    if not (remote_mode or sandboxed):
+        return
+    owners = plugin_hook_owners()
+    if owners:
+        logging.getLogger(__name__).warning(
+            "plugins %s registered hook handlers/commands in the host process, but sessions "
+            "run in %s; they will not apply there — ship them in the kernel image "
+            "(VALUZ_KERNEL_HOOK_MODULES) instead",
+            ", ".join(owners),
+            "a sandboxed kernel" if sandboxed else "a remote kernel (VALUZ_KERNEL_MODE=http)",
+        )
+
+
+async def start_mcp_session_managers(app: FastAPI, managers: Sequence[Any] | None = None) -> None:
+    """Bring the in-process MCP session managers online.
 
     FastMCP's ``StreamableHTTPSessionManager`` is started via an
     async context manager. When mounted as a Starlette sub-app under
@@ -785,22 +816,14 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     Without this, every MCP request would terminate with
     ``Session terminated`` because the session manager's background
     task wouldn't be running.
+
+    ``managers`` are the zero-arg context-manager factories (``Ref``) of the mounts
+    the composed plugins registered, in canonical order. ``None`` -- direct callers --
+    starts the built-in servers, plus the dsh bridge where the manager is enabled.
     """
     from contextlib import AsyncExitStack
 
-    from valuz_agent.integrations.automations_mcp_server import (
-        automations_mcp_session_manager_run,
-    )
-    from valuz_agent.integrations.connectors_mcp_server import (
-        connectors_mcp_session_manager_run,
-    )
-    from valuz_agent.integrations.docs_mcp_server import docs_mcp_session_manager_run
-    from valuz_agent.integrations.playbooks_mcp_server import (
-        playbooks_mcp_session_manager_run,
-    )
-    from valuz_agent.integrations.toolkit_mcp_server import (
-        toolkit_mcp_session_managers_run,
-    )
+    from valuz_agent.plugin_host.registry import resolve_ref
 
     stack = AsyncExitStack()
 
@@ -817,11 +840,12 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
 
         await stack.enter_async_context(mcp_router_lifespan())
     await stack.__aenter__()
-    await stack.enter_async_context(docs_mcp_session_manager_run())
-    await stack.enter_async_context(automations_mcp_session_manager_run())
-    await stack.enter_async_context(playbooks_mcp_session_manager_run())
-    await stack.enter_async_context(connectors_mcp_session_manager_run())
-    await stack.enter_async_context(toolkit_mcp_session_managers_run())
+    if managers is None:
+        from valuz_agent.features.mounts import default_session_managers
+
+        managers = default_session_managers()
+    for run in managers:
+        await stack.enter_async_context(resolve_ref(run)())
     app.state.docs_mcp_stack = stack
 
 
@@ -839,29 +863,64 @@ async def start_automation_runtime(app: FastAPI) -> None:
     await ext.automation_runtime.startup()
 
 
-async def start_host_background_services(app: FastAPI) -> None:
-    """Start non-automation host monitors and optional content scanners."""
-    # Task watchdog: detect a lead that died without finalizing (the hole boot
-    # recovery can't see mid-process) → mark blocked so it surfaces + resumes.
+async def start_task_health_monitor(app: FastAPI) -> None:
+    """Task watchdog (``oss-tasks``): detect a lead that died without finalizing
+    (the hole boot recovery can't see mid-process) → mark blocked so it surfaces +
+    resumes."""
     from valuz_agent.modules.tasks.recovery import task_health_monitor
 
     await task_health_monitor.startup()
 
+
+async def start_docs_auto_discovery(app: FastAPI) -> None:
+    """Knowledge-base auto-discovery scanner (``oss-knowledge``)."""
     if not _startup_user_content_enabled():
-        logger.info("startup user-content initialization disabled; docs/skills scanners skipped")
+        logger.info("startup user-content initialization disabled; docs scanner skipped")
         return
 
     from valuz_agent.modules.docs.scheduler import start_auto_discovery
 
     start_auto_discovery()
 
-    from valuz_agent.modules.skills.scheduler import start_skill_auto_scan
 
-    start_skill_auto_scan()
+async def start_skill_auto_scan(app: FastAPI) -> None:
+    """Skill-directory auto-scan (``oss-skills``)."""
+    if not _startup_user_content_enabled():
+        logger.info("startup user-content initialization disabled; skills scanner skipped")
+        return
 
-    from valuz_agent.modules.backup.scheduler import start_backup_scheduler
+    from valuz_agent.modules.skills.scheduler import start_skill_auto_scan as _start
 
-    start_backup_scheduler()
+    _start()
+
+
+async def start_backup_scheduler(app: FastAPI) -> None:
+    """Scheduled local backups (``oss-backup``)."""
+    if not _startup_user_content_enabled():
+        logger.info("startup user-content initialization disabled; backup scheduler skipped")
+        return
+
+    from valuz_agent.modules.backup.scheduler import start_backup_scheduler as _start
+
+    _start()
+
+
+async def start_host_background_services(app: FastAPI) -> None:
+    """Start non-automation host monitors and optional content scanners.
+
+    The aggregate of the per-feature steps above, in their historical order; the
+    plugin host runs the steps individually (each owned by its feature), this stays
+    for embedding callers and tests that start "the host background services".
+    """
+    await start_task_health_monitor(app)
+
+    if not _startup_user_content_enabled():
+        logger.info("startup user-content initialization disabled; docs/skills scanners skipped")
+        return
+
+    await start_docs_auto_discovery(app)
+    await start_skill_auto_scan(app)
+    await start_backup_scheduler(app)
 
 
 async def start_automation_runner(app: FastAPI) -> None:
@@ -1035,24 +1094,32 @@ async def stop_automation_runtime(app: FastAPI) -> None:
     await ext.automation_runtime.shutdown()
 
 
-async def stop_host_background_services(app: FastAPI) -> None:
-    """Stop non-automation host monitors and optional content scanners."""
+async def stop_task_health_monitor(app: FastAPI) -> None:
     from valuz_agent.modules.tasks.recovery import task_health_monitor
 
     await task_health_monitor.shutdown()
 
+
+async def stop_docs_auto_discovery(app: FastAPI) -> None:
     from valuz_agent.modules.docs.scheduler import stop_auto_discovery
 
     stop_auto_discovery()
 
-    from valuz_agent.modules.skills.scheduler import stop_skill_auto_scan
 
-    stop_skill_auto_scan()
+async def stop_skill_auto_scan(app: FastAPI) -> None:
+    from valuz_agent.modules.skills.scheduler import stop_skill_auto_scan as _stop
 
-    from valuz_agent.modules.backup.scheduler import stop_backup_scheduler
+    _stop()
 
-    stop_backup_scheduler()
 
+async def stop_backup_scheduler(app: FastAPI) -> None:
+    from valuz_agent.modules.backup.scheduler import stop_backup_scheduler as _stop
+
+    _stop()
+
+
+async def stop_agent_channels(app: FastAPI) -> None:
+    """Stop the IM channel long connections (``oss-channels``)."""
     from valuz_agent.integrations.wecom_aibot_long_connection import wecom_aibot_supervisor
 
     await wecom_aibot_supervisor.shutdown()
@@ -1061,9 +1128,22 @@ async def stop_host_background_services(app: FastAPI) -> None:
 
     await feishu_supervisor.shutdown()
 
+
+async def stop_skill_watcher(app: FastAPI) -> None:
     watcher = getattr(app.state, "skill_watcher", None)
     if watcher is not None:
         await watcher.stop()
+
+
+async def stop_host_background_services(app: FastAPI) -> None:
+    """Stop non-automation host monitors and optional content scanners (the
+    aggregate of the per-feature stop steps, in their historical order)."""
+    await stop_task_health_monitor(app)
+    await stop_docs_auto_discovery(app)
+    await stop_skill_auto_scan(app)
+    await stop_backup_scheduler(app)
+    await stop_agent_channels(app)
+    await stop_skill_watcher(app)
 
 
 async def stop_automation_runner(app: FastAPI) -> None:
@@ -1142,20 +1222,9 @@ async def stop_managed_browser() -> None:
 
 
 async def shutdown_kernel() -> None:
-    from src.runtimes.network_egress import (
-        configure_network_egress,
-        get_network_egress_registry,
-    )
+    from valuz_agent.boot.kernel import shutdown_kernel_with_network_egress
 
-    from valuz_agent.boot.kernel import shutdown_kernel_dependencies
-
-    await shutdown_kernel_dependencies()
-    if registry := get_network_egress_registry():
-        await registry.close()
-    # Reset the fail-loud sentinel as well as a live registry.  Production
-    # exits after this hook, but tests and embedded hosts may initialize the
-    # backend again in the same interpreter.
-    configure_network_egress(None)
+    await shutdown_kernel_with_network_egress()
 
 
 def shutdown_tracing() -> None:
@@ -1165,3 +1234,54 @@ def shutdown_tracing() -> None:
     from src.core.tracing import shutdown_tracing as _shutdown_tracing
 
     _shutdown_tracing()
+
+
+async def stop_dsh_manager() -> None:
+    """Stop the resident dsh manager host, if one was started on demand."""
+    from valuz_agent.modules.dsh_plugins.manager import get_dsh_manager
+
+    try:
+        await get_dsh_manager().stop()
+    except Exception:
+        logger.warning("dsh manager host stop failed", exc_info=True)
+
+
+async def start_dsh_manager_if_plugins_installed() -> None:
+    """Bring the dsh manager host up in the background when the managed
+    profile carries user-installed bundles, so their tools reach every
+    runtime's sessions (the always-on ``valuz-dsh-plugins`` MCP server) without
+    the user opening Settings → Extensions first. Never blocks boot."""
+    import asyncio
+
+    from valuz_agent.modules.dsh_plugins.manager import (
+        get_dsh_manager,
+        has_user_bundles,
+        unavailable_reason,
+    )
+
+    if unavailable_reason() is not None or not has_user_bundles():
+        return
+
+    async def _start() -> None:
+        try:
+            await get_dsh_manager().ensure_started()
+        except Exception:
+            logger.warning("dsh manager host autostart failed", exc_info=True)
+
+    asyncio.get_running_loop().create_task(_start())
+
+
+async def cleanup_superseded_app_plugin_versions() -> None:
+    """Remove third-party plugin version directories an update superseded.
+
+    Runs after boot (``POST_BOOT``): the previous version stays on disk while the
+    process that updated it is alive, then goes at the next start. Never fails boot.
+    """
+    import asyncio
+
+    from valuz_agent.modules.app_plugins.maintenance import cleanup_superseded_versions
+
+    try:
+        await asyncio.to_thread(cleanup_superseded_versions)
+    except Exception:  # noqa: BLE001 — housekeeping must not break startup
+        logger.warning("third-party plugin cleanup failed", exc_info=True)

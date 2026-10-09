@@ -43,6 +43,8 @@ from valuz_agent.modules.automations.models import (
     AutomationRunRow,
 )
 from valuz_agent.modules.automations.triggers import TriggerEvaluator
+from valuz_agent.modules.playbooks.models import PlaybookVersionRow
+from valuz_agent.modules.playbooks.service import PlaybookService
 from valuz_agent.ports.automation_runtime import (
     AutomationExecutionLease,
     NoopAutomationExecutionLease,
@@ -66,6 +68,13 @@ TICK_INTERVAL = 30
 TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
 
 
+class _InputPreparationDeniedError(Exception):
+    def __init__(self, status: str, reason: str | None) -> None:
+        self.status = status
+        self.reason = reason
+        super().__init__(reason or "Automation input preparation denied")
+
+
 def _automation_check_config(
     row: AutomationRow,
     run: AutomationRunRow,
@@ -81,12 +90,50 @@ def _automation_check_config(
         playbook_run_id=getattr(run, "playbook_run_id", None),
         configuration={
             "action_kind": row.action_kind,
+            "result_kind": getattr(row, "result_kind", "conversation"),
             "trigger_type": run.trigger_type,
             "playbook_version": (
                 playbook_run.definition_version if playbook_run is not None else None
             ),
         },
     )
+
+
+def _admitted_result_kind(receipt: Any, automation_id: str) -> str | None:
+    """Read the frozen result contract. Legacy inputs may carry the original
+    system-generated envelope; only its exact owned automation/run preamble
+    is recognized, never user text, model output, or presentation hints.
+    Ambiguous legacy inputs return None and cannot relax an artifact contract.
+    """
+    from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+
+    payload = receipt.input or {}
+    config = payload.get(CONFIG_KEY) or {}
+    configuration = config.get("configuration") or {}
+    kind = configuration.get("result_kind")
+    if isinstance(kind, str) and kind in {"conversation", "artifact"}:
+        return str(kind)
+    if (
+        payload.get("source") != "background"
+        or config.get("origin") != "automation"
+        or config.get("automation_id") != automation_id
+        or config.get("run_id") != receipt.id
+    ):
+        return None
+    lines = str(payload.get("text") or "").splitlines()
+    prefix = f'<automation-run automation_id="{automation_id}" run_id="{receipt.id}" '
+    if len(lines) < 5 or not lines[0].startswith(prefix) or not lines[0].endswith(">"):
+        return None
+    # The result rule is one fixed service-generated line before the user task.
+    # Quoted/newline names make the envelope ambiguous and are not inferred.
+    if lines[4] != "</automation-run>":
+        return None
+    for locale in ("en-US", "zh-CN"):
+        if lines[2] == t("backend.automation.runPreambleArtifact", locale=locale):
+            return "artifact"
+        if lines[2] == t("backend.automation.runPreambleConversation", locale=locale):
+            return "conversation"
+    return None
 
 
 def _automation_trigger_meta(
@@ -115,7 +162,7 @@ def _automation_trigger_meta(
 def _compose_playbook_prompt(
     *,
     definition: Any,
-    version: Any,
+    version: PlaybookVersionRow,
     automation_prompt: str,
 ) -> str:
     """Compose the pinned Prompt and this Automation fire's instruction.
@@ -326,16 +373,30 @@ class InProcessAutomationRunner:
         Reconciling on startup keeps the DB self-consistent so the
         single-flight check in ``run_now`` doesn't get tripped by ghost rows.
         """
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            playbooks = PlaybookDatastore(db)
+            playbooks = PlaybookService(db, ProjectLibrary())
             stranded = await ds.list_stranded_runs()
             now = now_ms()
             for run in stranded:
+                row = await ds.get_automation(run.user_id, run.automation_id)
+                from valuz_agent.facade.sessions import SessionLibrary
+
+                receipt = (
+                    await SessionLibrary(run.user_id).get_input(run.session_id, run.id)
+                    if run.session_id
+                    else None
+                )
+                if receipt is not None or getattr(row, "target_session_id", None):
+                    # A durable input owns the outcome. Re-enter admission with
+                    # the same run/input id; it never duplicates the message.
+                    await self.enqueue(run.automation_id, run.id, run.user_id)
+                    continue
                 run.status = "interrupted_by_shutdown"
                 run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
                 run.completed_at = now
@@ -355,17 +416,28 @@ class InProcessAutomationRunner:
                 )
 
     async def _mark_active_runs_interrupted(self) -> None:
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            playbooks = PlaybookDatastore(db)
+            playbooks = PlaybookService(db, ProjectLibrary())
             # Active automations span owners (shutdown path has no request
             # context) — use each automation's own owner, never ambient.
             for automation_id, owner in list(self._active_ids.items()):
                 last_run = await ds.last_run(owner, automation_id)
+                row = await ds.get_automation(owner, automation_id)
+                from valuz_agent.facade.sessions import SessionLibrary
+
+                receipt = (
+                    await SessionLibrary(owner).get_input(last_run.session_id, last_run.id)
+                    if last_run is not None and last_run.session_id
+                    else None
+                )
+                if receipt is not None or getattr(row, "target_session_id", None):
+                    continue
                 if last_run and last_run.status == "running":
                     last_run.status = "interrupted_by_shutdown"
                     last_run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
@@ -488,6 +560,72 @@ class InProcessAutomationRunner:
 
     # ── Per-run execution ────────────────────────────────────────────
 
+    async def _admit_run(
+        self, user_id: str, automation_id: str, run_id: str, lease: AutomationExecutionLease
+    ) -> bool:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.ports.automation_run_guard import evaluate_automation_run_guards
+        from valuz_agent.ports.automation_runtime import AutomationRunCommand
+        from valuz_agent.ports.extensions import ext
+
+        if not ext.automation_run_guards:
+            return True
+        async with async_unit_of_work() as db:
+            ds = AutomationDatastore(db)
+            row = await ds.get_automation(user_id, automation_id)
+            run = await ds.get_run(user_id, automation_id, run_id)
+            if row is None or run is None or run.status not in ACTIVE_RUN_STATUSES:
+                return False
+            from valuz_agent.facade.sessions import SessionLibrary
+
+            receipt = (
+                await SessionLibrary(user_id).get_input(run.session_id, run.id)
+                if run.session_id
+                else None
+            )
+            if receipt is not None and receipt.status != "queued":
+                # Recovery must record already-executed work, even if admission
+                # policy changed after that execution. It never replays input.
+                return True
+            admission = await evaluate_automation_run_guards(
+                AutomationRunCommand(user_id, automation_id, run_id),
+                project_id=row.project_id,
+                target_session_id=(
+                    run.session_id
+                    if receipt is not None
+                    else getattr(row, "target_session_id", None)
+                ),
+            )
+            if admission.allowed:
+                return True
+            if not await lease.is_current():
+                return False
+            if receipt is not None and run.session_id:
+                cancelled = await SessionLibrary(user_id).cancel_input(run.session_id, run.id)
+                if not cancelled:
+                    current = await SessionLibrary(user_id).get_input(run.session_id, run.id)
+                    if current is not None and current.status != "queued":
+                        return True
+            run.status, run.error_message = admission.status, admission.reason
+            run.error_code = (
+                "app_plugin_source_unavailable"
+                if (admission.reason or "").startswith("app_plugin_source_unavailable:")
+                else "AUTOMATION_GUARD_DENIED"
+            )
+            run.completed_at = now_ms()
+            await ds.replace_run(run)
+            row.last_run_at = run.triggered_at
+            assert self._triggers is not None
+            row.next_run_at = (
+                self._triggers.next_fire_at(row, run.triggered_at)
+                if row.status == "enabled"
+                else None
+            )
+            await ds.update_automation(row)
+            await ds.trim_runs(user_id, automation_id, keep=100)
+            return False
+
     async def _execute_run(
         self,
         user_id: str,
@@ -497,10 +635,11 @@ class InProcessAutomationRunner:
         lease: AutomationExecutionLease | None = None,
         detach_chat: bool = True,
     ) -> None:
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
         from valuz_agent.modules.playbooks.models import PlaybookRunRow
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
@@ -513,6 +652,42 @@ class InProcessAutomationRunner:
         # Bound before the ``try`` below so the catch-all handler can reach it
         # however early the failure happened.
         playbook_run: PlaybookRunRow | None = None
+
+        if not await self._admit_run(user_id, automation_id, run_id, execution_lease):
+            return
+
+        # Recover already-dispatched input from its actual receipt even when
+        # catalogue authority was revoked after it started. This never grants
+        # another turn or converts completed work into a new admission failure.
+        async with async_unit_of_work(commit=False) as recovery_db:
+            recovery_store = AutomationDatastore(recovery_db)
+            recovery_row = await recovery_store.get_automation(user_id, automation_id)
+            recovery_run = await recovery_store.last_run(user_id, automation_id)
+        recovery_session_id = recovery_run.session_id if recovery_run is not None else None
+        if (
+            recovery_row is not None
+            and recovery_run is not None
+            and recovery_run.id == run_id
+            and recovery_run.status in ACTIVE_RUN_STATUSES
+            and recovery_session_id
+        ):
+            from valuz_agent.facade.sessions import SessionLibrary
+
+            receipt = await SessionLibrary(user_id).get_input(recovery_session_id, run_id)
+            if receipt is not None and receipt.status != "queued":
+                finish_existing = self._finish_existing_chat_run(
+                    user_id=user_id,
+                    automation_id=automation_id,
+                    run_id=run_id,
+                    session_id=recovery_session_id,
+                    rendered_prompt=str(receipt.input.get("text") or ""),
+                    lease=execution_lease,
+                )
+                if detach_chat:
+                    asyncio.create_task(finish_existing)
+                else:
+                    await finish_existing
+                return
 
         # ── Code execution: no agent, no prompt ──────────────────────────
         # Marked running in its own unit of work, then handed to
@@ -533,7 +708,7 @@ class InProcessAutomationRunner:
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            playbooks = PlaybookDatastore(db)
+            playbooks = PlaybookService(db, ProjectLibrary())
             row = await ds.get_automation(user_id, automation_id)
             run = await ds.last_run(user_id, automation_id)
             if not row or not run or run.id != run_id:
@@ -543,6 +718,18 @@ class InProcessAutomationRunner:
                 # Cancelled (or otherwise terminalised) between enqueue and
                 # pickup — nothing to execute.
                 logger.info("Run %s is already %s; not executing", run_id, run.status)
+                return
+
+            from .app_plugin_authorization import authorize_managed_automation
+
+            try:
+                await authorize_managed_automation(row, user_id=user_id)
+            except Exception as exc:
+                run.status = "failed"
+                run.error_code = "app_plugin_source_unavailable"
+                run.error_message = str(exc)[:500]
+                run.completed_at = now_ms()
+                await ds.replace_run(run)
                 return
 
             # Owner boundary: an automation fires from the background scheduler
@@ -570,13 +757,15 @@ class InProcessAutomationRunner:
                 if run.extra_input:
                     rendered_prompt = f"{rendered_prompt}\n\n{run.extra_input}"
 
-                if row.playbook_definition_id is not None:
-                    definition = await playbooks.get_definition(
+                if run.playbook_run_id is not None:
+                    playbook_run = await playbooks.find_run(user_id, run.playbook_run_id)
+                if row.playbook_definition_id is not None and playbook_run is None:
+                    definition = await playbooks.find_definition(
                         user_id,
                         row.playbook_definition_id,
                     )
                     version = (
-                        await playbooks.get_version(
+                        await playbooks.find_version(
                             user_id,
                             row.playbook_definition_id,
                             row.playbook_version,
@@ -650,8 +839,7 @@ class InProcessAutomationRunner:
                     if not await execution_lease.is_current():
                         logger.warning("Run %s lost execution lease before preparation", run_id)
                         return
-                    playbooks.add(playbook_run)
-                    await playbooks.flush()
+                    await playbooks.prepare_automation_run(user_id, playbook_run)
                     run.playbook_run_id = playbook_run.id
                     # Session creation and task kickoff write through their own
                     # units of work. Commit the prepared run and its back-link
@@ -708,15 +896,38 @@ class InProcessAutomationRunner:
                     # Execution identity follows the bound agent — no model /
                     # provider / runtime override surface remains. The agent's
                     # ``AgentConfig`` is the single source of truth.
-                    session = await session_svc.create_session(
-                        project_id=row.project_id,
-                        origin="automation",
-                        title=f"{t('backend.automation.titlePrefix')} {row.name}",
-                        agent_slug=row.agent_slug,
-                        user_id=user_id,
-                        worktree=wt_spec,
-                        trigger_meta=_automation_trigger_meta(row, run, playbook_run),
-                    )
+                    target = getattr(row, "target_session_id", None)
+                    if target:
+                        from valuz_agent.adapters.data_reader import data_reader
+                        from valuz_agent.modules.sessions.background_targets import (
+                            validate_chat_target,
+                        )
+                        from valuz_agent.modules.sessions.input_receipts import get_input
+
+                        existing_input = await get_input(user_id, target, run_id)
+                        session = (
+                            await data_reader().get_session(user_id, target)
+                            if existing_input is not None
+                            else await validate_chat_target(
+                                user_id,
+                                target,
+                                project_id=row.project_id,
+                                agent_slug=row.agent_slug,
+                                worktree=bool(row.worktree),
+                            )
+                        )
+                        if session is None:
+                            raise RuntimeError("Target session disappeared")
+                    else:
+                        session = await session_svc.create_session(
+                            project_id=row.project_id,
+                            origin="automation",
+                            title=f"{t('backend.automation.titlePrefix')} {row.name}",
+                            agent_slug=row.agent_slug,
+                            user_id=user_id,
+                            worktree=wt_spec,
+                            trigger_meta=_automation_trigger_meta(row, run, playbook_run),
+                        )
                 except Exception as exc:
                     run.status = "failed"
                     run.error_code = type(exc).__name__
@@ -744,7 +955,7 @@ class InProcessAutomationRunner:
                     return
 
                 run.status = "running"
-                run.started_at = now_ms()
+                run.started_at = run.started_at or now_ms()
                 run.session_id = session.id
                 if playbook_run is not None:
                     playbook_run.session_id = session.id
@@ -853,16 +1064,31 @@ class InProcessAutomationRunner:
         it). Owns the turn, the run-row finalization, the automation reschedule,
         and releasing the ``_active_ids`` single-flight guard.
         """
+        from valuz_agent.facade.projects import ProjectLibrary
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
-        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
+        async with async_unit_of_work(commit=False) as target_db:
+            target_row = await AutomationDatastore(target_db).get_automation(user_id, automation_id)
+            existing_target = getattr(target_row, "target_session_id", None)
+        if existing_target:
+            await self._finish_existing_chat_run(
+                user_id=user_id,
+                automation_id=automation_id,
+                run_id=run_id,
+                session_id=session_id,
+                rendered_prompt=rendered_prompt,
+                lease=execution_lease,
+                task_check_config=task_check_config,
+            )
+            return
         try:
             async with async_unit_of_work() as db:
                 ds = AutomationDatastore(db)
-                playbooks = PlaybookDatastore(db)
+                playbooks = PlaybookService(db, ProjectLibrary())
                 row = await ds.get_automation(user_id, automation_id)
                 run = await ds.last_run(user_id, automation_id)
                 if not row or not run or run.id != run_id:
@@ -874,9 +1100,10 @@ class InProcessAutomationRunner:
                     return
                 session_svc = self._build_session_service(db)
                 try:
+                    playbook_run_id = getattr(run, "playbook_run_id", None)
                     pinned_playbook = (
-                        await playbooks.get_run(user_id, run.playbook_run_id)
-                        if getattr(run, "playbook_run_id", None)
+                        await playbooks.find_run(user_id, playbook_run_id)
+                        if isinstance(playbook_run_id, str) and playbook_run_id
                         else None
                     )
                     result = await session_svc.send_message_sync(
@@ -970,7 +1197,7 @@ class InProcessAutomationRunner:
                     return
                 playbook_run_id = getattr(run, "playbook_run_id", None)
                 if playbook_run_id is not None:
-                    playbook_run = await playbooks.get_run(user_id, playbook_run_id)
+                    playbook_run = await playbooks.find_run(user_id, playbook_run_id)
                     if playbook_run is not None and playbook_run.status in {
                         "queued",
                         "planning",
@@ -1012,6 +1239,186 @@ class InProcessAutomationRunner:
             logger.exception("Background chat run %s crashed", run_id)
         finally:
             self._active_ids.pop(automation_id, None)
+
+    async def _finish_existing_chat_run(
+        self,
+        *,
+        user_id: str,
+        automation_id: str,
+        run_id: str,
+        session_id: str,
+        rendered_prompt: str,
+        lease: AutomationExecutionLease,
+        task_check_config: TaskCheckConfig | None = None,
+    ) -> None:
+        """Admission is not success: wait for this input's durable outcome.
+
+        The input id equals the automation run id, making worker retries safe.
+        No DB transaction remains open while waiting for the model turn.
+        """
+        from valuz_agent.facade.projects import ProjectLibrary
+        from valuz_agent.facade.sessions import SessionLibrary
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.playbooks.service import PlaybookService
+        from valuz_agent.modules.sessions.input_receipts import TERMINAL_INPUT_STATUSES
+        from valuz_agent.ports.automation_input import (
+            AutomationInputOutcome,
+            observe_automation_input,
+            prepare_automation_input,
+        )
+        from valuz_agent.ports.automation_runtime import AutomationRunCommand
+
+        assert self._triggers is not None
+        status, error, summary = "failed", None, None
+        admitted_result_kind: str | None = None
+        command = AutomationRunCommand(user_id, automation_id, run_id)
+        receipt = None
+        async with async_unit_of_work(commit=False) as prepare_db:
+            target = await AutomationDatastore(prepare_db).get_automation(user_id, automation_id)
+            if target is None:
+                return
+            project_id = target.project_id
+        try:
+            library = SessionLibrary(user_id)
+            receipt = await library.get_input(session_id, run_id)
+            if receipt is None:
+                preparation = await prepare_automation_input(
+                    command, project_id=project_id, session_id=session_id
+                )
+                if not preparation.allowed:
+                    raise _InputPreparationDeniedError(preparation.status, preparation.reason)
+                if not await lease.is_current():
+                    return
+                if preparation.additional_context:
+                    rendered_prompt += "\n\n" + preparation.additional_context
+                receipt = await library.enqueue_background(
+                    session_id,
+                    rendered_prompt,
+                    input_id=run_id,
+                    task_check_config=task_check_config,
+                )
+            elif receipt.status == "queued":
+                from valuz_agent.modules.sessions.task_checks import CONFIG_KEY
+
+                stored_config = TaskCheckConfig.model_validate(receipt.input.get(CONFIG_KEY) or {})
+                receipt = await library.enqueue_background(
+                    session_id,
+                    str(receipt.input.get("text") or rendered_prompt),
+                    input_id=run_id,
+                    task_check_config=stored_config,
+                )
+            admitted_result_kind = _admitted_result_kind(receipt, automation_id)
+            polls = 0
+            while receipt.status not in TERMINAL_INPUT_STATUSES:
+                polls += 1
+                if receipt.status == "dispatched" and polls % 25 == 0:
+                    from valuz_agent.modules.sessions.recovery import recover_orphaned_inputs
+
+                    await recover_orphaned_inputs()
+                if not await lease.is_current():
+                    return
+                async with async_unit_of_work(commit=False) as db:
+                    run = await AutomationDatastore(db).get_run(user_id, automation_id, run_id)
+                    if run is None:
+                        return
+                    cancel = run.cancel_requested_at is not None or run.status == "cancelled"
+                if cancel:
+                    removed = await library.cancel_input(session_id, run_id)
+                    if not removed and receipt.status == "dispatched":
+                        # Only this run's executing head may be interrupted.
+                        from valuz_agent.modules.sessions.run_orchestrator import (
+                            get_dispatching_queue_id,
+                        )
+
+                        if get_dispatching_queue_id(session_id) == run_id:
+                            await library.interrupt(session_id)
+                if receipt.status == "blocked":
+                    error = receipt.error_message or "Background input blocked"
+                    status = "failed"
+                    break
+                await asyncio.sleep(0.2)
+                receipt = await library.get_input(session_id, run_id)
+                if receipt is None:
+                    raise RuntimeError("Background input receipt disappeared")
+            else:
+                status = {"completed": "success", "failed": "failed", "cancelled": "cancelled"}[
+                    receipt.status
+                ]
+                error, summary = receipt.error_message, receipt.result_summary
+        except _InputPreparationDeniedError as exc:
+            status, summary = exc.status, exc.reason
+        except Exception as exc:
+            error = str(exc)[:500]
+            logger.exception("Existing-session run %s failed", run_id)
+        finally:
+            self._active_ids.pop(automation_id, None)
+
+        if not await lease.is_current():
+            return
+        if receipt is not None and receipt.status in TERMINAL_INPUT_STATUSES:
+            await observe_automation_input(
+                AutomationInputOutcome(
+                    command=command, project_id=project_id, session_id=session_id,
+                    input_id=receipt.id, status=receipt.status, completed_at=receipt.completed_at,
+                )
+            )
+        async with async_unit_of_work() as db:
+            ds = AutomationDatastore(db)
+            run = await ds.get_run(user_id, automation_id, run_id)
+            row = await ds.get_automation(user_id, automation_id)
+            if run is None or row is None or run.status not in ACTIVE_RUN_STATUSES:
+                return
+            original_contract_unavailable = status == "success" and admitted_result_kind is None
+            if original_contract_unavailable:
+                status, error = (
+                    "failed",
+                    ("Original result contract is unavailable; inspect the completed input result"),
+                )
+            elif (
+                status == "success"
+                and admitted_result_kind == "artifact"
+                and run.artifact_json is None
+            ):
+                status, error = "failed", "The run ended without producing its declared artifact"
+            run.status, run.error_message = status, error
+            run.error_code = (
+                "original_result_contract_unavailable"
+                if original_contract_unavailable
+                else "SessionError"
+                if status == "failed"
+                else None
+            )
+            run.result_summary = summary
+            run.completed_at = now_ms()
+            run.duration_ms = run.completed_at - run.started_at if run.started_at else None
+            run.session_id = session_id
+            if run.playbook_run_id:
+                pb = await PlaybookService(db, ProjectLibrary()).get_run(
+                    user_id, run.playbook_run_id
+                )
+                if pb is not None:
+                    pb.status = (
+                        "completed"
+                        if status == "success"
+                        else "stopped"
+                        if status == "cancelled"
+                        else "failed"
+                    )
+                    pb.completed_at, pb.error_message, pb.error_code = (
+                        run.completed_at,
+                        error,
+                        run.error_code,
+                    )
+            await ds.replace_run(run)
+            row.last_run_at = run.triggered_at
+            row.next_run_at = (
+                self._triggers.next_fire_at(row, run.triggered_at)
+                if row.status == "enabled"
+                else None
+            )
+            row.updated_at = now_ms()
+            await ds.update_automation(row)
 
     # ── Code execution ─────────────────────────────────────────────
 
@@ -1394,7 +1801,7 @@ class InProcessAutomationRunner:
 
     @staticmethod
     async def _stop_linked_playbook_run(
-        playbooks: Any,
+        playbooks: PlaybookService,
         automation_run: AutomationRunRow,
         *,
         completed_at: int,
@@ -1404,7 +1811,7 @@ class InProcessAutomationRunner:
         playbook_run_id = getattr(automation_run, "playbook_run_id", None)
         if playbook_run_id is None:
             return
-        playbook_run = await playbooks.get_run(
+        playbook_run = await playbooks.find_run(
             automation_run.user_id,
             playbook_run_id,
         )
@@ -1464,6 +1871,8 @@ class InProcessAutomationRunner:
         """
         from valuz_agent.modules.projects.datastore import ProjectDatastore
 
+        if user_id is None:
+            raise ValueError("user_id is required")
         try:
             row = await ProjectDatastore(db).get_by_id(user_id, project_id)
             if row is not None:

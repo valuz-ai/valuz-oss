@@ -63,6 +63,7 @@ class _Cand:
     title: str | None = None
     status: str | None = None
     linked_session_id: str | None = None
+    runtime: str | None = None
 
 
 def _order_key(c: _Cand) -> tuple[int, str, str]:
@@ -178,7 +179,8 @@ async def list_activity(
         cands = [c for c in cands if _order_key(c) > cur_key]
     page = cands[:limit]
 
-    # Enrich only the winning chat rows with title/status from the kernel. A row
+    # Enrich only the winning chat rows with title/status/runtime from the
+    # kernel (runtime gates the row's Fork entry client-side). A row
     # whose session the kernel no longer has is a GHOST — the session was deleted
     # but a stale index row lingered (or a create half-failed). Drop it so it
     # never shows as a "New chat" the user can't clear.
@@ -197,6 +199,7 @@ async def list_activity(
             meta = (getattr(s, "metadata", None) or {}).get("valuz") or {}
             c.title = meta.get("name") or meta.get("last_user_message_text") or "New chat"
             c.status = getattr(s, "status", "unknown")
+            c.runtime = getattr(s, "runtime_provider", None) or None
     # Anchor the cursor to the original page tail BEFORE dropping ghosts, so
     # pagination advances past them instead of re-requesting the same ghosts.
     last_cand = page[-1] if page else None
@@ -215,6 +218,7 @@ async def list_activity(
             project_id=c.project_id,
             project_name=(None if c.project_id == _CHAT_DEFAULT else pname.get(c.project_id)),
             linked_session_id=c.linked_session_id,
+            runtime=c.runtime,
             sort_at=c.sort_at,
         )
         for c in page

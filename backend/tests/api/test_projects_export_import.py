@@ -7,7 +7,7 @@ Drives the HTTP layer against an isolated sqlite db so the full
   3. Library-agent slug de-dup (existing library agent is reused).
   4. Two members same source slug with dedupe=False.
   5. Connector secret stripping → recipient sees requires_credentials.
-  6. Memory file byte-for-byte restore.
+  6. Project memory re-admitted to the target catalog, never copied identities.
   7. No-memory-dir project exports + imports fine.
   8. model_hint doesn't affect resolution (provider/model come from defaults).
   9. Expired preview_id → 400.
@@ -254,11 +254,15 @@ async def test_round_trip_recreates_project_members_automations_memory(client, t
     auto.user_id = USER
     deps.session.add(auto)
     await deps.session.commit()
-    # memory file
+    # Memory comes from the catalog, not a hand-edited Markdown view.
     from valuz_agent.infra.fs_registry import fs_registry
+    from valuz_agent.modules.memory.service import memory_store
 
     memory = fs_registry.memory_dir(USER, "project", project_id=project.id)
-    (memory / "MEMORY.md").write_text("# bytes\n", encoding="utf-8")
+    assert memory_store.add(USER, "project", "Project-specific fact.", project_id=project.id)[
+        "success"
+    ]
+    original_memory_id = memory_store.list_records(USER, "project", project_id=project.id)[0].id
 
     # Export
     resp = await c.get(f"/v1/projects/{project.id}/export")
@@ -300,9 +304,14 @@ async def test_round_trip_recreates_project_members_automations_memory(client, t
     # empty-prompt bug that swallowed AutomationPromptEmpty in a broad except)
     assert len(result["automations"]) == 1
     assert result["automations"][0]["name"] == "Daily brief"
-    # memory restored byte-for-byte
+    # Generated view plus a new owner-scoped catalog identity, with untrusted provenance.
     new_memory = fs_registry.memory_dir(USER, "project", project_id=new_id)
-    assert (new_memory / "MEMORY.md").read_text() == "# bytes\n"
+    assert "Project-specific fact." in (new_memory / "MEMORY.md").read_text()
+    assert result["memory_imported"] == 1 and result["memory_errors"] == []
+    records = memory_store.list_records(USER, "project", project_id=new_id)
+    assert [record.content for record in records] == ["Project-specific fact."]
+    assert records[0].id != original_memory_id
+    assert not records[0].confirmed and records[0].source_refs[0].origin == "untrusted"
 
 
 async def test_name_conflict_skip(client) -> None:

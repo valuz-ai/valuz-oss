@@ -27,6 +27,7 @@
     "@valuz/core": "workspace:*",
     "@valuz/desktop-network-egress": "workspace:*",
     "@valuz/parser-plugins": "workspace:*",
+    "@valuz/plugin-sdk": "workspace:*",
     "@valuz/shared": "workspace:*",
     "@valuz/ui": "workspace:*",
     "electron-log": "^5.4.4",
@@ -41,7 +42,7 @@
     "@electron/notarize": "^3.1.1",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
-    "electron": "^36.3.2",
+    "electron": "44.0.0",
     "electron-builder": "^26.0.12",
     "rcedit": "^5.0.2",
     "wait-on": "^8.0.5"

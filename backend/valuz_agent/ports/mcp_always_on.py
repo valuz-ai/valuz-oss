@@ -15,8 +15,10 @@ built-in names are skipped defensively.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+
+from starlette.types import ASGIApp
 
 # Model-visible server names are hyphenated, the spelling every catalog
 # connector already uses (``valuz-data``, ``valuz-search``, ``valuz-following``).
@@ -28,6 +30,24 @@ from dataclasses import dataclass
 RESERVED_ALWAYS_ON_NAMES = frozenset(
     {"valuz-docs", "valuz-automations", "valuz-playbooks", "valuz-connectors", "harness"}
 )
+
+
+# Which built-in servers this process actually mounts. The plugin host decides: a
+# disabled feature (``oss-automations``, ``oss-knowledge``, ...) mounts nothing, and
+# sessions must not be handed a server whose URL 404s. ``None`` -- no composed app yet
+# (unit tests, embedding callers) -- means "all of them", the pre-plugin behaviour.
+_enabled_builtin_servers: frozenset[str] | None = None
+
+
+def set_enabled_builtin_servers(names: Iterable[str] | None) -> None:
+    """Record the built-in server names the composed app mounts (``create_app``)."""
+    global _enabled_builtin_servers
+    _enabled_builtin_servers = None if names is None else frozenset(names)
+
+
+def builtin_server_enabled(name: str) -> bool:
+    """Whether the built-in always-on server ``name`` is mounted in this process."""
+    return _enabled_builtin_servers is None or name in _enabled_builtin_servers
 
 
 def retired_always_on_name(name: str) -> str:
@@ -43,7 +63,13 @@ def retired_always_on_name(name: str) -> str:
     return name.replace("-", "_")
 
 
-__all__ = ["AlwaysOnMcpServerSpec", "RESERVED_ALWAYS_ON_NAMES", "retired_always_on_name"]
+__all__ = [
+    "AlwaysOnMcpServerSpec",
+    "RESERVED_ALWAYS_ON_NAMES",
+    "builtin_server_enabled",
+    "retired_always_on_name",
+    "set_enabled_builtin_servers",
+]
 
 
 @dataclass(frozen=True)
@@ -68,4 +94,4 @@ class AlwaysOnMcpServerSpec:
 
     name: str
     path: str
-    app_factory: Callable[[], object] | None = None
+    app_factory: Callable[[], ASGIApp] | None = None

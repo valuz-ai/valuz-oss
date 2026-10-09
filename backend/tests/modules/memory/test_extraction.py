@@ -10,12 +10,16 @@ import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
 from valuz_agent.modules.memory import MemoryStore
+from valuz_agent.ports.memory import SourceRef
 from valuz_agent.modules.memory.extraction import (
     MemoryExtractor,
     apply_ops,
     parse_ops,
     redact_secrets,
 )
+
+
+SOURCES = {"s1": SourceRef(kind="message", source_id="synthetic-message", origin="owner")}
 
 
 def _completer(payload):  # noqa: ANN001, ANN202 — async stub returning a fixed body
@@ -42,7 +46,10 @@ def test_redact_secrets():
 
 
 def test_parse_ops_plain_and_fenced():
-    body = {"ops": [{"action": "add", "target": "user", "content": "be terse"}], "note": "x"}
+    body = {
+        "ops": [{"action": "add", "source_ids": ["s1"], "target": "user", "content": "be terse"}],
+        "note": "x",
+    }
     assert parse_ops(json.dumps(body))[0].content == "be terse"
     fenced = "```json\n" + json.dumps(body) + "\n```"
     assert parse_ops(fenced)[0].target == "user"
@@ -54,11 +61,16 @@ def test_parse_ops_drops_malformed():
     raw = json.dumps(
         {
             "ops": [
-                {"action": "add", "target": "user", "content": "ok"},
-                {"action": "add", "target": "user"},  # missing content
+                {"action": "add", "source_ids": ["s1"], "target": "user", "content": "ok"},
+                {"action": "add", "source_ids": ["s1"], "target": "user"},  # missing content
                 {"action": "replace", "target": "global", "old_text": "x"},  # missing content
                 {"action": "frob", "target": "user", "content": "y"},  # bad action
-                {"action": "add", "target": "nope", "content": "y"},  # bad target
+                {
+                    "action": "add",
+                    "source_ids": ["s1"],
+                    "target": "nope",
+                    "content": "y",
+                },  # bad target
             ]
         }
     )
@@ -72,20 +84,55 @@ def test_apply_ops_scope_routing(store):
         json.dumps(
             {
                 "ops": [
-                    {"action": "add", "target": "user", "content": "be terse"},
-                    {"action": "add", "target": "global", "content": "prefers pnpm"},
-                    {"action": "add", "target": "project", "content": "tracks ACME"},
+                    {
+                        "action": "add",
+                        "source_ids": ["s1"],
+                        "target": "user",
+                        "content": "be terse",
+                    },
+                    {
+                        "action": "add",
+                        "source_ids": ["s1"],
+                        "target": "global",
+                        "content": "prefers pnpm",
+                    },
+                    {
+                        "action": "add",
+                        "source_ids": ["s1"],
+                        "target": "project",
+                        "content": "tracks ACME",
+                    },
                 ]
             }
         )
     )
     # no project bound -> the project op is skipped, user/global applied
-    rep = apply_ops(ops, user_id="local-test-owner", project_id=None, store=store)
-    assert rep["applied"] == 2 and rep["skipped"]
+    rep = asyncio.run(
+        apply_ops(
+            ops,
+            user_id="local-test-owner",
+            project_id=None,
+            store=store,
+            snapshot=store.snapshot("local-test-owner"),
+            review_id="review1",
+            source_aliases=SOURCES,
+        )
+    )
+    assert rep["applied"] == 2
     assert store.read_entries("local-test-owner", "user") == ["be terse"]
     assert store.read_entries("local-test-owner", "global") == ["prefers pnpm"]
     # with a project -> project op lands
-    rep2 = apply_ops(ops, user_id="local-test-owner", project_id="p1", store=store)
+    rep2 = asyncio.run(
+        apply_ops(
+            ops,
+            user_id="local-test-owner",
+            project_id="p1",
+            store=store,
+            snapshot=store.snapshot("local-test-owner"),
+            review_id="review2",
+            source_aliases=SOURCES,
+        )
+    )
     assert "tracks ACME" in store.read_entries("local-test-owner", "project", project_id="p1")
     assert rep2["applied"] >= 1
 
@@ -95,25 +142,51 @@ def test_apply_ops_redacts_before_persist(store):
         json.dumps(
             {
                 "ops": [
-                    {"action": "add", "target": "global", "content": "token=sk-ABCDEFGH012345678"}
+                    {
+                        "action": "add",
+                        "source_ids": ["s1"],
+                        "target": "global",
+                        "content": "token=sk-ABCDEFGH012345678",
+                    }
                 ]
             }
         )
     )
-    apply_ops(ops, user_id="local-test-owner", store=store)
-    stored = store.read_entries("local-test-owner", "global")[0]
-    assert "sk-ABCDEFGH" not in stored and "[REDACTED_SECRET]" in stored
+    from valuz_agent.modules.memory.extraction import InvalidReviewError
+
+    with pytest.raises(InvalidReviewError):
+        asyncio.run(
+            apply_ops(
+                ops,
+                user_id="local-test-owner",
+                store=store,
+                snapshot=store.snapshot("local-test-owner"),
+                review_id="secret-review",
+                source_aliases=SOURCES,
+            )
+        )
+    assert store.snapshot("local-test-owner").records == ()
 
 
 def test_extractor_end_to_end(store):
     payload = json.dumps(
-        {"ops": [{"action": "add", "target": "user", "content": "investor, replies in zh"}]}
+        {
+            "ops": [
+                {
+                    "action": "add",
+                    "source_ids": ["s1"],
+                    "target": "user",
+                    "content": "investor, replies in zh",
+                }
+            ]
+        }
     )
     ext = MemoryExtractor(store=store, complete=_completer(payload))
     assert ext.enabled
     rep = asyncio.run(
         ext.extract(
             user_id="local-test-owner",
+            source_aliases=SOURCES,
             transcript="user: I'm an investor; reply in Chinese",
         )
     )
@@ -162,6 +235,7 @@ def test_extractor_surfaces_usage_in_review_prompt(store):
     asyncio.run(
         ext.extract(
             user_id="local-test-owner",
+            source_aliases=SOURCES,
             transcript="user: please review this conversation content",
         )
     )
@@ -192,6 +266,7 @@ def _capture_prompt(store, **extract_kwargs):  # noqa: ANN001, ANN202
     asyncio.run(
         ext.extract(
             user_id="local-test-owner",
+            source_aliases=SOURCES,
             transcript="user: please review this content",
             **extract_kwargs,
         )

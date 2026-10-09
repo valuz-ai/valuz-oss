@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "office",
-  "version": "1.0.0",
-  "description": "Create and edit Word, Excel, and PowerPoint documents (docx / xlsx / pptx).",
+  "version": "2.0.0",
+  "description": "Create, edit, review and check Word, Excel and PowerPoint documents (docx / xlsx / pptx), with bundled LibreOffice rendering, conversion and formula recalculation.",
   "author": {"name": "Valuz"},
   "license": "MIT",
   "keywords": ["office", "docx", "xlsx", "pptx"]

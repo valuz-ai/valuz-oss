@@ -1,0 +1,75 @@
+# The Valuz layer over the upstream dsh distribution. One profile serves two
+# process roles, selected by VALUZ_DSH_ROLE:
+#
+#   session — one SDK JSON-RPC child per kernel session (stdout = JSON-RPC);
+#   manager — the resident web host, where plugins are installed, toggled and
+#             configured exactly as in dsh (Plugins page, plugin_manager).
+#
+# Only upstream row ids are referenced here (no upstream config is copied), so
+# a dsh upgrade carries its own defaults. tests/runtimes/test_dsh_upstream_compat.py
+# (test_bundle_addresses_only_rows_upstream_still_ships) fails when an id below
+# disappears upstream.
+
+# ── role: the web surface exists only in the manager ─────────────────────────
+- id: web-startup
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+- id: webserver
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+- id: web-runtime
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+- id: client-hmr
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+- id: modules
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+- id: connection
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+- id: hmr
+  disabled: !!js "process.env.VALUZ_DSH_ROLE === 'session'"
+
+# ── role: the SDK transport exists only in session children ─────────────────
+- id: sdk-app-startup
+  disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+- id: sdk-jsonrpc-server
+  disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+
+# ── privacy: nothing leaves the machine except the model request itself ─────
+# (OTel session telemetry is switched off by DSH_TELEMETRY_DISABLED, which the
+# launcher always sets.)
+- id: session-log-deepseek
+  disabled: true
+- id: plugin-package-inventory-deepseek
+  disabled: true
+
+# ── Valuz plugins ───────────────────────────────────────────────────────────
+# Relative names are anchored beside this file (app-boot anchors inserted
+# filesystem names), so they resolve wherever the closure is installed — the
+# runtime resolution table only knows the dsh installation's own graph.
+- insert:
+    - id: valuz-session-preset
+      name: ./lib/session-preset.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # Inert stand-ins for tools the shipped subagent filters name but the
+    # session role never registers (schedule_*), hidden from every agent.
+    - id: valuz-session-tool-stubs
+      name: ./lib/session-tool-stubs.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    - id: valuz-stream-forwarder
+      name: ./lib/stream-forwarder.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # Per-session config (instructions, plan state, the kernel's
+    # user-questions endpoint) arrives as an id-targeted override in the
+    # session patch the kernel writes.
+    - id: valuz-kernel-bridge
+      name: ./lib/kernel-bridge.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # Valuz hook bus for dsh's built-in tools. Armed by an id-targeted
+    # override in the session patch only while a Valuz handler listens;
+    # without config it does nothing.
+    - id: valuz-hook-bridge
+      name: ./lib/hook-bridge.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'session'"
+    # dsh plugin tools for Claude / Codex / DeepAgents sessions: the manager
+    # host serves them to the Valuz backend's always-on MCP server.
+    - id: valuz-tool-bridge
+      name: ./lib/tool-bridge.js
+      disabled: !!js "process.env.VALUZ_DSH_ROLE !== 'manager'"

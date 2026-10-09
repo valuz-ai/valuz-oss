@@ -28,6 +28,7 @@ from app.schemas import (
     ModelProviderUpdateSchema,
     ModelSettingsSchema,
     PrepareRuntimeRequest,
+    RecoverFailedSessionRequest,
     SessionListResponse,
     SessionResponse,
     SetSessionModeRequest,
@@ -277,9 +278,10 @@ async def fork_session(
                 runtime_context=body.runtime_context,
             )
         except NotImplementedError as exc:
-            # Rollout gate expressed by the runtime itself: codex is wired
-            # up; claude_agent / deepagents raise until design doc P1/P2
-            # land — at which point this route needs no change.
+            # Rollout gate expressed by the runtime itself: codex,
+            # claude_agent and deepagents are wired; deepseek_harness (and
+            # deepagents on a non-sqlite checkpoint backend) raise — wiring
+            # one later needs no change here.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(
@@ -460,7 +462,7 @@ async def set_session_mode(
 
     Validation:
 
-    * 400 — `deepagents` runtime: plan / goal have no native primitive.
+    * 400 — `goal` on `deepagents` / `deepseek_harness`: no goal primitive.
     * 422 — `mode` not in `{"default", "plan", "goal"}` (Pydantic).
 
     Direct ``plan ↔ goal`` transitions are allowed. The runtime
@@ -474,21 +476,15 @@ async def set_session_mode(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if body.mode != "default" and session.runtime_provider == "deepagents":
+    # Plan runs everywhere: natively on claude_agent / codex / deepseek_harness,
+    # bus-filled on deepagents (core/hooks/builtin/plan_gate.py + the
+    # runtime's plan instructions and proposal card). Goal has no lowering on
+    # deepagents or deepseek_harness.
+    if body.mode == "goal" and session.runtime_provider in ("deepagents", "deepseek_harness"):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"mode={body.mode!r} is not supported on {session.runtime_provider} "
-                "sessions (no native plan/goal primitive)."
-            ),
-        )
-    # deepseek_harness gained plan (dsh-plan-mode via the vendored closure,
-    # slice 3); goal still has no dsh lowering.
-    if body.mode == "goal" and session.runtime_provider == "deepseek_harness":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "mode='goal' is not supported on deepseek_harness sessions "
+                f"mode='goal' is not supported on {session.runtime_provider} sessions "
                 "(no native goal primitive)."
             ),
         )
@@ -586,6 +582,56 @@ async def append_session_event(
         Event(type=body.type, data=body.data),  # type: ignore[arg-type]
     )
     return {"data": AppendEventData(persisted=True)}
+
+
+@router.post("/{session_id}/recover-failed", response_model=SessionResponse)
+async def recover_failed_session(
+    session_id: str,
+    body: RecoverFailedSessionRequest,
+    store: StoreDep,
+    owner: OwnerDep,
+) -> dict[str, Any]:
+    """Explicit recovery of this exact failed conversation, with atomic store support."""
+    import hashlib
+    import json
+
+    session = await store.load_session(owner, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    serialized = _session_to_data(session).model_dump(mode="json")
+    fingerprint = hashlib.sha256(
+        json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    meta = (session.metadata or {}).get("valuz") or {}
+    from src.core.types import Error as ErrorStop
+
+    if (
+        fingerprint != body.expected_snapshot_hash
+        or session.status != "terminated"
+        or not isinstance(session.stop_reason, ErrorStop)
+        or session.stop_reason.category != "execution_error"
+        or session.stop_reason.retry_status != "exhausted"
+        or meta.get("task_id")
+        or meta.get("worktree")
+        or meta.get("project_id") != body.project_id
+        or meta.get("agent_slug") != body.agent_slug
+    ):
+        raise HTTPException(status_code=409, detail="Failed session recovery conditions changed")
+    recover = getattr(store, "recover_failed_session_if_current", None)
+    if not callable(recover):
+        raise HTTPException(status_code=501, detail="This store requires manual session recovery")
+    try:
+        changed = await recover(owner, session, body.failed_message_id)
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=501, detail="This store requires manual session recovery"
+        ) from exc
+    if not changed:
+        raise HTTPException(status_code=409, detail="Failed session recovery CAS lost")
+    current = await store.load_session(owner, session_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Session disappeared")
+    return {"data": _session_to_data(current)}
 
 
 @router.post("/{session_id}/finalize", response_model=SessionResponse)

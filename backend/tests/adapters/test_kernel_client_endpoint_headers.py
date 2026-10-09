@@ -207,8 +207,26 @@ class _HandshakeRecorder:
 
     async def _handler(self, ws: Any) -> None:
         self.headers = {k.lower(): v for k, v in ws.request.headers.items()}
-        await ws.recv()
-        await ws.send(json.dumps({"type": "session_idle", "data": {}, "timestamp": 1}))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "run_capabilities",
+                    "data": {"completion_correlation": "execution_request_id-v1"},
+                }
+            )
+        )
+        request = json.loads(await ws.recv())
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "run_result",
+                    "data": {
+                        "execution_request_id": request["execution_request_id"],
+                        "message_id": "m-1",
+                    },
+                }
+            )
+        )
         try:
             await asyncio.wait_for(ws.wait_closed(), timeout=3)
         except TimeoutError:
@@ -232,20 +250,20 @@ async def test_run_turn_handshake_carries_the_extra_headers() -> None:
             extra_headers={"X-Faas-Instance-Name": "inst-a"},
         )
 
-        async def _fake_list_messages(user_id, session_id, *, limit=50, offset=0):
-            return [
-                MessageData(
-                    id="m-1",
-                    session_id=session_id,
-                    user_message=UserMessageSchema(text="hi", attachments=[]),
-                    assistant_message="done",
-                    status="completed",
-                    total_turns=1,
-                    started_at=0,
-                )
-            ]
+        async def _fake_get_message(user_id, message_id):
+            assert user_id == "owner-a" and message_id == "m-1"
+            return MessageData(
+                id="m-1",
+                session_id="sess-1",
+                user_message=UserMessageSchema(text="hi", attachments=[]),
+                assistant_message="done",
+                status="completed",
+                total_turns=1,
+                started_at=0,
+                ended_at=1,
+            )
 
-        client.list_messages = _fake_list_messages  # type: ignore[method-assign]
+        client.get_message = _fake_get_message  # type: ignore[method-assign]
         try:
             await client.run_turn("owner-a", "sess-1", "hi")
         finally:
@@ -254,3 +272,4 @@ async def test_run_turn_handshake_carries_the_extra_headers() -> None:
     assert fake.headers["x-faas-instance-name"] == "inst-a"
     assert fake.headers["authorization"] == "Bearer tok"
     assert fake.headers["x-valuz-owner-id"] == "owner-a"
+    assert fake.headers["x-valuz-completion-correlation"] == "1"

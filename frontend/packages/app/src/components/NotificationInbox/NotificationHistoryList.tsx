@@ -29,6 +29,7 @@ import { notificationDisplay } from "./notification-display";
 const PAGE_SIZE = 50;
 
 const KIND_LABEL: Record<string, string> = {
+  app_plugin: "pluginSettings.appPlugins.title",
   question: "notification.kindQuestion",
   task_failed: "notification.kindFailure",
   run_failed: "notification.kindRunFailed",

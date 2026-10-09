@@ -33,15 +33,18 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
 import os
 import shutil
 import time
+import tomllib
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import quote_plus
 
@@ -55,6 +58,9 @@ from openai_codex.generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
     AskForApprovalValue,
+    ItemCompletedNotification,
+    ItemStartedNotification,
+    McpToolCallThreadItem,
     SandboxMode,
     TextUserInput,
     ThreadForkParams,
@@ -74,6 +80,18 @@ from src.core.events import (
     Event,
     EventSink,
 )
+from src.core.hooks import (
+    TOOL_CALL,
+    TOOL_CHECK,
+    HookEvent,
+    SessionHooks,
+    SessionRef,
+    ToolDecision,
+    ToolRef,
+    native_tool_ref,
+)
+from src.core.hooks.classic.config import classic_hooks_allowed, has_dialect_hooks
+from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
@@ -87,6 +105,7 @@ from src.core.types import (
     StopReason,
     UserMessage,
     is_bare_completion,
+    is_workspace_untrusted,
     model_rejects_images,
 )
 
@@ -95,11 +114,15 @@ from src.core.types import (
 # ``runtime.py`` (e.g. tests written before the split) keep working.
 from src.runtimes.codex.approval_bridge import (
     _REQUEST_USER_INPUT_METHOD,
+    McpApprovalItem,
     _build_approval_response,
     _build_codex_pending_payload,
     _build_request_user_input_response,
     _classify_codex_subject,
     _extract_matcher_inputs,
+    decode_mcp_approval,
+    matching_mcp_approval_items,
+    mcp_approval_key,
 )
 from src.runtimes.codex.event_mapper import (
     extract_error,
@@ -207,6 +230,9 @@ class CodexRuntime:
         # Tracks whether this runtime registered a toolkit endpoint so
         # ``close()`` can revoke it without needing the session reference.
         self._registered_session_id: str | None = None
+        # Hook bus: the session reference and the MCP proxy registration.
+        self._hook_session_ref: SessionRef | None = None
+        self._mcp_proxy_session_id: str | None = None
         self._egress_runtime_key: str | None = None
         self._egress_turn_attempt_id: str | None = None
 
@@ -277,6 +303,7 @@ class CodexRuntime:
         ) = None
 
     APPROVAL_TIMEOUT_SECONDS: float = 3600.0  # 1 h; class attr for test override
+    MCP_APPROVAL_ITEM_WAIT_SECONDS: float = 2.0
 
     # -- RuntimePort interface --
 
@@ -371,7 +398,8 @@ class CodexRuntime:
         async with self._prepare_lock:
             self._loop = asyncio.get_running_loop()
             self._materialize_skills(session)
-            await self._ensure_codex(session)
+            # The fork reads the source rollout, so run where it lives.
+            await self._ensure_codex(session, thread_id=source_native_session_id)
         assert self._codex is not None
         common = self._build_thread_kwargs(session)
         t0 = time.monotonic()
@@ -401,8 +429,16 @@ class CodexRuntime:
         self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         turn_attempt_id = uuid.uuid4().hex
+        self._mcp_approval_items: dict[str, McpApprovalItem] = {}
+        self._mcp_approval_retired_items: set[str] = set()
+        self._mcp_approval_history: dict[tuple[SessionRef, str, str, str, str], set[str]] = {}
+        self._mcp_approval_items_changed = asyncio.Event()
 
         try:
+            from src.core.hooks.runtime_support import runtime_constraints
+
+            self._hook_session_ref = SessionRef.from_session(session)
+            self._runtime_constraints = await runtime_constraints(self, "codex")
             await self._prepare(session, turn_attempt_id=turn_attempt_id)
             assert self._codex is not None
             assert self._thread is not None
@@ -547,6 +583,7 @@ class CodexRuntime:
                 async for notification in stream:
                     if self._cancelled:
                         break
+                    self._observe_mcp_approval_item(notification)
 
                     for event in map_notification(notification):
                         # On a ``/compact`` turn, swallow the model's
@@ -558,6 +595,9 @@ class CodexRuntime:
                             continue
                         if event.type == "compaction":
                             saw_compaction = True
+                            await notify_compaction(
+                                self._hook_session(), "manual" if is_compact else "auto"
+                            )
                         if not saw_model_event and event.type in {
                             "text_delta",
                             "thinking_delta",
@@ -682,6 +722,7 @@ class CodexRuntime:
             # turn — this synthetic one is only the fallback for binaries
             # that don't emit that item.
             if is_compact and completed is not None and not saw_compaction:
+                await notify_compaction(self._hook_session(), "manual")
                 await self.event_sink.emit(Event(type="compaction", data={}))
 
             # A turn that reached ``turn/completed`` reports its spend even
@@ -759,9 +800,14 @@ class CodexRuntime:
                     message=cause,
                 )
                 await self.event_sink.emit(Event(type="session_error", data={"message": cause}))
-                if self.config.hooks:
-                    await self.config.hooks.fire("on_error", error=exc, session_id=session.id)
         finally:
+            from src.core.hooks.runtime_support import release_runtime_constraints
+
+            await release_runtime_constraints(self, "codex")
+            self._mcp_approval_items.clear()
+            self._mcp_approval_retired_items.clear()
+            self._mcp_approval_history.clear()
+            self._mcp_approval_items_changed.set()
             self._active_turn = None
             self._active_task = None
             await self.event_sink.emit(
@@ -911,6 +957,37 @@ class CodexRuntime:
 
             unregister_session_toolkit(self._registered_session_id)
             self._registered_session_id = None
+        await self._release_mcp_proxy()
+
+    # -- Hook bus --
+
+    def _hook_session(self) -> SessionHooks:
+        """The hook bus bound to this runtime's session."""
+        return runtime_session_hooks(self, "codex")
+
+    async def _route_mcp_through_proxy(self, session: Session) -> Session:
+        if not session.mcp_servers or not self._hook_session().wants_tool_source(TOOL_CALL, "mcp"):
+            return session
+        from src.runtimes.mcp_proxy import proxy_session_mcp
+
+        await self._release_mcp_proxy()
+        proxied = proxy_session_mcp(session.id, session.mcp_servers, self._hook_session())
+        if proxied is None:
+            hooks = self._hook_session()
+            if any(spec.required for spec in hooks.registry.specs_for(TOOL_CALL, hooks.session)):
+                raise RuntimeError("required MCP execution guard unavailable")
+            return session
+        self._mcp_proxy_session_id = session.id
+        return dataclasses.replace(session, mcp_servers=proxied)
+
+    async def _release_mcp_proxy(self) -> None:
+        proxy_session_id = getattr(self, "_mcp_proxy_session_id", None)
+        if proxy_session_id is None:
+            return
+        from src.runtimes.mcp_proxy import unregister_session_proxy
+
+        self._mcp_proxy_session_id = None
+        await unregister_session_proxy(proxy_session_id)
 
     # -- Lifecycle helpers --
 
@@ -934,35 +1011,75 @@ class CodexRuntime:
             phase,
         )
 
-    async def _ensure_codex(self, session: Session) -> None:
+    async def _ensure_codex(self, session: Session, *, thread_id: str | None = None) -> None:
+        """Spawn this session's app-server. ``thread_id`` names the thread it
+        will resume or fork (default: the session's own), which decides the
+        CODEX_HOME it runs in (:func:`_select_codex_home`)."""
         if self._codex is not None:
+            # prepare() can precede pre-turn credential materialization, and
+            # resumed turns may have a new host authorization context. Keep
+            # the app-server (and its background commands) alive while its
+            # kernel-owned MCP upstreams follow this turn's session config.
+            self._hook_session_ref = SessionRef.from_session(session)
+            self._register_toolkit_if_eligible(session)
+            if self._mcp_proxy_session_id is not None:
+                from src.runtimes.mcp_proxy import refresh_session_proxy
+
+                await refresh_session_proxy(
+                    self._mcp_proxy_session_id, session.mcp_servers, self._hook_session()
+                )
             return
         t0 = time.monotonic()
         await self._emit_turn_phase("runtime_init_started")
+        self._hook_session_ref = SessionRef.from_session(session)
         expose_toolkit = self._register_toolkit_if_eligible(session)
         codex_bin = _resolve_codex_bin()
         if codex_bin is None:
             raise RuntimeError("Codex runtime binary is unavailable")
+        # While a ``tool.call`` handler is registered, codex reaches its MCP
+        # servers through the kernel's proxy so every MCP call goes through
+        # the hook bus; otherwise codex connects to them directly, as before.
+        config_session = await self._route_mcp_through_proxy(session)
+        egress_base_url = (
+            self.egress_descriptor.base_url if self.egress_descriptor is not None else None
+        )
         overrides = _build_config_overrides(
-            session,
+            config_session,
             self.model_provider,
             self.model,
             expose_toolkit=expose_toolkit,
-            egress_base_url=(
-                self.egress_descriptor.base_url if self.egress_descriptor is not None else None
-            ),
+            egress_base_url=egress_base_url,
         )
-        safe_overrides, mcp_secret_env = _externalize_mcp_secrets(session, overrides)
+        safe_overrides, mcp_secret_env = _externalize_mcp_secrets(config_session, overrides)
+        env = _build_codex_env(
+            self.model_provider,
+            egress_base_url=egress_base_url,
+            mcp_secret_env=mcp_secret_env,
+        )
+        codex_home = _select_codex_home(
+            self.model_provider,
+            egress_base_url=egress_base_url,
+            thread_id=thread_id or session.runtime_session_id,
+        )
+        if codex_home is not None:
+            try:
+                codex_home.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                # e.g. a Seatbelt-sandboxed kernel that may not write beside
+                # kernel.db: run as before rather than not at all.
+                logger.warning("codex: cannot create %s; using the user's home", codex_home)
+                codex_home = None
+        if codex_home is None:
+            safe_overrides = (
+                *safe_overrides,
+                *_user_home_isolation_overrides(_mcp_override_names(overrides)),
+            )
+        else:
+            env = {**(env if env is not None else os.environ), "CODEX_HOME": str(codex_home)}
         cfg = CodexConfig(
             codex_bin=codex_bin,
             config_overrides=safe_overrides,
-            env=_build_codex_env(
-                self.model_provider,
-                egress_base_url=(
-                    self.egress_descriptor.base_url if self.egress_descriptor is not None else None
-                ),
-                mcp_secret_env=mcp_secret_env,
-            ),
+            env=env,
         )
         self._codex = AsyncCodex(config=cfg)
         try:
@@ -1032,6 +1149,7 @@ class CodexRuntime:
         if not callable_tools:
             return False
 
+        from src.core.hooks import SessionRef
         from src.core.mcp_bridge import register_session_toolkit
 
         register_session_toolkit(
@@ -1042,6 +1160,7 @@ class CodexRuntime:
                 session_id=session.id,
                 user_id=getattr(session, "user_id", "") or "",
             ),
+            hook_session=SessionRef.from_session(session),
         )
         self._registered_session_id = session.id
         return True
@@ -1114,6 +1233,10 @@ class CodexRuntime:
             kwargs["cwd"] = self.workspace_root
         if session.instructions:
             kwargs["developer_instructions"] = session.instructions
+        if _hook_trust_roots(session):
+            # The workspace's hooks were reviewed in Valuz (H0); see
+            # ``_build_config_overrides``.
+            kwargs["config"] = {"bypass_hook_trust": True}
         return kwargs
 
     @staticmethod
@@ -1217,7 +1340,26 @@ class CodexRuntime:
         # (codex decides internally via guardian notifications). For both,
         # auto-accept matches the policy contract — codex would have
         # already accepted internally; we just shouldn't fight it.
-        if not is_user_input and self._cached_permission_mode != "default":
+        if not is_user_input and self._loop is not None and not self._loop.is_closed():
+            check_data = _approval_event_data(method, params)
+            if self._hook_session().wants(TOOL_CHECK, check_data):
+                try:
+                    cf = asyncio.run_coroutine_threadsafe(
+                        self._tool_check_coro(method, params, check_data), self._loop
+                    )
+                    return cast(
+                        dict[str, Any], cf.result(timeout=self.APPROVAL_TIMEOUT_SECONDS + 30.0)
+                    )
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException:
+                    logger.exception("codex tool.check dispatch crashed; auto-rejecting")
+                    return _build_approval_response(method, "reject", params)
+        if (
+            not is_user_input
+            and self._cached_permission_mode != "default"
+            and not getattr(getattr(self, "_runtime_constraints", None), "human_review", False)
+        ):
             return _build_approval_response(method, "approve", params)
         if self._loop is None or self._loop.is_closed():
             # Either ``run()`` hasn't captured the loop yet (race on a
@@ -1279,6 +1421,141 @@ class CodexRuntime:
                 message,
             )
         return _build_approval_response(method, decision, params)
+
+    async def _tool_check_coro(
+        self,
+        method: str,
+        params: dict[str, Any],
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """``tool.check`` with Valuz's approval (auto-accept or the card) as core."""
+
+        if method == "mcpServer/elicitation/request" and self._hook_session().registry.has_required(
+            TOOL_CHECK
+        ):
+            canonical = await self._decode_live_mcp_approval(params)
+            if canonical is None:
+                logger.warning("codex MCP approval has no unique verified execution item; denying")
+                return _build_approval_response(method, "reject", params)
+            data = canonical
+
+        async def core(_event: HookEvent) -> ToolDecision:
+            if self._cached_permission_mode != "default" and not getattr(
+                getattr(self, "_runtime_constraints", None), "human_review", False
+            ):
+                return ToolDecision(behavior="allow")
+            decision, message, _answers = await self._await_host_decision_coro(method, params)
+            if decision == "approve":
+                return ToolDecision(behavior="allow")
+            return ToolDecision(behavior="deny", reason=message)
+
+        decision = await self._hook_session().dispatch(TOOL_CHECK, data, core)
+        allowed = isinstance(decision, ToolDecision) and decision.behavior == "allow"
+        return _build_approval_response(method, "approve" if allowed else "reject", params)
+
+    def _observe_mcp_approval_item(self, notification: Any) -> None:
+        payload = getattr(notification, "payload", None)
+        if not isinstance(payload, (ItemStartedNotification, ItemCompletedNotification)):
+            return
+        item = payload.item.root
+        if not isinstance(item, McpToolCallThreadItem):
+            return
+        if not hasattr(self, "_mcp_approval_items"):
+            return
+        if (
+            self._active_turn is None
+            or payload.thread_id != self._active_turn.thread_id
+            or payload.turn_id != self._active_turn.id
+        ):
+            return
+        if isinstance(payload, ItemCompletedNotification):
+            self._mcp_approval_items.pop(item.id, None)
+            self._mcp_approval_retired_items.add(item.id)
+        elif (
+            self._active_turn is not None
+            and payload.thread_id == self._active_turn.thread_id
+            and payload.turn_id == self._active_turn.id
+            and isinstance(item.arguments, dict)
+            and self._hook_session_ref is not None
+            and item.id not in self._mcp_approval_retired_items
+        ):
+            candidate = McpApprovalItem(
+                self._hook_session_ref,
+                payload.thread_id,
+                payload.turn_id,
+                item.id,
+                item.server,
+                item.tool,
+                item.arguments,
+            )
+            key = mcp_approval_key(
+                candidate.session,
+                candidate.thread_id,
+                candidate.turn_id,
+                candidate.server,
+                candidate.arguments,
+            )
+            self._mcp_approval_history.setdefault(key, set()).add(item.id)
+            previous = self._mcp_approval_items.get(item.id)
+            # Repeated item/start cannot replace its original execution identity.
+            if previous is None or previous == candidate:
+                self._mcp_approval_items[item.id] = candidate
+            else:
+                self._mcp_approval_items.pop(item.id, None)
+                self._mcp_approval_retired_items.add(item.id)
+        self._mcp_approval_items_changed.set()
+
+    async def _decode_live_mcp_approval(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        turn = self._active_turn
+        items = getattr(self, "_mcp_approval_items", {})
+        changed = getattr(self, "_mcp_approval_items_changed", None)
+        if turn is None or not isinstance(changed, asyncio.Event):
+            return None
+        deadline = asyncio.get_running_loop().time() + self.MCP_APPROVAL_ITEM_WAIT_SECONDS
+        while True:
+            changed.clear()
+            meta = params.get("_meta")
+            server = params.get("serverName")
+            if (
+                params.get("itemId") is None
+                and isinstance(meta, dict)
+                and isinstance(meta.get("tool_params"), dict)
+                and isinstance(server, str)
+            ):
+                key = mcp_approval_key(
+                    self._hook_session().session,
+                    turn.thread_id,
+                    turn.id,
+                    server,
+                    meta["tool_params"],
+                )
+                if len(self._mcp_approval_history.get(key, ())) > 1:
+                    return None  # Completion never erases causal ambiguity within a turn.
+            candidates = matching_mcp_approval_items(
+                params,
+                tuple(items.values()),
+                session=self._hook_session().session,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+            )
+            if len(candidates) > 1:
+                return None  # Never wait for another tool to finish to guess causality.
+            result = decode_mcp_approval(
+                params,
+                tuple(items.values()),
+                session=self._hook_session().session,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+            )
+            if result is not None:
+                return dict(result)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0 or self._active_turn is not turn:
+                return None
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=remaining)
+            except TimeoutError:
+                return None
 
     async def _await_host_decision_coro(
         self,
@@ -1559,6 +1836,23 @@ class CodexRuntime:
         if session.mode == "plan":
             kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
 
+        constraints = getattr(self, "_runtime_constraints", None)
+        if constraints is not None:
+            if constraints.read_only:
+                kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
+            if constraints.network_off:
+                if not hasattr(kwargs["sandbox_policy"].root, "network_access"):
+                    kwargs["sandbox_policy"] = self._sandbox_mode_to_policy(SandboxMode.read_only)
+                kwargs["sandbox_policy"].root.network_access = False
+            if constraints.human_review:
+                from openai_codex.generated.v2_all import (
+                    ApprovalsReviewer,
+                    AskForApproval,
+                    AskForApprovalValue,
+                )
+
+                kwargs["approval_policy"] = AskForApproval(root=AskForApprovalValue.on_request)
+                kwargs["approvals_reviewer"] = ApprovalsReviewer.user
         return kwargs
 
     # Session-metadata marker: the thread has been switched into codex's
@@ -1914,6 +2208,21 @@ def _find_secret_residues(
     return residues
 
 
+def _approval_event_data(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """``tool.check`` payload for a codex approval request."""
+    ref: ToolRef
+    if method == "item/commandExecution/requestApproval":
+        ref = native_tool_ref("codex", "commandExecution", {"command": params.get("command")})
+    elif method == "item/fileChange/requestApproval":
+        ref = native_tool_ref("codex", "fileChange", {"path": params.get("path")})
+    elif method == "mcpServer/elicitation/request":
+        server = str(params.get("serverName") or params.get("server") or "") or None
+        ref = ToolRef(name="mcp", kind="mcp", source="mcp", server=server)
+    else:
+        ref = native_tool_ref("codex", method, params)
+    return {"tool": ref.to_dict(), "input": dict(params), "tool_use_id": params.get("itemId")}
+
+
 def _build_config_overrides(
     session: Session,
     provider: ModelProvider | None,
@@ -2041,6 +2350,19 @@ def _build_config_overrides(
         if provider is None:
             overrides.append('web_search="disabled"')
 
+    # Workspace trust (H0): an untrusted workspace's own Codex hooks
+    # (``.codex/hooks.json`` / ``[hooks]``) must not run.
+    if is_workspace_untrusted(session):
+        overrides.append("features.hooks=false")
+    # ... and a trusted one's do. Codex reads a project's ``.codex/`` only
+    # for a project trusted in ITS config, and then runs only hooks the user
+    # reviewed in its own TUI, which Valuz never shows — so neither happened
+    # and the hooks silently never ran. The H0 confirmation (it lists every
+    # hook command) stands in for both: the project is trusted here and the
+    # thread starts with ``bypass_hook_trust`` (``_build_thread_kwargs``).
+    for root in _hook_trust_roots(session):
+        overrides.append(f'projects.{_toml_key(root)}.trust_level="trusted"')
+
     # Model-capability image gate (docs/design/model-capability): a model
     # that explicitly declares no image input gets no ``view_image`` tool at
     # all — the cheapest possible gate (the tool is simply not registered, so
@@ -2100,7 +2422,9 @@ def _build_config_overrides(
         # the same non-subscription wall.
         overrides.append('web_search="disabled"')
 
-    effective_base_url = egress_base_url or (provider.base_url if provider is not None else None)
+    effective_base_url = egress_base_url or (
+        (provider.base_url or "https://api.openai.com/v1") if provider is not None else None
+    )
     if provider is None and egress_base_url is not None:
         name = _HARNESS_PROVIDER_NAME
         if model:
@@ -2119,8 +2443,9 @@ def _build_config_overrides(
                 f"model_providers.{name}.supports_websockets=false",
             ]
         )
-    elif provider is not None and effective_base_url is not None:
+    elif provider is not None:
         name = _HARNESS_PROVIDER_NAME
+        display_name = "OpenAI" if provider.base_url is None else "Harness-supplied gateway"
         env_key = _HARNESS_PROVIDER_ENV_KEY
         # Codex only supports ``wire_api = "responses"``; the harness-side
         # api_protocol field is ignored here. Routing for non-openai
@@ -2130,31 +2455,22 @@ def _build_config_overrides(
         # ``CodexConfig.env`` (see ``_build_codex_env``), not the TOML
         # ``[model_providers.harness.env]`` block, which only injects extras
         # into model HTTP calls and is not consulted for ``env_key``.
+        if model:
+            overrides.append(f"model={_toml_quote(model)}")
         overrides.extend(
             [
-                f"model={_toml_quote(model)}",
                 f"model_provider={_toml_quote(name)}",
-                f"model_providers.{name}.name={_toml_quote('Harness-supplied gateway')}",
+                f"model_providers.{name}.name={_toml_quote(display_name)}",
                 f"model_providers.{name}.base_url={_toml_quote(effective_base_url)}",
                 f'model_providers.{name}.wire_api="responses"',
                 f"model_providers.{name}.env_key={_toml_quote(env_key)}",
+                f"model_providers.{name}.requires_openai_auth=false",
             ]
         )
-    elif provider is not None and model:
-        # First-party OpenAI: no synthetic provider block, no
-        # ``model_provider=harness`` override. Codex uses its built-in
-        # ``openai`` provider (which reads ``OPENAI_API_KEY`` from env —
-        # we inject it in ``_build_codex_env``). We still emit the model
-        # override so the subprocess targets the session's model instead
-        # of whatever ``~/.codex/config.toml`` happens to pin. The
-        # ``model`` truthy guard mirrors ``_build_thread_kwargs``: empty
-        # string here would make codex try to resolve a deployment named
-        # ``""`` and fail with "Missed model deployment".
-        overrides.append(f"model={_toml_quote(model)}")
 
     if provider is not None:
         # Every custom provider path puts an API key in the app-server parent
-        # environment (HARNESS_CODEX_PROVIDER_API_KEY or OPENAI_API_KEY).
+        # environment (HARNESS_CODEX_PROVIDER_API_KEY).
         # codex-cli 0.144.4's model ``shell`` path does not reliably honor the
         # automatic name filter, so use the same core boundary, login-shell
         # block, and exact keyed exclusion as MCP secrets.  Avoid changing
@@ -2166,14 +2482,96 @@ def _build_config_overrides(
             overrides.append(_CODEX_SHELL_CORE_INHERIT)
         if _CODEX_DISABLE_LOGIN_SHELL not in overrides:
             overrides.append(_CODEX_DISABLE_LOGIN_SHELL)
-        provider_env_key = (
-            _HARNESS_PROVIDER_ENV_KEY if effective_base_url is not None else _CODEX_OPENAI_API_KEY
-        )
+        provider_env_key = _HARNESS_PROVIDER_ENV_KEY
         overrides.append(
             f"shell_environment_policy.filters.{_toml_key(provider_env_key)}="
             f"{_toml_quote('exclude')}"
         )
 
+    return tuple(overrides)
+
+
+#: The Valuz-owned CODEX_HOME (the host pins it beside kernel.db). Unset —
+#: the cloud sandbox, tests — leaves codex on its own default, as before.
+VALUZ_CODEX_HOME_ENV = "VALUZ_CODEX_HOME"
+
+
+def _user_codex_home() -> Path:
+    """The CODEX_HOME codex resolves by itself: the user's own."""
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def _thread_rollout_in(home: Path, thread_id: str) -> bool:
+    """Whether *home* keeps *thread_id*'s rollout (``sessions/YYYY/MM/DD``)."""
+    sessions = home / "sessions"
+    return sessions.is_dir() and any(sessions.glob(f"*/*/*/rollout-*-{thread_id}.jsonl*"))
+
+
+def _select_codex_home(
+    provider: ModelProvider | None,
+    *,
+    egress_base_url: str | None,
+    thread_id: str | None,
+) -> Path | None:
+    """The CODEX_HOME for one session's app-server; ``None`` = the user's own.
+
+    In the user's home the app-server loads their plugins (which carry MCP
+    servers such as ``cua_repl``), MCP servers, ``AGENTS.md``, rules and
+    skills, and Valuz threads land in their history (B5,
+    docs/design/plugin-architecture/runtime-capabilities.md). A session whose
+    credentials come from the env — including direct OpenAI API keys — runs
+    in the Valuz-owned home instead. Only ChatGPT subscriptions authenticate
+    from the user's ``auth.json``, trimmed by :func:`_user_home_isolation_overrides`.
+
+    A thread stays where its rollout is: a session started before the Valuz
+    home existed — or forked from one — resumes and forks in the user's home.
+    """
+    private = os.environ.get(VALUZ_CODEX_HOME_ENV, "").strip()
+    if not private or provider is None:
+        return None
+    home = Path(private)
+    if (
+        thread_id
+        and not _thread_rollout_in(home, thread_id)
+        and _thread_rollout_in(_user_codex_home(), thread_id)
+    ):
+        return None
+    return home
+
+
+def _mcp_override_names(overrides: tuple[str, ...] | list[str]) -> set[str]:
+    """The MCP server names Valuz itself configures in *overrides*."""
+    return {
+        entry.split(".", 2)[1]
+        for entry in overrides
+        if entry.startswith("mcp_servers.") and entry.count(".") >= 2
+    }
+
+
+def _user_home_isolation_overrides(own_mcp_names: set[str]) -> tuple[str, ...]:
+    """Trim what the user's own CODEX_HOME loads into a Valuz session (B5).
+
+    The app-server has no switch to skip the user config and ``-c`` only
+    layers over it, so plugins are switched off and every MCP server the user
+    configured is disabled by name — except a name Valuz configures itself,
+    which is Valuz's. ``AGENTS.md``, rules and skills there still load: only a
+    separate home avoids them (:func:`_select_codex_home`).
+    """
+    overrides = ["features.plugins=false"]
+    config = _user_codex_home() / "config.toml"
+    try:
+        servers = tomllib.loads(config.read_text(encoding="utf-8")).get("mcp_servers")
+    except FileNotFoundError:
+        servers = None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        logger.warning("codex: cannot read %s; its MCP servers stay enabled", config)
+        servers = None
+    if isinstance(servers, dict):
+        overrides.extend(
+            f"mcp_servers.{_toml_key(name)}.enabled=false"
+            for name in sorted(servers)
+            if name not in own_mcp_names
+        )
     return tuple(overrides)
 
 
@@ -2185,19 +2583,12 @@ def _build_codex_env(
 ) -> dict[str, str] | None:
     """Subprocess env passed to ``codex app-server``.
 
-    Inherits the parent process env so the codex CLI keeps its existing
-    ``~/.codex/config.toml`` lookups, ``AZURE_OPENAI_API_KEY`` etc., and
-    publishes the per-session API key on **one of two** channels
-    depending on whether the user wired a gateway:
-
-    * ``base_url`` present — the harness emits a synthetic
-      ``[model_providers.harness]`` TOML block whose ``env_key`` points
-      at ``HARNESS_CODEX_PROVIDER_API_KEY``; we set that here.
-    * ``base_url is None`` — codex uses its built-in ``openai``
-      provider, which reads ``OPENAI_API_KEY``; we set that instead.
-      The harness-specific env var is *not* set in this branch (it'd
-      be dead weight; codex's built-in openai provider doesn't read
-      it).
+    Inherits the parent process env (``AZURE_OPENAI_API_KEY`` etc.; which
+    CODEX_HOME the CLI reads is :func:`_select_codex_home`'s call), and
+    publishes every per-session API key as ``HARNESS_CODEX_PROVIDER_API_KEY``.
+    The explicit ``model_providers.harness.env_key`` selects it for gateways
+    and direct OpenAI alike. No API-key session relies on the built-in
+    provider's subscription credentials or writes account login files.
 
     ``mcp_secret_env`` carries values referenced by secret-free MCP
     ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
@@ -2222,8 +2613,11 @@ def _build_codex_env(
             subscription_env.update(mcp_secret_env)
         return subscription_env
     merged: dict[str, str] = dict(os.environ)
+    # Explicit provider credentials always win over any subscription login.
+    # The built-in openai provider ignores OPENAI_API_KEY on app-server in
+    # supported CLI versions, so direct OpenAI uses the same env_key route.
+    merged[_HARNESS_PROVIDER_ENV_KEY] = provider.api_key
     if egress_base_url is not None or provider.base_url is not None:
-        merged[_HARNESS_PROVIDER_ENV_KEY] = provider.api_key
         if egress_base_url is not None:
             merge_loopback_no_proxy(merged, egress_base_url)
         # Present as the CLI's originator (``codex_exec``) rather than the SDK's
@@ -2234,8 +2628,6 @@ def _build_codex_env(
         # even though the request body is byte-identical. Same App Server, so
         # spoofing the originator makes the SDK path match the working CLI path.
         merged["CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] = "codex_exec"
-    else:
-        merged[_CODEX_OPENAI_API_KEY] = provider.api_key
     if mcp_secret_env:
         merged.update(mcp_secret_env)
     return merged
@@ -2280,6 +2672,30 @@ def _toml_array(values: tuple[str, ...] | list[str]) -> str:
 
 
 _BARE_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+
+
+def _hook_trust_roots(session: Session) -> tuple[str, ...]:
+    """The paths Codex must treat as trusted projects so it runs the
+    workspace's own Codex hooks: none unless the workspace is trusted (H0),
+    this is a local workstation, and it has Codex-format hooks. Codex keys
+    project trust by the git root when there is one, so that is trusted too.
+    """
+    cwd = session.cwd
+    if (
+        not cwd
+        or is_workspace_untrusted(session)
+        or is_bare_completion(session)
+        or not classic_hooks_allowed()
+        or not has_dialect_hooks(cwd, "codex")
+    ):
+        return ()
+    roots = [cwd]
+    for parent in (Path(cwd), *Path(cwd).parents):
+        if (parent / ".git").exists():
+            if str(parent) != cwd:
+                roots.append(str(parent))
+            break
+    return tuple(roots)
 
 
 def _toml_key(key: str) -> str:

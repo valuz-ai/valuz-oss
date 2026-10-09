@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { providersApi } from "@valuz/core";
 import { ErrorBoundary, LogoShimmer } from "@valuz/ui";
 import { StartupScreen } from "./components/StartupScreen";
@@ -25,9 +25,9 @@ export const App = () => {
   // actually shown — if services were already up when we looked (renderer
   // reload, warm relaunch) there is nothing to finish and we go straight on.
   const [splashDone, setSplashDone] = useState(false);
-  const sawBootRef = useRef(false);
-  if (!checking && !ready) sawBootRef.current = true;
-  const holdSplash = ready && sawBootRef.current && !splashDone;
+  const [sawBoot, setSawBoot] = useState(false);
+  if (!checking && !ready && !sawBoot) setSawBoot(true);
+  const holdSplash = ready && sawBoot && !splashDone;
 
   useEffect(() => {
     if (!ready) return;

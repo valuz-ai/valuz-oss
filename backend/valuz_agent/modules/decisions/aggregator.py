@@ -444,14 +444,14 @@ class DecisionAggregator:
                     owner_user_id,
                 )
             for pid in removed_ids:
-                entry = self._pending.pop(pid, None)
-                if entry is None:
+                removed_entry = self._pending.pop(pid, None)
+                if removed_entry is None:
                     continue
-                siblings = self._by_session.get(entry.session_id)
+                siblings = self._by_session.get(removed_entry.session_id)
                 if siblings is not None:
                     siblings.discard(pid)
                     if not siblings:
-                        self._by_session.pop(entry.session_id, None)
+                        self._by_session.pop(removed_entry.session_id, None)
             self._pending.update(fresh)
             for sid, pids in fresh_by_session.items():
                 self._by_session.setdefault(sid, set()).update(pids)

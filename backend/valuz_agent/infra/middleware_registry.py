@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
+from valuz_agent.ports.middleware import MiddlewareFactory
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -31,7 +33,7 @@ class MiddlewareOrder(IntEnum):
 
 @dataclass
 class _MiddlewareEntry:
-    cls: type
+    cls: MiddlewareFactory
     order: int
     kwargs: dict[str, Any] = field(default_factory=dict)
 
@@ -44,11 +46,21 @@ class MiddlewareRegistry:
 
     def register(
         self,
-        cls: type,
+        cls: MiddlewareFactory,
         order: int | MiddlewareOrder,
         **kwargs: Any,
-    ) -> None:
-        self._entries.append(_MiddlewareEntry(cls=cls, order=int(order), kwargs=kwargs))
+    ) -> _MiddlewareEntry:
+        """Register middleware; returns the entry so a caller can ``unregister`` it."""
+        entry = _MiddlewareEntry(cls=cls, order=int(order), kwargs=kwargs)
+        self._entries.append(entry)
+        return entry
+
+    def unregister(self, entry: _MiddlewareEntry) -> None:
+        """Remove an entry returned by :meth:`register` (no-op when absent)."""
+        try:
+            self._entries.remove(entry)
+        except ValueError:
+            pass
 
     def apply(self, app: FastAPI) -> None:
         for entry in sorted(self._entries, key=lambda e: e.order, reverse=True):

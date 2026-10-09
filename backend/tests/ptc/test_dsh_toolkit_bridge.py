@@ -21,7 +21,7 @@ from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
 from src.core.types import Session
 from src.runtimes.deepseek_harness.composition import (
     KERNEL_TOOLKIT_SERVER_NAME,
-    build_composition_rows,
+    build_session_patch,
 )
 from src.runtimes.deepseek_harness.runtime import DeepSeekHarnessRuntime
 
@@ -58,13 +58,8 @@ def _toolkit_with_execute_code() -> ToolKit:
 
 def test_composition_carries_the_kernel_toolkit_row_when_asked(monkeypatch):
     monkeypatch.setenv("CODEX_TOOLKIT_BASE_URL", "http://127.0.0.1:18080")
-    rows = build_composition_rows(
-        _session(),
-        workspace_root="/tmp/ws",
-        skills_root=None,
-        model_settings=None,
-        kernel_toolkit=True,
-    )
+    patch = build_session_patch(_session(), kernel_toolkit=True)
+    rows = patch[-1]["insert"]
     row = next(r for r in rows if r["id"] == "kernel-toolkit")
     assert row["name"] == "@deepseek-ai/dsh-mcp-client"
     assert row["config"]["serverName"] == KERNEL_TOOLKIT_SERVER_NAME
@@ -73,9 +68,8 @@ def test_composition_carries_the_kernel_toolkit_row_when_asked(monkeypatch):
 
 
 def test_composition_default_has_no_kernel_toolkit_row():
-    rows = build_composition_rows(
-        _session(), workspace_root="/tmp/ws", skills_root=None, model_settings=None
-    )
+    patch = build_session_patch(_session())
+    rows = [row for entry in patch for row in entry.get("insert", [])]
     assert not any(r["id"] == "kernel-toolkit" for r in rows)
 
 

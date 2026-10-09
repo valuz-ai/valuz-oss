@@ -28,9 +28,10 @@ read the same pending row during a handover, and exactly one can flip it.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.db import async_unit_of_work
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Kinds that may be persisted. ``shutdown`` is absent on purpose — see above.
 DELIVERABLE_KINDS = frozenset({"text", "member_done", "revise_goal"})
+
 
 class ControlSignalNotDeliverableError(ValueError):
     """Raised when something tries to persist a control signal as a message.
@@ -181,7 +183,7 @@ async def drain(session_id: str, *, limit: int) -> list[InboxMsg]:
                 )
                 .values(state="consumed", consumed_at=now_ms(), consumed_by=holder_id())
             )
-            if result.rowcount != 1:
+            if cast(CursorResult[object], result).rowcount != 1:
                 logger.debug(
                     "task mailbox: message %s for %s was claimed elsewhere",
                     row.id,
@@ -215,7 +217,7 @@ async def cancel_pending(db: AsyncSession, *, session_id: str) -> int:
         )
         .values(state="cancelled", consumed_at=now_ms(), consumed_by=holder_id())
     )
-    return int(result.rowcount or 0)
+    return int(cast(CursorResult[object], result).rowcount or 0)
 
 
 __all__ = [

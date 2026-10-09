@@ -158,34 +158,30 @@ def isolated_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: igno
     monkeypatch.setattr(skill_scheduler_mod, "stop_skill_auto_scan", lambda: None)
     monkeypatch.setattr(fw_mod, "SkillFileWatcher", _NoopWatcher)
 
-    # The three in-process MCP servers mounted + run at app startup (docs,
-    # automations, connectors) use module-level FastMCP singletons whose
-    # StreamableHTTPSessionManager raises if .run() is called more than once.
-    # Stub all three so each test's create_app() doesn't blow up on the second
-    # run. (Patch ``automations_mcp`` — schedules MCP was replaced by it in the
-    # automation refactor, ADR-021.)
-    import contextlib
+    # This suite exercises skills HTTP → service → DB/filesystem, not unrelated
+    # host MCP transports. Their module-level FastMCP managers are one-shot;
+    # enumerating and stubbing each server missed new playbook/DSH/toolkit
+    # managers. Use the boot seam's explicit empty host-manager list instead,
+    # preserving the real kernel toolkit/proxy lifespan below. Future host MCP
+    # features remain out of this fixture without another fragile stub list.
+    import valuz_agent.boot.steps as boot_steps
 
-    import valuz_agent.integrations.automations_mcp_server as automations_mcp_mod
-    import valuz_agent.integrations.connectors_mcp_server as connectors_mcp_mod
-    import valuz_agent.integrations.docs_mcp_server as docs_mcp_mod
+    real_start_mcp = boot_steps.start_mcp_session_managers
 
-    async def _noop_asgi(scope, receive, send):  # type: ignore[no-untyped-def]
-        pass
+    async def _start_only_kernel_mcp(app, managers=None):  # noqa: ANN001, ANN202
+        await real_start_mcp(app, managers=[])
 
-    @contextlib.asynccontextmanager
-    async def _noop_run():
-        yield
+    monkeypatch.setattr(boot_steps, "start_mcp_session_managers", _start_only_kernel_mcp)
 
-    monkeypatch.setattr(docs_mcp_mod, "build_docs_mcp_asgi", lambda: _noop_asgi)
-    monkeypatch.setattr(docs_mcp_mod, "docs_mcp_session_manager_run", _noop_run)
-    monkeypatch.setattr(connectors_mcp_mod, "build_connectors_mcp_asgi", lambda: _noop_asgi)
-    monkeypatch.setattr(connectors_mcp_mod, "connectors_mcp_session_manager_run", _noop_run)
-    monkeypatch.setattr(automations_mcp_mod, "build_automations_mcp_asgi", lambda: _noop_asgi)
-    monkeypatch.setattr(automations_mcp_mod, "automations_mcp_session_manager_run", _noop_run)
+    from app import mcp_proxy_router, mcp_toolkit_router
 
     from valuz_agent.api.app import create_app
 
+    # Kernel toolkit/proxy managers are one-shot per lifespan as well. This
+    # fixture boots a new app per case, so use the routers' explicit test reset
+    # contract instead of carrying a closed manager from the previous app.
+    mcp_toolkit_router.reset_for_tests()
+    mcp_proxy_router.reset_for_tests()
     app = create_app()
     # `with TestClient(...)` triggers FastAPI startup events so the host +
     # kernel schema gets built via the alembic chain (`run_host_migrations` /
@@ -207,6 +203,8 @@ def isolated_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: igno
             }
         finally:
             local_identity_mod.resolve_local_user_id.cache_clear()
+    mcp_toolkit_router.reset_for_tests()
+    mcp_proxy_router.reset_for_tests()
 
 
 def _session_staging_root(session_id: str) -> Path:

@@ -81,14 +81,30 @@ from src.core.events import (
     Event,
     EventSink,
 )
-from src.core.hooks import Hooks
+from src.core.hooks import (
+    AGENT_SPAWN,
+    SESSION_COMPACT,
+    TOOL_CALL,
+    TOOL_CHECK,
+    CompactDecision,
+    HookEvent,
+    SessionHooks,
+    SessionRef,
+    ToolDecision,
+    thaw,
+)
+from src.core.hooks.builtin.image_gate import (
+    IMAGE_READ_DENY_REASON as IMAGE_READ_DENY_REASON,
+)
+from src.core.hooks.runtime_support import runtime_session_hooks
+from src.core.hooks.toolkit import call_tooldef
 from src.core.mcp_source_metadata import (
     adapt_mcp_source_result,
     unwrap_mcp_source_content_transport,
 )
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
-from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
+from src.core.tools import ExecContext, ToolDef, ToolKit
 from src.core.types import (
     IMAGE_READ_SUFFIXES,
     BudgetExhausted,
@@ -99,6 +115,7 @@ from src.core.types import (
     Session,
     UserMessage,
     is_bare_completion,
+    is_workspace_untrusted,
     model_rejects_images,
 )
 from src.core.usage import diff_model_usage
@@ -112,6 +129,13 @@ from src.core.usage import diff_model_usage
 from src.runtimes.claude_agent.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
+)
+from src.runtimes.claude_agent.hook_adapter import (
+    INTERACTION_TOOLS,
+    ClaudeToolRelay,
+    decision_from_permission,
+    outcome_changed,
+    tool_event_data,
 )
 from src.runtimes.claude_agent.mcp_proxy import ClaudeMcpSourceProxy
 from src.runtimes.interruption import (
@@ -364,13 +388,8 @@ CLAUDE_TODO_TOOL_NAME = "TodoWrite"
 # it as the route would send the model looking for a file that often isn't
 # there. Point at the parsing TOOL instead — generic wording, since which
 # document-parsing connector is mounted is a deployment concern.
-IMAGE_READ_DENY_REASON = (
-    "The current model does not accept image input, so this file cannot be "
-    "read into the conversation. Use a document-parsing tool to obtain its "
-    "text (an extracted-text path, when the attachment listing shows one, "
-    "works too), or operate on the file by path only. Tell the user if the "
-    "task truly requires seeing the file itself."
-)
+# ``IMAGE_READ_DENY_REASON`` lives with the builtin handler
+# (src.core.hooks.builtin.image_gate) and is re-exported here.
 
 
 def _is_image_file_read(tool_name: str, tool_input: Any) -> bool:
@@ -461,6 +480,10 @@ class ClaudeAgentRuntime:
         self._client: ClaudeSDKClient | None = None
         self._active_client: ClaudeSDKClient | None = None
         self._mcp_source_proxies: list[ClaudeMcpSourceProxy] = []
+        # Hook bus: the session this runtime serves (set when options are
+        # built) and the PreToolUse/PostToolUse relay for built-in tools.
+        self._hook_session_ref: SessionRef | None = None
+        self._tool_relay = ClaudeToolRelay()
         # Last cumulative usage snapshot echoed by the CLI, kept so every
         # ``usage_update`` we emit carries a disjoint increment. Cleared
         # with the client: a fresh CLI process restarts its accumulator at
@@ -785,6 +808,9 @@ class ClaudeAgentRuntime:
 
         session.status = "running"
         self._session = session
+        # Warm SDK callbacks/proxies must use this persisted execution, not
+        # the SessionRef captured when the native client was first spawned.
+        self._hook_session_ref = SessionRef.from_session(session)
         # Per-turn state — todo tool_use_ids are scoped to a single
         # query()/receive_response() cycle.
         self._todo_tool_use_ids = set()
@@ -995,11 +1021,12 @@ class ClaudeAgentRuntime:
                 # fresh so its session_error (if any) carries only its
                 # own stderr.
                 self._stderr_buffer.clear()
-                if self.config.hooks:
-                    await self.config.hooks.fire("on_error", error=exc, session_id=session.id)
             await self._destroy_client()
         finally:
             await self._stop_workflow_pollers()
+            # Tool calls whose PreToolUse fired but which never ran (denied,
+            # interrupted) finish their hook chain now.
+            await self._abort_tool_relay()
             self._active_client = None
             self._active_task = None
             # Hand the stream back to the between-turns drainer so
@@ -1571,6 +1598,7 @@ class ClaudeAgentRuntime:
 
     async def _destroy_client(self) -> None:
         await self._stop_idle_drainer()
+        await self._abort_tool_relay()
         # Bracket state is per-client: a rebuilt CLI starts with a fresh
         # stream, so stale wake-up attribution must not leak across.
         self._bracket_open = False
@@ -1896,6 +1924,16 @@ class ClaudeAgentRuntime:
     # -- Options building --
 
     def _build_options(self, session: Session) -> ClaudeAgentOptions:
+        active = getattr(self, "_session", None)
+        hook_session = (
+            active
+            if active is not None
+            and active.status == "running"
+            and active.execution_message_id is not None
+            else session
+        )
+        self._hook_session_ref = SessionRef.from_session(hook_session)
+        self._workspace_untrusted = is_workspace_untrusted(session)
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()
         if sdk_tools:
@@ -1908,7 +1946,7 @@ class ClaudeAgentRuntime:
 
         proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
-            proxy = ClaudeMcpSourceProxy(cfg)
+            proxy = ClaudeMcpSourceProxy(cfg, hooks=self._hook_session)
             proxies.append(proxy)
             mcp[cfg.name] = proxy.sdk_config()
         self._mcp_source_proxies = proxies
@@ -2181,6 +2219,12 @@ class ClaudeAgentRuntime:
             settings.update(_WORKFLOW_SETTINGS)
         if _skip_webfetch_preflight_enabled() and "skipWebFetchPreflight" not in project:
             settings["skipWebFetchPreflight"] = True
+        if getattr(self, "_workspace_untrusted", False):
+            # Workspace trust (H0): the folder's own hooks
+            # (``.claude/settings.json``) must not run. Verified: the inline
+            # layer's ``disableAllHooks`` stops project hooks while Valuz's SDK
+            # hook callbacks keep firing.
+            settings["disableAllHooks"] = True
         return json.dumps(settings) if settings else None
 
     def _build_model_provider_env(self, session: Session | None = None) -> dict[str, str] | None:
@@ -2382,7 +2426,9 @@ class ClaudeAgentRuntime:
 
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
             assert captured_handler is not None
-            result = await captured_handler(
+            result = await call_tooldef(
+                self._hook_session(),
+                tdef,
                 args,
                 ExecContext(
                     workspace=self.workspace_root,
@@ -2452,19 +2498,25 @@ class ClaudeAgentRuntime:
         ]
         | None
     ):
-        configured_hooks = self.config.hooks
-        # Model-capability image gate (docs/design/model-capability, commercial
-        # repo): when the session's model explicitly declares no image input,
-        # a PreToolUse deny stops the CLI's Read from ever producing an image
-        # block. It MUST ride hooks, not ``can_use_tool`` — ``full_access``
-        # maps to bypassPermissions where that callback never fires, and it
-        # must be a soft per-tool deny, not the turn-terminating
-        # ``continue_=False`` the before_tool mapping uses.
-        image_gate = model_rejects_images(self.model_settings)
-        if not configured_hooks and not self._citation_compaction_enabled and not image_gate:
+        # Hooks come from the Valuz hook bus (docs/design/plugin-architecture/
+        # hooks-and-plugin-ui.md). The model-capability image gate is one of
+        # its builtin handlers: when the session's model explicitly declares
+        # no image input, a PreToolUse deny stops the CLI's Read from ever
+        # producing an image block. It MUST ride hooks, not ``can_use_tool`` —
+        # ``full_access`` maps to bypassPermissions where that callback never
+        # fires — and it is a soft per-tool deny the model reacts to.
+        hooks = self._hook_session()
+        tool_hooks = hooks.wants(TOOL_CALL)
+        compact_hooks = hooks.wants(SESSION_COMPACT)
+        spawn_hooks = hooks.wants(AGENT_SPAWN)
+        if (
+            not tool_hooks
+            and not self._citation_compaction_enabled
+            and not compact_hooks
+            and not spawn_hooks
+        ):
             return None
 
-        hooks: Hooks | None = configured_hooks
         sdk_hooks: dict[
             Literal[
                 "PreToolUse",
@@ -2480,73 +2532,47 @@ class ClaudeAgentRuntime:
             ],
             list[HookMatcher],
         ] = {}
+        relay = self._get_tool_relay()
 
-        if (
-            image_gate
-            or self._citation_compaction_enabled
-            or (hooks is not None and hooks._handlers.get("before_tool"))
-        ):
+        if tool_hooks or self._citation_compaction_enabled:
 
             async def pre_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
+                if not tool_hooks:
+                    return SyncHookJSONOutput()
                 data: dict[str, Any] = dict(input_data)
-                if image_gate and _is_image_file_read(
-                    str(data.get("tool_name") or ""), data.get("tool_input")
-                ):
+                decision = await relay.pre(
+                    hooks,
+                    str(data.get("tool_name") or ""),
+                    data.get("tool_input"),
+                    tool_use_id,
+                )
+                if decision is None:
+                    return SyncHookJSONOutput()
+                if decision.deny_reason is not None:
                     # Soft deny the model can react to (fires in every
                     # permission mode, bypassPermissions included) — the turn
-                    # keeps running and the model self-corrects onto the
-                    # parsed text extract.
+                    # keeps running; the reason is the hook's answer.
                     return SyncHookJSONOutput(
                         hookSpecificOutput={
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": IMAGE_READ_DENY_REASON,
+                            "permissionDecisionReason": decision.deny_reason,
                         }
                     )
-                if hooks is not None and hooks._handlers.get("before_tool"):
-                    r = await hooks.fire(
-                        "before_tool",
-                        tool_name=data.get("tool_name", ""),
-                        input=data.get("tool_input", {}),
+                if decision.updated_input is not None:
+                    # No permissionDecision: the rewritten call still goes
+                    # through the normal permission flow.
+                    return SyncHookJSONOutput(
+                        hookSpecificOutput={
+                            "hookEventName": "PreToolUse",
+                            "updatedInput": decision.updated_input,
+                        }
                     )
-                    if r.action == "block":
-                        return SyncHookJSONOutput(
-                            continue_=False,
-                            stopReason=r.reason or "blocked",
-                        )
                 return SyncHookJSONOutput()
 
             sdk_hooks["PreToolUse"] = [HookMatcher(hooks=[pre_tool_use])]
-
-        if self._citation_compaction_enabled or (
-            hooks is not None and hooks._handlers.get("after_tool")
-        ):
-
-            def post_tool_output(
-                tool_name: str,
-                value: Any,
-                *,
-                mcp_response_uses_content_blocks: bool,
-            ) -> SyncHookJSONOutput:
-                if tool_name.startswith("mcp__"):
-                    return SyncHookJSONOutput(
-                        hookSpecificOutput={
-                            "hookEventName": "PostToolUse",
-                            "updatedMCPToolOutput": (
-                                _normalize_mcp_tool_output(value)
-                                if mcp_response_uses_content_blocks
-                                else value
-                            ),
-                        }
-                    )
-                return SyncHookJSONOutput(
-                    hookSpecificOutput={
-                        "hookEventName": "PostToolUse",
-                        "updatedToolOutput": value,
-                    }
-                )
 
             async def post_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
@@ -2554,178 +2580,271 @@ class ClaudeAgentRuntime:
                 data: dict[str, Any] = dict(input_data)
                 tool_name = str(data.get("tool_name") or "")
                 tool_response = data.get("tool_response", "")
-                mcp_response_uses_content_blocks = tool_name.startswith("mcp__") and isinstance(
-                    tool_response, list
+                citation_output = (
+                    await self._citation_post_tool_use(data, tool_use_id)
+                    if self._citation_compaction_enabled
+                    else SyncHookJSONOutput()
                 )
-                if hooks is not None and hooks._handlers.get("after_tool"):
-                    _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
-                    await hooks.fire(
-                        "after_tool",
-                        tool_name=tool_name,
-                        input=data.get("tool_input", {}),
-                        result=ToolResult(
-                            content=str(
-                                hook_tool_response
-                                if hook_tool_response is not None
-                                else tool_response
-                            )
-                        ),
-                    )
-                if not self._citation_compaction_enabled:
-                    return SyncHookJSONOutput()
-                serialized_tool_response = _stringify_tool_result_content(tool_response)
-                persisted_tool_response = (
-                    _load_persisted_tool_result_content(
-                        serialized_tool_response,
-                        tool_use_id=str(tool_use_id or ""),
-                    )
-                    if tool_use_id
-                    else None
+                if not tool_hooks:
+                    return citation_output
+                specific = citation_output.get("hookSpecificOutput") or {}
+                seen = specific.get(
+                    "updatedToolOutput",
+                    specific.get("updatedMCPToolOutput", tool_response),
                 )
-                effective_tool_response: Any = (
-                    persisted_tool_response
-                    if persisted_tool_response is not None
-                    else tool_response
-                )
-                (
-                    transport_descriptor,
-                    transport_structured_content,
-                    restored_tool_response,
-                ) = unwrap_mcp_source_content_transport(effective_tool_response)
-                source_content_transport_handled = restored_tool_response is not None
-                if source_content_transport_handled:
-                    effective_tool_response = restored_tool_response
-                source_adaptation = adapt_mcp_source_result(
-                    effective_tool_response,
-                    tool_name=tool_name or None,
-                    descriptor=transport_descriptor,
-                    structured_content=transport_structured_content,
-                )
-                source_metadata_handled = source_adaptation is not None
-                if source_adaptation is not None and source_adaptation.resource_kinds != {
-                    "operational"
-                }:
-                    effective_tool_response = source_adaptation.model_content
-                simple_name = tool_name.rsplit("__", 1)[-1].lower()
-                if (
-                    source_adaptation is not None
-                    and not source_adaptation.citable
-                    and simple_name == "kb_search"
-                ):
-                    # Keep parity with DeepAgents during rolling MCP metadata
-                    # upgrades: an exact indexed chunk remains locally
-                    # provable even when the provider temporarily labels the
-                    # result as discovery/non-citable.
-                    augmented_indexed_content = augment_indexed_document_evidence(
-                        effective_tool_response,
-                        tool_name=tool_name,
-                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    )
-                    if augmented_indexed_content is not None:
-                        effective_tool_response = augmented_indexed_content
-                self._record_citation_discovery_documents(
-                    tool_response=effective_tool_response,
-                )
-                if simple_name == "document_raw_content":
-                    raw_document = extract_raw_document(effective_tool_response)
-                    if raw_document is not None:
-                        document_id = str(
-                            raw_document.get("doc_id") or raw_document.get("document_id") or ""
-                        )
-                        metadata = self._citation_document_metadata.get(document_id, {})
-                        for key in ("title", "url", "file_url", "category"):
-                            if not raw_document.get(key) and metadata.get(key):
-                                raw_document[key] = metadata[key]
-                        cache_key = str(tool_use_id or document_id or "")
-                        if cache_key:
-                            if len(self._citation_raw_documents) >= 8:
-                                self._citation_raw_documents.pop(
-                                    next(iter(self._citation_raw_documents))
-                                )
-                            self._citation_raw_documents[cache_key] = raw_document
-                if simple_name in {"grep", "bash"}:
-                    focused = grep_document_evidence(
-                        effective_tool_response,
-                        tool_args=dict(_tool_input_mapping(data.get("tool_input"))),
-                        raw_documents=self._citation_raw_documents,
-                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    )
-                    if focused is not None:
-                        visible, envelope = focused
-                        if tool_use_id:
-                            self._citation_tool_result_sidecars[tool_use_id] = json.dumps(
-                                {"_valuz_evidence": [envelope]},
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            )
-                        return post_tool_output(
-                            tool_name,
-                            visible,
-                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
-                        )
-                if not source_metadata_handled:
-                    augmented_indexed_content = augment_indexed_document_evidence(
-                        effective_tool_response,
-                        tool_name=tool_name,
-                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    )
-                    if augmented_indexed_content is not None:
-                        effective_tool_response = augmented_indexed_content
-                # Claude Agent receives the task-selected Model Content with
-                # repeated trusted metadata removed. The private sidecar keeps
-                # only immutable Evidence/Collection descriptors; it is not a
-                # second copy of document text or structured data. Long filings
-                # and transcripts frequently place the requested metric well
-                # after the first dozen chunks, so preserve the complete
-                # selected chunk window instead of replacing it with evidence
-                # excerpts or forcing repeated small-page reads.
-                # Citation capture must not select the Primary Agent's search
-                # candidates. Preserve provider row order, duplicates,
-                # summaries, and result cardinality exactly as returned.
-                model_projection = effective_tool_response
-                model_projection = rebase_collection_projections(model_projection)
-                compacted = compact_citation_tool_content(model_projection)
-                private_citation_content = private_citation_tool_content(
-                    model_projection,
-                    model_content=compacted if compacted is not None else model_projection,
-                )
-                if (
-                    tool_use_id
-                    and private_citation_content is not None
-                    and len(private_citation_content.encode())
-                    <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
-                ):
-                    self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
-                    self._citation_tool_result_model_contents[tool_use_id] = (
-                        compacted if compacted is not None else model_projection
-                    )
-                if compacted is None:
-                    if source_content_transport_handled:
-                        return post_tool_output(
-                            tool_name,
-                            effective_tool_response,
-                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
-                        )
-                    return SyncHookJSONOutput()
-                return post_tool_output(
+                outcome = await relay.post(tool_use_id, seen)
+                if outcome is None or not outcome_changed(outcome, seen):
+                    return citation_output
+                return self._post_tool_output(
                     tool_name,
-                    compacted,
-                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                    thaw(outcome.content),
+                    mcp_response_uses_content_blocks=tool_name.startswith("mcp__")
+                    and isinstance(tool_response, list),
                 )
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
-        if hooks is not None and hooks._handlers.get("on_stop"):
+            if tool_hooks:
 
-            async def stop_hook(
+                async def post_tool_use_failure(
+                    input_data: HookInput, tool_use_id: str | None, context: HookContext
+                ) -> SyncHookJSONOutput:
+                    data: dict[str, Any] = dict(input_data)
+                    await relay.failed(tool_use_id, str(data.get("error") or ""))
+                    return SyncHookJSONOutput()
+
+                sdk_hooks["PostToolUseFailure"] = [HookMatcher(hooks=[post_tool_use_failure])]
+
+        if compact_hooks:
+
+            async def pre_compact(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
-                await hooks.fire("on_stop")
+                data: dict[str, Any] = dict(input_data)
+
+                async def proceed(_event: HookEvent) -> CompactDecision:
+                    return CompactDecision()
+
+                decision = await hooks.dispatch(
+                    SESSION_COMPACT,
+                    {"trigger": str(data.get("trigger") or "auto")},
+                    proceed,
+                )
+                if isinstance(decision, CompactDecision) and not decision.proceed:
+                    return SyncHookJSONOutput(
+                        decision="block",
+                        reason=decision.reason or "compaction blocked by a hook",
+                    )
                 return SyncHookJSONOutput()
 
-            sdk_hooks["Stop"] = [HookMatcher(hooks=[stop_hook])]
+            sdk_hooks["PreCompact"] = [HookMatcher(hooks=[pre_compact])]
+
+        if spawn_hooks:
+
+            async def subagent_start(
+                input_data: HookInput, tool_use_id: str | None, context: HookContext
+            ) -> SyncHookJSONOutput:
+                data: dict[str, Any] = dict(input_data)
+
+                async def observed(_event: HookEvent) -> None:
+                    return None
+
+                await hooks.dispatch(
+                    AGENT_SPAWN,
+                    {
+                        "agent_type": str(data.get("agent_type") or ""),
+                        "description": str(data.get("description") or ""),
+                    },
+                    observed,
+                )
+                return SyncHookJSONOutput()
+
+            sdk_hooks["SubagentStart"] = [HookMatcher(hooks=[subagent_start])]
 
         return sdk_hooks if sdk_hooks else None
+
+    def _hook_session(self) -> SessionHooks:
+        """The hook bus bound to this runtime's session."""
+        return runtime_session_hooks(self, "claude_agent")
+
+    def _get_tool_relay(self) -> ClaudeToolRelay:
+        relay = getattr(self, "_tool_relay", None)
+        if relay is None:
+            relay = ClaudeToolRelay()
+            self._tool_relay = relay
+        return relay
+
+    async def _abort_tool_relay(self) -> None:
+        relay = getattr(self, "_tool_relay", None)
+        if relay is not None and len(relay):
+            await relay.abort_all()
+
+    @staticmethod
+    def _post_tool_output(
+        tool_name: str,
+        value: Any,
+        *,
+        mcp_response_uses_content_blocks: bool,
+    ) -> SyncHookJSONOutput:
+        if tool_name.startswith("mcp__"):
+            return SyncHookJSONOutput(
+                hookSpecificOutput={
+                    "hookEventName": "PostToolUse",
+                    "updatedMCPToolOutput": (
+                        _normalize_mcp_tool_output(value)
+                        if mcp_response_uses_content_blocks
+                        else value
+                    ),
+                }
+            )
+        return SyncHookJSONOutput(
+            hookSpecificOutput={
+                "hookEventName": "PostToolUse",
+                "updatedToolOutput": value,
+            }
+        )
+
+    async def _citation_post_tool_use(
+        self, data: dict[str, Any], tool_use_id: str | None
+    ) -> SyncHookJSONOutput:
+        """Citation evidence capture and model-content compaction for one result."""
+        tool_name = str(data.get("tool_name") or "")
+        tool_response = data.get("tool_response", "")
+        mcp_response_uses_content_blocks = tool_name.startswith("mcp__") and isinstance(
+            tool_response, list
+        )
+        serialized_tool_response = _stringify_tool_result_content(tool_response)
+        persisted_tool_response = (
+            _load_persisted_tool_result_content(
+                serialized_tool_response,
+                tool_use_id=str(tool_use_id or ""),
+            )
+            if tool_use_id
+            else None
+        )
+        effective_tool_response: Any = (
+            persisted_tool_response if persisted_tool_response is not None else tool_response
+        )
+        (
+            transport_descriptor,
+            transport_structured_content,
+            restored_tool_response,
+        ) = unwrap_mcp_source_content_transport(effective_tool_response)
+        source_content_transport_handled = restored_tool_response is not None
+        if source_content_transport_handled:
+            effective_tool_response = restored_tool_response
+        source_adaptation = adapt_mcp_source_result(
+            effective_tool_response,
+            tool_name=tool_name or None,
+            descriptor=transport_descriptor,
+            structured_content=transport_structured_content,
+        )
+        source_metadata_handled = source_adaptation is not None
+        if source_adaptation is not None and source_adaptation.resource_kinds != {"operational"}:
+            effective_tool_response = source_adaptation.model_content
+        simple_name = tool_name.rsplit("__", 1)[-1].lower()
+        if (
+            source_adaptation is not None
+            and not source_adaptation.citable
+            and simple_name == "kb_search"
+        ):
+            # Keep parity with DeepAgents during rolling MCP metadata
+            # upgrades: an exact indexed chunk remains locally
+            # provable even when the provider temporarily labels the
+            # result as discovery/non-citable.
+            augmented_indexed_content = augment_indexed_document_evidence(
+                effective_tool_response,
+                tool_name=tool_name,
+                captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+            if augmented_indexed_content is not None:
+                effective_tool_response = augmented_indexed_content
+        self._record_citation_discovery_documents(
+            tool_response=effective_tool_response,
+        )
+        if simple_name == "document_raw_content":
+            raw_document = extract_raw_document(effective_tool_response)
+            if raw_document is not None:
+                document_id = str(
+                    raw_document.get("doc_id") or raw_document.get("document_id") or ""
+                )
+                metadata = self._citation_document_metadata.get(document_id, {})
+                for key in ("title", "url", "file_url", "category"):
+                    if not raw_document.get(key) and metadata.get(key):
+                        raw_document[key] = metadata[key]
+                cache_key = str(tool_use_id or document_id or "")
+                if cache_key:
+                    if len(self._citation_raw_documents) >= 8:
+                        self._citation_raw_documents.pop(next(iter(self._citation_raw_documents)))
+                    self._citation_raw_documents[cache_key] = raw_document
+        if simple_name in {"grep", "bash"}:
+            focused = grep_document_evidence(
+                effective_tool_response,
+                tool_args=dict(_tool_input_mapping(data.get("tool_input"))),
+                raw_documents=self._citation_raw_documents,
+                captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+            if focused is not None:
+                visible, envelope = focused
+                if tool_use_id:
+                    self._citation_tool_result_sidecars[tool_use_id] = json.dumps(
+                        {"_valuz_evidence": [envelope]},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                return self._post_tool_output(
+                    tool_name,
+                    visible,
+                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                )
+        if not source_metadata_handled:
+            augmented_indexed_content = augment_indexed_document_evidence(
+                effective_tool_response,
+                tool_name=tool_name,
+                captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+            if augmented_indexed_content is not None:
+                effective_tool_response = augmented_indexed_content
+        # Claude Agent receives the task-selected Model Content with
+        # repeated trusted metadata removed. The private sidecar keeps
+        # only immutable Evidence/Collection descriptors; it is not a
+        # second copy of document text or structured data. Long filings
+        # and transcripts frequently place the requested metric well
+        # after the first dozen chunks, so preserve the complete
+        # selected chunk window instead of replacing it with evidence
+        # excerpts or forcing repeated small-page reads.
+        # Citation capture must not select the Primary Agent's search
+        # candidates. Preserve provider row order, duplicates,
+        # summaries, and result cardinality exactly as returned.
+        model_projection = effective_tool_response
+        model_projection = rebase_collection_projections(model_projection)
+        compacted = compact_citation_tool_content(model_projection)
+        private_citation_content = private_citation_tool_content(
+            model_projection,
+            model_content=compacted if compacted is not None else model_projection,
+        )
+        if (
+            tool_use_id
+            and private_citation_content is not None
+            and len(private_citation_content.encode()) <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
+        ):
+            self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
+            self._citation_tool_result_model_contents[tool_use_id] = (
+                compacted if compacted is not None else model_projection
+            )
+        if compacted is None:
+            if source_content_transport_handled:
+                return self._post_tool_output(
+                    tool_name,
+                    effective_tool_response,
+                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                )
+            return SyncHookJSONOutput()
+        return self._post_tool_output(
+            tool_name,
+            compacted,
+            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+        )
 
     def _record_citation_discovery_documents(
         self,
@@ -2755,7 +2874,51 @@ class ClaudeAgentRuntime:
         input_data: dict[str, Any],
         context: ToolPermissionContext,
     ) -> PermissionResultAllow | PermissionResultDeny:
-        """SDK callback — invoked once per tool call before execution.
+        """SDK callback — the ``tool.check`` event, with Valuz's decision as core.
+
+        Handlers on the hook bus wrap :meth:`_permission_decision` (the
+        runtime's own approval logic). With nobody listening it is called
+        directly, exactly as before.
+        """
+        if tool_name in INTERACTION_TOOLS:
+            return await self._permission_decision(tool_name, input_data, context)
+        hooks = self._hook_session()
+        data = tool_event_data(tool_name, input_data, getattr(context, "tool_use_id", None))
+        if not hooks.wants(TOOL_CHECK, data):
+            return await self._permission_decision(tool_name, input_data, context)
+
+        core_results: list[tuple[ToolDecision, PermissionResultAllow | PermissionResultDeny]] = []
+
+        async def core(event: HookEvent) -> ToolDecision:
+            raw_input = thaw(event.get("input"))
+            sdk_result = await self._permission_decision(
+                tool_name, raw_input if isinstance(raw_input, dict) else input_data, context
+            )
+            decision = decision_from_permission(sdk_result)
+            core_results.append((decision, sdk_result))
+            return decision
+
+        decision = await hooks.dispatch(TOOL_CHECK, data, core)
+        for core_decision, sdk_result in reversed(core_results):
+            if decision is core_decision:
+                # Unchanged by the hooks: hand back the SDK object verbatim
+                # (keeps ``interrupt`` and any updated permissions).
+                return sdk_result
+        if not isinstance(decision, ToolDecision) or decision.behavior == "deny":
+            reason = decision.reason if isinstance(decision, ToolDecision) else None
+            return PermissionResultDeny(message=reason or f"{tool_name} denied by a hook")
+        updated = thaw(decision.updated_input) if decision.updated_input is not None else None
+        return PermissionResultAllow(
+            updated_input=updated if isinstance(updated, dict) else input_data
+        )
+
+    async def _permission_decision(
+        self,
+        tool_name: str,
+        input_data: dict[str, Any],
+        context: ToolPermissionContext,
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """Valuz's own approval logic — invoked once per tool call before execution.
 
         Decision order (slice 3):
 

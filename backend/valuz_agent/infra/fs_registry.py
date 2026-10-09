@@ -29,6 +29,7 @@ via ``project_cwd()``.
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import tempfile
 from collections.abc import Callable
@@ -190,14 +191,20 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def browser_bin_dir(self) -> Path:
-        """Host bin dir prepended to the agent shell's PATH so a friendly
-        ``chrome-devtools`` wrapper resolves (vs. the raw ``node <entry>`` /
-        ``npx`` invocation). See docs/design/browser-feature.md §8.
-        """
+    def session_bin_dir(self) -> Path:
+        """Host bin dir prepended to the agent shell's PATH, holding the
+        friendly command wrappers sessions call by name (``chrome-devtools``,
+        ``valuz-python``, ``dsoffice``)."""
         path = self._shared_root() / "bin"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def browser_bin_dir(self) -> Path:
+        """Where the ``chrome-devtools`` wrapper lives (vs. the raw
+        ``node <entry>`` / ``npx`` invocation): the session bin dir. See
+        docs/design/browser-feature.md §8.
+        """
+        return self.session_bin_dir()
 
     # ---- FS-3 — project cwd (project.cwd in V5 kernel terms) ----
 
@@ -668,12 +675,14 @@ class FsRegistry:
 
     # ---- FS-12 — memory store directories (memory-system-design §3) ----
     #
-    #   global  → <data_dir>/memories/               (root IS the global namespace)
-    #   project → <data_dir>/memories/projects/<id>/ (per-project, keyed by project_id)
+    #   global  → <data_dir>/memories/owners/<owner hash>/
+    #   project → <owner memory root>/projects/<id>/
     #
     # Centralized under the valuz data dir (never inside a user's bound repo) and
-    # keyed by stable ``project_id`` (decoupled from ``project.cwd``). global holds
-    # the flat ``USER.md`` + ``MEMORY.md``; each project dir holds ``MEMORY.md``.
+    # Always owner-scoped even when DATA_DIR has no user template. The digest
+    # uses the original owner identity, so filesystem sanitization cannot merge
+    # two owners. Old flat files have no provable owner; leave them untouched
+    # for explicit import, never adopt them during reads or deletes.
     # Returns (and creates) the scope directory.
 
     def memory_dir(
@@ -683,14 +692,18 @@ class FsRegistry:
         *,
         project_id: str | None = None,
     ) -> Path:
+        if not user_id or user_id in {".", ".."} or "\x00" in user_id:
+            raise ValueError("user_id is required for owner-scoped memory")
+        owner_key = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+        root = self.data_dir(user_id) / "memories" / "owners" / owner_key
         if scope == "global":
-            path = self.data_dir(user_id) / "memories"
+            path = root
         elif scope == "project":
             if not project_id:
                 raise ValueError("project memory requires project_id")
-            if "/" in project_id or ".." in project_id:
+            if "/" in project_id or "\\" in project_id or ".." in project_id:
                 raise ValueError(f"invalid project_id: {project_id!r}")
-            path = self.data_dir(user_id) / "memories" / "projects" / project_id
+            path = root / "projects" / project_id
         else:  # pragma: no cover - guarded by Literal
             raise ValueError(f"unknown memory scope: {scope!r}")
         path.mkdir(parents=True, exist_ok=True)
@@ -698,14 +711,14 @@ class FsRegistry:
 
     # ---- FS-13 — memory review scratch cwd (memory-system-design §7.2) ----
     #
-    # ONE fixed cwd shared by every ephemeral extraction session. Runtimes key
+    # ONE fixed owner-scoped cwd shared by that owner's extraction sessions. Runtimes key
     # per-project artifacts on the session cwd (claude-agent-sdk keeps
     # transcripts under ``~/.claude/projects/<encoded-cwd>/``), so a fresh cwd
     # per review leaked one such directory per extraction. The review session
     # is no-tools and never writes here — sharing is safe.
 
     def memory_review_cwd(self, user_id: str) -> Path:
-        path = self.data_dir(user_id) / "memory-review"
+        path = self.memory_dir(user_id, "global") / "memory-review"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -757,6 +770,54 @@ class FsRegistry:
         path = self.plugins_data_root(user_id) / self._plugin_segment(name)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    # ---- FS-17 — third-party plugins (ADR-034; docs task card 04 §A) ----
+    #
+    #   app-plugins/installed.json        the install registry (one per device)
+    #   app-plugins/<id>/<version>/       an unpacked package, immutable once installed
+    #   app-plugin-data/<id>/            the plugin's writable data (kept on uninstall)
+    #   logs/app-plugins/<id>.log         JSON lines written for / by the plugin
+    #
+    # Shared (device-wide) roots, like ``plugins`` models: the packages are stored
+    # once per device, which of them LOAD is decided per account. ``plugin_id`` is
+    # ``<publisher>.<name>`` and a version is SemVer, so both are single safe path
+    # segments; the guards below are defensive.
+
+    @staticmethod
+    def _app_plugin_segment(value: str, what: str) -> str:
+        if (
+            not value
+            or "/" in value
+            or "\\" in value
+            or value in (".", "..")
+            or ".." in value
+            or "\x00" in value
+        ):
+            raise ValueError(f"invalid application plugin {what}: {value!r}")
+        return value
+
+    def app_plugins_root(self) -> Path:
+        path = self._shared_root() / "app-plugins"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def app_plugin_version_dir(self, plugin_id: str, version: str) -> Path:
+        """Unpacked immutable version (created by the installer, not here)."""
+        return (
+            self.app_plugins_root()
+            / self._app_plugin_segment(plugin_id, "id")
+            / self._app_plugin_segment(version, "version")
+        )
+
+    def app_plugin_data_dir(self, plugin_id: str) -> Path:
+        path = self._shared_root() / "app-plugin-data" / self._app_plugin_segment(plugin_id, "id")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def app_plugin_log_path(self, plugin_id: str) -> Path:
+        parent = self._shared_root() / "logs" / "app-plugins"
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent / f"{self._app_plugin_segment(plugin_id, 'id')}.log"
 
     # ---- FS-16 — skill version snapshots ----
     #

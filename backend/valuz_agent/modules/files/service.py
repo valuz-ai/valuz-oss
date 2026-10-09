@@ -145,7 +145,7 @@ def stat_meta(abs_path: Path) -> FileMeta:
     except OSError:
         st = None
     exists = st is not None and stat.S_ISREG(st.st_mode)
-    size = st.st_size if exists else None
+    size = st.st_size if st is not None and exists else None
     return FileMeta(
         name=name,
         mime_type=mime_type,

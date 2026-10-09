@@ -348,6 +348,59 @@ async def test_deepagents_hides_only_internal_summarizer_model_events(
     ]
 
 
+async def test_deepagents_summarization_is_a_compaction_like_the_other_runtimes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The summarizer replacing older history is a compaction: the shared
+    ``compaction`` marker and an observe-only ``session.compact``."""
+    from langchain_core.messages import AIMessage
+    from src.core.hooks import SESSION_COMPACT, hook_registry
+
+    sink = _RecordingSink()
+    settled_state = SimpleNamespace(values={"messages": []}, interrupts=(), next=())
+    compacted: list[str] = []
+
+    class _Graph:
+        async def aget_state(self, _config: Any) -> Any:
+            return settled_state
+
+        async def astream_events(self, *_args: Any, **_kwargs: Any):
+            yield {
+                "event": "on_chat_model_end",
+                "metadata": {"lc_source": "summarization"},
+                "data": {"output": AIMessage(content="## SESSION INTENT\ninternal")},
+            }
+            yield {
+                "event": "on_chat_model_end",
+                "metadata": {},
+                "data": {"output": AIMessage(content="答案")},
+            }
+
+    async def _graph(*_args: Any, **_kwargs: Any) -> _Graph:
+        return _Graph()
+
+    async def on_compact(ctx, event, next_):  # noqa: ANN001, ANN202
+        compacted.append(str(event.get("trigger")))
+        return await next_()
+
+    remove = hook_registry.register(SESSION_COMPACT, on_compact, owner="test-da-compact")
+    runtime = DeepAgentsRuntime(
+        AgentConfig(id="agent-1", name="tester"),
+        "model",
+        sink,
+        workspace_root=str(tmp_path),
+    )
+    monkeypatch.setattr(runtime, "_ensure_graph", _graph)
+    try:
+        await runtime.run(_session(tmp_path, runtime="deepagents"), UserMessage(text="继续"))
+    finally:
+        remove()
+
+    assert [e.type for e in sink.events].count("compaction") == 1
+    assert compacted == ["auto"]
+
+
 async def test_codex_primary_uses_only_the_shared_user_prompt(tmp_path, monkeypatch) -> None:
     from src.runtimes.codex import runtime as runtime_module
 
@@ -397,6 +450,79 @@ async def test_codex_primary_uses_only_the_shared_user_prompt(tmp_path, monkeypa
     )
 
     assert captured == [sentinel_prompt]
+
+
+async def test_codex_native_compaction_is_announced_on_the_bus(tmp_path, monkeypatch) -> None:
+    """Codex compacts on its own and reports it after the fact (a
+    ``contextCompaction`` item): the runtime emits the shared marker and an
+    observe-only ``session.compact``."""
+    from openai_codex.generated.v2_all import (
+        ContextCompactionThreadItem,
+        ItemCompletedNotification,
+        ThreadItem,
+    )
+    from openai_codex.models import Notification
+    from src.core.hooks import SESSION_COMPACT, hook_registry
+    from src.runtimes.codex import runtime as runtime_module
+
+    compacted: list[str] = []
+    sink = _RecordingSink()
+
+    class _Client:
+        async def turn_start(self, thread_id: str, prompt: str, params: Any) -> Any:
+            return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
+
+    class _TurnHandle:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def stream(self):  # type: ignore[no-untyped-def]
+            async def _items():  # type: ignore[no-untyped-def]
+                yield Notification(
+                    method="item/completed",
+                    payload=ItemCompletedNotification.model_validate(
+                        {
+                            "item": ThreadItem(
+                                root=ContextCompactionThreadItem(
+                                    id="cc_1", type="contextCompaction"
+                                )
+                            ),
+                            "completedAtMs": 1,
+                            "threadId": "thread-1",
+                            "turnId": "turn-1",
+                        }
+                    ),
+                )
+
+            return _items()
+
+    async def _noop(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def on_compact(ctx, event, next_):  # noqa: ANN001, ANN202
+        compacted.append(str(event.get("trigger")))
+        return await next_()
+
+    remove = hook_registry.register(SESSION_COMPACT, on_compact, owner="test-codex-compact")
+    runtime = CodexRuntime(
+        AgentConfig(id="agent-1", name="tester"),
+        "model",
+        sink,
+        workspace_root=str(tmp_path),
+    )
+    runtime._codex = SimpleNamespace(_client=_Client())  # type: ignore[assignment]
+    runtime._thread = SimpleNamespace(id="thread-1")  # type: ignore[assignment]
+    monkeypatch.setattr(runtime, "_materialize_skills", lambda _session: None)
+    monkeypatch.setattr(runtime, "_ensure_codex", _noop)
+    monkeypatch.setattr(runtime, "_ensure_thread", _noop)
+    monkeypatch.setattr(runtime_module, "AsyncTurnHandle", _TurnHandle)
+    try:
+        await runtime.run(_session(tmp_path, runtime="codex"), UserMessage(text="go on"))
+    finally:
+        remove()
+
+    assert [e.type for e in sink.events].count("compaction") == 1
+    assert compacted == ["auto"]
 
 
 async def test_deepagents_production_graph_has_no_host_research_controller(

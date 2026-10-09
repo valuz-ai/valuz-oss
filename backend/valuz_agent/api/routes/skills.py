@@ -1,6 +1,6 @@
 import tempfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -77,7 +77,7 @@ async def list_skills(
     library_enabled: bool | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
     user_id: str = Depends(get_current_user_id),
-) -> dict:
+) -> dict[str, Any]:
     target_project_id = project_id or "chat-default"
     try:
         catalog = await svc.list_catalog(user_id, target_project_id)
@@ -516,7 +516,7 @@ async def confirm_skill_submission(
 
     return SkillSubmissionConfirmResponse(
         skill=skill,
-        creation_context=SkillCreationContext(**ctx_dict),
+        creation_context=SkillCreationContext.model_validate(ctx_dict),
         bound_to_project_id=bound_project_id,
     )
 
@@ -696,7 +696,7 @@ async def set_skill_library_state(
 async def delete_skill(
     skill_id: str,
     project_id: str | None = Query(default=None),
-    mode: str = Query(default="dry_run"),
+    mode: Literal["dry_run", "confirm"] = Query(default="dry_run"),
     svc: SkillLibraryService = Depends(get_skill_service),
     user_id: str = Depends(get_current_user_id),
 ) -> SkillDeletePreview | Response | None:

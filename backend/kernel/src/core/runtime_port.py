@@ -105,9 +105,10 @@ class RuntimePort(Protocol):
 
         The anchor identifies the runtime-native unit the just-finished
         kernel Message maps to — codex ``turn_id``, Claude transcript
-        ``message_uuid``, deepagents ``checkpoint_id`` — always with a
-        ``"provider"`` discriminator and the native thread/session id it
-        belongs to. The orchestrator consumes it at message finalize and
+        ``message_uuid``, deepagents ``checkpoint_id``, deepseek_harness
+        event ``seq`` (stamped ahead of a wired ``fork_session``) — always
+        with a ``"provider"`` discriminator and the native thread/session id
+        it belongs to. The orchestrator consumes it at message finalize and
         persists it under ``Message.metadata["runtime_native"]``; that
         stored value is the seam message-granularity fork resolves
         against (docs/design/session-fork.md). Read-and-clear semantics:

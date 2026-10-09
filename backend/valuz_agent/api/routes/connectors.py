@@ -4,14 +4,13 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AnyUrl, BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.api.deps import get_current_user_id
@@ -22,9 +21,25 @@ from valuz_agent.integrations.connector_oauth import (
     build_client_metadata_document,
     client_id_from_metadata_document,
 )
-from valuz_agent.integrations.mcp_http import mcp_request_headers
 from valuz_agent.modules.connectors.catalog import load_catalog
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+from valuz_agent.modules.connectors.mcp_client import (
+    ConnectorConfigError,
+    ConnectorDisabledError,
+    ConnectorNotFoundError,
+    ConnectorTimeoutError,
+    StdioUnavailableError,
+    ToolNotFoundError,
+    WriteToolRequiresConfirmationError,
+    call_connector_tool,
+    list_connector_tools,
+    open_connector_session,
+    unwrap_exception,
+)
+from valuz_agent.modules.connectors.mcp_client import is_unauthorized as _is_unauthorized
+from valuz_agent.modules.connectors.mcp_client import (
+    retry_async as _retry_async,  # noqa: F401  (re-exported: tests/api/test_probe_retry.py)
+)
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
 from valuz_agent.modules.connectors.service import (
     CatalogFieldSpec,
@@ -315,7 +330,7 @@ async def list_connectors(
     user_id: str = Depends(get_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
-) -> dict:
+) -> dict[str, Any]:
     """List all connectors (builtin, recommended, custom).
 
     For recommended connectors (those backed by a catalog entry, matched
@@ -553,21 +568,22 @@ async def create_connector(
         else:
             discover = OAuthDiscoverHelper(server_url)
             try:
-                oauth_meta = await discover.get_oauth_metadata()
+                discovered_meta = await discover.get_oauth_metadata()
             finally:
                 await discover.close()
-            if oauth_meta is None:
+            if discovered_meta is None:
                 raise HTTPException(
                     status_code=502,
                     detail=f"Could not discover OAuth metadata for {server_url!r}",
                 )
+            oauth_meta = discovered_meta
 
         from mcp.shared.auth import OAuthClientMetadata
 
         redirect_uri = f"{_settings.backend_base_url}/v1/connectors/oauth/callback"
         client_meta = OAuthClientMetadata(
             client_name="Valuz",
-            redirect_uris=[redirect_uri],  # type: ignore[arg-type]
+            redirect_uris=[AnyUrl(redirect_uri)],
             grant_types=["authorization_code"],
             response_types=["code"],
             token_endpoint_auth_method="none",
@@ -1037,7 +1053,7 @@ async def oauth_callback(
 
         client_meta = OAuthClientMetadata(
             client_name="Valuz",
-            redirect_uris=[redirect_uri],  # type: ignore[arg-type]
+            redirect_uris=[AnyUrl(redirect_uri)],
             grant_types=["authorization_code"],
             response_types=["code"],
             token_endpoint_auth_method="none",
@@ -1461,244 +1477,19 @@ def _tools_to_info(mcp_tools: object) -> list[ToolInfo]:
     return result
 
 
-async def _retry_async[T](
-    fn: Callable[[], Awaitable[T]],
-    *,
-    retry_if: Callable[[BaseException], bool],
-    delays: tuple[float, ...],
-) -> T:
-    """Await ``fn``; if it raises an exception matching ``retry_if``, back off and
-    retry — one extra attempt per entry in ``delays``. Re-raises the last error
-    once the retries are exhausted or the error doesn't match.
-    """
-    attempt = 0
-    while True:
-        try:
-            return await fn()
-        except BaseException as exc:
-            if attempt >= len(delays) or not retry_if(exc):
-                raise
-            await asyncio.sleep(delays[attempt])
-            attempt += 1
-
-
-def _is_unauthorized(exc: BaseException) -> bool:
-    """Detect a 401 from the MCP/httpx stack — i.e. an expired access token.
-
-    The MCP client may wrap the underlying error in an ``ExceptionGroup``; unwrap
-    to the leaf, prefer the typed ``HTTPStatusError`` status, and fall back to a
-    string match for transports that surface the 401 only in the message.
-    """
-    import httpx
-
-    inner: BaseException = exc
-    while isinstance(inner, BaseExceptionGroup) and inner.exceptions:
-        inner = inner.exceptions[0]
-    if isinstance(inner, httpx.HTTPStatusError):
-        return inner.response.status_code == 401
-    return "401" in str(inner)
-
-
 async def _probe_connector(
     connector_id: str, svc: ConnectorService, user_id: str
 ) -> TestConnectorResponse:
-    """Run the MCP probe for a connector and persist the result. Never raises."""
-    import os
-    import shlex
-    import shutil
-    import subprocess
+    """Run the MCP probe for a connector and persist the result. Never raises.
 
-    import httpx
-    from mcp.client.session import ClientSession
-
-    view = await svc.get_connector(user_id, connector_id)
-    if view is None:
-        return TestConnectorResponse(ok=False, error="Connector not found")
-
-    def _unwrap(exc: BaseException) -> BaseException:
-        inner = exc
-        while hasattr(inner, "exceptions") and getattr(inner, "exceptions", None):
-            inner = inner.exceptions[0]  # type: ignore[attr-defined]
-        return inner
-
-    # ── Stdio probe ──────────────────────────────────────────────────────────
-    if view.transport == "stdio":
-        if not view.command:
-            return TestConnectorResponse(
-                ok=False, error="Stdio connector has no command configured"
-            )
-
-        row = await svc._ds.get_by_id(user_id, connector_id)
-        env: dict[str, str] | None = None
-        if row and row.env_json:
-            try:
-                parsed_env = json.loads(row.env_json)
-                if isinstance(parsed_env, dict):
-                    env = {str(k): str(v) for k, v in parsed_env.items()}
-            except json.JSONDecodeError:
-                pass
-
-        try:
-            from mcp.client.stdio import StdioServerParameters, stdio_client
-
-            # Resolving the user's interactive PATH spawns a login shell per
-            # candidate (``zsh -l`` / ``bash -l`` sources rc files), up to 5s
-            # each — blocking. Run it off the event loop so a connector test
-            # never freezes the server for other requests.
-            def _detect_shell_path(default: str) -> str:
-                for shell in ("zsh", "bash"):
-                    try:
-                        out = subprocess.check_output(
-                            [shell, "-l", "-c", "echo $PATH"],
-                            text=True,
-                            timeout=5,
-                            stderr=subprocess.DEVNULL,
-                        ).strip()
-                        lines = [line for line in out.splitlines() if line.strip()]
-                        if lines:
-                            return lines[-1]
-                    except Exception:
-                        continue
-                return default
-
-            shell_path_str: str = await asyncio.to_thread(
-                _detect_shell_path, os.environ.get("PATH", "")
-            )
-
-            # Bundled stdio connectors reference their entry point with the
-            # ``{mcp_dir}`` placeholder; expand it the same way the runtime
-            # resolver does, or the probe spawns ``python {mcp_dir}/...`` as a
-            # literal path and the server exits with "Connection closed".
-            from valuz_agent.adapters.mcp_resolver import expand_mcp_dir
-
-            raw_command = expand_mcp_dir(view.command)
-            extra_args: list[str] = []
-            if " " in raw_command:
-                parts = shlex.split(raw_command)
-                raw_command = parts[0]
-                extra_args = parts[1:]
-
-            resolved_command = shutil.which(raw_command, path=shell_path_str) or raw_command
-            probe_args = extra_args + [expand_mcp_dir(str(a)) for a in (view.args or [])]
-            probe_env: dict[str, str] = os.environ.copy()
-            probe_env["PATH"] = shell_path_str
-            if env:
-                probe_env.update(env)
-
-            params = StdioServerParameters(
-                command=resolved_command, args=probe_args, env=probe_env, cwd=view.working_dir
-            )
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.list_tools()
-                    tool_infos = _tools_to_info(result.tools)
-            await svc.record_test_result(user_id, connector_id, ok=True, tool_count=len(tool_infos))
-            return TestConnectorResponse(
-                ok=True,
-                tool_count=len(tool_infos),
-                tools=[ti.name for ti in tool_infos],
-                tool_details=tool_infos,
-            )
-        except BaseException as exc:
-            error_msg = str(_unwrap(exc))
-            logger.warning("Stdio connector test failed for %s: %s", connector_id, error_msg)
-            await svc.record_test_result(user_id, connector_id, ok=False, error_message=error_msg)
-            return TestConnectorResponse(ok=False, error=error_msg)
-
-    # ── HTTP / SSE probe ─────────────────────────────────────────────────────
-    if not view.url:
-        return TestConnectorResponse(ok=False, error="Connector has no URL configured")
-
-    # Same injection truth as the runtime resolver (Acceptance #8).
-    row2 = await svc._ds.get_by_id(user_id, connector_id)
-    if row2 is None:
-        ov_headers = mcp_request_headers()
-        ov_params: dict[str, str] = {}
-    else:
-        ov_headers, ov_params = build_request_overrides(row2)
-
-    if view.auth_type == "oauth":
-        # OAuth layers on AFTER build_request_overrides — mirrors the resolver.
-        token_json = row2.oauth_token_json if row2 is not None else None
-        if token_json:
-            try:
-                from mcp.shared.auth import OAuthToken
-
-                token = OAuthToken.model_validate_json(token_json)
-                ov_headers["Authorization"] = f"Bearer {token.access_token}"
-            except Exception:
-                pass
-
-    probe_url = merge_params_into_url(view.url, ov_params)
-
-    async def _http_probe(transport: str) -> list[ToolInfo]:
-        if transport == "sse":
-            from mcp.client.sse import sse_client
-
-            async with sse_client(
-                probe_url, headers=ov_headers, timeout=15, sse_read_timeout=15
-            ) as (
-                r,
-                w,
-            ):
-                async with ClientSession(r, w) as s:
-                    await s.initialize()
-                    return _tools_to_info((await s.list_tools()).tools)
-        else:
-            from mcp.client.streamable_http import streamable_http_client
-
-            async with httpx.AsyncClient(headers=ov_headers, timeout=15.0) as hc:
-                async with streamable_http_client(probe_url, http_client=hc) as (r, w, _):
-                    async with ClientSession(r, w) as s:
-                        await s.initialize()
-                        return _tools_to_info((await s.list_tools()).tools)
-
-    async def _attempt() -> list[ToolInfo]:
-        primary = view.transport if view.transport in ("http", "sse") else "http"
-        fallback = "sse" if primary == "http" else "http"
-        try:
-            return await _http_probe(primary)
-        except BaseException as first_exc:
-            try:
-                return await _http_probe(fallback)
-            except BaseException:
-                raise _unwrap(first_exc) from None
-
+    The connection itself (stdio launch, HTTP/SSE request overrides, OAuth
+    bearer, transport fallback, the 401 retry / refresh) lives in
+    ``modules/connectors/mcp_client.open_connector_session``, shared with the
+    tools API below.
+    """
     try:
-        try:
-            # A no-auth connector answering 401 is anomalous — almost always a
-            # transient rate-limit on a free anonymous tier (e.g. Firecrawl
-            # throttles bursts), which is why the auto-probe sometimes fails
-            # while a manual reconnect a moment later succeeds. Retry with a
-            # short backoff so the default probe self-heals. OAuth 401s are real
-            # (token) and handled by the refresh path below — never retried here.
-            tool_infos = await _retry_async(
-                _attempt,
-                retry_if=lambda e: view.auth_type != "oauth" and _is_unauthorized(e),
-                delays=(1.5, 3.0),
-            )
-        except BaseException as exc:
-            # An OAuth connector whose access token expired answers 401. Try a
-            # silent refresh with the stored refresh_token, then retry once with
-            # the fresh token before giving up (a hard failure leaves the caller
-            # to re-authorize).
-            if view.auth_type == "oauth" and row2 is not None and _is_unauthorized(exc):
-                refreshed_json = await ext.connector_oauth_refresh.refresh_after_unauthorized(
-                    row=row2,
-                    connectors=svc._ds,
-                    token_json=row2.oauth_token_json,
-                )
-                if not refreshed_json:
-                    raise
-                from mcp.shared.auth import OAuthToken
-
-                token = OAuthToken.model_validate_json(refreshed_json)
-                ov_headers["Authorization"] = f"Bearer {token.access_token}"
-                tool_infos = await _attempt()
-            else:
-                raise
-
+        async with open_connector_session(svc, user_id, connector_id) as session:
+            tool_infos = _tools_to_info((await session.list_tools()).tools)
         await svc.record_test_result(user_id, connector_id, ok=True, tool_count=len(tool_infos))
         return TestConnectorResponse(
             ok=True,
@@ -1706,23 +1497,139 @@ async def _probe_connector(
             tools=[ti.name for ti in tool_infos],
             tool_details=tool_infos,
         )
+    except ConnectorNotFoundError:
+        return TestConnectorResponse(ok=False, error="Connector not found")
+    except ConnectorConfigError as exc:
+        # A configuration gap, not a failed connection: not recorded.
+        return TestConnectorResponse(ok=False, error=str(exc))
     except BaseException as exc:
-        error_msg = str(_unwrap(exc))
+        error_msg = str(unwrap_exception(exc))
         logger.warning("Connector test failed for %s: %s", connector_id, error_msg)
         await svc.record_test_result(user_id, connector_id, ok=False, error_message=error_msg)
         return TestConnectorResponse(ok=False, error=error_msg)
 
 
 # ---------------------------------------------------------------------------
+# Tools API — list a connector's MCP tools, call one (docs task card 04 §D).
+# Used by third-party plugins (``ctx.valuz.connectors``); who may call what is
+# enforced by the plugin-permission middleware, not here.
+# ---------------------------------------------------------------------------
+
+
+class ConnectorToolItem(BaseModel):
+    name: str
+    description: str | None = None
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+    #: ``annotations.readOnlyHint is True`` — the PTC code-face rule (fail-closed).
+    read_only: bool = False
+
+
+class ConnectorToolsResponse(BaseModel):
+    connector_id: str
+    tools: list[ConnectorToolItem]
+
+
+class CallConnectorToolRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    #: Required for a tool that is not declared read-only.
+    allow_write: bool = False
+
+
+class CallConnectorToolResponse(BaseModel):
+    #: MCP content blocks as JSON (``{"type": "text", "text": …}`` etc.).
+    content: list[dict[str, Any]]
+    structured_content: dict[str, Any] | None = None
+    is_error: bool = False
+
+
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    """A transport error rendered without URLs: connector URLs may carry
+    credentials in their query string, and this text goes back to plugin code."""
+    leaf = unwrap_exception(exc)
+    if isinstance(leaf, httpx.HTTPStatusError):
+        return f"HTTP {leaf.response.status_code}"
+    text = _URL_RE.sub("<url>", str(leaf)).strip()
+    return f"{type(leaf).__name__}: {text}"[:500] if text else type(leaf).__name__
+
+
+def _tools_api_error(exc: Exception) -> HTTPException:
+    """Map the connector client's errors onto HTTP (``detail`` = ``{"code": …}``)."""
+    if isinstance(exc, ConnectorNotFoundError):
+        return HTTPException(status_code=404, detail={"code": "connector_not_found"})
+    if isinstance(exc, ToolNotFoundError):
+        return HTTPException(status_code=404, detail={"code": "tool_not_found"})
+    if isinstance(exc, ConnectorDisabledError):
+        return HTTPException(status_code=409, detail={"code": "connector_disabled"})
+    if isinstance(exc, ConnectorConfigError):
+        return HTTPException(
+            status_code=409, detail={"code": "connector_misconfigured", "message": str(exc)}
+        )
+    if isinstance(exc, WriteToolRequiresConfirmationError):
+        return HTTPException(status_code=403, detail={"code": "write_tool_requires_confirmation"})
+    if isinstance(exc, StdioUnavailableError):
+        return HTTPException(status_code=403, detail={"code": "stdio_unavailable"})
+    if isinstance(exc, ConnectorTimeoutError):
+        return HTTPException(status_code=504, detail={"code": "connector_timeout"})
+    code = "connector_unauthorized" if _is_unauthorized(exc) else "connector_unreachable"
+    return HTTPException(
+        status_code=502, detail={"code": code, "message": _safe_error_message(exc)}
+    )
+
+
+@router.get("/{id_or_slug}/tools")
+async def list_tools_of_connector(
+    id_or_slug: str,
+    user_id: str = Depends(get_current_user_id),
+    svc: ConnectorService = Depends(_get_service),
+) -> ConnectorToolsResponse:
+    """The connector's MCP tools with their full input schemas and annotations."""
+    try:
+        connector_id, tools = await list_connector_tools(svc, user_id, id_or_slug)
+    except Exception as exc:  # noqa: BLE001
+        raise _tools_api_error(exc) from exc
+    return ConnectorToolsResponse(
+        connector_id=connector_id,
+        tools=[ConnectorToolItem(**tool.to_dict()) for tool in tools],
+    )
+
+
+@router.post("/{id_or_slug}/tools/{tool_name}/call")
+async def call_tool_of_connector(
+    id_or_slug: str,
+    tool_name: str,
+    body: CallConnectorToolRequest,
+    user_id: str = Depends(get_current_user_id),
+    svc: ConnectorService = Depends(_get_service),
+) -> CallConnectorToolResponse:
+    """Call one tool. A tool not declared read-only needs ``allow_write: true``."""
+    try:
+        result = await call_connector_tool(
+            svc,
+            user_id,
+            id_or_slug,
+            tool_name,
+            body.arguments,
+            allow_write=body.allow_write,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _tools_api_error(exc) from exc
+    return CallConnectorToolResponse(**result.to_dict())
+
+
+# ---------------------------------------------------------------------------
 # Directory endpoints (catalog v2 — groups + standalone connectors)
 # ---------------------------------------------------------------------------
 
-_CATALOG: list[dict] = load_catalog()
+_CATALOG: list[dict[str, Any]] = load_catalog()
 
 # CONNECTOR_DIRECTORY: flat list of all connectors for OAuth slug lookup.
 # CATALOG_ITEMS: raw catalog entries preserving order (groups + standalone connectors).
-CONNECTOR_DIRECTORY: list[dict] = []
-CATALOG_ITEMS: list[dict] = []
+CONNECTOR_DIRECTORY: list[dict[str, Any]] = []
+CATALOG_ITEMS: list[dict[str, Any]] = []
 
 for _entry in _CATALOG:
     if "connectors" in _entry:

@@ -25,6 +25,7 @@ import {
   type BackupVersionInfo,
 } from "@valuz/core";
 import { usePlatform } from "@valuz/app/platform";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 const FREQUENCIES: BackupFrequency[] = ["manual", "every_6h", "daily", "weekly"];
 
@@ -117,6 +118,7 @@ const VersionFileBrowser = ({ versionId }: { versionId: string }) => {
 };
 
 export const BackupSection = () => {
+  const headerActions = useSectionHeaderActions("backup");
   const { t } = useTranslation();
   const platform = usePlatform();
   const [config, setConfig] = useState<BackupConfig | null>(null);
@@ -235,6 +237,7 @@ export const BackupSection = () => {
   if (!config) {
     return (
       <SettingsSection
+        actions={headerActions}
         title={t("settings.tab.backup.label")}
         desc={t("settings.tab.backup.desc")}
       >
@@ -248,6 +251,7 @@ export const BackupSection = () => {
 
   return (
     <SettingsSection
+      actions={headerActions}
       title={t("settings.tab.backup.label")}
       desc={t("settings.tab.backup.desc")}
     >

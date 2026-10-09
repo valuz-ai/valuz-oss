@@ -26,6 +26,7 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "delete_session": ("DELETE", "/kernel/v1/sessions/{session_id}"),
     "set_mode": ("POST", "/kernel/v1/sessions/{session_id}/mode"),
     "finalize_session": ("POST", "/kernel/v1/sessions/{session_id}/finalize"),
+    "recover_failed_session": ("POST", "/kernel/v1/sessions/{session_id}/recover-failed"),
     "append_event": ("POST", "/kernel/v1/sessions/{session_id}/events"),
     "emit_live_event": ("POST", "/kernel/v1/sessions/{session_id}/events"),  # ?live_only=true
     "get_events": ("GET", "/kernel/v1/sessions/{session_id}/events"),
@@ -51,6 +52,11 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "cleanup_runtime": None,
     "runtime_availability": ("GET", "/kernel/v1/runtimes/availability"),
     "bg_busy_session_ids": ("GET", "/kernel/v1/runtimes/bg-busy-sessions"),
+    # Desktop capability-token control is deliberately process-local: it
+    # reconfigures/interrupts this host's networking coordinator, never an
+    # owner-scoped remote kernel selected for an arbitrary project/session.
+    "reconfigure_desktop_network_egress": None,
+    "interrupt_desktop_network_egress_activity": None,
 }
 
 # Streaming subscriptions are async-generator functions (not coroutine

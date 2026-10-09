@@ -4,6 +4,13 @@ import { initI18n, getLocale, subscribe } from "@valuz/shared/i18n";
 import type { LocaleCode } from "@valuz/shared/i18n";
 import { initParserPlugins } from "@valuz/parser-plugins";
 import { hydrateOverlayIfPresent, hydrateTheme } from "@valuz/core";
+import {
+  loadOssPlugins,
+  markAppPluginBootSettled,
+  renderOssBootFailure,
+  settleOssPlugins,
+} from "@valuz/app/plugins";
+import { installSharedModules } from "@valuz/plugin-sdk/host";
 import { setMenuLocale } from "./lib/desktop-ipc";
 // Serif display faces — used only for onboarding hero headlines (editorial
 // moment). Bundled via @fontsource so the desktop build stays offline-safe;
@@ -43,22 +50,50 @@ subscribe(() => void setMenuLocale(getLocale()));
 // subscribers (useTranslation) never see a torn snapshot at commit.
 initParserPlugins();
 
+// The OSS app's own features are plugins on the shared plugin host. Load them
+// first — before the edition overlay, whose plugins position their pages
+// relative to the OSS ones — and before React mounts, so the router sees the
+// routes from the first render. ``oss-core`` / ``oss-agents`` failing to load
+// is a boot failure (an empty shell would look like a working app); an
+// optional plugin that fails is left disabled and the rest still load.
+//
+// The backend starts alongside this window, so the read of which of its
+// plugins are off usually finds no backend yet and everything loads;
+// ``settleOssPlugins`` applies the real state as soon as the backend answers.
+//
 // Hydrate edition overlay before React mounts so the router sees
 // the correct routes from the first render. The overlay is optional —
 // a hydration failure must NOT block the mount (a bare ``.then`` here
 // meant any rejection left a permanently white window, since ``render``
 // was never called and nothing logged the cause).
-hydrateOverlayIfPresent()
-  .catch((cause: unknown) => {
-    console.error(
-      "[boot] edition overlay hydration failed — continuing with the base profile",
-      cause,
-    );
+// Third-party plugins import react, react-dom and the plugin SDK from this
+// table instead of bundling their own copies; it must exist before any plugin
+// loads.
+installSharedModules();
+
+const rootElement = document.getElementById("root") as HTMLElement;
+loadOssPlugins()
+  .then(({ stateKnown }) => {
+    if (!stateKnown) void settleOssPlugins();
   })
-  .then(() => {
-    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-      <React.StrictMode>
-        <App />
-      </React.StrictMode>,
-    );
-  });
+  .then(() =>
+    hydrateOverlayIfPresent().catch((cause: unknown) => {
+      console.error(
+        "[boot] edition overlay hydration failed — continuing with the base profile",
+        cause,
+      );
+    }),
+  )
+  .then(
+    () => {
+      ReactDOM.createRoot(rootElement).render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>,
+      );
+      // First-party plugins and the overlay are in and the app has rendered:
+      // third-party plugins may start loading now.
+      markAppPluginBootSettled();
+    },
+    (error: unknown) => renderOssBootFailure(rootElement, error),
+  );

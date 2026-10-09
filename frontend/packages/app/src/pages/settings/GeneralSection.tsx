@@ -20,11 +20,12 @@ import {
 import { clearOnboarded } from "../../lib/onboarding";
 import { useTheme, type Theme, type FontSize } from "@valuz/core";
 import { useSettingsStore } from "@valuz/core";
-import { useTranslation } from "@valuz/core";
+import { SlotRenderer, useTranslation } from "@valuz/core";
 import {
   setLocale as setI18nLocale,
   type LocaleCode,
 } from "@valuz/shared/i18n";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 const defaultShortcuts: Record<string, string> = {
   "new-chat": "⌘ N",
@@ -37,6 +38,7 @@ const defaultShortcuts: Record<string, string> = {
 export const GeneralSection = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const headerActions = useSectionHeaderActions("general");
   const { locale, setLocale: setStoreLocale } = useSettingsStore();
   const language = locale.startsWith("zh") ? "zh" : "en";
   const {
@@ -87,6 +89,7 @@ export const GeneralSection = () => {
     <SettingsSection
       title={t("settings.tab.general.label")}
       desc={t("settings.tab.general.desc")}
+      actions={headerActions}
     >
       <div className="mb-2 mt-5 text-sm font-medium text-ink-heading">
         {t("settings.appearance.title")}
@@ -185,6 +188,8 @@ export const GeneralSection = () => {
           </SettingsRow>
         </CardContent>
       </Card>
+
+      <SlotRenderer name="settings.general.items" />
 
       <div className="mb-2 text-sm font-medium text-ink-heading">
         {t("settings.shortcuts.title")}

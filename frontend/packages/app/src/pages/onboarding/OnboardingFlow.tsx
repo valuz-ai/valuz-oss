@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import { onboardingApi, type OnboardingTeamId } from "@valuz/core";
+import {
+  SlotRenderer,
+  onboardingApi,
+  useHasSlot,
+  type OnboardingTeamId,
+} from "@valuz/core";
 import { usePlatform } from "../../platform";
 import { useTranslation } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
@@ -153,6 +158,7 @@ const OnboardingChrome = ({
   const platform = usePlatform();
   const [isMaximized, setIsMaximized] = useState(false);
   const showWindowControls = platform.isElectron && !platform.isMac;
+  const hasHeaderActions = useHasSlot("onboarding.header.actions");
 
   useEffect(() => {
     if (showWindowControls && platform.windowIsMaximized) {
@@ -214,6 +220,20 @@ const OnboardingChrome = ({
               })}
             </span>
           )}
+          {hasHeaderActions ? (
+            // The header is a window-drag region: the wrapper opts out the way
+            // the Skip button does, so contributions stay clickable. It only
+            // exists while something occupies the slot.
+            <div
+              className="flex items-center gap-2"
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            >
+              <SlotRenderer
+                name="onboarding.header.actions"
+                context={{ step: STEP_ORDER[stepIndex], stepIndex }}
+              />
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={onSkip}

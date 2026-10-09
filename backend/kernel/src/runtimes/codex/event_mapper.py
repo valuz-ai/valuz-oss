@@ -132,24 +132,23 @@ def map_notification(notification: Notification) -> list[Event]:
         return []
 
     if isinstance(payload, TurnPlanUpdatedNotification):
-        # Codex plan-mode structured snapshot (`turn/plan/updated`). Each
-        # step carries the model's intent + a lifecycle status; codex
-        # emits the *full* plan on every update so the front-end can
-        # snapshot-replace. Mapped to `plan_update` per
-        # docs/design/session-modes.md §Events. Status enum is
-        # normalized to snake_case (codex wire is camelCase `inProgress`).
+        # Codex's checklist tool (``update_plan`` → ``turn/plan/updated``) is
+        # the same thing every other runtime calls todos: emit the shared
+        # ``todo_update`` (``{content, status}`` items, snake_case statuses)
+        # so the todo panel and ``session.todos`` work for codex too. Codex
+        # sends the full list on every update, the same snapshot-replace the
+        # other runtimes use.
         return [
             Event(
-                type="plan_update",
+                type="todo_update",
                 data={
-                    "plan": [
+                    "todos": [
                         {
-                            "step": step.step,
+                            "content": step.step,
                             "status": _normalize_plan_step_status(step.status),
                         }
                         for step in payload.plan
-                    ],
-                    "explanation": payload.explanation,
+                    ]
                 },
             )
         ]

@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { notarize } = require('@electron/notarize');
+const { verifyClaudeCli } = require('./verify-claude-cli.cjs');
 
 const MACHO_MAGICS = new Set([
   0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca,
@@ -247,6 +248,7 @@ exports.default = async function afterSign(context) {
       );
     }
     console.log('[afterSign] claude sidecar entitlements verified (allow-jit present)');
+    console.log(`[afterSign] claude sidecar startup verified: ${verifyClaudeCli(claudeSidecar)}`);
   } else {
     console.warn(`[afterSign] claude sidecar not found at ${claudeSidecar} — entitlement sentinel skipped`);
   }

@@ -1,9 +1,17 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { initI18n } from "@valuz/shared/i18n";
 import { toast } from "sonner";
-import { docsApi, filesApi, kbApi } from "@valuz/core";
+import { docsApi, filesApi, kbApi, useRegistryStore } from "@valuz/core";
 import { PlatformProvider } from "@valuz/app/platform";
 import { KnowledgePage } from "./KnowledgePage";
 import type { PlatformCapabilities } from "@valuz/core";
@@ -71,10 +79,12 @@ function renderKnowledgePage(props: Parameters<typeof KnowledgePage>[0] = {}) {
   latestPanelSize = undefined;
   panelSizeAsks = [];
   return render(
-    <PlatformProvider value={platform}>
-      <KnowledgePage {...props} />
-      <div data-testid="page-header">{latestHeader}</div>
-    </PlatformProvider>,
+    <MemoryRouter>
+      <PlatformProvider value={platform}>
+        <KnowledgePage {...props} />
+        <div data-testid="page-header">{latestHeader}</div>
+      </PlatformProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -255,10 +265,12 @@ describe("KnowledgePage", () => {
       expect(screen.getByText("Create new knowledge base")).toBeTruthy();
     });
     rerender(
-      <PlatformProvider value={platform}>
-        <KnowledgePage />
-        <div data-testid="page-header">{latestHeader}</div>
-      </PlatformProvider>,
+      <MemoryRouter>
+        <PlatformProvider value={platform}>
+          <KnowledgePage />
+          <div data-testid="page-header">{latestHeader}</div>
+        </PlatformProvider>
+      </MemoryRouter>,
     );
 
     const header = screen.getByTestId("page-header");
@@ -266,6 +278,55 @@ describe("KnowledgePage", () => {
     expect(
       screen.getByRole("button", { name: "Add knowledge base" }),
     ).toBeTruthy();
+  });
+
+  it("renders resource.kb.list.actions in the library header, and nothing when unregistered", async () => {
+    vi.spyOn(kbApi, "list").mockResolvedValue({ knowledge_bases: [] });
+    vi.spyOn(docsApi, "health").mockResolvedValue({
+      status: "healthy",
+      total_documents: 0,
+      ready_count: 0,
+      processing_count: 0,
+      failed_count: 0,
+      missing_count: 0,
+    });
+    useRegistryStore.setState({ slots: {} });
+    // Built after the page has run: ``latestHeader`` is only set by its effect.
+    const view = () => (
+      <MemoryRouter>
+        <PlatformProvider value={platform}>
+          <KnowledgePage />
+          <div data-testid="page-header">{latestHeader}</div>
+        </PlatformProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = renderKnowledgePage();
+    await waitFor(() => {
+      expect(screen.getByText("Create new knowledge base")).toBeTruthy();
+    });
+    rerender(view());
+    expect(screen.queryByTestId("kb-plugin-action")).toBeNull();
+
+    act(() => {
+      useRegistryStore.getState().registerSlot("resource.kb.list.actions", {
+        id: "kb-plugin",
+        component: (props: Record<string, unknown>) => (
+          <button type="button" data-testid="kb-plugin-action">
+            {typeof props.navigate}
+          </button>
+        ),
+      });
+    });
+    expect(screen.getByTestId("kb-plugin-action").textContent).toBe("function");
+    // First child of the header's right-hand cluster, before the Add button.
+    const header = screen.getByTestId("page-header");
+    const add = within(header).getByRole("button", { name: "Add" });
+    expect(
+      screen
+        .getByTestId("kb-plugin-action")
+        .compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    useRegistryStore.setState({ slots: {} });
   });
 
   it("shows document health in the header when the knowledge base list is empty", async () => {
@@ -286,10 +347,12 @@ describe("KnowledgePage", () => {
       expect(screen.getByText("创建一个新的知识库")).toBeTruthy();
     });
     rerender(
-      <PlatformProvider value={platform}>
-        <KnowledgePage />
-        <div data-testid="page-header">{latestHeader}</div>
-      </PlatformProvider>,
+      <MemoryRouter>
+        <PlatformProvider value={platform}>
+          <KnowledgePage />
+          <div data-testid="page-header">{latestHeader}</div>
+        </PlatformProvider>
+      </MemoryRouter>,
     );
 
     const header = screen.getByTestId("page-header");
@@ -318,10 +381,12 @@ describe("KnowledgePage", () => {
       expect(screen.getByText("Create new knowledge base")).toBeTruthy();
     });
     rerender(
-      <PlatformProvider value={platform}>
-        <KnowledgePage directoryFieldMode="managed" />
-        <div data-testid="page-header">{latestHeader}</div>
-      </PlatformProvider>,
+      <MemoryRouter>
+        <PlatformProvider value={platform}>
+          <KnowledgePage directoryFieldMode="managed" />
+          <div data-testid="page-header">{latestHeader}</div>
+        </PlatformProvider>
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add knowledge base" }));

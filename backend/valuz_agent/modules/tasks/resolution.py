@@ -187,6 +187,12 @@ class ResolvedTaskSession:
     agent_name: str | None = None
 
 
+
+def _workspace_trust(project_row: Any) -> str:
+    from valuz_agent.modules.projects.workspace_trust import effective_trust
+
+    return effective_trust(getattr(project_row, "workspace_trust", None))
+
 class TaskSessionResolver:
     """Resolve host definitions into task lead / member kernel sessions.
 
@@ -342,6 +348,7 @@ class TaskSessionResolver:
             brief=brief,
             project_name=env.project_row.name,
             project_instructions_md=env.instructions_md,
+            workspace_trust=_workspace_trust(env.project_row),
             # Lead runs the whole task in goal mode: the kernel auto-loops
             # until the task goal is met. ``finish_task`` remains the
             # authoritative terminal (it forces mode back to default).
@@ -411,6 +418,7 @@ class TaskSessionResolver:
             brief=brief,
             project_name=env.project_row.name,
             project_instructions_md=env.instructions_md,
+            workspace_trust=_workspace_trust(env.project_row),
             lead_session_id=lead_session_id,
             goal_mode=True,
             worktree_notice=worktree_notice,

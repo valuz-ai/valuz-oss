@@ -542,6 +542,21 @@ async def enqueue_session_input(
     )
 
 
+@router.get("/{session_id}/queue/{queue_id}")
+async def get_session_input_receipt(
+    session_id: str,
+    queue_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> Any:
+    from valuz_agent.modules.sessions.errors import QueuedInputNotFound
+    from valuz_agent.modules.sessions.input_receipts import get_input
+
+    receipt = await get_input(user_id, session_id, queue_id)
+    if receipt is None:
+        raise QueuedInputNotFound()
+    return receipt
+
+
 @router.patch("/{session_id}/queue/{queue_id}")
 async def edit_session_queued_input(
     session_id: str,

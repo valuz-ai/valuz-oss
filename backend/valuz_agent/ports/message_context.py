@@ -20,9 +20,17 @@ Contract notes:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
-__all__ = ["HostRef", "MessageContextProviderPort"]
+__all__ = [
+    "HostRef",
+    "MessageContextProviderPort",
+    "TurnContextProviderPort",
+    "TurnContextRequest",
+    "TurnInputSource",
+]
+
+TurnInputSource = Literal["foreground", "background", "host"]
 
 
 @dataclass(frozen=True)
@@ -56,5 +64,39 @@ class MessageContextProviderPort(Protocol):
         ``host_ref`` is ``None`` when the client did not declare a host
         (plain conversations). Implementations open their own DB scope if
         they need one and must validate ``host_ref`` server-side.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class TurnContextRequest:
+    """Current input and owner-scoped session identity, supplied by the host.
+
+    ``input_text`` is this turn's actual input, never a history approximation.
+    ``input_source`` identifies an execution entry point, NOT human authority:
+    background evidence cannot grant new permission. It is stamped from the
+    host's execution/queue path, never inferred from client message metadata.
+    ``host_ref`` remains an untrusted location hint that contributors must
+    resolve and validate under ``user_id``. No session instructions are changed.
+    Native slash commands do not guarantee a context refresh.
+    """
+
+    user_id: str
+    session_id: str
+    project_id: str
+    host_ref: HostRef | None
+    input_text: str
+    input_id: str | None = None
+    input_source: TurnInputSource = "host"
+
+
+class TurnContextProviderPort(Protocol):
+    """Build bounded, query-aware context; context never confers authority."""
+
+    async def build(self, *, request: TurnContextRequest) -> str:
+        """Return a context section or an explicit provider-specific failure state.
+
+        The host bounds execution and adds a fixed unavailable marker on an
+        exception/timeout. Cancellation propagates to the caller.
         """
         ...

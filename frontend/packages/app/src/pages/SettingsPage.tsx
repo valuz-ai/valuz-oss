@@ -16,25 +16,18 @@ import {
   HardDrive,
   Info,
   Palette,
+  Puzzle,
   Radio,
   Settings,
   Wifi,
 } from "lucide-react";
 import { SettingsNav, cn } from "@valuz/ui";
-import { useTranslation } from "@valuz/core";
+import { SlotRenderer, useTranslation } from "@valuz/core";
 import { useRegistryStore } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 
-import { ModelSection } from "./settings/ModelSection";
-import { ConnectorsSection } from "./settings/ConnectorsSection";
-import { GeneralSection } from "./settings/GeneralSection";
-import { MemorySection } from "./settings/MemorySection";
-import { BrowserSection } from "./settings/BrowserSection";
-import { ParsingSection } from "./settings/ParsingSection";
-import { BackupSection } from "./settings/BackupSection";
-import { SystemLogsSettingsSection } from "./settings/SystemLogsSection";
-import { AboutSection } from "./settings/AboutSection";
-import { NetworkSection } from "./settings/NetworkSection";
+import { useContributions } from "../lib/contributions";
+import { sectionComponents } from "./settings/section-components";
 
 const SETTINGS_TAB_STORAGE_KEY = "valuz-settings-tab";
 
@@ -65,6 +58,7 @@ const TAB_ICON_MAP: Record<string, ReactNode> = {
   browser: <Globe className="h-4 w-4" />,
   network: <Wifi className="h-4 w-4" />,
   flask: <FlaskConical className="h-4 w-4" />,
+  puzzle: <Puzzle className="h-4 w-4" />,
 };
 
 const readStoredTab = (): string => {
@@ -81,25 +75,14 @@ const readStoredTab = (): string => {
   return "general";
 };
 
-const SECTION_MAP: Record<string, React.ComponentType> = {
-  model: ModelSection,
-  connectors: ConnectorsSection,
-  general: GeneralSection,
-  memory: MemorySection,
-  personalization: MemorySection,
-  browser: BrowserSection,
-  parsing: ParsingSection,
-  backup: BackupSection,
-  "system-logs": SystemLogsSettingsSection,
-  network: NetworkSection,
-  about: AboutSection,
-};
-
 export const SettingsPage = () => {
   const [searchParams] = useSearchParams();
   const { setHideHeader } = useProjectOutlet();
   const { t } = useTranslation();
   const settingsSections = useRegistryStore((s) => s.settingsSections);
+  // The panels of the built-in sections are contributed by the plugins that
+  // own them (see ../plugins); subscribing re-renders when one comes or goes.
+  useContributions(sectionComponents);
 
   const nav = useMemo(
     () =>
@@ -149,13 +132,14 @@ export const SettingsPage = () => {
     }
   }, []);
 
-  const ActiveSection = activeSectionComponent ?? SECTION_MAP[tab] ?? null;
+  const ActiveSection =
+    activeSectionComponent ?? sectionComponents.get(tab) ?? null;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-card">
       <SettingsNav items={nav} value={tab} onValueChange={setTab} />
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,#FFFFFF_0%,#FBFBFD_100%)] dark:bg-[linear-gradient(180deg,#131418_0%,#0f1012_100%)]">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] bg-[linear-gradient(180deg,#FFFFFF_0%,#FBFBFD_100%)] dark:bg-[linear-gradient(180deg,#131418_0%,#0f1012_100%)]">
         <div
           className={cn(
             "mx-auto max-w-[920px] px-5 md:px-8",
@@ -164,7 +148,13 @@ export const SettingsPage = () => {
               : "py-5 pb-12 md:py-6 md:pb-14",
           )}
         >
+          <SlotRenderer name="settings.header" context={{ tab, setTab }} />
           {ActiveSection ? <ActiveSection /> : null}
+          <SlotRenderer
+            name="settings.section.footer"
+            slotKey={tab}
+            context={{ tab }}
+          />
         </div>
       </div>
     </div>

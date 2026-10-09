@@ -48,7 +48,7 @@ jobs:
     name: macOS (arm64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'mac-arm64' }}
-    runs-on: macos-14
+    runs-on: macos-15
     environment: CSC_KEY_PASSWORD
     permissions:
       contents: write
@@ -148,6 +148,12 @@ jobs:
             exit 1
           fi
           echo "OK: latest-mac.yml present, version=$actual"
+          # Valuz requires macOS 15, including its bundled DSH native modules.
+          # electron-updater compares os.release(): macOS 15 is Darwin 24.
+          # Replace any older gate before uploading either architecture.
+          sed -i '' '/^minimumSystemVersion:/d' "$yml"
+          printf 'minimumSystemVersion: 24.0.0\n' >> "$yml"
+          grep '^minimumSystemVersion:' "$yml"
 
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.
@@ -320,6 +326,12 @@ jobs:
             exit 1
           fi
           echo "OK: latest-mac.yml present, version=$actual"
+          # Valuz requires macOS 15, including its bundled DSH native modules.
+          # electron-updater compares os.release(): macOS 15 is Darwin 24.
+          # Replace any older gate before uploading either architecture.
+          sed -i '' '/^minimumSystemVersion:/d' "$yml"
+          printf 'minimumSystemVersion: 24.0.0\n' >> "$yml"
+          grep '^minimumSystemVersion:' "$yml"
 
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.
@@ -682,7 +694,7 @@ jobs:
             frontend/apps/desktop/release/latest.yml
           if-no-files-found: warn
 
-  # macOS ships as two separate arch builds (arm64 on macos-14, x64 on
+  # macOS ships as two separate arch builds (arm64 on macos-15, x64 on
   # macos-15-intel). electron-builder emits ONE arch-specific latest-mac.yml per
   # job, and uploading both to the same release left the later one (x64) as the
   # published manifest — so electron-updater on an Apple Silicon Mac, finding no

@@ -6,6 +6,7 @@ import {
   _resetUserStreamForTests,
   type ControlFrame,
 } from "./user-stream";
+import { _resetUiBusForTests, uiBus, type UiPushEvent } from "../ui-bus";
 
 vi.mock("./fetch-event-source");
 const mockFES = vi.mocked(fetchEventSource);
@@ -33,6 +34,39 @@ afterEach(() => {
 });
 
 describe("subscribeUserStream", () => {
+  it("hands ui.* pushes to the UI bus without dispatching or moving the cursor", () => {
+    _resetUiBusForTests();
+    const h = connect();
+    const seen: ControlFrame[] = [];
+    const pushes: UiPushEvent[] = [];
+    subscribeUserStream((f) => seen.push(f));
+    const unsubscribe = uiBus.subscribe((push) => pushes.push(push));
+
+    h.feed({
+      event: "ui.invalidate",
+      data: JSON.stringify({
+        seq: 0,
+        event_type: "ui.invalidate",
+        session_id: "",
+        payload: { site: "*", push_id: "p1" },
+        timestamp: 3,
+      }),
+    });
+    unsubscribe();
+
+    expect(seen).toEqual([]);
+    expect(pushes).toEqual([
+      {
+        kind: "invalidate",
+        sessionId: null,
+        payload: { site: "*" },
+        pushId: "p1",
+        timestamp: 3,
+      },
+    ]);
+    expect(h.url()).toContain("after_seq=0");
+  });
+
   it("decodes control frames and dispatches to subscribers", () => {
     const h = connect();
     const seen: ControlFrame[] = [];

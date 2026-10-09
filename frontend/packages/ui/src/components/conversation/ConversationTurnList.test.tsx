@@ -703,3 +703,286 @@ describe("UserMessageBody skill-tag rendering", () => {
     expect(text).not.toContain("/goal");
   });
 });
+
+describe("ConversationTurnList host extension props", () => {
+  type ListProps = Partial<Parameters<typeof ConversationTurnList>[0]>;
+
+  function renderWith(turns: ConversationTurn[], props: ListProps = {}) {
+    virtualState.start = 0;
+    const scrollRef = createRef<HTMLDivElement>();
+    return render(
+      <div ref={scrollRef} style={{ height: 640, overflowY: "auto" }}>
+        <ConversationTurnList
+          turns={turns}
+          scrollContainerRef={scrollRef}
+          sending={false}
+          loading={false}
+          error={null}
+          {...props}
+        />
+      </div>,
+    );
+  }
+
+  describe("renderUserMessageActions", () => {
+    it("adds nothing to the user action row while unset", () => {
+      const { container } = renderWith([buildTurn(0)]);
+      // First 复制 in document order is the user message's (the assistant
+      // row's follows it).
+      const row = screen.getAllByRole("button", { name: "复制" })[0]!
+        .parentElement!;
+      expect(row.children.length).toBe(1);
+      expect(container.querySelector("[data-testid='ext-user']")).toBeNull();
+    });
+
+    it("appends the node after the copy button, with the turn", () => {
+      const seen: string[] = [];
+      renderWith([buildTurn(0)], {
+        renderUserMessageActions: (turn) => {
+          seen.push(turn.id);
+          return <button data-testid="ext-user">extra</button>;
+        },
+      });
+      const extra = screen.getByTestId("ext-user");
+      const copy = screen.getAllByRole("button", { name: "复制" })[0]!;
+      expect(copy.nextElementSibling).toBe(extra);
+      expect(extra.parentElement).toBe(copy.parentElement);
+      expect(seen).toContain("turn-0");
+    });
+
+    it("is not called for a row that has no user text", () => {
+      const turn: ConversationTurn = { ...buildTurn(0), userText: "" };
+      const render_ = vi.fn(() => <span data-testid="ext-user" />);
+      renderWith([turn], { renderUserMessageActions: render_ });
+      expect(render_).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("ext-user")).toBeNull();
+    });
+  });
+
+  describe("renderTurnTail", () => {
+    it("adds no element to the turn while unset", () => {
+      const { container } = renderWith([buildTurn(0)]);
+      expect(container.querySelector("[data-testid='ext-tail']")).toBeNull();
+    });
+
+    it("renders last in the assistant column, after the error card, with row state", () => {
+      const failed: ConversationTurn = {
+        ...buildTurn(1),
+        blocks: [],
+        failedMessage: "boom",
+      };
+      const states: Array<[string, boolean, boolean]> = [];
+      renderWith([buildTurn(0), failed], {
+        sending: true,
+        renderTurnTail: (turn, { isLatest, inFlight }) => {
+          states.push([turn.id, isLatest, inFlight]);
+          return <div data-testid={`ext-tail-${turn.id}`}>tail</div>;
+        },
+      });
+      const tail = screen.getByTestId("ext-tail-turn-1");
+      // Last child of its column, directly after the error card.
+      expect(tail.parentElement!.lastElementChild).toBe(tail);
+      expect(tail.previousElementSibling?.textContent).toContain("生成失败");
+      expect(states).toContainEqual(["turn-0", false, false]);
+      expect(states).toContainEqual(["turn-1", true, true]);
+    });
+  });
+
+  describe("renderPlanActions", () => {
+    const planTurn: ConversationTurn = {
+      ...buildTurn(0),
+      blocks: [{ kind: "plan_proposal", plan: "# Plan" }],
+    };
+
+    it("draws no footer when the host returns null", () => {
+      renderWith([planTurn], { renderPlanActions: () => null });
+      expect(screen.queryByText("回复可继续调整计划")).toBeNull();
+    });
+
+    it("draws the footer with the host node when it returns one", () => {
+      renderWith([planTurn], {
+        renderPlanActions: () => <button data-testid="ext-plan">go</button>,
+      });
+      expect(screen.getByText("回复可继续调整计划")).toBeTruthy();
+      expect(screen.getByTestId("ext-plan")).toBeTruthy();
+    });
+  });
+
+  describe("welcome", () => {
+    const welcome: ListProps = {
+      showWelcome: true,
+      emptySuggestions: ["suggestion-a"],
+    };
+    const mascot = (c: HTMLElement) =>
+      c.querySelector("img[aria-hidden='true']");
+
+    it("renders the default mascot, title and suggestions with no host nodes", () => {
+      const { container } = renderWith([], welcome);
+      expect(mascot(container)).not.toBeNull();
+      expect(screen.getByText(/告诉我你想做什么/)).toBeTruthy();
+      expect(screen.getByText("suggestion-a")).toBeTruthy();
+      // Nothing after the suggestions column.
+      expect(
+        screen.getByText("suggestion-a").closest("div.mt-5")!.nextElementSibling,
+      ).toBeNull();
+    });
+
+    it("welcomeHero replaces the mascot and title but keeps the suggestions", () => {
+      const { container } = renderWith([], {
+        ...welcome,
+        welcomeHero: <div data-testid="ext-hero">hero</div>,
+      });
+      expect(screen.getByTestId("ext-hero")).toBeTruthy();
+      expect(mascot(container)).toBeNull();
+      expect(screen.queryByText(/告诉我你想做什么/)).toBeNull();
+      expect(screen.getByText("suggestion-a")).toBeTruthy();
+    });
+
+    it("welcomeMascot replaces only the mascot image", () => {
+      const { container } = renderWith([], {
+        ...welcome,
+        welcomeMascot: <span data-testid="ext-mascot">m</span>,
+      });
+      expect(screen.getByTestId("ext-mascot")).toBeTruthy();
+      expect(mascot(container)).toBeNull();
+      expect(screen.getByText(/告诉我你想做什么/)).toBeTruthy();
+    });
+
+    it("hideEmptyMascot still wins over a host mascot", () => {
+      renderWith([], {
+        ...welcome,
+        hideEmptyMascot: true,
+        welcomeMascot: <span data-testid="ext-mascot">m</span>,
+      });
+      expect(screen.queryByTestId("ext-mascot")).toBeNull();
+    });
+
+    it("welcomeExtra renders after the suggestions, only on the welcome", () => {
+      renderWith([], {
+        ...welcome,
+        welcomeExtra: <div data-testid="ext-extra">extra</div>,
+      });
+      // Own column, aligned with the suggestions', directly after them.
+      const extraColumn = screen.getByTestId("ext-extra").parentElement!;
+      expect(extraColumn.className).toContain("max-w-[750px]");
+      expect(extraColumn.previousElementSibling?.textContent).toContain(
+        "suggestion-a",
+      );
+      expect(extraColumn.nextElementSibling).toBeNull();
+    });
+
+    it("renders no welcome node while showWelcome is off", () => {
+      renderWith([], {
+        showWelcome: false,
+        welcomeHero: <div data-testid="ext-hero" />,
+        welcomeExtra: <div data-testid="ext-extra" />,
+      });
+      expect(screen.queryByTestId("ext-hero")).toBeNull();
+      expect(screen.queryByTestId("ext-extra")).toBeNull();
+    });
+  });
+});
+
+describe("ConversationTurnList — host wrappers around tool cards and messages", () => {
+  const turn: ConversationTurn = {
+    id: "turn-wrap",
+    userMessageSeq: 9,
+    userText: "please check",
+    failedMessage: null,
+    blocks: [
+      { kind: "thinking", text: "thinking first", elapsedMs: 1000 },
+      {
+        kind: "tool",
+        tool: {
+          id: "tool-generic",
+          kind: "bash",
+          title: "generic-tool",
+          status: "success",
+          output: "ok",
+        },
+      },
+      {
+        kind: "tool",
+        tool: {
+          id: "tool-custom",
+          kind: "fetch",
+          title: "custom-tool",
+          status: "success",
+        },
+      },
+      { kind: "assistant", text: "final answer", messageId: "m1" },
+    ],
+  };
+
+  const renderWith = (
+    props: Partial<Parameters<typeof ConversationTurnList>[0]> = {},
+  ) => {
+    virtualState.start = 0;
+    const scrollContainerRef = createRef<HTMLDivElement>();
+    return render(
+      <div ref={scrollContainerRef}>
+        <ConversationTurnList
+          turns={[turn]}
+          scrollContainerRef={scrollContainerRef}
+          sending={false}
+          loading={false}
+          error={null}
+          renderToolCall={(tool) =>
+            tool.id === "tool-custom" ? <div>custom card</div> : null
+          }
+          {...props}
+        />
+      </div>,
+    );
+  };
+
+  const expandProcess = () => {
+    fireEvent.click(
+      screen.getAllByRole("button", { name: processedElapsedName })[0]!,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /调用了 1 次工具/ }));
+  };
+
+  it("wraps every tool card, the user bubble and each assistant message", () => {
+    renderWith({
+      wrapToolCall: (tool, card) => (
+        <div data-testid={`wrap-tool-${tool.id}`}>{card}</div>
+      ),
+      wrapUserMessage: (wrapped, message) => (
+        <div data-testid={`wrap-user-${wrapped.id}`}>{message}</div>
+      ),
+      wrapAssistantMessage: (_turn, messageId, message) => (
+        <div data-testid={`wrap-assistant-${messageId}`}>{message}</div>
+      ),
+    });
+    expandProcess();
+
+    expect(screen.getByTestId("wrap-user-turn-wrap").textContent).toContain(
+      "please check",
+    );
+    expect(screen.getByTestId("wrap-assistant-m1").textContent).toContain(
+      "final answer",
+    );
+    expect(screen.getByTestId("wrap-tool-tool-custom").textContent).toBe(
+      "custom card",
+    );
+    expect(
+      screen.getByTestId("wrap-tool-tool-generic").textContent,
+    ).toContain("generic-tool");
+  });
+
+  it("renders exactly as without wrappers when they pass the content through", () => {
+    const bare = renderWith();
+    expandProcess();
+    const bareHtml = bare.container.innerHTML;
+    bare.unmount();
+
+    const passthrough = renderWith({
+      wrapToolCall: (_tool, card) => card,
+      wrapUserMessage: (_turn, message) => message,
+      wrapAssistantMessage: (_turn, _id, message) => message,
+    });
+    expandProcess();
+    expect(passthrough.container.innerHTML).toBe(bareHtml);
+  });
+});

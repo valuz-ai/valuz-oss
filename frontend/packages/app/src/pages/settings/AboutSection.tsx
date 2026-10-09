@@ -3,6 +3,7 @@ import { Button, Card, CardContent, MetricStrip, SettingsSection, Spinner } from
 import { useTranslation, useUpdaterStore, useSystemStore } from "@valuz/core";
 import { assetUrl } from "@valuz/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 const REPO_BASE = "https://github.com/valuz-ai/valuz-oss";
 
@@ -14,6 +15,7 @@ const getBridge = (): DesktopBridge | null =>
   (window as Window & { valuzDesktop?: DesktopBridge }).valuzDesktop ?? null;
 
 export const AboutSection = () => {
+  const headerActions = useSectionHeaderActions("about");
   const { t } = useTranslation();
   const { status: updaterStatus, version: updaterVersion } = useUpdaterStore();
   const systemStatus = useSystemStore((s) => s.status);
@@ -59,6 +61,7 @@ export const AboutSection = () => {
 
   return (
     <SettingsSection
+      actions={headerActions}
       title={t("settings.about.title")}
       desc={t("settings.about.desc")}
     >

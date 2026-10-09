@@ -79,9 +79,9 @@ def _is_runtime_context_marker(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     try:
-        from src.core.runtime_context import _marker_key  # type: ignore[attr-defined]
+        from valuz_agent.adapters.kernel_client import is_runtime_context_marker
 
-        return _marker_key(value) is not None
+        return is_runtime_context_marker(value)
     except Exception:  # noqa: BLE001 — kernel not importable: fall back to the wire shape
         return value.startswith("__runtime_context:") and value.endswith("__")
 
@@ -306,9 +306,7 @@ def _make_completer(
                 # explicit cap the runtime default truncates it mid-write,
                 # and a half-written A2UI doc is rejected at storage (no
                 # version, no card). Match the direct path's budget.
-                model_settings=ModelSettingsSchema(
-                    max_tokens=_DIRECT_GENUI_MAX_TOKENS
-                ),
+                model_settings=ModelSettingsSchema(max_tokens=_DIRECT_GENUI_MAX_TOKENS),
             ),
             cwd=str(gen_cwd),
             runtime_provider=runtime_provider,
@@ -317,9 +315,7 @@ def _make_completer(
             instructions=session_instructions,
             permission_mode="default",
             metadata=marker,
-            model_settings=ModelSettingsSchema(
-                max_tokens=_DIRECT_GENUI_MAX_TOKENS
-            ),
+            model_settings=ModelSettingsSchema(max_tokens=_DIRECT_GENUI_MAX_TOKENS),
         )
         await kernel_client.create_session(user_id, req)
         stream_task: asyncio.Task[None] | None = None

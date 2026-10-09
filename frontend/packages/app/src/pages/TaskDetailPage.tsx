@@ -47,9 +47,11 @@ import {
   Spinner,
 } from "@valuz/ui";
 import {
+  SlotRenderer,
   agentsApi,
   tasksApi,
   projectsApi,
+  useHasSlot,
   useNotifications,
   useTaskEvents,
   useTranslation,
@@ -338,6 +340,11 @@ export const TaskDetailPage = () => {
   const { t } = useTranslation();
   const platform = usePlatform();
   const { setHeader, setHideHeader, setRightPanel } = useProjectOutlet();
+  // ``task.detail.header.actions`` gets its own box in the title row, so the
+  // box must exist only while something is registered for the slot. (The other
+  // ``task.detail.*`` slots render their contributions straight into existing
+  // containers and need no gate.)
+  const hasHeaderActions = useHasSlot("task.detail.header.actions");
   // Pending confirmations (AskUserQuestion) raised by this task's agents —
   // surfaced prominently in the timeline so the user isn't left thinking the
   // task is just "working" when it's actually blocked on their answer.
@@ -710,6 +717,7 @@ export const TaskDetailPage = () => {
 
     setRightPanel(
       <TaskContextPanel
+        projectId={projectId}
         runs={runs}
         members={members}
         fileTree={fileTree}
@@ -1519,8 +1527,24 @@ export const TaskDetailPage = () => {
                   <TaskTokenUsagePopover usage={tokenUsage} />
                 </>
               )}
+              {/* ``task.detail.meta`` — contributions bring their own separator. */}
+              <SlotRenderer name="task.detail.meta" context={{ task }} />
             </div>
           </div>
+          {/* ``task.detail.header.actions`` — right end of the title row. */}
+          {hasHeaderActions && (
+            <div className="flex shrink-0 items-center gap-2">
+              <SlotRenderer
+                name="task.detail.header.actions"
+                context={{
+                  taskId: task.id,
+                  task,
+                  projectId: task.project_id,
+                  status: task.status,
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Goal card — shown only when it adds something beyond the title: a
@@ -1861,6 +1885,13 @@ export const TaskDetailPage = () => {
         {!isCompleted && (
           <section className="mt-5 w-full">{timelineBody}</section>
         )}
+
+        {/* ``task.detail.sections`` — after the timeline, inside the reading
+            column. */}
+        <SlotRenderer
+          name="task.detail.sections"
+          context={{ task, isCompleted }}
+        />
       </div>
       {/* /Reading column ---------------------------------------- */}
 
@@ -1906,6 +1937,9 @@ export const TaskDetailPage = () => {
             >
               {t("task.pause")}
             </Button>
+            {/* ``task.detail.actions`` — extra actions while the task runs; this
+                bar only renders for an active task. */}
+            <SlotRenderer name="task.detail.actions" context={{ task, busy }} />
             {/* Stop is destructive AND the primary intent while active (the
                 user is interrupting an in-flight task) — right edge. */}
             <Button

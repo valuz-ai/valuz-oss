@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -50,6 +51,16 @@ class UserMessage:
     text: str
     attachments: tuple[Attachment, ...] = ()
     additional_context: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.metadata, dict):
+            raise ValueError("message metadata must be a JSON object")
+        try:
+            detached = json.loads(json.dumps(self.metadata, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("message metadata must contain only JSON values") from exc
+        object.__setattr__(self, "metadata", detached)
 
 
 # -- Model provider + settings --
@@ -332,6 +343,9 @@ class Session:
     # "activeForm"?: str}`. None when the agent has never updated todos in
     # this session.
     todos: list[dict[str, Any]] | None = None
+    # Orchestrator-only binding to the Message persisted for this actual turn.
+    # Not accepted by create/update, serialized, or recovered from metadata.
+    execution_message_id: str | None = field(default=None, init=False, repr=False, compare=False)
 
 
 # Host-stamped ``Session.metadata`` marker for one-shot "bare completion"
@@ -344,6 +358,23 @@ class Session:
 # invocation (a claude_agent ephemeral turn measured ~38s to first token vs
 # ~2.4s for a stripped in-process call on the same model).
 BARE_COMPLETION_METADATA_KEY = "bare_completion"
+
+
+# Host-stamped workspace trust (H0): ``Session.metadata["valuz"]
+# ["workspace_trust"]`` is ``untrusted`` when the session's project folder may
+# not run its own hook configuration (``.claude/settings.json`` hooks, Codex
+# ``hooks.json``). Runtimes switch those off; Valuz's own hook bus is not
+# affected. Absent = trusted (sessions created before trust existed).
+WORKSPACE_TRUST_METADATA_KEY = "workspace_trust"
+
+
+def is_workspace_untrusted(session: Session) -> bool:
+    """True when the host marked *session*'s workspace untrusted."""
+    try:
+        valuz = session.metadata.get("valuz")
+        return isinstance(valuz, dict) and valuz.get(WORKSPACE_TRUST_METADATA_KEY) == "untrusted"
+    except Exception:  # noqa: BLE001 — malformed metadata never breaks dispatch
+        return False
 
 
 def is_bare_completion(session: Session) -> bool:

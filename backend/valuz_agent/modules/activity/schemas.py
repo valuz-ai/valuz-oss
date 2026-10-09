@@ -26,6 +26,10 @@ class ActivityItem(BaseModel):
         default=None,
         description="Conversation executing a PlaybookRun, when present.",
     )
+    runtime: str | None = Field(
+        default=None,
+        description="Kernel runtime provider of a chat (gates its Fork entry); null otherwise.",
+    )
     sort_at: int = Field(description="Unix epoch ms used for interleaving + the keyset cursor.")
 
 

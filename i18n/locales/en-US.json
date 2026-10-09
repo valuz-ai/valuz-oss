@@ -1440,7 +1440,22 @@
     "deleteChat": "Delete group",
     "deleteChatDone": "Group deleted",
     "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good.",
-    "nameSection": "Project name"
+    "nameSection": "Project name",
+    "trustDialogTitle": "This folder runs its own commands",
+    "trustDialogDesc": "Configuration in this folder makes the agent run the commands below during a session — on every runtime, without asking and without approval. Trust it only if you know where the folder comes from.",
+    "trustDialogTrust": "Trust and allow",
+    "trustDialogDistrust": "Don't trust (don't run them)",
+    "trustSectionTitle": "Workspace trust",
+    "trustTrusted": "Trusted",
+    "trustUntrusted": "Not trusted",
+    "trustTrustedHint": "The folder's own commands below run in new sessions.",
+    "trustUntrustedHint": "The folder's own commands below do not run.",
+    "trustMakeTrusted": "Trust this folder",
+    "trustMakeUntrusted": "Stop trusting",
+    "trustAppliesToNewSessions": "Applies to sessions started from now on.",
+    "trustUpdateFailed": "Couldn't update workspace trust: {error}",
+    "memoryImportItem": "Memory entry",
+    "partialImportErrors": "Some content could not be imported; the remaining content was kept:"
   },
   "schedule": {
     "create": "Create Schedule",
@@ -1571,7 +1586,49 @@
       "deleted": "Deleted",
       "cleared": "Cleared",
       "loadFailed": "Failed to load memory",
-      "saveFailed": "Action failed"
+      "saveFailed": "Action failed",
+      "contextLimit": "Forgetting memory does not delete original chats or files, or remove context already loaded in this conversation. Recheck the source or start a new conversation when you need current information.",
+      "unavailable": "The memory service is unavailable. Memory contents cannot be verified; try refreshing later.",
+      "conflict": "Memory changed elsewhere. The list was reloaded; review the latest contents and confirm again. Nothing will be overwritten automatically.",
+      "scope": "Memory scope",
+      "allScopes": "All scopes",
+      "scopeProject": "Project memory",
+      "refreshRecords": "Refresh memory",
+      "addRecord": "Add memory",
+      "correctRecord": "Correct memory",
+      "forgetRecord": "Forget memory",
+      "forgetSource": "Forget this source",
+      "confirmed": "Confirmed",
+      "unconfirmed": "Unconfirmed",
+      "recordId": "Memory ID",
+      "previousPage": "Previous page",
+      "nextPage": "Next page",
+      "recordContent": "Memory content",
+      "saveRecord": "Save memory",
+      "confirmLatest": "Confirm latest version",
+      "confirmForget": "Confirm forgetting",
+      "forgetRecordHint": "Forget this memory and prevent its tracked sources from extracting it again. Original chats, files, and context already loaded in this conversation remain.",
+      "forgetSourceHint": "Forget all memories derived from this tracked source and prevent further extraction from it. Original chats, files, and context already loaded in this conversation remain.",
+      "sourceKinds": {
+        "message": "Message",
+        "session": "Conversation",
+        "task": "Task",
+        "input": "Background input",
+        "document": "Document",
+        "tool": "Tool result",
+        "manual": "Manual entry",
+        "import": "Import"
+      },
+      "sourceOrigins": {
+        "owner": "From you",
+        "agent": "From an agent",
+        "untrusted": "Unverified external information",
+        "system": "System record"
+      },
+      "latestRecordContent": "Latest saved contents",
+      "recordRemoved": "This memory is no longer in the current list",
+      "cleanupIncomplete": "Memory was updated, but pending extraction cleanup is incomplete. Retry this operation to finish cleanup.",
+      "saveUncertain": "The save outcome is not yet known. Recover the pending write before submitting a new change. Retrying keeps this request unchanged."
     },
     "personalization": {
       "conversationTitle": "Conversation",
@@ -2382,7 +2439,61 @@
     "complete": "Complete",
     "executing": "Executing",
     "failed": "Failed",
-    "running": "Running"
+    "running": "Running",
+    "appPluginManager": {
+      "title": {
+        "install": "Install and enable app plugin",
+        "dev_link": "Install and enable app plugin",
+        "uninstall": "Uninstall app plugin",
+        "publish": "Publish app plugin",
+        "generic": "App Plugin action"
+      },
+      "field": {
+        "id": "App Plugin id",
+        "version": "Version",
+        "publisher": "Publisher",
+        "source": "Source",
+        "path": "Folder",
+        "sha256": "sha256",
+        "permissions": "Permissions",
+        "requires": "Requires",
+        "scope": "Scope",
+        "targets": "Publish to",
+        "notes": "Notes"
+      },
+      "updatesFrom": "Updates from v{version}",
+      "newPermission": "New",
+      "unmet": "Unmet",
+      "noPermissions": "No permissions declared",
+      "hasBackend": "Includes a backend service",
+      "scope": {
+        "personal": "Personal",
+        "org": "Organization",
+        "global": "Global marketplace"
+      },
+      "purgeData": "Also delete the app plugin's data",
+      "keepData": "Keep the app plugin's data",
+      "devHint": "The installed plugin uses this folder directly. Later builds update it without another installation.",
+      "risk": "Once confirmed, this app plugin runs third-party code on this computer with your permissions.",
+      "publishHint": "Once confirmed, the package is uploaded and goes through the automatic checks and review.",
+      "confirm": {
+        "install": "Install and enable",
+        "dev_link": "Install and enable",
+        "uninstall": "Uninstall",
+        "publish": "Publish",
+        "generic": "Confirm"
+      },
+      "state": {
+        "succeeded": "Done",
+        "cancelled": "Cancelled, nothing was changed.",
+        "expired": "The proposal expired and nothing was changed. Ask again.",
+        "superseded": "Replaced by a newer proposal, nothing was changed.",
+        "stale": "The proposal is out of date. Ask again.",
+        "failed": "The app plugin action failed"
+      },
+      "succeeded": "App Plugin action completed",
+      "details": "Details"
+    }
   },
   "menu": {
     "about": "About Valuz",
@@ -3346,19 +3457,20 @@
     "pluginPreviewing": "Checking for conflicts…"
   },
   "plugin": {
+    "navLabel": "Plugins",
     "title": "Plugins",
-    "description": "Installed skill suites and plugins with connectors",
+    "description": "Installed plugins: skill suites and bundles of skills and connectors",
     "install": "Install plugin",
     "installFromZip": "Upload zip",
     "installFromPath": "Local path or URL",
     "installPathPlaceholder": "Plugin directory, zip path, or https:// URL",
-    "installPathHelp": "Accepts the Agent Plugins layout as well as .claude-plugin / .codebuddy-plugin layouts.",
+    "installPathHelp": "Accepts the plugin layout as well as .claude-plugin / .codebuddy-plugin layouts.",
     "selectZip": "Choose zip file",
     "preview": "Preview",
     "previewing": "Analyzing…",
     "previewFailed": "Could not read the plugin",
     "previewFormat": "Format",
-    "formatAgentPlugins": "Agent Plugins",
+    "formatAgentPlugins": "Plugins",
     "formatClaude": "Claude plugin (compat)",
     "formatCodebuddy": "CodeBuddy plugin (compat)",
     "warnings": "Notes",
@@ -3479,5 +3591,308 @@
     "contextPanel": "Context panel",
     "overlays": "Overlays",
     "playbookDetail": "Playbook detail"
+  },
+  "pluginSettings": {
+    "tabsLabel": "Plugin categories",
+    "title": "App Plugins",
+    "navDesc": "App Plugins, built-in plugins and DSH plugins",
+    "desc": "Manage App Plugins, built-in plugins that ship with Valuz, and standard DSH (DeepSeek Harness) plugins.",
+    "valuz": {
+      "title": "Built-in plugins",
+      "desc": "Built-in plugins that ship with Valuz, in two parts: the interface (frontend) and the backend. They cannot be installed or removed at runtime.",
+      "empty": "No UI plugins are loaded",
+      "legacyCount": "{count} legacy installs",
+      "legacyHint": "Installed before the plugin model; they stay in effect when the plugin unloads: {names}",
+      "failedReason": "Failed to load: {error}",
+      "status": {
+        "active": "Active",
+        "failed": "Failed",
+        "loading": "Loading",
+        "disposed": "Unloaded",
+        "backend-disabled": "Backend disabled"
+      },
+      "frontend": {
+        "title": "UI plugins",
+        "desc": "Plugins that run in the interface. Read-only."
+      }
+    },
+    "dsh": {
+      "title": "DSH plugins",
+      "desc": "Standard DeepSeek Harness plugins, installed and toggled by DSH's own plugin manager. They only affect sessions on the DSH runtime.",
+      "connecting": "Connecting to the DSH plugin manager. The first start can take about 30 seconds",
+      "loadFailed": "Could not reach the DSH plugin manager",
+      "unavailable": {
+        "title": "DSH plugins are unavailable here",
+        "disabled": "Cloud and shared deployments keep DSH plugins off by default: plugin code runs with the user's privileges, so it is a local-workstation capability.",
+        "generic": "No DSH plugin manager is available in this deployment.",
+        "reason": "Reason: {reason}"
+      },
+      "profile": "Profile",
+      "home": "Directory",
+      "openManager": "Open DSH plugin manager",
+      "openManagerLabel": "Native DSH manager",
+      "openManagerDesc": "Opens DSH's own plugin UI in your browser, for plugin configuration, rollback, build-script approval and version exemptions.",
+      "openFailed": "Could not open the DSH plugin manager: {error}",
+      "bundles": {
+        "title": "Installed bundles",
+        "desc": "A bundle is DSH's unit of distribution; one bundle can contain several plugins.",
+        "empty": "No bundles yet",
+        "builtin": "Built-in",
+        "builtinHint": "Provided by Valuz or DSH; it cannot be switched off or removed",
+        "optional": "Optional",
+        "optionalHint": "Shipped with DSH, off by default; switch it on if you need it",
+        "broken": "Unreadable",
+        "toggleLabel": "Enable {name}",
+        "remove": "Remove",
+        "removeTitle": "Remove {name}?",
+        "removeDesc": "This uninstalls {package} and removes its plugins. It cannot be undone.",
+        "enabledToast": "Enabled {name}",
+        "disabledToast": "Disabled {name}",
+        "removedToast": "Removed {name}",
+        "restartRequired": "{name}: saved, restart DSH for it to take effect",
+        "overridden": "{name}: saved, but overridden by a higher-priority configuration",
+        "changeFailed": "{name}: {error}",
+        "incompatible": "Not for Valuz",
+        "incompatibleHint": "This bundle brings a process surface of its own (ACP / one-shot runner / minimal SDK); on the profile Valuz's dsh sessions share it would conflict, so it cannot be switched on here."
+      },
+      "install": {
+        "title": "Install a DSH plugin",
+        "desc": "Enter an npm package name (optionally with a version range), an absolute path, a tarball or a git URL. Inspect first, then confirm the install.",
+        "specLabel": "Package spec",
+        "placeholder": "@scope/package@^1.0.0 or /absolute/path",
+        "inspect": "Inspect",
+        "install": "Install",
+        "cancel": "Cancel",
+        "inspectFailed": "Inspection failed: {error}",
+        "installing": "Installing, this can take a few minutes",
+        "accepted": "Ready to install",
+        "refused": "Cannot install",
+        "bundleUnknown": "Whether it is a DSH bundle is only known after it is downloaded",
+        "from": "From: {host}",
+        "kind": {
+          "registry": "npm package",
+          "path": "Local directory",
+          "git": "Git repository",
+          "tarball": "Tarball"
+        },
+        "problem": {
+          "invalid-spec": "The spec is malformed",
+          "already-installed": "Already installed",
+          "not-found": "Package or version not found",
+          "not-a-package": "Not a valid package",
+          "not-a-bundle": "Not a DSH bundle",
+          "network": "Network unreachable",
+          "unknown": "Unknown reason"
+        },
+        "result": {
+          "applied": "Installed and enabled {target}",
+          "restartRequired": "Installed {target}; restart DSH for it to take effect",
+          "overridden": "Installed {target}, but overridden by a higher-priority configuration",
+          "failed": "Install failed",
+          "cancelled": "Install cancelled"
+        },
+        "pendingBuilds": "These packages need their build scripts approved first: {packages}. Handle it in the \"Native DSH manager\", then try again.",
+        "incompatible": "{name}@{version} declares DSH version requirements that the running DSH {runtime} does not meet. You can set a version exemption in the \"Native DSH manager\".",
+        "output": "Install output",
+        "outputTruncated": "Output truncated; full log: {path}",
+        "warnings": "Note: {warnings}"
+      },
+      "errorCode": {
+        "invalid-spec": "The spec is malformed",
+        "ambiguous-install": "The spec is ambiguous",
+        "not-bundle": "This package is not a DSH bundle",
+        "stale-approval": "The build approval is stale",
+        "incompatible-version": "Incompatible with the running DSH version",
+        "operation-error": "The operation failed",
+        "other": "Failed ({code})",
+        "management-required": "A built-in component DSH needs for management; it cannot be changed",
+        "unaddressable": "This entry cannot be changed through the profile configuration",
+        "unknown-plugin": "Plugin not found",
+        "not-removable": "This bundle cannot be removed",
+        "stop-profile": "Stop the running profile before removing it",
+        "bundle-in-use": "The bundle is still in use and cannot be removed"
+      },
+      "toolsNote": "Tools from installed DSH plugins are available to every runtime while the plugin host is running (through the built-in MCP server valuz-dsh-plugins)."
+    },
+    "backend": {
+      "title": "Backend plugins",
+      "desc": "Plugins that ship with the Valuz backend and are composed when the process starts. A switch is recorded and takes effect after a restart.",
+      "loadFailed": "Could not read the backend plugins",
+      "notComposed": "This build has no backend plugins",
+      "empty": "The backend composed no plugins",
+      "readOnly": "Plugins are managed by the operator on this deployment and cannot be changed here.",
+      "restartHint": "Changes are recorded; restart Valuz to apply them.",
+      "required": "Required",
+      "requiredHint": "Valuz needs it to run; it cannot be switched off",
+      "requiredBy": "Needed by {ids}",
+      "requiredByHint": "{ids} needs it to run; it cannot be switched off",
+      "toggleLabel": "Enable {id}",
+      "pendingEnable": "Recorded; it will be enabled after a restart",
+      "pendingDisable": "Recorded; it will be disabled after a restart",
+      "toggleFailed": "{id}: {error}",
+      "status": {
+        "active": "Active",
+        "failed": "Failed",
+        "pending": "Waiting to start",
+        "disabled": "Disabled"
+      },
+      "meta": {
+        "provides": "Provides: {list}",
+        "needs": "Needs: {list}",
+        "entitlement": "Entitlement: {key}"
+      }
+    },
+    "appPlugins": {
+      "title": "App Plugins",
+      "desc": "Install and manage App Plugins that extend the Valuz interface and features. An app plugin runs on this computer with your permissions, so only install sources you trust.",
+      "loadFailed": "Could not read the app plugins",
+      "tabsLabel": "App plugin tabs",
+      "tabs": {
+        "installed": "Installed"
+      },
+      "empty": "No app plugins installed yet",
+      "safeMode": {
+        "title": "Safe mode",
+        "desc": "App plugins kept failing to load, so loading them is paused.",
+        "reason": "Reason: {reason}",
+        "exit": "Exit safe mode",
+        "exitFailed": "Could not exit safe mode: {error}"
+      },
+      "install": {
+        "title": "Install",
+        "file": "Install from file",
+        "url": "Install from URL",
+        "folder": "Link a dev folder"
+      },
+      "source": {
+        "file": "Local file",
+        "url": "URL",
+        "dev": "Dev folder",
+        "catalog": "Catalog",
+        "scope": {
+          "personal": "Mine",
+          "org": "Organization",
+          "global": "Marketplace"
+        }
+      },
+      "status": {
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "incompatible": "Incompatible",
+        "broken": "Broken",
+        "requires-unmet": "Requirements unmet",
+        "blocked": "Blocked by policy"
+      },
+      "load": {
+        "active": "UI loaded",
+        "loading": "UI loading",
+        "failed": "UI failed to load",
+        "disposed": "UI unloaded",
+        "error": "Failed to load: {error}"
+      },
+      "meta": {
+        "publisher": "Publisher: {name}",
+        "source": "Source: {source}",
+        "devPath": "Dev folder: {path}",
+        "unmet": "Unmet requirements: {list}",
+        "permissions": "Permissions: {list}",
+        "noPermissions": "No permissions declared",
+        "reason": "Reason: {reason}"
+      },
+      "actions": {
+        "toggle": "Enable or disable {name}",
+        "reload": "Reload",
+        "reloaded": "Reloaded {name}",
+        "reloadFailed": "Could not reload {name}: {error}",
+        "toggleFailed": "Could not change {name}: {error}",
+        "uninstall": "Uninstall",
+        "logs": "Logs",
+        "config": "Settings"
+      },
+      "uninstall": {
+        "title": "Uninstall {name}",
+        "desc": "This removes the app plugin and the automations it created.",
+        "purge": "Also delete its data",
+        "purgeHint": "Deletes the settings and data the app plugin saved. Leave unchecked to keep them for a later reinstall.",
+        "confirm": "Uninstall",
+        "done": "Uninstalled {name}",
+        "failed": "Could not uninstall {name}: {error}"
+      },
+      "logs": {
+        "title": "Logs of {name}",
+        "desc": "Recent entries from the UI, the backend and the audit trail.",
+        "empty": "No log entries yet",
+        "refresh": "Refresh",
+        "loadFailed": "Could not read the logs: {error}",
+        "source": {
+          "frontend": "UI",
+          "backend": "Backend",
+          "audit": "Audit"
+        }
+      },
+      "config": {
+        "title": "Settings of {name}",
+        "desc": "Options declared by the app plugin.",
+        "noSchema": "This app plugin has no settings.",
+        "loadFailed": "Could not read the settings: {error}",
+        "save": "Save",
+        "saved": "Settings saved",
+        "saveFailed": "Could not save the settings: {error}",
+        "required": "{field} is required",
+        "invalidNumber": "{field} must be a number",
+        "invalidInteger": "{field} must be an integer",
+        "listHint": "One item per line",
+        "unset": "Not set",
+        "serverErrors": "The server rejected the settings:"
+      },
+      "form": {
+        "fileLabel": "Package path (.zip or folder)",
+        "filePlaceholder": "/path/to/plugin.zip",
+        "urlLabel": "Package URL",
+        "urlPlaceholder": "https://example.com/plugin.zip",
+        "devLabel": "App Plugin folder",
+        "devPlaceholder": "/path/to/my-plugin",
+        "devHint": "Dev mode reads this folder in place without copying it; after a rebuild, press Reload.",
+        "browse": "Browse…",
+        "inspect": "Inspect",
+        "inspecting": "Inspecting…",
+        "inspectFailed": "Could not inspect: {error}",
+        "required": "Enter a source first"
+      },
+      "confirm": {
+        "title": "Install app plugin",
+        "titleDev": "Link a dev folder",
+        "desc": "Review the details below before installing.",
+        "field": {
+          "id": "App Plugin id",
+          "version": "Version",
+          "publisher": "Publisher",
+          "source": "Source",
+          "sha256": "sha256",
+          "size": "Size",
+          "permissions": "Permissions",
+          "requires": "Requires"
+        },
+        "updatesFrom": "Updates from v{version}",
+        "newPermission": "New",
+        "unmet": "Unmet",
+        "noPermissions": "No permissions declared",
+        "noRequires": "None",
+        "hasBackend": "Includes a backend service",
+        "errors": "Errors found, installation is blocked:",
+        "warnings": "Notes:",
+        "risk": "I understand this app plugin runs third-party code on this computer with my permissions",
+        "install": "Install",
+        "link": "Link",
+        "update": "Update",
+        "back": "Back",
+        "working": "Working…",
+        "installed": "Installed {name}",
+        "updated": "Updated {name} from v{from} to v{to}",
+        "linked": "Linked {name}",
+        "failed": "Could not install: {error}",
+        "unknownName": "(unnamed)"
+      }
+    }
   }
 }

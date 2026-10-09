@@ -90,7 +90,7 @@ function ReadonlyResourceList({
 }) {
   if (items.length === 0) {
     return (
-      <div className="rounded-[14px] border border-dashed border-surface-border bg-card px-4 py-6 text-center text-xs text-ink-meta">
+      <div className="rounded-2xl border border-dashed border-surface-border bg-card px-4 py-6 text-center text-xs text-ink-meta">
         {emptyText}
       </div>
     );
@@ -100,7 +100,7 @@ function ReadonlyResourceList({
       {items.map((item) => (
         <div
           key={`${item.source}:${item.id}`}
-          className="flex items-center gap-3 rounded-[14px] bg-card p-3 shadow-[var(--shadow-1)]"
+          className="flex items-center gap-3 rounded-2xl bg-card p-3 shadow-[var(--shadow-1)]"
         >
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
             {item.name}

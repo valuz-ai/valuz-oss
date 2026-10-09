@@ -18,7 +18,7 @@ import {
 } from "react";
 
 import { Skeleton } from "../ui/skeleton";
-import { dispatchGenUIAction } from "./genui-channel/action-registry";
+import { useActionForwarder } from "./genui-channel/use-action-forwarder";
 import {
   getGenUIDataHost,
   type GenUIComponentDataRef,
@@ -492,22 +492,18 @@ export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [body, version, hostParamsKey]);
 
-  // Forward user actions to the registered host sink (action-registry.ts)
-  // with this renderer's host identity attached. Reads hostParams through a
-  // ref so the callback stays stable and never forces a surface rebuild.
-  const hostParamsRef = useRef(hostParams);
-  hostParamsRef.current = hostParams;
+  // Keep surface callbacks stable; event dispatch reads the committed host.
+  const forwardAction = useActionForwarder(hostParams);
   const onAction = useCallback<
     NonNullable<Parameters<typeof createValuzMessageProcessor>[0]>
   >((action) => {
-    dispatchGenUIAction({
+    forwardAction({
       name: action.name,
       surfaceId: action.surfaceId,
       sourceComponentId: action.sourceComponentId,
       context: action.context ?? {},
-      ...(hostParamsRef.current ? { host: hostParamsRef.current } : {}),
     });
-  }, []);
+  }, [forwardAction]);
 
   const built = useMemo(
     () => buildSurfaces(body, liveMessages, status === "running", onAction),

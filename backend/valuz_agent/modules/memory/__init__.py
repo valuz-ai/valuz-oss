@@ -1,13 +1,10 @@
-"""Memory module — global + project scoped agent memory.
+"""Owner-scoped memory catalog with compatible text-entry operations.
 
-See ``docs/design/memory-system-design.md`` for the architecture.
-
-P0: three flat ``§``-delimited files (``USER.md`` + ``MEMORY.md`` at the memories
-root, ``projects/<id>/MEMORY.md`` per project), a single runtime-agnostic
-``memory`` MCP tool (add/replace/remove), and a frozen-snapshot injection. The
-service layer is pure (it takes ``project_id`` explicitly and does not couple to
-the DB/kernel), so it is fully unit-testable; callers (tool, injection,
-extractor) resolve the project id from the kernel session.
+The owner memory.json is the sole authority. Markdown files are generated views;
+records carry stable identities, revisions and source lineage, while deletion
+tombstones and operation receipts contain no retained text. The service uses
+cross-process file transactions and has no database/kernel coupling. Entrypoints
+resolve the verified owner and scope and offload blocking IO from async turns.
 """
 
 from valuz_agent.modules.memory.models import (

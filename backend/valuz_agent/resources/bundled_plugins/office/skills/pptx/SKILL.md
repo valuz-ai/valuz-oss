@@ -1,232 +1,178 @@
 ---
 name: pptx
-description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."
-license: Proprietary. LICENSE.txt has complete terms
+description: Create, read, edit and check PowerPoint presentations (.pptx/.potx) - new decks with native charts, tables and images; filling and rearranging templates (duplicate, delete, reorder slides); extracting slide text, tables and speaker notes; thumbnail overviews; content and visual QA; conversion to PDF or slide images. Use whenever a .pptx or .potx file is an input or a requested deliverable, including "make a deck/slides/presentation" requests that should produce a PowerPoint file.
 ---
 
-# PPTX Skill
+# PowerPoint presentations
 
-## Quick Reference
+`<skill>` below is the directory that contains this SKILL.md. Its scripts are
+read-only resources: run them from the task workspace and write every output
+(scripts, decks, renders) into the workspace. Match the language of the request
+in slide text, and the design of a supplied deck or template when editing it.
 
-| Task | Guide |
-|------|-------|
-| Read/analyze content | `python -m markitdown presentation.pptx` |
-| Edit or create from template | Read [editing.md](editing.md) |
-| Create from scratch | Read [pptxgenjs.md](pptxgenjs.md) |
+## Environment
 
----
+- **`valuz-python`** runs every script and snippet: bundled CPython 3.12 with
+  python-pptx 1.0, Pillow, lxml, openpyxl, pandas. Use `valuz-python file.py` or
+  `valuz-python - <<'PY' ... PY`. It is read-only; if a task truly needs another
+  package, make a task venv that keeps the bundled libraries:
+  `valuz-python -m venv --system-site-packages .venv && .venv/bin/pip install <pkg>`.
+  If `valuz-python` is not on PATH, install what it provides and use that
+  interpreter wherever this file says `valuz-python`: Python 3.12 with
+  python-pptx, Pillow, lxml, openpyxl and pandas
+  (plan the installation yourself, e.g. a venv).
+  Follow an explicit user or AGENTS.md environment requirement when there is one.
+- **`dsoffice`** is the bundled LibreOffice engine: `capabilities`, `convert`,
+  `render`. Outputs must be new files/directories (it never overwrites). Never
+  search for or call a system LibreOffice, `soffice` or `pdftoppm` unless the
+  user explicitly asks; if `dsoffice` fails, report that.
+  If `dsoffice` is not on PATH, install it: it is the `dsoffice` command of
+  the npm package `@deepseek-ai/libreoffice-kit@0.1.5` (Node.js 22.19 or
+  newer; plan the installation yourself).
 
-## Reading Content
+## Scripts
 
-```bash
-# Text extraction
-python -m markitdown presentation.pptx
+| script | does |
+|---|---|
+| `outline.py deck.pptx [--layouts] [--geometry] [--json] [--slides 2,5-7]` | per-slide layout, title, text with levels, tables, chart data, pictures, notes; `--layouts` lists layouts and placeholder idx |
+| `thumbnails.py deck.pptx --output-dir new-dir [--slides ..] [--cols 3]` | renders with dsoffice and writes labelled grid images `grid-NN.png` plus one PNG per slide |
+| `slides.py duplicate\|delete\|move\|arrange in.pptx out.pptx ...` | copy (with charts, notes, media), delete, move, or rebuild the slide order (`arrange --order 1,3,3,5`) |
+| `content_qa.py deck.pptx [--json] [--strict]` | leftover template/sample text, empty placeholders, likely overflow, off-slide shapes, tiny text, low contrast, overlaps, dense slides; exit 1 on errors |
+| `pptx_helpers.py` (import) | 16:9 deck setup, palettes and theme fonts, text boxes, real bullets, cards, grid, native charts and tables, image fit, `set_text`/`replace_text`/`replace_image` for templates |
+| `check_office.py deck.pptx [--count N] [--contains TEXT]` | package integrity (ZIP, XML, relationships), slide count, required text |
 
-# Visual overview
-python scripts/thumbnail.py presentation.pptx
+Run them as `valuz-python <skill>/scripts/<name>.py ...`; each prints usage
+with `--help`. `outline.py`, `slides.py`, `content_qa.py` and `thumbnails.py`
+also accept a `.potx` template; in your own code open one with
+`open_presentation()` from the helpers (plain python-pptx rejects .potx) and
+save the result as `.pptx`.
 
-# Raw XML
-python scripts/office/unpack.py presentation.pptx unpacked/
+## Choose the workflow
+
+- **Read or summarise a deck**: `outline.py` (add `--json` to process it). Add
+  `thumbnails.py` when the look matters. Speaker notes are in the outline.
+- **Small edit to an existing deck**: python-pptx on a copy; change only the
+  requested content and keep its formatting (see "Editing" below).
+- **Deck from a template, or restructuring a deck**: follow
+  [reference/templates.md](reference/templates.md) - inventory, map, `arrange`,
+  fill, QA.
+- **New deck from scratch**: read [reference/design.md](reference/design.md)
+  first, then build with the helper module (next section).
+
+Every workflow that writes a deck ends with the QA loop and delivery.
+
+## New deck from scratch
+
+1. Plan in text before code: audience, the slide list with one takeaway title
+   per slide, and the layout pattern for each slide (cover, KPI row, chart +
+   takeaways, comparison, table, process, closing). Vary the patterns.
+2. Pick a palette from the brand or subject (`PALETTES` or your own `Theme`)
+   and keep the type scale and grid from design.md.
+3. Build with python-pptx through the helpers. Native charts and tables, real
+   bullets, explicit box sizes, speaker notes for detail:
+
+```python
+import sys
+sys.dont_write_bytecode = True               # the skill directory is read-only
+sys.path.insert(0, "<skill>/scripts")
+from pptx_helpers import *
+
+theme = PALETTES["navy"]                       # or Theme(primary="0B5CAD", ...)
+prs = new_presentation(theme=theme)            # 16:9, theme colours + Latin/CJK fonts
+
+s = blank_slide(prs, theme)                    # cover
+add_box(s, 0, 0, 0.18, 7.5, fill=theme.primary)
+add_text(s, 0.9, 2.3, 8, 1.6, "2025 年度经营回顾", theme=theme, size=44, bold=True, anchor="bottom")
+add_text(s, 0.9, 4.0, 8, 0.5, "FY2025 Business Review · 2026-01", theme=theme, size=18, color=theme.muted)
+
+s = content_slide(prs, "Revenue grew 18% on APAC demand", theme)
+chart_box, notes_box = columns(theme.content_box(), 2, weights=[2, 1])
+add_chart(s, "column", ["2022", "2023", "2024", "2025"], {"Revenue (USD m)": [120, 138, 163, 192]},
+          *chart_box, theme=theme, data_labels=True, number_format="#,##0", legend=None)
+add_bullets(s, *notes_box, ["APAC +32% YoY", "Gross margin 41.5%", "Two new plants"], theme=theme)
+set_notes(s, "Source: management accounts, unaudited.")
+
+prs.save("deck.pptx")
 ```
 
----
+   Helper reference (all positions in inches, colours "RRGGBB"):
+   - `add_text(slide, x, y, w, h, content, size=, color=, bold=, align=, anchor=)`
+   - `add_bullets(slide, x, y, w, h, items, numbered=False)`; items are str,
+     `(text, level)` or dict(text, level, bold, color, size)
+   - `add_box(slide, x, y, w, h, fill=, line=, kind="rect"|"rounded"|"oval", text=)`
+   - `add_chart(slide, kind, categories, series, x, y, w, h, number_format=,
+     data_labels=, legend=, colors=)`; kinds: column, stacked_column, bar,
+     stacked_bar, line, line_plain, area, pie, doughnut, scatter
+   - `add_table(slide, rows, x, y, w, col_widths=, align=, zebra=, bold_last_row=)`
+   - `add_image(slide, path, x, y, w, h, mode="contain"|"cover")`
+   - `columns(box, n, gap, weights)`, `rows(...)`, `theme.content_box(subtitle=False)`
+   - `set_background`, `set_notes`, `set_font(font, size=, color=, name=, ea=)`
 
-## Editing Workflow
+   Raw python-pptx recipes and limits: [reference/python-pptx.md](reference/python-pptx.md).
+4. Rules that keep decks clean:
+   - 16:9 (13.333 x 7.5 in) unless the user or template says otherwise.
+   - Text boxes: word wrap on, autofit off, a size that fits the text at the
+     intended font size. Do not rely on shrink-to-fit.
+   - One title per slide in the same place; use the title placeholder
+     (`content_slide`) so titles show in PowerPoint's outline.
+   - Bullets come from paragraph formatting, never typed "•" or "-".
+   - Charts and tables are native objects with the real data; images are local
+     files placed without distortion.
+   - Set an East Asian font for CJK text (the theme does this via `new_presentation(theme=...)`).
 
-**Read [editing.md](editing.md) for full details.**
+## Editing an existing deck
 
-1. Analyze template with `thumbnail.py`
-2. Unpack → manipulate slides → edit content → clean → pack
+- Inspect first (`outline.py --geometry`), then open with python-pptx, change
+  what was asked, and save to a new file unless the user asked for an in-place
+  edit.
+- Keep run formatting: change `run.text`, or use `set_text(shape, ...)` and
+  `replace_text(prs_or_slide_or_shape, old, new)` from the helpers. Assigning
+  `shape.text_frame.text` drops formatting.
+- Slide copy/delete/reorder: `scripts/slides.py` (python-pptx has no API for it).
+- Rebuilding shapes loses what python-pptx does not model (animations,
+  SmartArt, some effects); edit in place instead.
+- Notes: `slide.notes_slide.notes_text_frame.text = "..."`.
 
----
+## QA loop (required before delivery)
 
-## Creating from Scratch
+1. Structure: `valuz-python <skill>/scripts/check_office.py deck.pptx --count N`
+   (add `--contains "..."` for must-have text). It must pass.
+2. Content: `valuz-python <skill>/scripts/content_qa.py deck.pptx`. Fix every
+   error. Treat warnings as items to confirm on the render; fix the real ones.
+   Text-size estimates are heuristics in both directions.
+3. Visual (when the current model accepts images):
+   `valuz-python <skill>/scripts/thumbnails.py deck.pptx --output-dir qa-v1`,
+   then open each `grid-NN.png` with your file/image reading tool. For a close
+   look, open the per-slide PNGs listed under `slide_images` in its JSON, or
+   render chosen slides larger:
+   `dsoffice render --input deck.pptx --output-dir qa-v1-detail --pages 3,5 --dpi 110`
+   (files are numbered in output order - `page-0001.png` is slide 3 here;
+   `manifest.json` maps each image to its slide in `page`).
+   Check: text clipped or overflowing, overlaps, uneven alignment or spacing,
+   low contrast, empty areas or crowding, chart labels and values, wrong or
+   missing fonts (`missingFonts` in the JSON), leftover sample content.
+4. Fix and repeat with a new output directory (`qa-v2`, ...) until steps 1-3
+   are clean. Re-render only the slides you changed, plus a final full grid.
 
-**Read [pptxgenjs.md](pptxgenjs.md) for full details.**
+If images cannot be read by the current model, finish steps 1-2 and say that
+visual layout was not inspected. Previews come from LibreOffice: they do not
+certify pixel-identical PowerPoint output, animations or media. Fonts that are
+not installed are substituted in the preview (see `missingFonts`), so leave a
+little slack in tight boxes. One known difference: a text box with word wrap
+off renders wrapped in the preview but as one long line in PowerPoint -
+`content_qa.py` reports that case.
 
-Use when no template or reference presentation is available.
+## Convert and deliver
 
----
+- PDF: `dsoffice convert --input deck.pptx --output deck.pdf`.
+- Slide images: `dsoffice render --input deck.pptx --output-dir slides-png [--pages 1,3] [--dpi 144]`
+  (PNG per slide plus `manifest.json`; max 144 dpi, 100 slides per call).
+- Other: pptx/odp conversions via `dsoffice convert`; `dsoffice capabilities`
+  lists them.
 
-## Design Ideas
-
-**Don't create boring slides.** Plain bullets on a white background won't impress anyone. Consider ideas from this list for each slide.
-
-### Before Starting
-
-- **Pick a bold, content-informed color palette**: The palette should feel designed for THIS topic. If swapping your colors into a completely different presentation would still "work," you haven't made specific enough choices.
-- **Dominance over equality**: One color should dominate (60-70% visual weight), with 1-2 supporting tones and one sharp accent. Never give all colors equal weight.
-- **Dark/light contrast**: Dark backgrounds for title + conclusion slides, light for content ("sandwich" structure). Or commit to dark throughout for a premium feel.
-- **Commit to a visual motif**: Pick ONE distinctive element and repeat it — rounded image frames, icons in colored circles, thick single-side borders. Carry it across every slide.
-
-### Color Palettes
-
-Choose colors that match your topic — don't default to generic blue. Use these palettes as inspiration:
-
-| Theme | Primary | Secondary | Accent |
-|-------|---------|-----------|--------|
-| **Midnight Executive** | `1E2761` (navy) | `CADCFC` (ice blue) | `FFFFFF` (white) |
-| **Forest & Moss** | `2C5F2D` (forest) | `97BC62` (moss) | `F5F5F5` (cream) |
-| **Coral Energy** | `F96167` (coral) | `F9E795` (gold) | `2F3C7E` (navy) |
-| **Warm Terracotta** | `B85042` (terracotta) | `E7E8D1` (sand) | `A7BEAE` (sage) |
-| **Ocean Gradient** | `065A82` (deep blue) | `1C7293` (teal) | `21295C` (midnight) |
-| **Charcoal Minimal** | `36454F` (charcoal) | `F2F2F2` (off-white) | `212121` (black) |
-| **Teal Trust** | `028090` (teal) | `00A896` (seafoam) | `02C39A` (mint) |
-| **Berry & Cream** | `6D2E46` (berry) | `A26769` (dusty rose) | `ECE2D0` (cream) |
-| **Sage Calm** | `84B59F` (sage) | `69A297` (eucalyptus) | `50808E` (slate) |
-| **Cherry Bold** | `990011` (cherry) | `FCF6F5` (off-white) | `2F3C7E` (navy) |
-
-### For Each Slide
-
-**Every slide needs a visual element** — image, chart, icon, or shape. Text-only slides are forgettable.
-
-**Layout options:**
-- Two-column (text left, illustration on right)
-- Icon + text rows (icon in colored circle, bold header, description below)
-- 2x2 or 2x3 grid (image on one side, grid of content blocks on other)
-- Half-bleed image (full left or right side) with content overlay
-
-**Data display:**
-- Large stat callouts (big numbers 60-72pt with small labels below)
-- Comparison columns (before/after, pros/cons, side-by-side options)
-- Timeline or process flow (numbered steps, arrows)
-
-**Visual polish:**
-- Icons in small colored circles next to section headers
-- Italic accent text for key stats or taglines
-
-### Typography
-
-**Choose an interesting font pairing** — don't default to Arial. Pick a header font with personality and pair it with a clean body font.
-
-| Header Font | Body Font |
-|-------------|-----------|
-| Georgia | Calibri |
-| Arial Black | Arial |
-| Calibri | Calibri Light |
-| Cambria | Calibri |
-| Trebuchet MS | Calibri |
-| Impact | Arial |
-| Palatino | Garamond |
-| Consolas | Calibri |
-
-| Element | Size |
-|---------|------|
-| Slide title | 36-44pt bold |
-| Section header | 20-24pt bold |
-| Body text | 14-16pt |
-| Captions | 10-12pt muted |
-
-### Spacing
-
-- 0.5" minimum margins
-- 0.3-0.5" between content blocks
-- Leave breathing room—don't fill every inch
-
-### Avoid (Common Mistakes)
-
-- **Don't repeat the same layout** — vary columns, cards, and callouts across slides
-- **Don't center body text** — left-align paragraphs and lists; center only titles
-- **Don't skimp on size contrast** — titles need 36pt+ to stand out from 14-16pt body
-- **Don't default to blue** — pick colors that reflect the specific topic
-- **Don't mix spacing randomly** — choose 0.3" or 0.5" gaps and use consistently
-- **Don't style one slide and leave the rest plain** — commit fully or keep it simple throughout
-- **Don't create text-only slides** — add images, icons, charts, or visual elements; avoid plain title + bullets
-- **Don't forget text box padding** — when aligning lines or shapes with text edges, set `margin: 0` on the text box or offset the shape to account for padding
-- **Don't use low-contrast elements** — icons AND text need strong contrast against the background; avoid light text on light backgrounds or dark text on dark backgrounds
-- **NEVER use accent lines under titles** — these are a hallmark of AI-generated slides; use whitespace or background color instead
-
----
-
-## QA (Required)
-
-**Assume there are problems. Your job is to find them.**
-
-Your first render is almost never correct. Approach QA as a bug hunt, not a confirmation step. If you found zero issues on first inspection, you weren't looking hard enough.
-
-### Content QA
-
-```bash
-python -m markitdown output.pptx
-```
-
-Check for missing content, typos, wrong order.
-
-**When using templates, check for leftover placeholder text:**
-
-```bash
-python -m markitdown output.pptx | grep -iE "xxxx|lorem|ipsum|this.*(page|slide).*layout"
-```
-
-If grep returns results, fix them before declaring success.
-
-### Visual QA
-
-**⚠️ USE SUBAGENTS** — even for 2-3 slides. You've been staring at the code and will see what you expect, not what's there. Subagents have fresh eyes.
-
-Convert slides to images (see [Converting to Images](#converting-to-images)), then use this prompt:
-
-```
-Visually inspect these slides. Assume there are issues — find them.
-
-Look for:
-- Overlapping elements (text through shapes, lines through words, stacked elements)
-- Text overflow or cut off at edges/box boundaries
-- Decorative lines positioned for single-line text but title wrapped to two lines
-- Source citations or footers colliding with content above
-- Elements too close (< 0.3" gaps) or cards/sections nearly touching
-- Uneven gaps (large empty area in one place, cramped in another)
-- Insufficient margin from slide edges (< 0.5")
-- Columns or similar elements not aligned consistently
-- Low-contrast text (e.g., light gray text on cream-colored background)
-- Low-contrast icons (e.g., dark icons on dark backgrounds without a contrasting circle)
-- Text boxes too narrow causing excessive wrapping
-- Leftover placeholder content
-
-For each slide, list issues or areas of concern, even if minor.
-
-Read and analyze these images:
-1. /path/to/slide-01.jpg (Expected: [brief description])
-2. /path/to/slide-02.jpg (Expected: [brief description])
-
-Report ALL issues found, including minor ones.
-```
-
-### Verification Loop
-
-1. Generate slides → Convert to images → Inspect
-2. **List issues found** (if none found, look again more critically)
-3. Fix issues
-4. **Re-verify affected slides** — one fix often creates another problem
-5. Repeat until a full pass reveals no new issues
-
-**Do not declare success until you've completed at least one fix-and-verify cycle.**
-
----
-
-## Converting to Images
-
-Convert presentations to individual slide images for visual inspection:
-
-```bash
-python scripts/office/soffice.py --headless --convert-to pdf output.pptx
-pdftoppm -jpeg -r 150 output.pdf slide
-```
-
-This creates `slide-01.jpg`, `slide-02.jpg`, etc.
-
-To re-render specific slides after fixes:
-
-```bash
-pdftoppm -jpeg -r 150 -f N -l N output.pdf slide-fixed
-```
-
----
-
-## Dependencies
-
-- `pip install "markitdown[pptx]"` - text extraction
-- `pip install Pillow` - thumbnail grids
-- `npm install -g pptxgenjs` - creating from scratch
-- LibreOffice (`soffice`) - PDF conversion (auto-configured for sandboxed environments via `scripts/office/soffice.py`)
-- Poppler (`pdftoppm`) - PDF to images
+Deliver the final files with the session tool `deliver_artifacts`, using
+absolute paths inside the working directory, for example
+`deliver_artifacts({"attachments":[{"filePath":"/abs/path/deck.pptx"}]})`. Add
+the PDF when it was requested. Do not deliver QA renders, outlines or scratch
+files unless asked. If `deliver_artifacts` is not available, give the final
+path.

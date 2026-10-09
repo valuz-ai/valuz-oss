@@ -774,7 +774,9 @@ class DocumentLibraryService:
         await self._ds.create_import_task(user_id, task)
         return task
 
-    async def _run_rescan(self, kb: KnowledgeBaseRow, task: DocumentImportTaskRow) -> None:
+    async def _run_rescan(
+        self, kb: KnowledgeBaseRow, task: DocumentImportTaskRow
+    ) -> ImportTaskResult:
         """Diff the on-disk tree against the indexed tree and converge.
 
         Walks ``kb.root_path`` once, then in three phases:
@@ -1484,7 +1486,10 @@ class DocumentLibraryService:
            parameter is never populated from model or tool input.
         2. ``authorized_document_ids`` — caller-owned ids (document-research
            sessions). Re-authorized under ``user_id``.
-        3. project bindings (the default).
+        3. caller-owned ``knowledge_base_ids`` when explicitly selected, or
+           project bindings (the default), plus documents authorized by the
+           shared-scope contributor. Explicit KB selection filters that
+           authorized union by each document's actual KB, never grants access.
 
         ``document_ids`` narrowing applies to all three. ``folder_ids``
         narrowing resolves within the **caller's own** folders, so cross-owner
@@ -1591,6 +1596,8 @@ class DocumentLibraryService:
                 if row is not None and row.status == "ready":
                     scope_ids.append(doc_id)
         else:
+            if knowledge_base_ids == []:
+                return [], {}
             scope_ids = await self.resolve_doc_scope(
                 user_id,
                 project_id,
@@ -1603,6 +1610,24 @@ class DocumentLibraryService:
             # construction and widening one would defeat the point.
             scope_ids, contributed_owners = await self._contribute_shared_scope(user_id, scope_ids)
             owner_of.update(contributed_owners)
+            if knowledge_base_ids is not None:
+                selected_kbs = set(knowledge_base_ids)
+                selected_scope: list[str] = []
+                existing_kbs: dict[str, bool] = {}
+                for doc_id in scope_ids:
+                    owner = owner_of.get(doc_id, user_id)
+                    row = await self._ds.get_by_id(owner, doc_id)
+                    if row is None or row.status != "ready" or row.kb_id not in selected_kbs:
+                        continue
+                    # The document was already authorized above. This lookup
+                    # only rejects deleted KBs, including stale shared grants;
+                    # it never uses a guessed KB id to authorize another owner.
+                    if row.kb_id not in existing_kbs:
+                        existing_kbs[row.kb_id] = await self._ds.get_kb_by_id(row.kb_id) is not None
+                    if existing_kbs[row.kb_id]:
+                        selected_scope.append(doc_id)
+                scope_ids = selected_scope
+                owner_of = {doc_id: owner_of[doc_id] for doc_id in scope_ids if doc_id in owner_of}
         if not scope_ids:
             return [], owner_of
 
@@ -1725,7 +1750,7 @@ class DocumentLibraryService:
             return list(doc_ids)
 
         bindings = await self._ds.list_bindings(user_id, project_id)
-        doc_ids: set[str] = set()
+        doc_ids = set()
         for b in bindings:
             if b.binding_kind == "kb":
                 doc_ids.update(
@@ -2045,7 +2070,8 @@ class DocumentLibraryService:
         # The duck-typed contract mirrors ``ParserBackend.parse``:
         # ``parse_sync(file_path, options=None)``.
         if hasattr(self._parser, "parse_sync"):
-            return self._parser.parse_sync(file_path, options)
+            parse_sync: Callable[[str, ParseOptions], ParseResult] = self._parser.parse_sync
+            return parse_sync(file_path, options)
 
         import asyncio
 

@@ -429,10 +429,8 @@ export interface ComposerProps {
   /** Called when the user toggles plan mode from the composer. */
   onSessionModeChange?: (mode: "default" | "plan") => void;
   /**
-   * Whether the session's runtime supports plan mode. Only
-   * ``claude_agent`` lowers plan natively today (codex follows with
-   * its ``collaborationMode`` wiring); deepagents / deepseek_harness
-   * have no native primitive and the server 400s them.
+   * Whether the session's runtime supports plan mode
+   * (``supportsPlanMode`` / ``PLAN_MODE_RUNTIMES`` in ``@valuz/shared``).
    */
   planModeAvailable?: boolean;
   /**
@@ -497,6 +495,27 @@ export interface ComposerProps {
    * here; the input card paints above it, so the strip's top edge tucks
    * under the card's rounded corners. */
   footerBar?: React.ReactNode;
+  /**
+   * Host-supplied nodes for the composer's extension points. ``@valuz/ui``
+   * cannot reach the slot registry, so the app host fills these with its
+   * slot hosts.
+   *
+   * ``toolbarLeft`` / ``toolbarRight`` are rendered bare (no wrapper), so an
+   * element that renders nothing leaves the toolbar untouched. ``plusMenuItems``
+   * and ``attachmentsExtra`` draw a separator / row wrapper whenever the node
+   * is truthy — a host must pass those ONLY while something occupies the slot,
+   * never an always-present element that may render empty.
+   *
+   * ``toolbarLeft`` — end of the left toolbar cluster (h-7 items; the row
+   * never wraps, so keep it compact).
+   */
+  toolbarLeft?: React.ReactNode;
+  /** Right toolbar cluster, before the Send / Stop button (h-7 items). */
+  toolbarRight?: React.ReactNode;
+  /** DropdownMenu items at the end of the "+" menu, after a separator. */
+  plusMenuItems?: React.ReactNode;
+  /** A row of extra chips above the editor, after the attachment chips. */
+  attachmentsExtra?: React.ReactNode;
   /** Entry point to create/add an agent to the project. */
   onAddAgent?: () => void;
   /** Disable the send button regardless of content (e.g. no agent picked). */
@@ -630,6 +649,10 @@ export const Composer = ({
   onProjectChange,
   projectLocked = false,
   footerBar,
+  toolbarLeft,
+  toolbarRight,
+  plusMenuItems,
+  attachmentsExtra,
   onAddAgent,
   sendDisabled = false,
   mode = "chat",
@@ -836,10 +859,11 @@ export const Composer = ({
   // Skills matching the live ``/`` query. Empty means the user is typing a
   // slash *command* (e.g. ``/compact``) — not a skill name — so we let it pass
   // through: the picker closes and Enter sends the command verbatim, rather
-  // than dead-ending on "no matching skill" while the runtime would happily
-  // run it. ``skillMenuOpen`` is the single gate for both the popup's
-  // visibility and the Enter-capture below, using the same predicate the menu
-  // renders with so the two can't drift apart.
+  // than dead-ending on "no matching skill". Only Claude and Codex act on
+  // ``/compact``; DeepAgents and DSH receive it as plain text — the composer
+  // doesn't special-case either way. ``skillMenuOpen`` is the single gate for
+  // both the popup's visibility and the Enter-capture below, using the same
+  // predicate the menu renders with so the two can't drift apart.
   const skillMatches =
     slashEnabled && skillSearch.active
       ? filterSkillItems(skills, skillSearch.query)
@@ -1368,9 +1392,13 @@ export const Composer = ({
   // settled on one yet (e.g. before ``useRuntimes`` resolves); fall back
   // to the first available runtime's label so the trigger still reads
   // sensibly.
+  // Existing temporary conversations own a frozen brain. The library agent
+  // identifies their persona; its current defaults are not execution state.
+  const frozenAgentBrain = agentLocked && allowAgentBrainOverride;
   const selectedRuntimeLabel =
     (selectedRuntimeId
-      ? runtimes.find((r) => r.id === selectedRuntimeId)?.displayName
+      ? runtimes.find((r) => r.id === selectedRuntimeId)?.displayName ??
+        (frozenAgentBrain ? selectedRuntimeId : null)
       : null) ??
     runtimes.find((r) => r.available)?.displayName ??
     runtimes[0]?.displayName ??
@@ -1412,7 +1440,7 @@ export const Composer = ({
   // Session working mode (docs/design/session-modes.md). The composer
   // only *toggles* plan; goal is entered elsewhere (task path). The "+"
   // menu entry and the active chip both need the handler AND runtime
-  // support — a session on deepagents/dsh gets neither affordance.
+  // support — a runtime outside ``PLAN_MODE_RUNTIMES`` gets neither.
   const planActive = sessionMode === "plan";
   const planToggleVisible =
     planModeAvailable && onSessionModeChange !== undefined;
@@ -1471,7 +1499,8 @@ export const Composer = ({
               c.providerId === selectedProviderId &&
               c.modelId === selectedModelId,
           );
-          if (!m) return null;
+          // A removed channel does not change a frozen session's model.
+          if (!m) return frozenAgentBrain ? modelLabel(selectedModelId) : null;
           return m.source === "managed"
             ? m.providerName
             : modelLabel(m.modelId);
@@ -1645,6 +1674,12 @@ export const Composer = ({
               ))}
             </div>
           )}
+
+          {attachmentsExtra ? (
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {attachmentsExtra}
+            </div>
+          ) : null}
 
           <div className="relative">
             {/* Contenteditable replaces the old textarea so skill
@@ -2037,6 +2072,12 @@ export const Composer = ({
                     </ComposerSubmenuContent>
                   </DropdownMenuSub>
                 )}
+                {plusMenuItems ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    {plusMenuItems}
+                  </>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
             {/* ADR-013/014 cross-runtime approval mode picker. Visible
@@ -2240,6 +2281,7 @@ export const Composer = ({
                 </Tooltip>
               </TooltipProvider>
             )}
+            {toolbarLeft}
           </div>
           <div className="flex min-w-0 items-center gap-2">
             {/* 09-assistant 📁 project chip — switches the conversation
@@ -2388,17 +2430,15 @@ export const Composer = ({
                               typeof t
                             >[0],
                           );
-                  // When an agent is selected use its own host-computed model
-                  // label (correct for project members, whose model id may not
-                  // resolve against the composer's own provider list — that path
-                  // falls back to a placeholder). Default/agentless uses the
-                  // composer's resolved model.
+                  // Existing temporary sessions display their actual creation
+                  // override. New conversations and project members retain the
+                  // host-computed agent label (their provider catalog may differ).
                   const triggerModelLabel =
-                    selectedAgent?.modelLabel ??
-                    // Hide the "Model" placeholder when no model channel is
-                    // configured — ``selectedModelLabel`` falls back to that
-                    // literal only when ``providers`` is empty.
-                    (providers.length > 0 ? selectedModelLabel : null);
+                    frozenAgentBrain && selectedModelId
+                      ? selectedModelLabel
+                      : selectedAgent?.modelLabel ??
+                        // Hide the placeholder when no channel is configured.
+                        (providers.length > 0 ? selectedModelLabel : null);
                   return (
                     <>
                       <button
@@ -2568,8 +2608,12 @@ export const Composer = ({
                                       </span>
                                       {selectedAgent && (
                                         <span className="truncate text-2xs text-ink-meta">
-                                          {selectedAgent.runtimeLabel} ·{" "}
-                                          {selectedAgent.modelLabel}
+                                          {frozenAgentBrain
+                                            ? selectedRuntimeLabel
+                                            : selectedAgent.runtimeLabel} ·{" "}
+                                          {frozenAgentBrain
+                                            ? selectedModelLabel
+                                            : selectedAgent.modelLabel}
                                         </span>
                                       )}
                                     </span>
@@ -3326,6 +3370,7 @@ export const Composer = ({
                 )}
               </div>
             )}
+            {toolbarRight}
             {/* Send button: 28×28 / radius 6 / accent bg / arrow 13px.
                 Doubles as the stop button while a turn is in flight —
                 clicking it routes to ``onStop`` (the page maps to its

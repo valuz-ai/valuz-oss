@@ -25,13 +25,15 @@ OutboundEventType = Literal[
     "session_idle",
     "session_error",
     "session_update",
-    # Context compaction marker, emitted by both runtimes when the context
+    # Context compaction marker, emitted by all four runtimes when the context
     # window is summarized. ``data`` is passed through raw, not normalized:
     # Claude forwards the CLI's ``compact_boundary`` ``compact_metadata`` dict
     # verbatim (e.g. ``{trigger, pre_tokens}``); codex runs ``/compact`` as a
     # real turn but has no metadata of its own, so its marker is ``{}`` (the
-    # real token counts ride the following ``usage_update``). The upper layer
-    # decides how/whether to render it.
+    # real token counts ride the following ``usage_update``); DeepAgents
+    # (from the summarizer's model call) and deepseek_harness (from
+    # ``compaction/end``) also send ``{}``. The upper layer decides
+    # how/whether to render it.
     "compaction",
     "usage_update",
     "todo_update",
@@ -42,10 +44,10 @@ OutboundEventType = Literal[
     "action_resolved",
     # Session-modes contract (see docs/design/session-modes.md):
     # ``mode_changed`` fires on every transition (user or runtime initiated)
-    # carrying ``{mode, by: "user" | "runtime"}``. ``plan_update`` carries
-    # the codex runtime's structured ``TurnPlanStep[]`` snapshot during
-    # plan mode (Claude plan reuses ``requires_action(clarifying_questions)``
-    # for its interactive surface; codex plan emits ``plan_update``).
+    # carrying ``{mode, by: "user" | "runtime"}``. ``plan_update`` is
+    # legacy: codex's ``update_plan`` checklist used to arrive as it and
+    # now maps to the shared ``todo_update`` like every other runtime's
+    # todos; the type stays readable for events already persisted.
     "mode_changed",
     "plan_update",
     # ``plan_proposed`` carries a plan-mode PROPOSAL awaiting the user's

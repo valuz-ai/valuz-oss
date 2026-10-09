@@ -14,12 +14,17 @@ shared bus — the persisted ledger IS the shared state.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
+import uuid
 from collections.abc import AsyncIterator
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from valuz_agent.api.deps import get_current_user_id
@@ -64,6 +69,78 @@ async def list_notifications(
     """Open (unresolved) notifications + the unread count, for cold-start."""
     entries, unread = await notification_service.snapshot(user_id)
     return NotificationListResponse(entries=entries, unread=unread)
+
+
+class CreateNotificationRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=2048)
+    #: An in-app path (``/projects/…``) the notification opens on click. Anything
+    #: else (a URL, a relative path) is kept in ``payload.link`` only.
+    link: str | None = Field(default=None, max_length=512)
+    #: ``info`` = quiet entry; ``actionable`` = also raises the OS notification.
+    urgency: Literal["info", "actionable"] = "info"
+
+
+class CreateNotificationResponse(BaseModel):
+    id: str
+
+
+#: ``<publisher>.<name>`` — the third-party plugin id shape (valuz-plugin.schema.json).
+_PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$")
+_DEDUP_KEY_MAX = 128  # models.NotificationRow.dedup_key
+
+
+def _in_app_route(link: str | None) -> str | None:
+    """``link`` when it is an in-app path (``/x``), else ``None``."""
+    if not link or not link.startswith("/") or link.startswith("//"):
+        return None
+    if "\\" in link or any(ch.isspace() or ord(ch) < 0x20 for ch in link):
+        return None
+    return link
+
+
+@router.post("/v1/notifications", response_model=CreateNotificationResponse)
+async def create_notification(
+    body: CreateNotificationRequest,
+    plugin_id: str | None = Header(default=None, alias="X-Valuz-App-Plugin-Id"),
+    user_id: str = Depends(get_current_user_id),
+) -> CreateNotificationResponse:
+    """Post a notification into the caller's own ledger (``ctx.valuz.notifications``).
+
+    A third-party plugin sends ``X-Valuz-App-Plugin-Id``: the entry is ``kind=app_plugin``
+    with the plugin id in its payload, and every post is its own entry (random
+    dedup key). Permission (the plugin's ``notifications`` grant) is checked by
+    the plugin-request middleware, not here.
+    """
+    payload: dict[str, object] = {}
+    if body.link:
+        payload["link"] = body.link
+    if plugin_id is not None:
+        if not _PLUGIN_ID_RE.fullmatch(plugin_id) or len(plugin_id) > 100:
+            raise HTTPException(status_code=400, detail={"code": "invalid_plugin_id"})
+        kind = "app_plugin"
+        payload["app_plugin_id"] = plugin_id
+        dedup_key = f"app-plugin:{plugin_id}:{uuid.uuid4()}"
+        if len(dedup_key) > _DEDUP_KEY_MAX:
+            digest = hashlib.sha256(plugin_id.encode()).hexdigest()[:16]
+            dedup_key = f"app-plugin:{digest}:{uuid.uuid4().hex}"
+    else:
+        kind = "custom"
+        dedup_key = f"api:{uuid.uuid4()}"
+    entry = await notification_service.ingest(
+        user_id,
+        dedup_key=dedup_key,
+        kind=kind,
+        title=body.title,
+        body=body.body,
+        route=_in_app_route(body.link),
+        action="none",
+        urgency=body.urgency,
+        payload=payload,
+    )
+    if entry is None:
+        raise HTTPException(status_code=503, detail={"code": "notification_unavailable"})
+    return CreateNotificationResponse(id=entry.id)
 
 
 @router.get("/v1/notifications/history", response_model=NotificationHistoryResponse)

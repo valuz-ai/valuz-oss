@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from valuz_agent.modules.genui.parameters import (
 from valuz_agent.modules.genui.prompts import TOOL_DESCRIPTION
 from valuz_agent.modules.genui.protocol import (
     OUTPUT_FORMAT,
+    GenUIComponentScope,
     a2ui_instructions,
     build_a2ui_prompt,
     component_names_for_scope,
@@ -113,7 +115,7 @@ _EXPLICIT_VISUAL_REQUEST_RE = re.compile(
 )
 
 
-def _requested_visual_output(messages: object) -> bool:
+def _requested_visual_output(messages: Iterable[object] | None) -> bool:
     """True when any of the recent turns explicitly asked for a visual.
 
     Bare 图 is deliberately not a keyword: it would match 地图, 图片 and 试图.
@@ -130,7 +132,7 @@ def _requested_visual_output(messages: object) -> bool:
     return False
 
 
-def _latest_user_language_reference(messages: object) -> str | None:
+def _latest_user_language_reference(messages: Iterable[object] | None) -> str | None:
     """Return the latest real user text that the tool call is acting on.
 
     ``request`` is written by an Agent and may translate a Chinese request into
@@ -147,10 +149,11 @@ def _latest_user_language_reference(messages: object) -> str | None:
     return None
 
 
-def _latest_user_text(messages: object) -> str:
+def _latest_user_text(messages: Iterable[object] | None) -> str:
     return _latest_user_language_reference(messages) or ""
 
-_PARAMS = {
+
+_PARAMS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "request": {
@@ -336,13 +339,13 @@ def _parse_target_host(args: dict[str, Any], session: Any = None) -> UiArtifactT
         return explicit
     if session is None:
         return None
-    valuz = ((getattr(session, "metadata", None) or {}).get("valuz") or {})
+    valuz = (getattr(session, "metadata", None) or {}).get("valuz") or {}
     return _host_from_mapping(valuz.get("host_ref"))
 
 
 def _validate_generation_choices(
     *,
-    scope: str,
+    scope: GenUIComponentScope,
     component_names: object,
     component_data: object,
 ) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...], str | None]:
@@ -358,9 +361,7 @@ def _validate_generation_choices(
         name for name in requested_components if name not in allowed_components
     )
     if unknown_components:
-        return (), (), (
-            "unknown component name(s): " + ", ".join(unknown_components)
-        )
+        return (), (), ("unknown component name(s): " + ", ".join(unknown_components))
     contracts = registered_component_data_contracts()
     schema_error = _invalid_parameter_schema_error(requested_components, contracts)
     if schema_error:
@@ -390,21 +391,33 @@ def _validate_generation_choices(
             return (), (), f"component_data[{index}] must be an object"
         unknown_fields = tuple(name for name in raw if name not in {"component", "params"})
         if unknown_fields:
-            return (), (), (
-                f"component_data[{index}] has unsupported field(s): "
-                f"{', '.join(unknown_fields)}; pass only component and params"
+            return (
+                (),
+                (),
+                (
+                    f"component_data[{index}] has unsupported field(s): "
+                    f"{', '.join(unknown_fields)}; pass only component and params"
+                ),
             )
         component = str(raw.get("component") or "").strip()
         params = raw.get("params")
         if component not in known_query_components:
-            return (), (), (
-                f"component_data[{index}] uses component '{component}' without "
-                "a registered bound-data contract"
+            return (
+                (),
+                (),
+                (
+                    f"component_data[{index}] uses component '{component}' without "
+                    "a registered bound-data contract"
+                ),
             )
         if component not in allowed_components:
-            return (), (), (
-                f"component_data[{index}] component '{component}' is outside "
-                f"the '{scope}' component scope"
+            return (
+                (),
+                (),
+                (
+                    f"component_data[{index}] component '{component}' is outside "
+                    f"the '{scope}' component scope"
+                ),
             )
         if not isinstance(params, dict):
             return (), (), f"component_data[{index}].params must be an object"
@@ -445,28 +458,25 @@ def _validate_generation_choices(
                 if singular and singular in param_specs
                 else plural
                 if plural in param_specs
-                and "comma-separated"
-                in str(param_specs[plural].get("description") or "")
+                and "comma-separated" in str(param_specs[plural].get("description") or "")
                 else None
             )
             if target and target not in normalized_params:
                 value = normalized_params[name]
-                if not (
-                    target == singular
-                    and isinstance(value, str)
-                    and "," in value
-                ):
+                if not (target == singular and isinstance(value, str) and "," in value):
                     normalized_params[target] = normalized_params.pop(name)
         unknown_params = tuple(
-            name
-            for name in normalized_params
-            if param_specs and name not in param_specs
+            name for name in normalized_params if param_specs and name not in param_specs
         )
         if unknown_params:
-            return (), (), (
-                f"component_data[{index}] component '{component}' has unknown param(s): "
-                f"{', '.join(unknown_params)}; allowed params: "
-                f"{', '.join(param_specs)}"
+            return (
+                (),
+                (),
+                (
+                    f"component_data[{index}] component '{component}' has unknown param(s): "
+                    f"{', '.join(unknown_params)}; allowed params: "
+                    f"{', '.join(param_specs)}"
+                ),
             )
         for name, spec in param_specs.items():
             if name not in normalized_params:
@@ -480,15 +490,17 @@ def _validate_generation_choices(
                 # same plural spelling makes even a one-company live chart
                 # impossible to re-bind when the page subject changes.
                 allowed_host_keys = {name}
-                if name.endswith("s") and "comma-separated" in str(
-                    spec.get("description") or ""
-                ):
+                if name.endswith("s") and "comma-separated" in str(spec.get("description") or ""):
                     allowed_host_keys.add(name.removesuffix("s"))
                 if host_key not in allowed_host_keys:
-                    return (), (), (
-                        f"component_data[{index}].params.{name} must reference "
-                        "one of the compatible host keys: "
-                        + ", ".join(f"'{key}'" for key in sorted(allowed_host_keys))
+                    return (
+                        (),
+                        (),
+                        (
+                            f"component_data[{index}].params.{name} must reference "
+                            "one of the compatible host keys: "
+                            + ", ".join(f"'{key}'" for key in sorted(allowed_host_keys))
+                        ),
                     )
                 continue
             kind = spec.get("kind")
@@ -497,9 +509,13 @@ def _validate_generation_choices(
                     value = ",".join(item.strip() for item in value)
                     normalized_params[name] = value
             if kind == "string" and (not isinstance(value, str) or not value.strip()):
-                return (), (), (
-                    f"component_data[{index}].params.{name} must be a non-empty "
-                    f"string ({spec.get('description')})"
+                return (
+                    (),
+                    (),
+                    (
+                        f"component_data[{index}].params.{name} must be a non-empty "
+                        f"string ({spec.get('description')})"
+                    ),
                 )
             if kind == "boolean" and not isinstance(value, bool):
                 return (), (), f"component_data[{index}].params.{name} must be boolean"
@@ -513,26 +529,31 @@ def _validate_generation_choices(
                 if (minimum is not None and value < minimum) or (
                     maximum is not None and value > maximum
                 ):
-                    return (), (), (
-                        f"component_data[{index}].params.{name} must be between "
-                        f"{minimum:g} and {maximum:g}"
+                    return (
+                        (),
+                        (),
+                        (
+                            f"component_data[{index}].params.{name} must be between "
+                            f"{minimum:g} and {maximum:g}"
+                        ),
                     )
             enum = tuple(spec.get("enum") or ())
             if enum and value not in enum:
-                return (), (), (
-                    f"component_data[{index}].params.{name} must be one of: "
-                    f"{', '.join(enum)}"
+                return (
+                    (),
+                    (),
+                    (f"component_data[{index}].params.{name} must be one of: {', '.join(enum)}"),
                 )
         required_params = tuple(contract.get("required_params") or ())
-        missing_params = tuple(
-            name
-            for name in required_params
-            if name not in normalized_params
-        )
+        missing_params = tuple(name for name in required_params if name not in normalized_params)
         if missing_params:
-            return (), (), (
-                f"component_data[{index}] component '{component}' is missing required "
-                f"param(s): {', '.join(missing_params)}"
+            return (
+                (),
+                (),
+                (
+                    f"component_data[{index}] component '{component}' is missing required "
+                    f"param(s): {', '.join(missing_params)}"
+                ),
             )
         if component not in requested_components:
             requested_components.append(component)
@@ -680,15 +701,14 @@ def _ensure_planned_component_data_refs(
             for prop, value in dict(plan.get("fixed_props") or {}).items():
                 if prop in declared:
                     occurrence[prop] = value
-            for input_contract in (plan.get("inputs") or ()):
+            for input_contract in plan.get("inputs") or ():
                 input_key = str(input_contract.get("key") or "")
                 data_prefix = f"/data/{component_id}/{input_key}"
                 for prop, field in dict(input_contract.get("bindings") or {}).items():
                     if prop in declared:
                         occurrence[prop] = {"path": f"{data_prefix}/{field}"}
     return "\n".join(
-        json.dumps(message, ensure_ascii=False, separators=(",", ":"))
-        for message in messages
+        json.dumps(message, ensure_ascii=False, separators=(",", ":")) for message in messages
     )
 
 
@@ -718,8 +738,7 @@ def _ensure_supported_catalog_id(document: str | None) -> str | None:
             created["catalogId"] = _SUPPORTED_CATALOG_ID
         messages.append(parsed)
     return "\n".join(
-        json.dumps(message, ensure_ascii=False, separators=(",", ":"))
-        for message in messages
+        json.dumps(message, ensure_ascii=False, separators=(",", ":")) for message in messages
     )
 
 
@@ -758,9 +777,7 @@ def _compiled_document_error(
             for component in (component_update.get("components") or ())
             if isinstance(component, dict)
         )
-    actual_names = tuple(
-        str(component.get("component") or "") for component in components
-    )
+    actual_names = tuple(str(component.get("component") or "") for component in components)
     contracts = registered_component_data_contracts()
     schema_error = _invalid_parameter_schema_error(actual_names, contracts)
     if schema_error:
@@ -832,7 +849,7 @@ def _compiled_document_error(
         component = matching[0]
         component_id = str(component["id"])
         claimed_ids.add(component_id)
-        for input_contract in (plan.get("inputs") or ()):
+        for input_contract in plan.get("inputs") or ():
             input_key = str(input_contract.get("key") or "")
             data_prefix = f"/data/{component_id}/{input_key}"
             for prop, field in dict(input_contract.get("bindings") or {}).items():
@@ -914,25 +931,16 @@ class _CompilerModel:
 def _is_valuz_lite_model(model: Any) -> bool:
     model_id = str(getattr(model, "id", "") or "").strip().lower()
     label = str(getattr(model, "label", "") or "").strip().lower()
-    return label == "valuz lite" or model_id == "valuz-lite" or model_id.startswith(
-        "valuz-lite-"
-    )
+    return label == "valuz lite" or model_id == "valuz-lite" or model_id.startswith("valuz-lite-")
 
 
 def _lite_channel_rank(channel: Any, model: Any) -> tuple[int, int, int, str]:
     """Prefer the system-managed Anthropic Lite route, then other Lite wires."""
 
     protocols = tuple(
-        str(value)
-        for value in (getattr(channel, "compatible_protocols", None) or ())
+        str(value) for value in (getattr(channel, "compatible_protocols", None) or ())
     )
-    protocol_rank = (
-        0
-        if "anthropic" in protocols
-        else 1
-        if "openai-completion" in protocols
-        else 2
-    )
+    protocol_rank = 0 if "anthropic" in protocols else 1 if "openai-completion" in protocols else 2
     source_rank = 0 if getattr(channel, "source", None) == "system" else 1
     exact_label_rank = 0 if str(getattr(model, "label", "") or "").strip() == "Valuz Lite" else 1
     return source_rank, protocol_rank, exact_label_rank, str(getattr(model, "id", ""))
@@ -1144,7 +1152,7 @@ async def _deliver_generated_ui(
     tool_use_id: str | None,
     target_host: UiArtifactTargetHost | None,
     request: str,
-    document: str,
+    document: str | None,
     host_context: _HostGenerationContext | None = None,
 ) -> str:
     """Record the document as an artifact revision; return a receipt trailer.
@@ -1309,9 +1317,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
     # current user message so "列出..." cannot silently become a dashboard.
     try:
         messages = (
-            await kernel_client.list_messages(
-                user_id, ctx.session_id, limit=_INTENT_LOOKBACK_TURNS
-            )
+            await kernel_client.list_messages(user_id, ctx.session_id, limit=_INTENT_LOOKBACK_TURNS)
             if ctx.session_id
             else []
         )
@@ -1407,6 +1413,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         if host_context is not None
         else None
     )
+
     def _completer_for(
         selected: _CompilerModel,
         *,
@@ -1417,9 +1424,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
             runtime_provider=selected.runtime_provider,
             model=selected.model,
             mp=selected.model_provider,
-            calling_session_id=(
-                ctx.session_id if stream_to_tool and tool_use_id else None
-            ),
+            calling_session_id=(ctx.session_id if stream_to_tool and tool_use_id else None),
             tool_use_id=tool_use_id if stream_to_tool else None,
             session_instructions=a2ui_instructions(scope),
             output_format=OUTPUT_FORMAT,
@@ -1466,9 +1471,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
 
     generated = (generated or "").strip()
     primary_document = _ensure_planned_component_data_refs(
-        _ensure_supported_catalog_id(
-            extract_a2ui_document(generated) if generated else None
-        ),
+        _ensure_supported_catalog_id(extract_a2ui_document(generated) if generated else None),
         component_data,
     )
     has_generation_plan = bool(component_names or component_data)
@@ -1483,9 +1486,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         if has_generation_plan
         else _document_parameter_schema_error(primary_document)
     )
-    if compiler.is_lite and (
-        primary_document is None or primary_validation_error is not None
-    ):
+    if compiler.is_lite and (primary_document is None or primary_validation_error is not None):
         logger.warning(
             "generate_ui: Valuz Lite produced an invalid planned document (%s); "
             "falling back to caller model=%s",
@@ -1549,8 +1550,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
     receipt_trailer = ""
     if validation_error is not None:
         logger.warning(
-            "generate_ui: output is not a valid planned document; not recorded "
-            "(%d chars): %s",
+            "generate_ui: output is not a valid planned document; not recorded (%d chars): %s",
             len(generated),
             validation_error,
         )
@@ -1572,8 +1572,7 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
             host_context=host_context,
         )
     logger.info(
-        "generate_ui: compile finished model=%s lite=%s elapsed_ms=%d "
-        "generated_chars=%d usable=%s",
+        "generate_ui: compile finished model=%s lite=%s elapsed_ms=%d generated_chars=%d usable=%s",
         compiler.model,
         compiler.is_lite,
         int((time.monotonic() - started_at) * 1000),
@@ -1598,9 +1597,7 @@ def build_generative_ui_tool_defs() -> tuple[ToolDef, ...]:
     )
     component_schemas = _registered_component_data_item_schemas()
     if component_schemas:
-        parameters["properties"]["component_data"]["items"] = {
-            "oneOf": component_schemas
-        }
+        parameters["properties"]["component_data"]["items"] = {"oneOf": component_schemas}
     td = ToolDef(
         name=GENERATIVE_UI_TOOL_NAME,
         description=TOOL_DESCRIPTION + registered_component_data_tool_guide(),

@@ -42,6 +42,7 @@ def _message_to_data(message: Message) -> MessageData:
         session_id=message.session_id,
         user_message=UserMessageSchema(
             text=message.user_message.text,
+            metadata=message.user_message.metadata,
             attachments=[
                 AttachmentSchema(source_path=a.source_path, parsed_path=a.parsed_path)
                 for a in message.user_message.attachments

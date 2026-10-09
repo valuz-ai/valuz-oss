@@ -22,6 +22,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.i18n import t
@@ -75,9 +76,9 @@ def _resolve_project_name() -> str:
 
 
 async def _resolve_deploy_target(
-    db,
+    db: AsyncSession,
     user_id: str,
-) -> tuple[str, str, str]:  # type: ignore[no-untyped-def]
+) -> tuple[str, str, str]:
     """Return ``(runtime, provider_id, model)`` to assign to onboarding's deployed agents.
 
     Resolution order (see endpoint comment for rationale):
@@ -214,7 +215,7 @@ async def create_example_project(
             event_bus=event_bus,
         )
         connector_svc = ConnectorService.with_defaults(db)
-        agent_svc = AgentService(db=db, connector_service=connector_svc)  # type: ignore[arg-type]
+        agent_svc = AgentService(db=db, connector_service=connector_svc)
 
         # Step 1: create or reuse the project.
         created_new = False

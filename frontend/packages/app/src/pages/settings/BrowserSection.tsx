@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button, Card, CardContent, SettingsRow, SettingsSection } from "@valuz/ui";
 import { browserApi, useTranslation, type BrowserStatus } from "@valuz/core";
+import { useSectionHeaderActions } from "./section-header-actions";
 
 /**
  * Settings → Browser. The human front door for the host-managed
@@ -10,6 +11,7 @@ import { browserApi, useTranslation, type BrowserStatus } from "@valuz/core";
  * panel and that tool share one backend service.
  */
 export const BrowserSection = () => {
+  const headerActions = useSectionHeaderActions("browser");
   const { t } = useTranslation();
   const [status, setStatus] = useState<BrowserStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,6 +72,7 @@ export const BrowserSection = () => {
 
   return (
     <SettingsSection
+      actions={headerActions}
       title={t("settings.tab.browser.label")}
       desc={t("settings.tab.browser.desc")}
     >

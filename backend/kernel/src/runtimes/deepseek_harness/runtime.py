@@ -1,10 +1,11 @@
 """DeepSeekHarnessRuntime — drives a DeepSeek Harness SDK runtime as a RuntimePort.
 
 One dsh runtime subprocess per kernel Session, spoken to over stdio JSON-RPC
-(``jsonrpc_client``). The wire has no cancel / resume / fork / approval
-methods yet (verified against dsh 0.1.0-rc.5 — see
-docs/references/deepseek-harness/runtime-gap-analysis.md), so this adapter
-ships the documented v1 stances:
+(``jsonrpc_client``): the managed profile ``valuz`` in the session role, plus a
+per-session ``--patch`` (composition.build_session_patch). The SDK wire has no
+cancel / resume / fork / approval methods (dsh 0.2.1-alpha.1 — the gaps are
+listed in docs/references/deepseek-harness/runtime-gap-analysis.md), so this
+adapter ships these stances:
 
 * **Interrupt = kill.** ``interrupt()`` hard-stops the subprocess; the turn
   settles as ``user_interrupt`` and the next ``run`` cold-starts.
@@ -13,18 +14,20 @@ ships the documented v1 stances:
   transcript sidecar under the state dir and prepends a
   ``<conversation-history>`` block on the first prompt of a fresh process.
   Within one live process, dsh continues the session natively.
-* **No tool approvals.** Tools composed into the session run unattended;
-  ``permission_mode="auto_review"`` is rejected at session create (route
-  guard). The ONE parked surface is the user-questions bridge below.
+* **Tool approvals through the bridge.** dsh's ``approval/request`` is
+  answered by the ``valuz-kernel-bridge`` row: it forwards the request as a
+  question ("Allow once" / "Deny") to the user-questions endpoint below and
+  fails closed (rejected) when nobody answers. ``permission_mode="auto_review"``
+  is still rejected at session create (route guard).
 * **No native fork / task coverage.** ``fork_session`` and
   ``run_task_coverage`` raise; ``supports_native_continuation`` is False so
   the orchestrator marks task coverage unavailable instead of calling it.
 * **Plan mode + user questions = in-process plugins + HTTP bridge.** The
-  wire has no plan or user-questions channel either, so the composition
-  (on a plan-capable closure) mounts ``dsh-plan-mode`` /
-  ``dsh-user-questions`` / ``dsh-tool-ask-user`` plus the Valuz
-  ``valuz-dsh-kernel-bridge`` plugin, which converges dsh plan state to
-  ``session.mode`` at spawn and forwards ``ask()`` to the kernel's
+  wire has no plan or user-questions channel either; dsh's own plan-mode and
+  user-questions plugins run in the profile, and the ``valuz-kernel-bridge``
+  row of ``valuz-dsh-bundle`` (configured per session through the patch)
+  converges dsh plan state to ``session.mode`` on the first ``agent/pre-step``
+  and forwards ``ask()`` to the kernel's
   ``/kernel/v1/dsh/user-questions/{token}`` endpoint. The forward parks as
   a standard ``requires_action`` (subject ``exit_plan_mode`` for the plan
   review, ``clarifying_questions`` for ask_user_question batches) and
@@ -41,6 +44,7 @@ locks the model for the process lifetime, which matches the kernel's
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
@@ -61,6 +65,9 @@ from src.core.events import (
     Event,
     EventSink,
 )
+from src.core.hooks import AGENT_SPAWN, TOOL_CALL, TOOL_CHECK, SessionHooks, SessionRef
+from src.core.hooks.classic.config import workspace_hooks_signature
+from src.core.hooks.runtime_support import notify_compaction, runtime_session_hooks
 from src.core.tools import ToolDef, ToolKit
 from src.core.types import (
     EndTurn,
@@ -70,6 +77,7 @@ from src.core.types import (
     Session,
     StopReason,
     UserMessage,
+    is_workspace_untrusted,
 )
 from src.core.user_questions_bridge import (
     UserQuestionsBridgeRecord,
@@ -82,11 +90,20 @@ from src.runtimes.deepseek_harness.approval_bridge import (
     classify_dsh_subject,
 )
 from src.runtimes.deepseek_harness.composition import (
+    KERNEL_TOOLKIT_SERVER_NAME,
+    PROFILE_NAME,
+    SESSION_ROLE,
     DshLaunchSpec,
-    cleanup_composition,
+    cleanup_session_patch,
+    dsh_max_tokens,
+    dsh_reasoning_effort,
+    hook_bridge_endpoint,
+    launch_unavailable_reason,
+    process_env,
+    resolve_dsh_home,
     resolve_launch,
     user_questions_endpoint,
-    write_composition,
+    write_session_patch,
 )
 from src.runtimes.deepseek_harness.event_mapper import (
     DshEventMapper,
@@ -112,6 +129,8 @@ logger = logging.getLogger(__name__)
 DSH_PROVIDER_ROUTE = "deepseek-official"
 
 STATE_DIR_ENV = "VALUZ_DSH_STATE_DIR"
+#: JSON-RPC notification the Valuz bundle's stream-forwarder emits per frame.
+STREAM_NOTIFICATION = "valuz.assistant-stream"
 DEFAULT_STATE_DIR = "./dsh_state"
 
 # Cold-start grace before the first prompt of a process whose composition
@@ -178,6 +197,15 @@ class DeepSeekHarnessRuntime:
         # the bridge plugin; ``_uq_asks`` keeps every ask of the current
         # process (terminal states stay readable for poll idempotency).
         self._uq_token: str | None = None
+        # Hook bus: session reference, the kernel-side remote session for
+        # dsh's built-in tools, and the MCP proxy registration.
+        self._hook_session_ref: SessionRef | None = None
+        # Sessions of this process's subagents (dsh runs each child agent in
+        # its own session; nested children included) — their steps bill to
+        # the turn that runs them.
+        self._child_sessions: set[str] = set()
+        self._hook_bridge_token: str | None = None
+        self._mcp_proxy_session_id: str | None = None
         self._uq_asks: dict[str, _UserQuestionsAsk] = {}
         self._pending_futures: dict[
             str,
@@ -289,6 +317,79 @@ class DeepSeekHarnessRuntime:
             task.cancel()
             self._interrupt_cancels += 1
 
+    # -- Hook bus --
+
+    def _hook_session(self) -> SessionHooks:
+        """The hook bus bound to this runtime's session."""
+        return runtime_session_hooks(self, "deepseek_harness")
+
+    async def _prepare_hook_bus(self, session: Session) -> tuple[Session, dict[str, Any] | None]:
+        """Per spawn: proxy MCP and arm the dsh-side bridge while handlers listen.
+
+        Returns the session to compose the patch from (MCP servers swapped for
+        kernel-proxy entries when a ``tool.call`` handler is registered) and the
+        ``valuz-hook-bridge`` row config (``None`` when nothing listens — the
+        patch is then exactly what it was without the bus).
+        """
+        await self._release_hook_bus()
+        self._hook_session_ref = SessionRef.from_session(session)
+        hooks = self._hook_session()
+        patch_session = session
+        if session.mcp_servers and hooks.wants_tool_source(TOOL_CALL, "mcp"):
+            from src.runtimes.mcp_proxy import proxy_session_mcp
+
+            proxied = proxy_session_mcp(session.id, session.mcp_servers, hooks)
+            if proxied is None and any(
+                spec.required for spec in hooks.registry.specs_for(TOOL_CALL, hooks.session)
+            ):
+                raise RuntimeError("required MCP execution guard unavailable")
+            if proxied is not None:
+                self._mcp_proxy_session_id = session.id
+                patch_session = dataclasses.replace(session, mcp_servers=proxied)
+        # The bridge's tool.call covers dsh's own tools only (MCP calls go
+        # through the proxy above), so only a handler that could match one
+        # arms it — the MCP-only citation projection does not.
+        events = [
+            event
+            for event, wanted in (
+                (TOOL_CALL, hooks.wants_tool_source(TOOL_CALL, "native")),
+                (TOOL_CHECK, hooks.wants(TOOL_CHECK)),
+            )
+            if wanted
+        ]
+        if not events:
+            return patch_session, None
+        from src.core.hooks.remote import RemoteHookSession, register_remote_hooks
+
+        self._hook_bridge_token = register_remote_hooks(
+            RemoteHookSession(
+                hooks, "deepseek_harness", toolkit_servers=(KERNEL_TOOLKIT_SERVER_NAME,)
+            )
+        )
+        return patch_session, {
+            "endpoint": hook_bridge_endpoint(self._hook_bridge_token),
+            "events": events,
+            "required": any(
+                spec.required
+                for event in events
+                for spec in hooks.registry.specs_for(event, hooks.session)
+            ),
+        }
+
+    async def _release_hook_bus(self) -> None:
+        token = getattr(self, "_hook_bridge_token", None)
+        if token is not None:
+            from src.core.hooks.remote import unregister_remote_hooks
+
+            self._hook_bridge_token = None
+            await unregister_remote_hooks(token)
+        proxy_session_id = getattr(self, "_mcp_proxy_session_id", None)
+        if proxy_session_id is not None:
+            from src.runtimes.mcp_proxy import unregister_session_proxy
+
+            self._mcp_proxy_session_id = None
+            await unregister_session_proxy(proxy_session_id)
+
     async def close(self) -> None:
         if self._registered_session_id is not None:
             from src.core.mcp_bridge import unregister_session_toolkit
@@ -298,6 +399,7 @@ class DeepSeekHarnessRuntime:
         if self._uq_token is not None:
             unregister_user_questions_bridge(self._uq_token)
             self._uq_token = None
+        await self._release_hook_bus()
         current = asyncio.current_task()
         ask_tasks = [t for t in self._ask_tasks if t is not current and not t.done()]
         for t in ask_tasks:
@@ -318,7 +420,7 @@ class DeepSeekHarnessRuntime:
                 await client.close()
             except Exception:
                 logger.debug("dsh client close failed", exc_info=True)
-        cleanup_composition(self._config_path)
+        cleanup_session_patch(self._config_path)
         self._config_path = None
 
     async def run(self, session: Session, user_message: UserMessage) -> None:
@@ -329,6 +431,27 @@ class DeepSeekHarnessRuntime:
         self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         try:
+            from src.core.hooks.runtime_support import runtime_constraints
+            from src.runtimes.deepseek_harness.composition import dsh_entry
+
+            self._hook_session_ref = SessionRef.from_session(session)
+            self._runtime_constraints = await runtime_constraints(self, "deepseek_harness")
+            if (
+                self._runtime_constraints.require_tool_guard
+                or self._hook_session().registry.has_required(TOOL_CALL)
+            ):
+                entry = dsh_entry()
+                # The launcher is <bundle>/bin/dsh.mjs in both installed and
+                # packaged closures; validate the bridge in that same bundle.
+                bridge = entry.parent.parent / "lib/hook-bridge.js" if entry else None
+                if (
+                    bridge is None
+                    or not bridge.is_file()
+                    or "valuz-required-guard-v1" not in await asyncio.to_thread(bridge.read_text)
+                ):
+                    raise RuntimeError(
+                        "Required DSH native execution guard is unavailable; execution stopped"
+                    )
             # The composition is baked once per subprocess, but the session's
             # capability state drifts between turns: the host's pre-turn
             # re-stamp rotates MCP credentials (external connector bearers
@@ -491,6 +614,25 @@ class DeepSeekHarnessRuntime:
                 raise self._client._closed_error("dsh runtime exited mid-turn")
             assert isinstance(item, DshNotification)
             payload = item.payload
+            children = self._subagent_sessions()
+            if item.method == "subagent.started":
+                parent = str(payload.get("parentSessionId") or "")
+                child = str(payload.get("childSessionId") or "")
+                if child and (parent == self._native_session_id or parent in children):
+                    children.add(child)
+                    await self._announce_spawn()
+                continue
+            if item.method == "subagent.finished":
+                continue
+            if payload.get("sessionId") in children:
+                # A subagent's own session: its transcript stays its own (the
+                # parent shows the subagent tool call and result), but every
+                # step it takes is billed to this turn.
+                if item.method == "session.event" and isinstance(payload.get("event"), dict):
+                    usage = extract_step_usage(payload["event"])
+                    if usage is not None:
+                        outcome.add_usage(usage)
+                continue
             if payload.get("sessionId") != self._native_session_id:
                 continue
             if item.method == "session.event":
@@ -509,6 +651,8 @@ class DeepSeekHarnessRuntime:
                     if isinstance(plan_data, dict) and isinstance(plan_data.get("active"), bool):
                         self._dsh_plan_active = plan_data["active"]
                 for mapped in self._mapper.map_session_event(event):
+                    if mapped.type == "compaction":
+                        await notify_compaction(self._hook_session())
                     await self.event_sink.emit(mapped)
                 reason = extract_turn_end_reason(event)
                 if reason is not None:
@@ -519,9 +663,36 @@ class DeepSeekHarnessRuntime:
                 text = extract_assistant_text(event)
                 if text:
                     outcome.last_assistant_text = text
+            elif item.method == STREAM_NOTIFICATION:
+                # Live model stream frames (valuz-dsh-bundle stream-forwarder):
+                # since session-log v4 the token stream is no session event.
+                frame = payload.get("frame")
+                if received and isinstance(frame, dict):
+                    for mapped in self._mapper.map_stream_frame(frame):
+                        await self.event_sink.emit(mapped)
             elif item.method == "session.status":
                 if received and payload.get("status") == "idle":
                     return outcome
+
+    def _subagent_sessions(self) -> set[str]:
+        children = getattr(self, "_child_sessions", None)
+        if children is None:
+            children = self._child_sessions = set()
+        return children
+
+    async def _announce_spawn(self) -> None:
+        """``agent.spawn`` for a subagent dsh just started (observe-only)."""
+        hooks = self._hook_session()
+        if not hooks.wants(AGENT_SPAWN):
+            return
+
+        async def core(_event: Any) -> None:
+            return None
+
+        try:
+            await hooks.dispatch(AGENT_SPAWN, {"agent_type": "subagent", "description": ""}, core)
+        except Exception:  # noqa: BLE001 — an observer never breaks the turn
+            logger.warning("deepseek_harness: agent.spawn dispatch failed", exc_info=True)
 
     def _register_kernel_toolkit(self, session: Session) -> bool:
         """Publish this session's kernel ToolDefs on the mcp_bridge registry.
@@ -536,6 +707,7 @@ class DeepSeekHarnessRuntime:
         ]
         if not callable_tools:
             return False
+        from src.core.hooks import SessionRef
         from src.core.mcp_bridge import register_session_toolkit
         from src.core.tools import ExecContext
 
@@ -548,6 +720,7 @@ class DeepSeekHarnessRuntime:
                 user_id=getattr(session, "user_id", "") or "",
             ),
             tool_gate=self._plan_toolkit_gate,
+            hook_session=SessionRef.from_session(session),
         )
         self._registered_session_id = session.id
         return True
@@ -729,7 +902,37 @@ class DeepSeekHarnessRuntime:
             )
 
     async def _ensure_process(self, session: Session) -> None:
+        # One spawn at a time: opening an idle session warms the runtime
+        # (``prepare``) while the user may already be sending. Without the
+        # lock the second caller saw the half-started process (client set,
+        # native session not yet — the MCP grace sits between the two) and
+        # the turn failed. Now it waits for the spawn and reuses it.
+        lock = getattr(self, "_process_lock", None)
+        if lock is None:
+            lock = self._process_lock = asyncio.Lock()
+        async with lock:
+            await self._ensure_process_locked(session)
+
+    async def _ensure_process_locked(self, session: Session) -> None:
         if self._client is not None and self._client.is_running:
+            # An idle/background UI prepare must not erase the actual run
+            # scope with its at-rest Session (which has no Message binding).
+            if self._active_task is not asyncio.current_task():
+                return
+            # The CLI/process token stays warm; its guard context is per turn.
+            self._hook_session_ref = SessionRef.from_session(session)
+            hooks = self._hook_session()
+            if self._hook_bridge_token is not None:
+                from src.core.hooks.remote import get_remote_hooks
+
+                remote = get_remote_hooks(self._hook_bridge_token)
+                if remote is None:
+                    raise RuntimeError("Warm native hook registration is missing")
+                remote.rebind(hooks)
+            if self._mcp_proxy_session_id is not None:
+                from src.runtimes.mcp_proxy import refresh_session_proxy
+
+                await refresh_session_proxy(self._mcp_proxy_session_id, session.mcp_servers, hooks)
             return
         t_init = time.monotonic()
         old_client = self._client
@@ -739,7 +942,7 @@ class DeepSeekHarnessRuntime:
                 await old_client.close()
             except Exception:
                 logger.debug("stale dsh client close failed", exc_info=True)
-        cleanup_composition(self._config_path)
+        cleanup_session_patch(self._config_path)
         self._config_path = None
         if self._uq_token is not None:
             # A failed spawn skips ``close()`` — drop the previous spawn's
@@ -751,13 +954,16 @@ class DeepSeekHarnessRuntime:
         launch = self._launch_spec or resolve_launch()
         if launch is None:
             raise RuntimeError(
-                "deepseek_harness runtime is not launchable on this machine "
-                "(set VALUZ_DSH_RUNTIME_BIN or VALUZ_DSH_ROOT)"
+                "deepseek_harness runtime is not launchable on this machine: "
+                f"{launch_unavailable_reason()}"
             )
 
-        skills_root: str | None = None
-        if session.skills:
-            skills_root = prepare_codex_skills(self.workspace_root, session.skills)
+        if self.workspace_root:
+            # Materialized into <workspace>/.agents/skills, a default root of
+            # dsh's skill-filesystem provider — discovered with no config.
+            # Even an empty set is materialized, so entries a previous spawn
+            # wrote are cleared when the library switches them off (as codex).
+            prepare_codex_skills(self.workspace_root, list(session.skills))
 
         self._plan_capable = launch.plan_capable
         user_questions_url: str | None = None
@@ -783,36 +989,52 @@ class DeepSeekHarnessRuntime:
         # the constructor snapshot is only the fallback for callers that
         # never round-trip the session.
         model_settings = session.model_settings or self.model_settings
-        self._config_path = write_composition(
-            session,
-            config_parent_dir=launch.config_parent_dir,
-            workspace_root=self.workspace_root,
-            skills_root=skills_root,
-            model_settings=model_settings,
+        home = resolve_dsh_home(self._state_dir)
+        patch_session, hook_bridge = await self._prepare_hook_bus(session)
+        self._config_path = write_session_patch(
+            patch_session,
+            model_base_url=(
+                self.model_provider.base_url
+                if self.model_provider is not None and self.model_provider.base_url
+                else None
+            ),
             kernel_toolkit=self._register_kernel_toolkit(session),
             plan_capable=launch.plan_capable,
             user_questions_url=user_questions_url,
+            hook_bridge=hook_bridge,
         )
         self._composition_fingerprint = _composition_fingerprint(session)
 
         env = os.environ.copy()
         env.update(launch.env)
-        env["DSH_CORDIS_CONFIG"] = self._config_path
-        env["DSH_CWD"] = self.workspace_root
+        env.update(
+            process_env(
+                home=home,
+                role=SESSION_ROLE,
+                permission_mode=getattr(session, "permission_mode", None) or "full_access",
+            )
+        )
         if self.model_provider is not None:
             env["DEEPSEEK_API_KEY"] = self.model_provider.api_key
-            if self.model_provider.base_url:
-                env["DEEPSEEK_BASE_URL"] = self.model_provider.base_url
 
-        client = DshRuntimeClient(launch.argv, cwd=launch.cwd, env=env)
+        argv = (*launch.argv, "--profile", PROFILE_NAME, "--patch", self._config_path)
+        # dsh's sandbox policy anchors the workspace at process.cwd(), so the
+        # child runs in the session workspace (the SDK ``initialize`` cwd is
+        # only recorded on session headers).
+        cwd = launch.cwd or self.workspace_root or None
+        client = DshRuntimeClient(argv, cwd=cwd, env=env)
         await client.start()
-        max_tokens = model_settings.max_tokens if model_settings is not None else None
+        max_tokens = dsh_max_tokens(
+            self.model, model_settings.max_tokens if model_settings is not None else None
+        )
+        effort = model_settings.effort if model_settings is not None else None
         try:
             await client.initialize(
                 cwd=self.workspace_root or os.getcwd(),
                 provider=DSH_PROVIDER_ROUTE,
                 model=self.model,
                 max_tokens=max_tokens,
+                reasoning_effort=dsh_reasoning_effort(effort),
             )
         except BaseException:
             await client.close()
@@ -826,6 +1048,7 @@ class DeepSeekHarnessRuntime:
             if grace > 0:
                 await asyncio.sleep(grace)
         self._process_turns = 0
+        self._subagent_sessions().clear()
         # Fresh native session per process: the SDK server cannot rehydrate a
         # persisted id ("id collision"), so each process gets a new thread and
         # the transcript sidecar carries the history across.
@@ -947,10 +1170,16 @@ def _composition_fingerprint(session: Session) -> str:
     including headers — a changed credential must change the digest — and
     ``model_settings`` (effort lands in the llm adapter row, max_tokens in
     ``initialize``), so a live-reconciled PATCH ``/effort`` reaches the
-    runtime on the next turn instead of staying baked forever.
+    runtime on the next turn instead of staying baked forever. The
+    workspace's classic hooks are read once at spawn, so their files and the
+    workspace trust count too.
     """
     payload = json.dumps(
         {
+            "classic_hooks": [
+                is_workspace_untrusted(session),
+                workspace_hooks_signature(session.cwd),
+            ],
             "instructions": session.instructions,
             "skills": list(session.skills),
             "mcp": [asdict(server) for server in session.mcp_servers],

@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
-from src.runtimes.network_egress import EgressRegistrationError, provider_test_egress
+
+from valuz_agent.boot.kernel import EgressRegistrationError, provider_test_egress
 
 logger = logging.getLogger(__name__)
 

@@ -45,7 +45,10 @@ export const FormDialog = ({
   className,
 }: FormDialogProps) => (
   <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className={cn(maxWidthClass, className)}>
+    <DialogContent
+      className={cn(maxWidthClass, className)}
+      {...(description ? {} : { "aria-describedby": undefined })}
+    >
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
         {description && <DialogDescription>{description}</DialogDescription>}

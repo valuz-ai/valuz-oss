@@ -186,8 +186,10 @@ chrome-devtools-mcp / dsh-runtime pattern). Owning the deploy-root manifest
 means owning the plugin set — that is how dsh got `dsh-mcp-client` before
 upstream shipped it. Pin one coherent release wave; pre-release registries
 drift (dsh's npm `latest` tag pointed at a wave with a renamed-away peer).
-Watch pinned floors: Electron 36's embedded Node is 22.19.0, exactly dsh's
-minimum.
+Watch pinned runtimes: dsh's native addon (`node-addon-require-builtin`)
+fingerprints the Electron it runs under and accepts only exact releases, so
+the desktop pins the Electron dsh's own desktop locks (44.0.0, embedded Node
+24.18.1, for dsh 0.2.1).
 
 ## Phase 5 — Close the loop upstream
 

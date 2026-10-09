@@ -1,25 +1,10 @@
 {
   "name": "valuz-dsh-runtime",
   "private": true,
-  "description": "Valuz deploy root for the DeepSeek Harness (dsh) SDK runtime. This manifest IS the plugin closure the deepseek_harness kernel runtime can mount: packaged-bin.js resolves bare Cordis plugins from the node_modules this file materializes, so adding a plugin to the distribution means adding one dependency line here and refreshing the lockfile (scripts/vendor-dsh-runtime.sh). Only the pins are committed; node_modules is fetched at build time (npm ci) and staged into the desktop bundle's libexec, run under Electron-as-node (same pattern as vendor/chrome-devtools-mcp). Unlike the upstream deepseek-harness-runtime-bin closure, this one includes @deepseek-ai/dsh-mcp-client — without it every session carrying MCP servers fails to boot.",
+  "description": "Valuz deploy root for the DeepSeek Harness (dsh) runtime: the upstream dsh distribution as published (@deepseek-ai/dsh — launcher, app-boot, plugin manager, every shipped bundle) plus the Valuz layer as an ordinary dsh bundle (valuz-plugins/valuz-dsh-bundle). Kernel sessions boot the managed profile `valuz` (dsh-base + dsh-web-app + dsh-sdk-app + valuz-dsh-bundle + whatever the user installed the dsh way) in the session role; the desktop's resident manager host boots the same profile in the manager role. Staying current with upstream is one version: bash scripts/dsh-upstream-sync.sh moves the @deepseek-ai/dsh pin and the bundle's peer pin together, refreshes the lockfile and the drift fixtures, then runs the compatibility tests. Only the pins + lockfile are committed; node_modules is fetched at build time (npm ci) and staged into the desktop bundle's libexec, run under Electron-as-node. The desktop's Electron is pinned to the exact version dsh's own desktop locks (apps/desktop in the dsh repo): dsh's native addon node-addon-require-builtin fingerprints the runtime and accepts only the exact Electron releases it was built against.",
   "dependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-bash-local": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-compaction-basic": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-fs-local": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-fs-observation-policy": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-plan-mode": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-sdk-jsonrpc-demo": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-subprocess-local": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-token-meter": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tool-ask-user": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6",
-    "valuz-dsh-kernel-bridge": "file:valuz-plugins/kernel-bridge"
+    "@deepseek-ai/dsh": "0.2.1-alpha.1",
+    "valuz-dsh-bundle": "file:valuz-plugins/valuz-dsh-bundle",
+    "pnpm": "11.7.0"
   }
 }

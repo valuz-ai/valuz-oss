@@ -31,6 +31,9 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
+      // The renderer fetches previews (docx/xlsx/pptx/pdf) from this scheme;
+      // Electron 44, unlike 36, refuses that cross-origin read without it.
+      corsEnabled: true,
       stream: true,
       bypassCSP: true,
     },

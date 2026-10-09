@@ -10,6 +10,7 @@
 #       ├── valuz-server           # backend entrypoint binary
 #       ├── _internal/             # PyInstaller runtime (sibling of binary)
 #       ├── rg                     # ripgrep helper, used by backend
+#       ├── plugin-sdk/            # valuz-plugin CLI distribution (Phase B1)
 #       └── valuz-tui/             # (later)
 #
 # Usage:
@@ -20,6 +21,7 @@
 #   ./scripts/build-desktop.sh --skip-backend        # frontend + CLI only
 #   ./scripts/build-desktop.sh --skip-frontend       # backend + CLI only
 #   ./scripts/build-desktop.sh --skip-cli            # backend + frontend only
+#   ./scripts/build-desktop.sh --skip-plugin-sdk     # no valuz-plugin CLI in libexec
 #   ./scripts/build-desktop.sh --verbose             # verbose output
 #
 # Editions (per docs/STRUCTURE.md §"Distribution Model"):
@@ -60,6 +62,7 @@ SKIP_FRONTEND=false
 SKIP_CLI=false
 SKIP_RG=false
 SKIP_NODE=false
+SKIP_PLUGIN_SDK=false
 SKIP_NOTICES=false
 SIGNED=false
 VERBOSE=false
@@ -73,6 +76,7 @@ for arg in "$@"; do
     --skip-cli)      SKIP_CLI=true ;;
     --skip-rg)       SKIP_RG=true ;;
     --skip-node)     SKIP_NODE=true ;;
+    --skip-plugin-sdk) SKIP_PLUGIN_SDK=true ;;
     --skip-notices)  SKIP_NOTICES=true ;;
     --signed)        SIGNED=true ;;
     --verbose)       VERBOSE=true ;;
@@ -80,7 +84,7 @@ for arg in "$@"; do
     --publish)       PUBLISH="always" ;;
     --edition=*)     EDITION="${arg#--edition=}" ;;
     --help|-h)
-      echo "Usage: $0 [--edition=oss|enterprise|finance] [--signed] [--skip-backend] [--skip-frontend] [--skip-cli] [--skip-rg] [--skip-node] [--skip-notices] [--verbose] [--publish[=always|never|onTag]]"
+      echo "Usage: $0 [--edition=oss|enterprise|finance] [--signed] [--skip-backend] [--skip-frontend] [--skip-cli] [--skip-rg] [--skip-node] [--skip-plugin-sdk] [--skip-notices] [--verbose] [--publish[=always|never|onTag]]"
       exit 0
       ;;
     *)
@@ -147,6 +151,17 @@ esac
 # injected separately via VALUZ_EDITION). Result example: ``darwin-arm64``.
 export VALUZ_DIST_TAG="${PLATFORM_TAG}-${ARCH_TAG}"
 
+# Resolve native backend wheels against the product floor, not the build host.
+UV_TARGET_ARGS=()
+if [ "$PLATFORM_TAG" = "darwin" ]; then
+  export MACOSX_DEPLOYMENT_TARGET=15.0
+  case "$ARCH_TAG" in
+    arm64) UV_TARGET_ARGS=(--python-platform aarch64-apple-darwin) ;;
+    amd64) UV_TARGET_ARGS=(--python-platform x86_64-apple-darwin) ;;
+    *) die "unsupported macOS Python architecture: $ARCH_TAG" ;;
+  esac
+fi
+
 log "Platform: $PLATFORM ($ARCH_RAW) | edition=$EDITION | dist tag=$VALUZ_DIST_TAG"
 
 # ============================================================
@@ -163,10 +178,10 @@ if ! $SKIP_BACKEND; then
 
   # Ensure dependencies are synced
   log "Syncing backend dependencies..."
-  uv sync --quiet
+  uv sync --quiet "${UV_TARGET_ARGS[@]}"
 
   # Install PyInstaller if not present
-  if ! uv run python -c "import PyInstaller" 2>/dev/null; then
+  if ! uv run "${UV_TARGET_ARGS[@]}" python -c "import PyInstaller" 2>/dev/null; then
     log "Installing PyInstaller..."
     uv add --dev pyinstaller --quiet
   fi
@@ -175,7 +190,7 @@ if ! $SKIP_BACKEND; then
   # --distpath/--workpath are CWD-relative (we're in backend/), so output stays at
   # backend/dist regardless of where the spec file lives.
   log "Running PyInstaller..."
-  uv run pyinstaller scripts/valuz_agent.spec \
+  uv run "${UV_TARGET_ARGS[@]}" pyinstaller scripts/valuz_agent.spec \
     --clean \
     --noconfirm \
     --distpath dist \
@@ -214,39 +229,20 @@ else
 fi
 
 # ============================================================
-# Phase A1: Override bundled Claude Code CLI (Linux only)
+# Phase A1: Restore SDK-paired Claude CLI (Linux only)
 # ============================================================
-# PyInstaller stages whatever `claude` ships inside the `claude_agent_sdk`
-# Python package (~220 MB) at `_internal/claude_agent_sdk/_bundled/claude`.
-# On Linux we overwrite that with the pinned official Claude Code release from
-# github.com/anthropics/claude-code — the SDK's bundled binary is not what we
-# want shipped. macOS/Windows keep the SDK's binary. No --skip flag: this is
-# a no-op on non-Linux hosts and when the bundled binary wasn't staged
-# (--skip-backend, or claude_agent_sdk changes its layout).
+# Restore original native bytes from the SDK installed in the selected uv
+# project after PyInstaller rewrites/strips ELF files. Keep the SDK/CLI pair;
+# missing binaries or unsuccessful bounded startup must fail the build.
 
 if [ "$PLATFORM_TAG" = "linux" ] && ! $SKIP_BACKEND; then
-  log "=== Phase A1: Override bundled Claude Code CLI (Linux only) ==="
-
-  # Map Valuz dist arch → Claude Code release-asset token. The amd64→x64
-  # rename is the same one download-node.sh applies for the Node binary.
-  case "$ARCH_TAG" in
-    amd64) CLAUDE_TARGET="linux-x64" ;;
-    arm64) CLAUDE_TARGET="linux-arm64" ;;
-    *)     die "No Claude Code release asset for arch=$ARCH_TAG on Linux" ;;
-  esac
-
+  log "=== Phase A1: Restore original SDK-paired Linux CLI ==="
   CLAUDE_BIN="$RESOURCES_LIBEXEC/_internal/claude_agent_sdk/_bundled/claude"
-  if [ ! -f "$CLAUDE_BIN" ]; then
-    warn "Expected PyInstaller-staged claude not found at $CLAUDE_BIN — skipping override"
-  else
-    log "Overriding Linux Claude Code CLI → v${CLAUDE_CODE_VERSION:-2.1.185} ($CLAUDE_TARGET)"
-    bash "$SCRIPT_DIR/download-claude-code.sh" \
-      --target="$CLAUDE_TARGET" \
-      --out="$CLAUDE_BIN"
-    log "Claude Code override complete: $CLAUDE_BIN ($(du -h "$CLAUDE_BIN" | cut -f1))"
-  fi
+  uv run --project "$BACKEND_DIR" python "$SCRIPT_DIR/stage-sdk-claude.py" \
+    --destination "$CLAUDE_BIN"
+  log "SDK-paired Linux CLI bytes and startup verified"
 else
-  log "=== Phase A1: Skipping Claude Code override (non-Linux or --skip-backend) ==="
+  log "=== Phase A1: Skipping SDK CLI restoration (non-Linux or --skip-backend) ==="
 fi
 
 # ============================================================
@@ -354,10 +350,10 @@ fi
 # ============================================================
 # Phase A5: Stage DeepSeek Harness runtime (vendored npm closure)
 # ============================================================
-# The kernel's deepseek_harness runtime spawns the dsh SDK runtime as
-# `node <packaged-bin.js>` from a vendored deploy-root closure
-# (backend/vendor/dsh-runtime — the manifest defines the plugin set,
-# including dsh-mcp-client, which the upstream runtime-bin closure lacks).
+# The kernel's deepseek_harness runtime (and the resident plugin-manager
+# host) spawn `node <valuz-dsh-bundle/bin/dsh.mjs>` — the upstream dsh
+# distribution's CLI with the bundled pnpm — from the vendored deploy-root
+# closure (backend/vendor/dsh-runtime: @deepseek-ai/dsh + valuz-dsh-bundle).
 # Same distribution pattern as chrome-devtools-mcp above: only pins +
 # lockfile are committed, `npm ci` fetches the tree at build time, and the
 # packaged app runs it under its own Electron binary as plain Node
@@ -368,7 +364,7 @@ if ! $SKIP_NODE; then
   log "=== Phase A5: Staging DeepSeek Harness runtime (dsh closure) ==="
 
   DSH_VENDOR_DIR="$BACKEND_DIR/vendor/dsh-runtime"
-  DSH_ENTRY_REL="@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+  DSH_ENTRY_REL="valuz-dsh-bundle/bin/dsh.mjs"
   [ -f "$DSH_VENDOR_DIR/package-lock.json" ] || \
     die "Missing $DSH_VENDOR_DIR/package-lock.json. Refresh: bash scripts/vendor-dsh-runtime.sh --update"
   log "Installing dsh runtime closure (npm ci) ..."
@@ -390,6 +386,28 @@ if ! $SKIP_NODE; then
   log "dsh runtime staged at: $DSH_TARGET/node_modules ($(du -sh "$DSH_TARGET" | cut -f1))"
 else
   log "=== Phase A5: Skipping dsh runtime staging (--skip-node) ==="
+fi
+
+# ============================================================
+# Phase A6: Stage the bundled session Python
+# ============================================================
+# Agent sessions call `valuz-python` — CPython plus the libraries the bundled
+# skills import (backend/vendor/python-runtime; the Office skills need
+# python-docx / python-pptx / openpyxl / pandas / Pillow). The vendor script
+# builds a relocatable python-build-standalone CPython for this build's
+# platform with hash-checked wheels; the app ships it as-is under
+# libexec/python-runtime and sidecar.ts sets VALUZ_PYTHON_RUNTIME.
+# SKIP_PYTHON_RUNTIME=1 skips it (the Office skills then report it missing).
+
+if [ "${SKIP_PYTHON_RUNTIME:-0}" != "1" ]; then
+  log "=== Phase A6: Staging session Python runtime ==="
+  bash "$ROOT_DIR/scripts/vendor-python-runtime.sh" --target "$PLATFORM_TAG-$ARCH_TAG"
+  PY_RUNTIME_TARGET="$RESOURCES_LIBEXEC/python-runtime"
+  rm -rf "$PY_RUNTIME_TARGET"
+  cp -R "$BACKEND_DIR/vendor/python-runtime/dist" "$PY_RUNTIME_TARGET"
+  log "session python staged at: $PY_RUNTIME_TARGET ($(du -sh "$PY_RUNTIME_TARGET" | cut -f1))"
+else
+  log "=== Phase A6: Skipping session Python runtime (SKIP_PYTHON_RUNTIME=1) ==="
 fi
 
 # ============================================================
@@ -418,6 +436,33 @@ if ! $SKIP_FRONTEND; then
       "$RESOURCES_DIR/THIRD-PARTY-NOTICES.txt"
   else
     log "Skipping third-party notices generation (--skip-notices)"
+  fi
+
+  # --------------------------------------------------------------
+  # Phase B1: Stage the plugin SDK CLI (valuz-plugin) into libexec/
+  # --------------------------------------------------------------
+  # Agent sessions call `valuz-plugin` (create / build / test / validate /
+  # pack a third-party plugin; backend/valuz_agent/infra/session_tools.py).
+  # The packaged app has no monorepo, so it ships the self-contained
+  # distribution: the CLI + build core + templates + the SDK runtime
+  # pre-bundled from the workspace just installed above, plus the pinned
+  # esbuild/React from backend/vendor/plugin-sdk-cli (npm ci). Runs under the
+  # app's own Electron as Node like the other closures (sidecar.ts sets
+  # VALUZ_PLUGIN_SDK_ENTRY). esbuild's native binary is a per-platform optional
+  # dependency: --target installs the one for THIS build's dist tag (npm
+  # --os/--cpu, scripts skipped), not the build host's — the script fails if
+  # the expected @esbuild/<os>-<cpu> did not land.
+  if ! $SKIP_NODE && ! $SKIP_PLUGIN_SDK; then
+    log "=== Phase B1: Staging plugin SDK CLI (valuz-plugin) ==="
+    command -v npm >/dev/null 2>&1 || die "npm is required for the plugin SDK CLI (Phase B1)."
+    PLUGIN_SDK_TARGET="$RESOURCES_LIBEXEC/plugin-sdk"
+    node "$SCRIPT_DIR/build-plugin-sdk-dist.mjs" \
+      --out "$PLUGIN_SDK_TARGET" --install --target "$PLATFORM_TAG-$ARCH_TAG" || \
+      die "plugin SDK CLI distribution failed (scripts/build-plugin-sdk-dist.mjs)"
+    [ -f "$PLUGIN_SDK_TARGET/bin/valuz-plugin.mjs" ] || die "plugin SDK CLI entry missing after staging"
+    log "plugin SDK CLI staged at: $PLUGIN_SDK_TARGET ($(du -sh "$PLUGIN_SDK_TARGET" | cut -f1))"
+  else
+    log "=== Phase B1: Skipping plugin SDK CLI (--skip-node / --skip-plugin-sdk) ==="
   fi
 
   # Build workspace packages + desktop app

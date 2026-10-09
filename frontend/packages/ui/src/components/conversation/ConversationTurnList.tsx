@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useEffect,
   useLayoutEffect,
@@ -501,7 +502,7 @@ type DisplayBlock =
   // Tool block whose rendering is overridden by the caller (e.g. the
   // SkillSubmissionCard for ``submit_skill`` tool_use). Lifted out of
   // the segment fold so the user can actually see and interact with it.
-  | { kind: "tool-overridden"; tool: PrototypeToolCall; node: ReactNode }
+  | { kind: "tool-overridden"; tool: PrototypeToolCall; node: ReactNode; trailing?: boolean }
   // Aggregated per-turn file-change card. Always sits at the END of the
   // turn (after every segment) and replaces the per-tool ToolCallCard
   // rendering for Edit / MultiEdit / Write blocks within that turn.
@@ -525,8 +526,11 @@ type DisplayBlock =
 const SegmentDetails = ({
   items,
   inProgress = false,
+  wrapToolCall,
 }: {
   items: ProcessingItem[];
+  /** See ``TurnRowProps.wrapToolCall``. */
+  wrapToolCall?: TurnRowProps["wrapToolCall"];
   /** ``true`` when this is the turn's currently-running segment (the
    * agent is still firing tools inside it). Drives the shimmer sweep on
    * the summary phrase so the user sees the count is "still updating",
@@ -614,6 +618,10 @@ const SegmentDetails = ({
               >
                 {item.text}
               </div>
+            ) : wrapToolCall ? (
+              <Fragment key={`tool-${item.tool.id}`}>
+                {wrapToolCall(item.tool, <ToolCallCard tc={item.tool} />)}
+              </Fragment>
             ) : (
               <ToolCallCard key={`tool-${item.tool.id}`} tc={item.tool} />
             ),
@@ -625,7 +633,7 @@ const SegmentDetails = ({
 };
 
 /** Single unified marker for a context compaction (``/compact`` or
- *  autocompact), for either runtime. Intentionally label-only — the kernel
+ *  autocompact), for any of the four runtimes. Intentionally label-only — the kernel
  *  ``compaction`` event's raw data is not parsed for display here. */
 const CompactionDivider = () => {
   const { t } = useI18n();
@@ -647,6 +655,7 @@ const CompactionDivider = () => {
 const buildDisplayBlocks = (
   turn: ConversationTurn,
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null,
+  isToolCardTrailing?: (tool: PrototypeToolCall) => boolean,
 ): DisplayBlock[] => {
   // Edit / MultiEdit / Write tool blocks render through the regular
   // per-segment ToolCallCard path AND get aggregated into the turn-level
@@ -677,6 +686,7 @@ const buildDisplayBlocks = (
   // Phase 3: walk blocks, accumulate one segment at a time. Each new
   // ``assistant`` block flushes the in-flight segment and opens a new one.
   const result: DisplayBlock[] = [];
+  const trailingCards: DisplayBlock[] = [];
   let cur: {
     header: string | null;
     items: ProcessingItem[];
@@ -717,10 +727,12 @@ const buildDisplayBlocks = (
       // then leave ``cur`` empty so the next assistant / tool starts a
       // fresh segment after the override card.
       flush();
-      result.push({
+      const trailing = isToolCardTrailing?.(block.tool) ?? false;
+      (trailing ? trailingCards : result).push({
         kind: "tool-overridden",
         tool: block.tool,
         node: overrideMap.get(block.tool.id)!,
+        trailing,
       });
       continue;
     }
@@ -796,6 +808,9 @@ const buildDisplayBlocks = (
     }
     break;
   }
+
+  // Confirmation cards belong to the completed reply, before its file summary.
+  result.push(...trailingCards);
 
   // Phase 5: aggregate file changes from the turn's Edit/MultiEdit/Write
   // tool blocks (the originals from ``turn.blocks``, not the filtered
@@ -873,9 +888,12 @@ function buildTrailingCitationContext(
 const UserMessageActions = ({
   text,
   timestamp,
+  extraActions,
 }: {
   text: string;
   timestamp?: number;
+  /** Host-supplied controls appended after the copy button. */
+  extraActions?: ReactNode;
 }) => {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -925,6 +943,7 @@ const UserMessageActions = ({
           <Copy className="h-3.5 w-3.5" />
         )}
       </TurnActionButton>
+      {extraActions}
     </div>
   );
 };
@@ -990,6 +1009,8 @@ interface TurnRowProps {
    * Used by the conversation page to render the SkillSubmissionCard
    * for ``submit_skill`` tool_use events. */
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
+  /** Show selected cards after the completed answer, before the file summary and actions. */
+  isToolCardTrailing?: (tool: PrototypeToolCall) => boolean;
   /**
    * Host-supplied controls appended to a turn's action row (share, export…).
    * Returning null adds nothing, so OSS renders exactly as before.
@@ -1038,6 +1059,23 @@ interface TurnRowProps {
    * contract as ``renderTurnActions``.
    */
   renderPlanActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * Host-supplied controls appended to a USER message's action row (after
+   * copy). Called only for rows that render that row (``turn.userText``).
+   * Returning null adds nothing. External state it depends on must be folded
+   * into ``turnActionsKey`` — same memo contract as ``renderTurnActions``.
+   */
+  renderUserMessageActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * Host content rendered LAST in a turn, after the error card. ``isLatest`` /
+   * ``inFlight`` describe the row at render time (the latest row re-renders on
+   * every change, so both stay current). Returning null adds nothing. External
+   * state it depends on must be folded into ``turnActionsKey``.
+   */
+  renderTurnTail?: (
+    turn: ConversationTurn,
+    state: { isLatest: boolean; inFlight: boolean },
+  ) => ReactNode | null;
   /** Predicate marking an overridden tool card as *foldable* — it collapses
    * away with the process trail when the turn ends (visible while running or
    * when the turn is expanded), instead of staying pinned at its position.
@@ -1057,6 +1095,29 @@ interface TurnRowProps {
   onOpenAttachment?: (path: string) => void;
   /** See ``ConversationTurnListProps.startingRuntime``. */
   startingRuntime?: RuntimeStartLocation | null;
+  /**
+   * Wrap every tool card — the generic one and a ``renderToolCall`` override
+   * alike — e.g. in a host slot whose contributions may adjust or extend it.
+   * Omitted → each card renders as is. External state it depends on must be
+   * folded into ``turnActionsKey`` — same memo contract as
+   * ``renderTurnActions``.
+   */
+  wrapToolCall?: (tool: PrototypeToolCall, card: ReactNode) => ReactNode;
+  /** Wrap the user's message bubble. Same contract as ``wrapToolCall``. */
+  wrapUserMessage?: (turn: ConversationTurn, message: ReactNode) => ReactNode;
+  /** Wrap the full input row, including leading controls, attachments and actions.
+   * Same memoization contract as wrapToolCall; the assistant row is independent. */
+  wrapUserTurn?: (turn: ConversationTurn, row: ReactNode) => ReactNode;
+  /**
+   * Wrap an assistant message (the text of one segment; ``messageId`` is the
+   * kernel message it belongs to, when known). Same contract as
+   * ``wrapToolCall``.
+   */
+  wrapAssistantMessage?: (
+    turn: ConversationTurn,
+    messageId: string | undefined,
+    message: ReactNode,
+  ) => ReactNode;
 }
 
 const TurnRow = memo(
@@ -1069,6 +1130,7 @@ const TurnRow = memo(
     onRetry,
     retryCount,
     renderToolCall,
+    isToolCardTrailing,
     renderTurnActions,
     turnRating,
     onRateTurn,
@@ -1076,6 +1138,8 @@ const TurnRow = memo(
     showTokenUsage,
     renderTurnLeading,
     renderPlanActions,
+    renderUserMessageActions,
+    renderTurnTail,
     isToolCardFoldable,
     onRevealFile,
     isLocalFileHref,
@@ -1083,13 +1147,17 @@ const TurnRow = memo(
     onCitationClick,
     onOpenAttachment,
     startingRuntime,
+    wrapToolCall,
+    wrapUserMessage,
+    wrapUserTurn,
+    wrapAssistantMessage,
   }: TurnRowProps) {
     const { t } = useI18n();
     const inFlight = sending && isLatest;
     const lastBlock = turn.blocks[turn.blocks.length - 1];
     const showStreamingCaret = inFlight && lastBlock?.kind === "assistant";
     const showLoadingDots = inFlight && !turn.failedMessage;
-    const displayBlocks = buildDisplayBlocks(turn, renderToolCall);
+    const displayBlocks = buildDisplayBlocks(turn, renderToolCall, isToolCardTrailing);
     const assistantText = turn.blocks
       .filter((b) => b.kind === "assistant")
       .map((b) => b.text)
@@ -1172,6 +1240,7 @@ const TurnRow = memo(
         // boundary would land at ``displayBlocks.length`` and the actual
         // answer segment(s) before it would get folded away.
         if (b.kind === "turn-diff-summary") continue;
+        if (b.kind === "tool-overridden" && b.trailing) continue;
         // The compaction divider is meta — always visible, never folded —
         // so it must be transparent to this walk (same as the diff summary).
         if (b.kind === "compaction") continue;
@@ -1289,50 +1358,70 @@ const TurnRow = memo(
       : isStartingUp
         ? formatRuntimeStarting(startingRuntime, startupElapsedMs)
         : formatTurnElapsed(processedElapsedMs);
+    // Host wrappers (``wrapUserMessage`` / ``wrapAssistantMessage``); absent,
+    // the message element is returned untouched.
+    const wrapUser = (message: ReactNode): ReactNode =>
+      wrapUserMessage ? wrapUserMessage(turn, message) : message;
+    const wrapAssistant = (
+      messageId: string | undefined,
+      message: ReactNode,
+    ): ReactNode =>
+      wrapAssistantMessage
+        ? wrapAssistantMessage(turn, messageId, message)
+        : message;
+    const wrapUserRow = (row: ReactNode): ReactNode =>
+      wrapUserTurn ? wrapUserTurn(turn, row) : row;
     return (
       <div data-conversation-turn className="space-y-[26px]">
         {/* Host control rendered BEFORE the messages — a selection checkbox
             belongs beside the message it selects, not down in the action row
             where it reads as another action. */}
-        {turn.userText || (turn.attachments && turn.attachments.length > 0) ? (
-          <div className="flex items-start gap-2">
-            {renderTurnLeading?.(turn, "user")}
-            <div className="group flex min-w-0 flex-1 flex-col items-end gap-1">
-              {turn.userText ? (
-                <div className="max-w-[78%]">
-                  <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
-                    <UserMessageBody
-                      text={turn.userText}
-                      skillsBySlug={skillsBySlug}
+        {turn.userText || (turn.attachments && turn.attachments.length > 0)
+          ? wrapUserRow(
+              <div className="flex items-start gap-2">
+                {renderTurnLeading?.(turn, "user")}
+                <div className="group flex min-w-0 flex-1 flex-col items-end gap-1">
+                  {turn.userText
+                    ? wrapUser(
+                        <div className="max-w-[78%]">
+                          <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
+                            <UserMessageBody
+                              text={turn.userText}
+                              skillsBySlug={skillsBySlug}
+                            />
+                          </div>
+                        </div>,
+                      )
+                    : null}
+                  {turn.attachments?.map((att, i) => (
+                    <FileUploadMessage
+                      key={`att-${turn.id}-${i}`}
+                      fileName={att.name}
+                      fileSize={
+                        att.size > 0 ? formatFileSize(att.size) : undefined
+                      }
+                      status="ready"
+                      // Both conditions matter: a host that cannot resolve files
+                      // passes no handler, and a turn recorded before the path was
+                      // kept has nothing to open.
+                      onOpen={
+                        onOpenAttachment && att.path
+                          ? () => onOpenAttachment(att.path as string)
+                          : undefined
+                      }
                     />
-                  </div>
+                  ))}
+                  {turn.userText ? (
+                    <UserMessageActions
+                      text={turn.userText}
+                      timestamp={turn.userTimestamp}
+                      extraActions={renderUserMessageActions?.(turn)}
+                    />
+                  ) : null}
                 </div>
-              ) : null}
-              {turn.attachments?.map((att, i) => (
-                <FileUploadMessage
-                  key={`att-${turn.id}-${i}`}
-                  fileName={att.name}
-                  fileSize={att.size > 0 ? formatFileSize(att.size) : undefined}
-                  status="ready"
-                  // Both conditions matter: a host that cannot resolve files
-                  // passes no handler, and a turn recorded before the path was
-                  // kept has nothing to open.
-                  onOpen={
-                    onOpenAttachment && att.path
-                      ? () => onOpenAttachment(att.path as string)
-                      : undefined
-                  }
-                />
-              ))}
-              {turn.userText ? (
-                <UserMessageActions
-                  text={turn.userText}
-                  timestamp={turn.userTimestamp}
-                />
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+              </div>,
+            )
+          : null}
 
         <div className="flex items-start gap-3">
           {renderTurnLeading?.(turn, "assistant")}
@@ -1412,14 +1501,24 @@ const TurnRow = memo(
               }
               if (
                 block.kind === "tool-overridden" &&
+                block.trailing &&
+                inFlight
+              )
+                return null;
+              if (
+                block.kind === "tool-overridden" &&
                 !isToolCardFoldable?.(block.tool)
               ) {
-                // Pinned caller card (agent/automation proposals, SkillSubmission,
-                // workflow & task cards…). It appears mid-process but must stay at
-                // its original position after the turn ends — render BEFORE the
-                // fold check (like the compaction divider) so the auto-fold never
-                // hides it.
-                return <div key={`tool-${block.tool.id}`}>{block.node}</div>;
+                // Pinned cards stay visible when the process trail folds.
+                // Trailing cards have already moved after the completed answer;
+                // other proposals keep their original timeline position.
+                return (
+                  <div key={`tool-${block.tool.id}`}>
+                    {wrapToolCall
+                      ? wrapToolCall(block.tool, block.node)
+                      : block.node}
+                  </div>
+                );
               }
               // When the turn-level header is folded, hide every block
               // before ``trailingContentStart`` — that's the process work
@@ -1433,7 +1532,13 @@ const TurnRow = memo(
                 // the fold check, so it collapses away with the process trail
                 // once the turn ends; visible while running or when the user
                 // expands the turn.
-                return <div key={`tool-${block.tool.id}`}>{block.node}</div>;
+                return (
+                  <div key={`tool-${block.tool.id}`}>
+                    {wrapToolCall
+                      ? wrapToolCall(block.tool, block.node)
+                      : block.node}
+                  </div>
+                );
               }
               if (block.kind === "turn-diff-summary") {
                 return (
@@ -1466,36 +1571,40 @@ const TurnRow = memo(
                   // belongs to — the same identity the citation system uses.
                   data-assistant-message-id={block.messageId ?? undefined}
                 >
-                  {block.header !== null ? (
-                    <MarkdownContent
-                      content={block.header}
-                      isAnimating={animateHeader}
-                      isLocalFileHref={isLocalFileHref}
-                      onLocalFileLinkClick={onLocalFileLinkClick}
-                      citationBundle={block.citationBundle}
-                      messageId={block.messageId}
-                      onCitationClick={onCitationClick}
-                      citationDisplayOrderOverride={
-                        isTrailingAnswer
-                          ? trailingCitationContext.displayOrder
-                          : undefined
-                      }
-                      citationLookupBundleOverride={
-                        isTrailingAnswer
-                          ? trailingCitationContext.bundle
-                          : undefined
-                      }
-                      citationMessageIdByCitationIdOverride={
-                        isTrailingAnswer
-                          ? trailingCitationContext.messageIdByCitationId
-                          : undefined
-                      }
-                      showCitationSources={!isTrailingAnswer}
-                    />
-                  ) : null}
+                  {block.header !== null
+                    ? wrapAssistant(
+                        block.messageId,
+                        <MarkdownContent
+                          content={block.header}
+                          isAnimating={animateHeader}
+                          isLocalFileHref={isLocalFileHref}
+                          onLocalFileLinkClick={onLocalFileLinkClick}
+                          citationBundle={block.citationBundle}
+                          messageId={block.messageId}
+                          onCitationClick={onCitationClick}
+                          citationDisplayOrderOverride={
+                            isTrailingAnswer
+                              ? trailingCitationContext.displayOrder
+                              : undefined
+                          }
+                          citationLookupBundleOverride={
+                            isTrailingAnswer
+                              ? trailingCitationContext.bundle
+                              : undefined
+                          }
+                          citationMessageIdByCitationIdOverride={
+                            isTrailingAnswer
+                              ? trailingCitationContext.messageIdByCitationId
+                              : undefined
+                          }
+                          showCitationSources={!isTrailingAnswer}
+                        />,
+                      )
+                    : null}
                   {block.items.length > 0 ? (
                     <SegmentDetails
                       items={block.items}
+                      wrapToolCall={wrapToolCall}
                       // The agent is still firing tools inside the LAST
                       // segment of an in-flight turn. Earlier segments
                       // are already "closed" because the agent moved on
@@ -1588,6 +1697,8 @@ const TurnRow = memo(
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
               />
             ) : null}
+
+            {renderTurnTail?.(turn, { isLatest, inFlight })}
           </div>
         </div>
       </div>
@@ -1624,6 +1735,8 @@ interface ConversationTurnListProps {
   ) => void;
   /** See ``TurnRowProps.renderToolCall``. */
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
+  /** Show selected cards after the completed answer, before the file summary and actions. */
+  isToolCardTrailing?: (tool: PrototypeToolCall) => boolean;
   /** See ``TurnRowProps.renderTurnActions``. */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
   /** Current 👍/👎 keyed by ``turn.messageId`` (docs/design/feedback-signals.md). */
@@ -1662,8 +1775,20 @@ interface ConversationTurnListProps {
   ) => ReactNode | null;
   /** See ``TurnRowProps.renderPlanActions``. */
   renderPlanActions?: (turn: ConversationTurn) => ReactNode | null;
+  /** See ``TurnRowProps.renderUserMessageActions``. */
+  renderUserMessageActions?: (turn: ConversationTurn) => ReactNode | null;
+  /** See ``TurnRowProps.renderTurnTail``. */
+  renderTurnTail?: TurnRowProps["renderTurnTail"];
   /** See ``TurnRowProps.isToolCardFoldable``. */
   isToolCardFoldable?: (tool: PrototypeToolCall) => boolean;
+  /** See ``TurnRowProps.wrapToolCall``. */
+  wrapToolCall?: TurnRowProps["wrapToolCall"];
+  /** See ``TurnRowProps.wrapUserMessage``. */
+  wrapUserMessage?: TurnRowProps["wrapUserMessage"];
+  /** See TurnRowProps.wrapUserTurn. */
+  wrapUserTurn?: TurnRowProps["wrapUserTurn"];
+  /** See ``TurnRowProps.wrapAssistantMessage``. */
+  wrapAssistantMessage?: TurnRowProps["wrapAssistantMessage"];
   /** See ``TurnRowProps.onRevealFile``. */
   onRevealFile?: (filePath: string) => void;
   /** See ``TurnRowProps.isLocalFileHref``. */
@@ -1687,6 +1812,25 @@ interface ConversationTurnListProps {
    *  (e.g. an edition workbench panel) keep the title + suggestions but drop
    *  the illustration, which reads as filler at panel widths. */
   hideEmptyMascot?: boolean;
+  /**
+   * Host replacement for the welcome's mascot AND title. Absent → the default
+   * mascot + ``emptyTitle``; the suggestions below are unaffected. Hosts that
+   * also pass ``emptyTitle`` / ``hideEmptyMascot`` decide precedence themselves
+   * (this node is rendered whenever it is given). A function receives the
+   * default hero, so the host can keep or wrap it (a single slot's default).
+   */
+  welcomeHero?: ReactNode | ((defaultHero: ReactNode) => ReactNode);
+  /**
+   * Host replacement for ONLY the default mascot image. Ignored when
+   * ``hideEmptyMascot`` is set or ``welcomeHero`` replaces the whole hero. A
+   * function receives the default mascot image.
+   */
+  welcomeMascot?: ReactNode | ((defaultMascot: ReactNode) => ReactNode);
+  /**
+   * Host content below the suggestions on the welcome. Wrapped in the same
+   * ``max-w-[750px]`` column as the suggestions, and only when given.
+   */
+  welcomeExtra?: ReactNode;
   /** Show the new-chat welcome (mascot + title + suggestions) when there are no
    *  turns. Only true for a genuinely fresh conversation — an existing
    *  conversation whose transcript is still loading has no turns yet either, and
@@ -1703,6 +1847,24 @@ interface ConversationTurnListProps {
   startingRuntime?: RuntimeStartLocation | null;
 }
 
+/** ``welcomeHero``: a node replaces the default hero; a function gets it. */
+function renderWelcomeHero(
+  welcomeHero: ReactNode | ((defaultHero: ReactNode) => ReactNode),
+  defaultHero: ReactNode,
+): ReactNode {
+  if (typeof welcomeHero === "function") return welcomeHero(defaultHero);
+  return welcomeHero ? welcomeHero : defaultHero;
+}
+
+/** ``welcomeMascot``: a node replaces the default image; a function gets it. */
+function renderWelcomeMascot(
+  welcomeMascot: ReactNode | ((defaultMascot: ReactNode) => ReactNode),
+  defaultMascot: ReactNode,
+): ReactNode {
+  if (typeof welcomeMascot === "function") return welcomeMascot(defaultMascot);
+  return welcomeMascot ?? defaultMascot;
+}
+
 export function ConversationTurnList({
   turns,
   scrollContainerRef,
@@ -1716,6 +1878,7 @@ export function ConversationTurnList({
   skillsBySlug,
   onVirtualApiReady,
   renderToolCall,
+  isToolCardTrailing,
   renderTurnActions,
   turnActionsKey,
   turnRatings,
@@ -1724,7 +1887,13 @@ export function ConversationTurnList({
   showTokenUsage,
   renderTurnLeading,
   renderPlanActions,
+  renderUserMessageActions,
+  renderTurnTail,
   isToolCardFoldable,
+  wrapToolCall,
+  wrapUserMessage,
+  wrapUserTurn,
+  wrapAssistantMessage,
   onRevealFile,
   isLocalFileHref,
   onLocalFileLinkClick,
@@ -1734,6 +1903,9 @@ export function ConversationTurnList({
   emptySuggestions,
   onEmptySuggestionClick,
   hideEmptyMascot,
+  welcomeHero,
+  welcomeMascot,
+  welcomeExtra,
   showWelcome,
   startingRuntime,
 }: ConversationTurnListProps) {
@@ -1892,6 +2064,7 @@ export function ConversationTurnList({
                     onRetry={onRetry}
                     retryCount={retryCounts?.[turn.id] ?? 0}
                     renderToolCall={renderToolCall}
+                    isToolCardTrailing={isToolCardTrailing}
                     renderTurnActions={renderTurnActions}
                     turnActionsKey={turnActionsKey}
                     turnRating={
@@ -1904,6 +2077,8 @@ export function ConversationTurnList({
                     showTokenUsage={showTokenUsage}
                     renderTurnLeading={renderTurnLeading}
                     renderPlanActions={renderPlanActions}
+                    renderUserMessageActions={renderUserMessageActions}
+                    renderTurnTail={renderTurnTail}
                     isToolCardFoldable={isToolCardFoldable}
                     onRevealFile={onRevealFile}
                     isLocalFileHref={isLocalFileHref}
@@ -1911,6 +2086,10 @@ export function ConversationTurnList({
                     onCitationClick={onCitationClick}
                     onOpenAttachment={onOpenAttachment}
                     startingRuntime={startingRuntime}
+                    wrapToolCall={wrapToolCall}
+                    wrapUserMessage={wrapUserMessage}
+                    wrapUserTurn={wrapUserTurn}
+                    wrapAssistantMessage={wrapAssistantMessage}
                   />
                 </div>
               </div>
@@ -1956,17 +2135,25 @@ export function ConversationTurnList({
                   empty new-chat page feels less bare. Gated on ``showWelcome``
                   so an existing conversation still fetching its transcript (no
                   turns yet) doesn't flash this new-chat state mid-load. */}
-              {hideEmptyMascot ? null : (
-                <img
-                  src={assetUrl("mascot.png")}
-                  alt=""
-                  aria-hidden="true"
-                  className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
-                />
+              {renderWelcomeHero(
+                welcomeHero,
+                <>
+                  {hideEmptyMascot
+                    ? null
+                    : renderWelcomeMascot(
+                        welcomeMascot,
+                        <img
+                          src={assetUrl("mascot.png")}
+                          alt=""
+                          aria-hidden="true"
+                          className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
+                        />,
+                      )}
+                  <div className="text-center text-2xl font-medium leading-tight text-ink-heading">
+                    {emptyTitle ?? t("conversation.startHere")}
+                  </div>
+                </>,
               )}
-              <div className="text-center text-2xl font-medium leading-tight text-ink-heading">
-                {emptyTitle ?? t("conversation.startHere")}
-              </div>
               {emptySuggestions && emptySuggestions.length > 0 ? (
                 <div className="mx-auto mt-5 max-w-[750px]">
                   <SuggestionList
@@ -1974,6 +2161,9 @@ export function ConversationTurnList({
                     onClick={onEmptySuggestionClick}
                   />
                 </div>
+              ) : null}
+              {welcomeExtra ? (
+                <div className="mx-auto mt-5 max-w-[750px]">{welcomeExtra}</div>
               ) : null}
             </>
           ) : null}

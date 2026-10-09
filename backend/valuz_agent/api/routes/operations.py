@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.facade.projects import ProjectLibrary, get_project_library
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.modules.app_plugins import operations as _app_plugin_operations  # noqa: F401
 from valuz_agent.modules.operations.models import (
     ConfirmationDecisionRow,
     OperationRecordRow,

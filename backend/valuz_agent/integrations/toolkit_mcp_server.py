@@ -57,7 +57,7 @@ import itertools
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
@@ -72,13 +72,20 @@ from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
 
-from src.core.tools import ExecContext, ToolDef
+from src.core.tools import ToolDef
 
 logger = logging.getLogger(__name__)
 
 
+class _ToolExecutionContext(Protocol):
+    workspace: str
+    session_id: str
+    user_id: str
+    report_progress: Callable[[str], Awaitable[None]] | None
+
+
 @dataclass
-class HostExecContext(ExecContext):
+class HostExecContext:
     """``ExecContext`` enriched with the resolved session owner.
 
     The kernel's ``ExecContext`` stays owner-agnostic (owner scoping is a host
@@ -88,6 +95,8 @@ class HostExecContext(ExecContext):
     pure. Tests construct it directly with the owner they seed.
     """
 
+    workspace: str = ""
+    session_id: str = ""
     user_id: str = ""
     # Heartbeat for a long, silent tool call. A client that sent a
     # ``progressToken`` gets an MCP ``notifications/progress`` frame. This
@@ -166,7 +175,7 @@ def _build_server(toolset: str) -> Server:
         tdef = by_name.get(tool_name)
         if tdef is None or tdef.handler is None:
             raise ValueError(f"unknown tool: {tool_name}")
-        ctx = HostExecContext(
+        ctx: _ToolExecutionContext = HostExecContext(
             session_id=_current_session_id(),
             user_id=_current_user_id(),
             report_progress=_progress_reporter(server),

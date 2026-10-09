@@ -1440,7 +1440,22 @@
     "deleteChat": "解散群",
     "deleteChatDone": "群已解散",
     "deleteChatDesc": "该群由 Valuz 创建。解散后群和聊天记录都会消失，且无法恢复。",
-    "nameSection": "项目名称"
+    "nameSection": "项目名称",
+    "trustDialogTitle": "这个文件夹会自己运行命令",
+    "trustDialogDesc": "文件夹里的配置会让智能体在会话中自动执行下面这些命令（所有运行时都会执行），不会提示，也不经过审批。只在你认识这个文件夹的来源时才信任它。",
+    "trustDialogTrust": "信任并允许运行",
+    "trustDialogDistrust": "不信任（不运行这些命令）",
+    "trustSectionTitle": "工作区信任",
+    "trustTrusted": "已信任",
+    "trustUntrusted": "未信任",
+    "trustTrustedHint": "文件夹自带的这些命令会在新会话中运行。",
+    "trustUntrustedHint": "文件夹自带的这些命令不会运行。",
+    "trustMakeTrusted": "信任这个文件夹",
+    "trustMakeUntrusted": "不再信任",
+    "trustAppliesToNewSessions": "对之后新开的会话生效。",
+    "trustUpdateFailed": "更新工作区信任失败：{error}",
+    "memoryImportItem": "记忆条目",
+    "partialImportErrors": "部分内容未导入，其余内容已保留："
   },
   "schedule": {
     "create": "创建定时任务",
@@ -1571,7 +1586,49 @@
       "deleted": "已删除",
       "cleared": "已清空",
       "loadFailed": "加载记忆失败",
-      "saveFailed": "操作失败"
+      "saveFailed": "操作失败",
+      "contextLimit": "忘记记忆不会删除原聊天或文件，也不会撤回已载入当前对话的内容。需要最新信息时，请重新查询来源或开始新对话。",
+      "unavailable": "记忆服务暂时不可达。当前无法确认记忆内容，请稍后刷新。",
+      "conflict": "记忆已在别处变化。列表已重新读取，请检查最新内容后再次确认；不会自动覆盖。",
+      "scope": "记忆范围",
+      "allScopes": "全部范围",
+      "scopeProject": "项目记忆",
+      "refreshRecords": "刷新记忆",
+      "addRecord": "添加记忆",
+      "correctRecord": "纠正记忆",
+      "forgetRecord": "忘记记忆",
+      "forgetSource": "忘记此来源",
+      "confirmed": "已确认",
+      "unconfirmed": "未确认",
+      "recordId": "记忆 ID",
+      "previousPage": "上一页",
+      "nextPage": "下一页",
+      "recordContent": "记忆内容",
+      "saveRecord": "保存记忆",
+      "confirmLatest": "确认最新版本",
+      "confirmForget": "确认忘记",
+      "forgetRecordHint": "忘记这条记忆，并阻止其已追踪来源再次提炼它。原聊天、文件和当前对话已载入的内容仍保留。",
+      "forgetSourceHint": "忘记由这个可追踪来源派生的全部记忆，并阻止未来继续从该来源提炼。原聊天、文件和当前对话已载入的内容仍保留。",
+      "sourceKinds": {
+        "message": "消息",
+        "session": "对话",
+        "task": "任务",
+        "input": "后台输入",
+        "document": "文档",
+        "tool": "工具结果",
+        "manual": "手动录入",
+        "import": "导入"
+      },
+      "sourceOrigins": {
+        "owner": "来自你",
+        "agent": "来自智能体",
+        "untrusted": "外部未验证信息",
+        "system": "系统记录"
+      },
+      "latestRecordContent": "最新已保存内容",
+      "recordRemoved": "这条记忆已不在当前列表中",
+      "cleanupIncomplete": "记忆已更新，但部分待处理提炼仍未清理。请重试本次操作以完成清理。",
+      "saveUncertain": "保存结果尚未确定。请先恢复待处理写入，再提交新修改；重试会保留原请求。"
     },
     "personalization": {
       "conversationTitle": "对话",
@@ -2382,7 +2439,61 @@
     "complete": "完成",
     "executing": "执行中",
     "failed": "失败",
-    "running": "运行中"
+    "running": "运行中",
+    "appPluginManager": {
+      "title": {
+        "install": "安装并启用应用插件",
+        "dev_link": "安装并启用应用插件",
+        "uninstall": "卸载应用插件",
+        "publish": "发布应用插件",
+        "generic": "应用插件操作"
+      },
+      "field": {
+        "id": "应用插件 id",
+        "version": "版本",
+        "publisher": "发布者",
+        "source": "来源",
+        "path": "目录",
+        "sha256": "sha256",
+        "permissions": "权限",
+        "requires": "依赖",
+        "scope": "范围",
+        "targets": "发布到",
+        "notes": "说明"
+      },
+      "updatesFrom": "更新自 v{version}",
+      "newPermission": "新增",
+      "unmet": "未满足",
+      "noPermissions": "未声明任何权限",
+      "hasBackend": "带有后端服务",
+      "scope": {
+        "personal": "个人",
+        "org": "组织",
+        "global": "全局市场"
+      },
+      "purgeData": "同时删除应用插件数据",
+      "keepData": "保留应用插件数据",
+      "devHint": "安装后直接使用此目录中的插件；后续构建会更新插件，无需再次安装。",
+      "risk": "确认后，该应用插件将以你的权限在本机运行第三方代码。",
+      "publishHint": "确认后将上传该应用插件包，并进入自动检查和审核。",
+      "confirm": {
+        "install": "安装并启用",
+        "dev_link": "安装并启用",
+        "uninstall": "卸载",
+        "publish": "发布",
+        "generic": "确认"
+      },
+      "state": {
+        "succeeded": "操作已完成",
+        "cancelled": "已取消，未做任何修改。",
+        "expired": "提案已过期，未做任何修改。请重新发起。",
+        "superseded": "已被更新的提案替代，未做任何修改。",
+        "stale": "提案已失效，请重新发起。",
+        "failed": "应用插件操作失败"
+      },
+      "succeeded": "应用插件操作已完成",
+      "details": "详细信息"
+    }
   },
   "menu": {
     "about": "关于 Valuz",
@@ -3346,19 +3457,20 @@
     "pluginPreviewing": "正在检查冲突…"
   },
   "plugin": {
+    "navLabel": "插件",
     "title": "插件",
-    "description": "已安装的技能套件与含连接器的插件",
+    "description": "已安装的插件：技能套件与技能、连接器组合包",
     "install": "安装插件",
     "installFromZip": "上传 zip",
     "installFromPath": "本地路径或 URL",
     "installPathPlaceholder": "插件目录、zip 路径或 https:// 链接",
-    "installPathHelp": "支持 Agent Plugins 布局，以及 .claude-plugin / .codebuddy-plugin 布局。",
+    "installPathHelp": "支持插件布局，以及 .claude-plugin / .codebuddy-plugin 布局。",
     "selectZip": "选择 zip 文件",
     "preview": "预览",
     "previewing": "正在解析…",
     "previewFailed": "无法读取插件",
     "previewFormat": "格式",
-    "formatAgentPlugins": "Agent Plugins",
+    "formatAgentPlugins": "插件",
     "formatClaude": "Claude 插件（兼容读取）",
     "formatCodebuddy": "CodeBuddy 插件（兼容读取）",
     "warnings": "提示",
@@ -3479,5 +3591,308 @@
     "contextPanel": "上下文面板",
     "overlays": "浮层预览",
     "playbookDetail": "手册详情"
+  },
+  "pluginSettings": {
+    "tabsLabel": "插件分类",
+    "title": "应用插件",
+    "navDesc": "应用插件、内置插件与 DSH 插件",
+    "desc": "管理应用插件、随 Valuz 发行的内置插件，以及标准 DSH（DeepSeek Harness）插件。",
+    "valuz": {
+      "title": "内置插件",
+      "desc": "随 Valuz 发行的内置插件，分界面（前端）和后端两部分。运行时不能安装或卸载。",
+      "empty": "当前没有已加载的界面插件",
+      "legacyCount": "{count} 项旧式安装",
+      "legacyHint": "这些安装早于插件模型，卸载插件时不会被撤销：{names}",
+      "failedReason": "加载失败：{error}",
+      "status": {
+        "active": "运行中",
+        "failed": "失败",
+        "loading": "加载中",
+        "disposed": "已卸载",
+        "backend-disabled": "后端已停用"
+      },
+      "frontend": {
+        "title": "界面插件",
+        "desc": "运行在界面里的插件，只读。"
+      }
+    },
+    "dsh": {
+      "title": "DSH 插件",
+      "desc": "标准 DeepSeek Harness 插件，由 DSH 自己的插件管理器安装与启停，只对 DSH 运行时的会话生效。",
+      "connecting": "正在连接 DSH 插件管理服务，首次启动可能需要约 30 秒",
+      "loadFailed": "无法连接 DSH 插件管理服务",
+      "unavailable": {
+        "title": "DSH 插件在此环境不可用",
+        "disabled": "云端和共享部署默认关闭 DSH 插件：插件代码以用户权限运行，只能在本机使用。",
+        "generic": "此部署没有可用的 DSH 插件管理服务。",
+        "reason": "原因：{reason}"
+      },
+      "profile": "Profile",
+      "home": "目录",
+      "openManager": "打开 DSH 插件管理",
+      "openManagerLabel": "DSH 原生管理界面",
+      "openManagerDesc": "在浏览器中打开 DSH 自带的插件管理界面，可配置插件、回滚、批准构建脚本、设置版本豁免。",
+      "openFailed": "无法打开 DSH 插件管理：{error}",
+      "bundles": {
+        "title": "已安装的 Bundle",
+        "desc": "Bundle 是 DSH 的发行单位，一个 bundle 可以包含多个插件。",
+        "empty": "还没有任何 bundle",
+        "builtin": "内置",
+        "builtinHint": "由 Valuz 或 DSH 随包提供，不能关闭或移除",
+        "optional": "可选",
+        "optionalHint": "DSH 随包提供，默认关闭，可按需开启",
+        "broken": "无法读取",
+        "toggleLabel": "启用 {name}",
+        "remove": "移除",
+        "removeTitle": "移除 {name}？",
+        "removeDesc": "将卸载 {package} 并移除它的插件，此操作无法撤销。",
+        "enabledToast": "已启用 {name}",
+        "disabledToast": "已停用 {name}",
+        "removedToast": "已移除 {name}",
+        "restartRequired": "{name}：变更已保存，重启 DSH 后生效",
+        "overridden": "{name}：变更已保存，但被更高优先级的配置覆盖",
+        "changeFailed": "{name}：{error}",
+        "incompatible": "不适用",
+        "incompatibleHint": "这个 bundle 自带一套进程入口（ACP / 单次运行 / 精简 SDK），与 Valuz 的 DSH 会话共用同一个 profile 时会冲突，因此不能在这里启用。"
+      },
+      "install": {
+        "title": "安装 DSH 插件",
+        "desc": "输入 npm 包名（可带版本范围）、本地绝对路径、tarball 或 git 地址。先检查，再确认安装。",
+        "specLabel": "安装来源",
+        "placeholder": "@scope/package@^1.0.0 或 /绝对/路径",
+        "inspect": "检查",
+        "install": "安装",
+        "cancel": "取消",
+        "inspectFailed": "检查失败：{error}",
+        "installing": "正在安装，可能需要几分钟",
+        "accepted": "可以安装",
+        "refused": "无法安装",
+        "bundleUnknown": "是否为 DSH bundle 要在下载后才能确认",
+        "from": "来源：{host}",
+        "kind": {
+          "registry": "npm 包",
+          "path": "本地目录",
+          "git": "Git 仓库",
+          "tarball": "Tarball"
+        },
+        "problem": {
+          "invalid-spec": "安装来源格式不正确",
+          "already-installed": "已经安装过",
+          "not-found": "找不到这个包或版本",
+          "not-a-package": "不是有效的包",
+          "not-a-bundle": "不是 DSH bundle",
+          "network": "网络不可达",
+          "unknown": "未知原因"
+        },
+        "result": {
+          "applied": "已安装并启用 {target}",
+          "restartRequired": "已安装 {target}，重启 DSH 后生效",
+          "overridden": "已安装 {target}，但被更高优先级的配置覆盖",
+          "failed": "安装失败",
+          "cancelled": "安装已取消"
+        },
+        "pendingBuilds": "需要先批准这些包的构建脚本：{packages}。请在「DSH 原生管理界面」中处理后重试。",
+        "incompatible": "{name}@{version} 声明的 DSH 版本要求与当前运行的 DSH {runtime} 不符。可以在「DSH 原生管理界面」里设置版本豁免。",
+        "output": "安装输出",
+        "outputTruncated": "输出已截断，完整日志：{path}",
+        "warnings": "提示：{warnings}"
+      },
+      "errorCode": {
+        "invalid-spec": "安装来源格式不正确",
+        "ambiguous-install": "安装来源有歧义",
+        "not-bundle": "这个包不是 DSH bundle",
+        "stale-approval": "构建批准已过期",
+        "incompatible-version": "与当前 DSH 版本不兼容",
+        "operation-error": "操作出错",
+        "other": "出错（{code}）",
+        "management-required": "这是 DSH 管理所需的内置组件，不能更改",
+        "unaddressable": "这一项无法通过 profile 配置更改",
+        "unknown-plugin": "找不到这个插件",
+        "not-removable": "这个 bundle 不能移除",
+        "stop-profile": "需要先停止正在运行的 profile 才能移除",
+        "bundle-in-use": "bundle 仍在使用中，无法移除"
+      },
+      "toolsNote": "已安装的 DSH 插件所提供的工具，在插件宿主运行期间对所有运行时可用（通过内置 MCP 服务 valuz-dsh-plugins）。"
+    },
+    "backend": {
+      "title": "后端插件",
+      "desc": "随 Valuz 后端发行、在进程启动时装配的插件。开关会被记录下来，重启后生效。",
+      "loadFailed": "无法读取后端插件",
+      "notComposed": "此构建没有后端插件",
+      "empty": "后端没有装配任何插件",
+      "readOnly": "此部署的插件由运营方统一管理，无法在这里更改。",
+      "restartHint": "有变更已记录，重启 Valuz 后生效。",
+      "required": "必需",
+      "requiredHint": "Valuz 运行所必需，不能停用",
+      "requiredBy": "被 {ids} 依赖",
+      "requiredByHint": "{ids} 需要它才能运行，不能停用",
+      "toggleLabel": "启用 {id}",
+      "pendingEnable": "已记录，重启后启用",
+      "pendingDisable": "已记录，重启后停用",
+      "toggleFailed": "{id}：{error}",
+      "status": {
+        "active": "运行中",
+        "failed": "失败",
+        "pending": "等待启动",
+        "disabled": "已停用"
+      },
+      "meta": {
+        "provides": "提供：{list}",
+        "needs": "依赖：{list}",
+        "entitlement": "权益：{key}"
+      }
+    },
+    "appPlugins": {
+      "title": "应用插件",
+      "desc": "安装和管理扩展 Valuz 界面与功能的应用插件。应用插件以你的权限在本机运行，请只安装你信任的来源。",
+      "loadFailed": "无法读取应用插件",
+      "tabsLabel": "应用插件分栏",
+      "tabs": {
+        "installed": "已安装"
+      },
+      "empty": "还没有安装应用插件",
+      "safeMode": {
+        "title": "安全模式",
+        "desc": "应用插件加载连续失败，已暂停加载全部应用插件。",
+        "reason": "原因：{reason}",
+        "exit": "退出安全模式",
+        "exitFailed": "无法退出安全模式：{error}"
+      },
+      "install": {
+        "title": "安装",
+        "file": "从文件安装",
+        "url": "从 URL 安装",
+        "folder": "链接开发目录"
+      },
+      "source": {
+        "file": "本地文件",
+        "url": "URL",
+        "dev": "开发目录",
+        "catalog": "目录",
+        "scope": {
+          "personal": "我的",
+          "org": "组织",
+          "global": "市场"
+        }
+      },
+      "status": {
+        "enabled": "已启用",
+        "disabled": "已停用",
+        "incompatible": "不兼容",
+        "broken": "已损坏",
+        "requires-unmet": "依赖未满足",
+        "blocked": "已被策略阻止"
+      },
+      "load": {
+        "active": "界面已加载",
+        "loading": "界面加载中",
+        "failed": "界面加载失败",
+        "disposed": "界面已卸载",
+        "error": "加载失败：{error}"
+      },
+      "meta": {
+        "publisher": "发布者：{name}",
+        "source": "来源：{source}",
+        "devPath": "开发目录：{path}",
+        "unmet": "未满足的依赖：{list}",
+        "permissions": "权限：{list}",
+        "noPermissions": "未声明权限",
+        "reason": "原因：{reason}"
+      },
+      "actions": {
+        "toggle": "启用或停用 {name}",
+        "reload": "重载",
+        "reloaded": "已重载 {name}",
+        "reloadFailed": "无法重载 {name}：{error}",
+        "toggleFailed": "无法更改 {name} 的状态：{error}",
+        "uninstall": "卸载",
+        "logs": "日志",
+        "config": "配置"
+      },
+      "uninstall": {
+        "title": "卸载 {name}",
+        "desc": "将移除应用插件及其创建的自动化。",
+        "purge": "同时删除数据",
+        "purgeHint": "删除应用插件保存的配置和数据；不勾选则保留，重新安装后可继续使用。",
+        "confirm": "卸载",
+        "done": "已卸载 {name}",
+        "failed": "无法卸载 {name}：{error}"
+      },
+      "logs": {
+        "title": "{name} 的日志",
+        "desc": "最近的日志，包含界面、后端和审计记录。",
+        "empty": "暂无日志",
+        "refresh": "刷新",
+        "loadFailed": "无法读取日志：{error}",
+        "source": {
+          "frontend": "界面",
+          "backend": "后端",
+          "audit": "审计"
+        }
+      },
+      "config": {
+        "title": "{name} 的配置",
+        "desc": "由应用插件声明的配置项。",
+        "noSchema": "该应用插件没有可配置项。",
+        "loadFailed": "无法读取配置：{error}",
+        "save": "保存",
+        "saved": "配置已保存",
+        "saveFailed": "无法保存配置：{error}",
+        "required": "{field} 为必填项",
+        "invalidNumber": "{field} 必须是数字",
+        "invalidInteger": "{field} 必须是整数",
+        "listHint": "每行一项",
+        "unset": "未设置",
+        "serverErrors": "服务端校验未通过："
+      },
+      "form": {
+        "fileLabel": "应用插件包路径（.zip 或目录）",
+        "filePlaceholder": "/path/to/plugin.zip",
+        "urlLabel": "应用插件包地址",
+        "urlPlaceholder": "https://example.com/plugin.zip",
+        "devLabel": "应用插件目录",
+        "devPlaceholder": "/path/to/my-plugin",
+        "devHint": "开发模式直接读取该目录，不拷贝；重新构建后点击“重载”即可生效。",
+        "browse": "选择…",
+        "inspect": "检查",
+        "inspecting": "正在检查…",
+        "inspectFailed": "无法检查：{error}",
+        "required": "请先填写来源"
+      },
+      "confirm": {
+        "title": "安装应用插件",
+        "titleDev": "链接开发目录",
+        "desc": "安装前请核对下面的信息。",
+        "field": {
+          "id": "应用插件 id",
+          "version": "版本",
+          "publisher": "发布者",
+          "source": "来源",
+          "sha256": "sha256",
+          "size": "大小",
+          "permissions": "权限",
+          "requires": "依赖"
+        },
+        "updatesFrom": "更新自 v{version}",
+        "newPermission": "新增",
+        "unmet": "未满足",
+        "noPermissions": "未声明任何权限",
+        "noRequires": "无",
+        "hasBackend": "带有后端服务",
+        "errors": "存在错误，无法安装：",
+        "warnings": "提示：",
+        "risk": "我了解该应用插件将以我的权限在本机运行第三方代码",
+        "install": "安装",
+        "link": "链接",
+        "update": "更新",
+        "back": "返回",
+        "working": "处理中…",
+        "installed": "已安装 {name}",
+        "updated": "已将 {name} 从 v{from} 更新到 v{to}",
+        "linked": "已链接 {name}",
+        "failed": "无法安装：{error}",
+        "unknownName": "（未命名）"
+      }
+    }
   }
 }

@@ -19,6 +19,13 @@ from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
+from valuz_agent.modules.projects.workspace_trust import (
+    TRUSTED,
+    UNTRUSTED,
+    detect_workspace_hooks,
+    effective_trust,
+    initial_trust,
+)
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.skills.datastore import SkillDatastore
@@ -130,6 +137,9 @@ class ProjectListItem:
     # user_project_root/{user_id}). Surfaced so the UI can offer "Open in
     # Finder" without a second detail fetch.
     cwd: str | None = None
+    # Workspace trust (H0): ``trusted`` / ``untrusted`` — whether the folder's
+    # own hook configuration may run in its sessions (workspace_trust.py).
+    workspace_trust: str = TRUSTED
 
 
 @dataclass
@@ -182,6 +192,7 @@ def _row_to_list_item(row: ProjectRow, cwd: str | None = None) -> ProjectListIte
         root_path=row.root_path,
         icon=row.icon,
         cwd=cwd,
+        workspace_trust=effective_trust(getattr(row, "workspace_trust", None)),
     )
 
 
@@ -198,6 +209,7 @@ def _row_to_detail(
         icon=row.icon,
         instructions_md=instructions_md,
         cwd=cwd,
+        workspace_trust=effective_trust(getattr(row, "workspace_trust", None)),
         default_lead_agent_slug=row.default_lead_agent_slug,
     )
 
@@ -396,6 +408,7 @@ class ProjectService:
         user_id: str,
         name: str,
         root_path: str | None = None,
+        trust_workspace: bool | None = None,
     ) -> ProjectDetail:
         """Create a project.
 
@@ -424,6 +437,11 @@ class ProjectService:
             kind="project",
             root_path=resolved_root,
             sort_order=10,
+            workspace_trust=initial_trust(
+                None if managed_root else _root_path(user_id, resolved_root),
+                managed=managed_root,
+                choice=trust_workspace,
+            ),
         )
         try:
             await self._ds.create(user_id, row)
@@ -487,6 +505,11 @@ class ProjectService:
             icon=icon,
             instructions_md=(instructions_md or "").strip() or None,
             sort_order=10,
+            workspace_trust=initial_trust(
+                None if managed_root else _root_path(user_id, resolved_root),
+                managed=managed_root,
+                choice=None,
+            ),
         )
         try:
             await self._ds.create(user_id, row)
@@ -538,6 +561,29 @@ class ProjectService:
             instructions_md=row.instructions_md,
             cwd=await self.resolve_project_cwd(user_id, row),
         )
+
+    async def workspace_trust(self, user_id: str, project_id: str) -> dict[str, Any]:
+        """The project's trust state and the hook commands its folder carries."""
+        row = await self._ds.get_by_id(user_id, project_id)
+        if not row:
+            raise KeyError(project_id)
+        cwd = await self.resolve_project_cwd(user_id, row)
+        return {
+            "project_id": row.id,
+            "workspace_trust": effective_trust(row.workspace_trust),
+            "hooks": [hook.to_dict() for hook in detect_workspace_hooks(cwd)],
+        }
+
+    async def set_workspace_trust(
+        self, user_id: str, project_id: str, trusted: bool
+    ) -> dict[str, Any]:
+        """Trust (or stop trusting) the folder's own hooks for NEW sessions."""
+        row = await self._ds.get_by_id(user_id, project_id)
+        if not row:
+            raise KeyError(project_id)
+        row.workspace_trust = TRUSTED if trusted else UNTRUSTED
+        await self._ds.update(row)
+        return await self.workspace_trust(user_id, project_id)
 
     async def update_instructions(
         self, user_id: str, project_id: str, instructions_md: str
@@ -645,9 +691,9 @@ class ProjectService:
         # centralized memory dir is Valuz-owned (never the user's bound repo), so
         # it's safe to remove. Best-effort — never fail the delete on cleanup.
         try:
-            from valuz_agent.modules.memory.service import memory_store
+            from valuz_agent.facade.memory import MemoryLibrary
 
-            memory_store.drop_project(user_id, project_id)
+            await MemoryLibrary(user_id).drop_project(project_id)
         except Exception:  # noqa: BLE001
             logger.debug("project memory cleanup skipped for %s", project_id, exc_info=True)
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -558,7 +559,9 @@ async def set_backup_destination(db: AsyncSession, value: str, user_id: str | No
     await _write(db, KEY_BACKUP_DESTINATION, cleaned, user_id=user_id)
 
 
-async def _read_json(db: AsyncSession, key: str, user_id: str | None = None) -> dict | None:
+async def _read_json(
+    db: AsyncSession, key: str, user_id: str | None = None
+) -> dict[str, Any] | None:
     raw = await _read(db, key, user_id=user_id)
     if not raw:
         return None
@@ -569,27 +572,37 @@ async def _read_json(db: AsyncSession, key: str, user_id: str | None = None) -> 
     return data if isinstance(data, dict) else None
 
 
-async def get_backup_scope(db: AsyncSession, user_id: str | None = None) -> dict | None:
+async def get_backup_scope(db: AsyncSession, user_id: str | None = None) -> dict[str, Any] | None:
     return await _read_json(db, KEY_BACKUP_SCOPE, user_id=user_id)
 
 
-async def set_backup_scope(db: AsyncSession, value: dict, user_id: str | None = None) -> None:
+async def set_backup_scope(
+    db: AsyncSession, value: dict[str, Any], user_id: str | None = None
+) -> None:
     await _write(db, KEY_BACKUP_SCOPE, json.dumps(value), user_id=user_id)
 
 
-async def get_backup_retention(db: AsyncSession, user_id: str | None = None) -> dict | None:
+async def get_backup_retention(
+    db: AsyncSession, user_id: str | None = None
+) -> dict[str, Any] | None:
     return await _read_json(db, KEY_BACKUP_RETENTION, user_id=user_id)
 
 
-async def set_backup_retention(db: AsyncSession, value: dict, user_id: str | None = None) -> None:
+async def set_backup_retention(
+    db: AsyncSession, value: dict[str, Any], user_id: str | None = None
+) -> None:
     await _write(db, KEY_BACKUP_RETENTION, json.dumps(value), user_id=user_id)
 
 
-async def get_backup_last_run(db: AsyncSession, user_id: str | None = None) -> dict | None:
+async def get_backup_last_run(
+    db: AsyncSession, user_id: str | None = None
+) -> dict[str, Any] | None:
     return await _read_json(db, KEY_BACKUP_LAST_RUN, user_id=user_id)
 
 
-async def set_backup_last_run(db: AsyncSession, value: dict, user_id: str | None = None) -> None:
+async def set_backup_last_run(
+    db: AsyncSession, value: dict[str, Any], user_id: str | None = None
+) -> None:
     await _write(db, KEY_BACKUP_LAST_RUN, json.dumps(value), user_id=user_id)
 
 

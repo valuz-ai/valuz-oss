@@ -90,19 +90,6 @@ export const registerPlugin = async (manifest: PluginManifest): Promise<LoadedPl
   return loaded
 }
 
-/**
- * Load a plugin from an ESM URL. The module must export a `PluginManifest`
- * either as the default export or as the named export `plugin`.
- */
-export const loadPluginFromUrl = async (url: string): Promise<LoadedPlugin> => {
-  const module: Record<string, unknown> = await import(/* @vite-ignore */ url)
-  const candidate = (module.default ?? module.plugin) as PluginManifest | undefined
-  if (!candidate || typeof candidate !== 'object' || typeof candidate.id !== 'string') {
-    throw new Error(`Module at ${url} does not export a valid PluginManifest`)
-  }
-  return registerPlugin(candidate)
-}
-
 export const listLoadedPlugins = (): LoadedPlugin[] => Array.from(activePlugins.values())
 
 export const getLoadedPlugin = (id: string): LoadedPlugin | undefined => activePlugins.get(id)

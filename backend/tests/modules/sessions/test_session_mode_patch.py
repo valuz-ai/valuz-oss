@@ -10,7 +10,7 @@ unreachable for any user-facing chat session. This pins the new
 * the service forwards to ``kernel_client.set_mode`` (the kernel owns
   validation, the write, and the ``mode_changed`` event);
 * the route re-surfaces kernel-shaped errors verbatim — the kernel's 400
-  for runtimes with no native plan/goal primitive must not become a 500.
+  for runtimes with no goal primitive must not become a 500.
 """
 
 # ruff: noqa: I001 — kernel bootstrap side-effect import must precede app.*
@@ -126,13 +126,13 @@ async def test_route_resurfaces_kernel_400_verbatim() -> None:
         async def set_session_mode(self, *_a: Any, **_k: Any) -> Any:
             raise KernelBadRequestError(
                 400,
-                "mode='plan' is not supported on deepagents sessions "
-                "(no native plan/goal primitive).",
+                "mode='goal' is not supported on deepagents sessions "
+                "(no native goal primitive).",
             )
 
     with pytest.raises(HTTPException) as exc:
         await update_session_mode(
-            "s1", SessionModeRequest(mode="plan"), user_id="u1", svc=_Svc()
+            "s1", SessionModeRequest(mode="goal"), user_id="u1", svc=_Svc()
         )
     assert exc.value.status_code == 400
     assert "deepagents" in str(exc.value.detail)

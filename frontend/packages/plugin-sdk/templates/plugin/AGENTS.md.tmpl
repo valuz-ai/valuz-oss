@@ -1,0 +1,191 @@
+# __PLUGIN_NAME__ — a Valuz App Plugin
+
+This directory is a **Valuz App Plugin** (`__PLUGIN_ID__`). Valuz loads
+its frontend bundle into the desktop app and gives it a restricted context: it
+can add buttons, cards, tabs and pages in public places of the UI, and use
+Valuz's own backend (projects, artifacts, knowledge, conversations, connector
+tools, code automations, storage). It has no backend of its own.
+
+Agent Plugins bundle skills and MCP connectors and use `valuz plugin agent …`; this App Plugin uses `valuz plugin app …`.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `valuz-plugin.json` | Manifest: id, version, names, permissions, config, automations (schema in `$schema`) |
+| `src/index.tsx` | Source entry: `export default definePlugin({ id, apply(ctx) { … } })` |
+| `src/*.css` | Optional CSS, imported from the source; scoped to the plugin by the build |
+| `locales/<lang>.json` | The plugin's texts (`zh-CN.json`, `en-US.json`, same keys) |
+| `test/*.test.tsx` | Tests (`node:test` + `@valuz/plugin-sdk/testing`) |
+| `frontend/` | Build output (`index.js`, `index.css`) — never edit by hand |
+| `automations/` | Scripts of code automations declared in the manifest |
+
+## Commands
+
+`valuz-plugin` is the SDK's command (if it is not on PATH: `node __SDK_BIN__`).
+
+| Command | Does |
+|---|---|
+| `valuz-plugin build` | Bundle `src/` into `frontend/index.js` (+ `index.css`) |
+| `valuz-plugin dev` | Build in watch mode and link this directory into the running Valuz (`--backend URL`) |
+| `valuz-plugin test` | Run `test/**/*.test.tsx` (no Valuz needed) |
+| `valuz-plugin validate` | Check the manifest, files and the built bundle |
+| `valuz-plugin pack` | Validate and zip into `dist/<id>-<version>.zip` (prints the sha256) |
+
+Install into Valuz: `valuz-plugin dev` (watch + link), or `valuz plugin app dev <dir>`
+(link only; Valuz picks up every later `valuz-plugin build` by itself), or
+`valuz-plugin pack` then `valuz plugin app install dist/<zip>`.
+Check it with `valuz plugin app status __PLUGIN_ID__` / `valuz plugin app logs __PLUGIN_ID__`.
+
+After every change run `valuz-plugin test` and `valuz-plugin validate`. Tests
+passing is not "done": the developer confirms the UI inside Valuz.
+
+## Rules
+
+1. Import only `react`, `react-dom`, `@valuz/plugin-sdk` and
+   `@valuz/plugin-sdk/ui` from the host. Never import `@valuz/core`,
+   `@valuz/app`, `@valuz/ui` or other internal packages (not available at
+   runtime; the build fails). Other npm packages are bundled into the plugin.
+2. Ids you register are local (`"hello"`); Valuz namespaces them as
+   `x:__PLUGIN_ID__:hello`. Register only into the 12 public slots below, add
+   pages / settings sections / sidebar items — never remove or replace Valuz's own.
+3. Page paths must be `/x/__PLUGIN_ID__` or below it.
+4. `permissions` in `valuz-plugin.json` must list every capability the code
+   uses through `ctx.valuz` / `useValuz()` (table below). A missing permission
+   is a 403 at runtime.
+5. No network calls of your own (`fetch`, websockets, analytics): data comes
+   through `ctx.valuz` (a customer system is added as a connector and called with
+   `valuz.connectors.callTool`); computation runs as a code automation.
+6. Every user-facing text goes through `useTranslation()`; add each key to both
+   `locales/zh-CN.json` and `locales/en-US.json`. Placeholders are `{{name}}`.
+7. Style with the SDK's UI components; own CSS uses the host's CSS variables
+   (`var(--color-ink-heading)`, `var(--color-primary)`, … — `tokens` in
+   `@valuz/plugin-sdk/ui`) so light / dark themes work. Host Tailwind classes the
+   host does not use itself do not work.
+8. `definePlugin({ id })` must equal the manifest `id`. Bump `version` (SemVer)
+   for every release.
+
+## Registering UI (`apply(ctx)`)
+
+```tsx
+ctx.registry.slot("project.detail.tabs", { id: "board", key: "board", label: "board.title", component: slotComponent(Board) });
+pageRoute(ctx, { id: "home", path: "/x/__PLUGIN_ID__", title: "home.title", icon: "plugins" }, HomePage, { nav: true });
+settingsPage(ctx, { id: "settings", title: "settings.title" }, SettingsSection);
+sidebarItem(ctx, { id: "home-link", label: "home.title", icon: "plugins", path: "/x/__PLUGIN_ID__" });
+ctx.effect(() => { const timer = setInterval(tick, 60_000); return () => clearInterval(timer); });
+```
+
+Sidebar icon ids: assistant, knowledge, skills, scheduled, playbooks, activity, settings, agents, connectors, plugins, marketplace, projectTasks, star, compass, watchlist, portfolio, dashboard, globe (unknown ids show a gear).
+
+
+`title` / `label` are keys of your locales (or plain text). Slot components get
+the slot's props: type them as `SlotProps<"slot.name">`.
+
+### The 12 public slots
+
+| Slot | Kind | Props |
+|---|---|---|
+| `conversation.title.actions` | list | `sessionId`, `session`, `scrollToTop`, `turns` |
+| `conversation.header.badges` | list | `sessionId`, `session`, `project`, `agentSlug` |
+| `conversation.turn.actions` | list | `turn`, `scrollToTurn` |
+| `conversation.tool-card.{tool}` | list | `tool`, `toolUseId`, `status`, `input`, `output`, `thinking`, `hostRef` |
+| `conversation.composer.plus.menu-items` | list | `sessionId`, `projectId`, `setDraft`, `surface` |
+| `conversation.empty.extra` | list | `projectId`, `agentSlug`, `setDraft` |
+| `context-panel.tabs` | keyed (`key` required) | `projectId`, `sessionId`, `surface` |
+| `project.detail.tabs` | keyed (`key` required) | `projectId`, `navigate` |
+| `project.detail.header.actions` | list | `projectId`, `project`, `navigate` |
+| `resource.{type}.actions` | list | `resourceType`, `resource` |
+| `shell.topbar.actions` | list | `pathname`, `activeProjectId`, `rightPanelCollapsed` |
+| `task.detail.sections` | list | `task`, `isCompleted` |
+
+`session`, `project`, `turn`, `task`, `resource`, `tool` are the SDK's public
+types (`PublicSession`, `PublicProject`, `PublicTurn`, `PublicTask`,
+`PublicResource`, `PublicToolCall`). `conversation.tool-card.{tool}` replaces
+the generic card of the tool named `{tool}` (e.g. an MCP tool of your connector).
+
+## React hooks and host actions
+
+| Hook | Returns |
+|---|---|
+| `useTranslation()` | `{ t, locale }` — `t(key, params?)` over your locales |
+| `useValuz()` | the `ctx.valuz` client |
+| `usePluginConfig()` | the plugin's config values (re-renders on change) |
+| `useHostContext()` | `{ locale, theme, edition, deployment, orgId }` |
+
+`host.navigate(path)`, `host.openSession(id)`, `host.openProject(id)`,
+`host.toast({ title, description?, variant? })`,
+`host.confirm({ title, body?, confirmLabel? })` → `Promise<boolean>`,
+`host.openExternal(url)` (http(s) only), `host.copyText(text)`,
+`host.draftConversation({ projectId?, agent?, text })`.
+
+UI components (`@valuz/plugin-sdk/ui`, with their parts — `CardHeader`,
+`DialogContent`, `TabsList` …): Button, Input, Textarea, Select, Checkbox,
+Switch, Tabs, Table, Card, Badge, Dialog, Popover, Tooltip, DropdownMenu,
+Skeleton, Spinner, LoadingState, Empty / EmptyState, ChartContainer /
+ChartTooltip / ChartLegend, and `tokens` (the CSS variables).
+
+## `ctx.valuz` (and `useValuz()`)
+
+Errors are `ValuzApiError { status, code, message }`.
+
+| Method | Permission |
+|---|---|
+| `projects.list()`, `projects.get(id)`, `projects.files(id, { path?, depth? })` | `projects:read` |
+| `artifacts.list({ projectId?, sessionId? })`, `artifacts.content(revisionId)` | `artifacts:read` |
+| `knowledge.search(query, { projectId?, kbIds?, topK? })`, `knowledge.get(docId)` | `knowledge:read` |
+| `conversations.draft({ projectId?, agent?, text })` — opens a new conversation, the user sends | — |
+| `conversations.send({ sessionId?, projectId?, agent?, text })` (experimental) | `conversations:write` |
+| `conversations.events(sessionId, { afterSeq? })` | `conversations:read` |
+| `connectors.list()`, `connectors.listTools(connector)` | `connectors:read` |
+| `connectors.callTool(connector, tool, args)` — read-only tools | `connectors:call` |
+| `connectors.callTool(connector, tool, args, { write: true })` — the user confirms (experimental) | `connectors:write` |
+| `automations.run(name, input)`, `getRun(runId)`, `waitRun(runId, { timeoutMs? })`, `latestRun(name)` | `automations:run` |
+| `storage.get(key)`, `set(key, value)`, `delete(key)`, `list(prefix?)` | `storage` |
+| `notifications.post({ title, body?, link? })` (experimental) | `notifications` |
+
+## Config, storage, automations
+
+- **Config**: declare `"config"` in the manifest as a JSON Schema
+  (`{"type": "object", "properties": {…}}`); Valuz renders the form in
+  Settings → Plugins; read it with `usePluginConfig()` / `ctx.config`.
+- **Storage**: per user × plugin JSON key-value store (key ≤ 200 chars, value
+  ≤ 256 KiB, 10 MiB total), on this device only.
+- **Automations**: computation runs as a code automation the manifest declares;
+  Valuz creates it at install and deletes it at uninstall:
+
+  ```json
+  "automations": [
+    { "name": "daily-summary", "runtime": "python", "entry": "automations/daily_summary.py",
+      "input": { "type": "object", "properties": { "projectId": { "type": "string" } } },
+      "result": "artifact", "timeoutSec": 300, "trigger": { "cron": "0 8 * * 1-5" } }
+  ]
+  ```
+
+  Trigger it with `valuz.automations.run("daily-summary", { projectId })` and read
+  the result with `waitRun` / `latestRun` (needs `automations:run`).
+
+  A `python` script defines `run(ctx)`: `ctx["input"]` is the run input (matching
+  `input`), `ctx["trigger"]["type"]` says how it started; it returns
+  `{"artifact": {...}}` — that object is the run's output (`run.output`).
+  Valuz runs it with the bundled `valuz-python` (standard library plus the
+  bundled skills' packages; no `pip install`):
+
+  ```python
+  def run(ctx):
+      project_id = (ctx.get("input") or {}).get("projectId")
+      return {"artifact": {"projectId": project_id, "summary": "…"}}
+  ```
+
+## Testing
+
+```tsx
+import { createTestHost, mockValuz } from "@valuz/plugin-sdk/testing";
+const host = createTestHost({ locales, valuz: mockValuz({ projects: [...], connectors: { "acme-data": { get_positions: () => ({ positions: [] }) } } }) });
+await host.load(plugin, { permissions: manifest.permissions, locales });
+host.capture().slots["conversation.title.actions"]; // ["x:__PLUGIN_ID__:hello"]
+host.renderSlot("conversation.title.actions", props); // static HTML
+host.renderRoute("/x/__PLUGIN_ID__/projects");
+host.calls.toast; // what the plugin asked the host to do
+```
+
+`renderSlot` / `renderRoute` render static markup (effects do not run).

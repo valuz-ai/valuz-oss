@@ -1,0 +1,24 @@
+# __PLUGIN_NAME__
+
+A Valuz App Plugin (`__PLUGIN_ID__`).
+
+## Develop
+
+```bash
+valuz-plugin dev        # build in watch mode + link into the running Valuz
+valuz-plugin test       # run test/**/*.test.tsx
+valuz-plugin validate   # check manifest, files and the built bundle
+valuz-plugin pack       # dist/__PLUGIN_ID__-<version>.zip + sha256
+```
+
+`valuz-plugin` comes with `@valuz/plugin-sdk` (if it is not on PATH:
+`node __SDK_BIN__`). The same commands are available as `npm run build|dev|test|validate|pack`.
+
+## Install
+
+- Development: `valuz plugin app dev .` (or `valuz-plugin dev`) links this
+  directory; every rebuild reloads the plugin in Valuz.
+- Package: `valuz-plugin pack`, then `valuz plugin app install dist/<zip>` or
+  Settings → Plugins → App Plugins → Install.
+
+See `AGENTS.md` for the plugin rules, the public slots and the `ctx.valuz` API.

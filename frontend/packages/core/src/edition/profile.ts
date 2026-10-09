@@ -50,7 +50,10 @@ export interface DesktopRouteModule {
   presentation?: DesktopRoutePresentation;
   /** Whether the route appears in the project sidebar nav. */
   showInNav: boolean;
-  /** Optional inline component. If omitted, the app resolves via its local COMPONENT_MAP by id. */
+  /**
+   * Optional inline component (overlay and edition routes). If omitted, the app resolves the
+   * component the registering plugin contributed for this id (see ``registerRouteComponent``).
+   */
   component?: ComponentType;
   edition: Edition;
 }
@@ -130,6 +133,14 @@ export interface NavGroupModule {
   id: string;
   /** i18n key for the group heading. */
   label: string;
+  /** Opt into an in-place sidebar menu instead of an always-visible section.
+   * Entering opens the first available item; Back only restores the sidebar. */
+  presentation?: "menu";
+  /** Sidebar icon id for a menu's root entry. */
+  icon?: string;
+  /** Optional existing nav item ids, in menu order. Missing/unloaded items
+   * are omitted; no duplicate registrations are created. */
+  itemIds?: string[];
 }
 
 export interface EditionProfile {

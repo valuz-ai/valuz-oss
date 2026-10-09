@@ -45,27 +45,59 @@ The whole repo is organized around this principle:
 Everything edition-specific flows through **`packages/core/src/edition/`**:
 
 - `profile.ts` — `EditionProfile`, `FeatureFlags`, `ServiceDescriptor`, `DesktopRouteModule`, `SettingsSectionModule`, `ProjectPanelModule` types.
-- `personal-profile.ts` — personal baseline.
-- `registries/{desktop-routes,settings-sections,service-panels}.ts` — per-edition module lists.
+- `personal-profile.ts` — the personal edition's STATIC base: identity, feature flags, branding, default capabilities and the boot service. It declares **no pages**.
+- `registries/{layers,slots}.ts` — the layered-list algebra (placement, removal) and the slot types. The pages themselves are registered by the OSS plugins (see below).
 - `resolve.ts` — `resolveEdition()` / `getActiveProfile()` (build-time).
 - `registry-store.ts` — **runtime** mutable store (Zustand) seeded from the active profile.
-- `plugin.ts` — `PluginManifest` + `registerPlugin()` + `loadPluginFromUrl()`.
+- `plugin.ts` — `PluginManifest` + `registerPlugin()` (the pre-plugin-host manifest model, kept for in-process use; App Plugins load through `@valuz/plugin-sdk` and the `oss-app-plugins` plugin, not by URL).
 
-### Adding a route / settings section / project panel
+### The OSS app is itself a set of plugins
 
-Edit **registries only**. The app shell discovers entries through the store.
+Every OSS route, settings section, sidebar item and project panel is registered by a **frontend plugin** on the shared plugin host (`@valuz/core` `pluginHost`), not declared in the profile. The plugins live next to the pages they own, in `packages/app/src/plugins/`, and `ossPlugins` / `ossPluginSpecs` list them in load order.
 
-1. Append a `DesktopRouteModule` to `registries/desktop-routes.ts`.
-2. Add an `id → Component` entry in `apps/desktop/src/routes/route-registry.ts` (app-local map; registries can't import app components).
-3. Done. Router, sidebar nav, and settings page pick it up.
+| Plugin | Registers |
+|---|---|
+| `oss-core` (required) | conversations, projects, settings shell + model / network / plugins / logs / about, onboarding, developer galleries, the 设置 nav item, project panels |
+| `oss-agents` (required) | agents list + detail, the Agents nav item |
+| `oss-tasks` | task detail |
+| `oss-automations` | automations + playbooks pages, the 自动化 nav item |
+| `oss-activity` | activity page + nav item |
+| `oss-skills` | skills list + detail |
+| `oss-connectors` | connectors page |
+| `oss-knowledge` | knowledge pages, nav item, parsing settings |
+| `oss-memory` | personalization settings |
+| `oss-browser` | browser settings |
+| `oss-backup` | backup settings |
+| `oss-marketplace` | marketplace page |
+| `oss-agent-plugins` | the `/plugins` page + nav item |
+| `oss-dsh-plugins` | the DSH block of Settings → 插件 |
+| `oss-plugin-ui` | nothing up front: mounts backend plugins' UI-bus surfaces (`/v1/ui`) in the slots the backend announces, plus toast / status / log / notice pushes |
 
-Same pattern for `settings-sections.ts` and `service-panels.ts`.
+The **id of a frontend plugin is the id of its backend counterpart** (`oss-automations` here is `oss-automations` there). That is the whole pairing: at boot `loadOssPlugins()` reads `GET /v1/builtin-plugins/state` (`{"inactive": [ids]}`, public) and does not load an optional plugin whose backend namesake is inactive; the built-in plugins list shows it as 后端已停用. A read that fails (older backend, offline, 401) loads everything. On the desktop the backend usually is not up yet at that point, so `settleOssPlugins()` keeps asking and applies the state when it answers. Embedded surfaces with no registry entry of their own (notifications, citations, feedback, the IM-channel bindings in the agent page) stay in `oss-core`.
 
-For **settings sections**, `SettingsSectionModule` supports two optional fields:
-- `icon?: string` — Lucide icon name (e.g. `"radio"`, `"cpu"`). Mapped to a component in `SettingsPage`'s `TAB_ICON_MAP`. Falls back to a gear icon.
-- `component?: ComponentType` — React component for the section's content. If provided, it renders instead of any built-in tab with the same id. Overlay editions use this to inject their own settings UI.
+Hosts load `ossPlugins` BEFORE the edition overlay's plugins (overlay pages are placed relative to the OSS ones), and before React mounts: `loadOssPlugins()` then `hydrateOverlayIfPresent()`. `oss-core` / `oss-agents` failing is a boot failure (`renderOssBootFailure`); an optional plugin that fails is left `failed` and the rest load.
 
-Built-in tabs (model, general, parsing, system-logs, about) live in `pages/settings/` as standalone components. The SettingsPage shell reads `settingsSections` from the registry and dispatches to either the overlay `component` or the built-in `SECTION_MAP`.
+### Adding a route / settings section / sidebar item
+
+1. Write (or extend) the plugin that owns the feature in `packages/app/src/plugins/<feature>.ts` and register through the helpers in `plugins/define.ts`:
+   - `pageRoute(ctx, route, Component, routePlacement(id))` — the route (plain data in the registry) **and** the component behind it (a contribution tied to the plugin, see `routes/route-registry.ts`).
+   - `settingsPage(ctx, section, Component, settingsSectionPlacement(id))`, `sidebarItem(ctx, item, navItemPlacement(id))`.
+   - Anything else through `ctx.registry.*` (`projectPanel`, `service`, `capabilities`, `slot` …).
+2. Add the id to the canonical order tables in `plugins/layout.ts` (`OSS_ROUTE_ORDER`, `OSS_SETTINGS_SECTION_ORDER`, `OSS_NAV_ITEM_ORDER`). The order is part of what the user sees and is pinned by the golden snapshot; placement makes it independent of plugin load order and of plugins that are off. Overlays anchor on these ids, so renaming one is a contract change.
+3. Add the plugin to `ossPluginSpecs` (`plugins/specs.ts`). Its id must be the backend plugin's id if there is one.
+4. Never put a `component` on a registry entry from an OSS plugin: registry entries stay serializable data (the composition snapshots compare them across editions). Components go through `pageRoute` / `settingsPage` / `registerPluginSettingsBlock`.
+
+Tests: `composeOss()` (`plugins/testing/compose-oss.ts`) composes the OSS plugins into the shared registry for a test that renders a page; `plugins/composition.snapshot.test.ts` pins the bare personal registry and must not change when a feature moves into a plugin.
+
+Sidebar groups may opt into contextual menus with `NavGroupModule.presentation:
+"menu"` and an optional sidebar `icon`. A menu replaces the same sidebar column:
+entering opens its first available item, while Back restores the root menu
+without changing the current page. Optional `itemIds` selects and orders existing
+registered nav items without registering duplicates; unloaded items disappear
+from the menu. Without `itemIds`, membership follows `navGroup`. Only editions
+that declare a menu group enable this structure; the default OSS sidebar stays
+unchanged. Root menus retain the existing project and conversation histories,
+and collapsed rails expose equivalent menu/back navigation.
 
 ### Adding enterprise capability
 
@@ -91,7 +123,7 @@ await registerPlugin({
 })
 ```
 
-`loadPluginFromUrl(url)` is the ESM-import entry point. Security (signing, origin allowlist) is **not** provided here — it belongs at the delivery layer, not the loader. Plugins run in the host React root; trust is full.
+There is no load-by-URL entry point any more: App Plugins are installed on the backend and loaded by the `oss-app-plugins` plugin through a restricted context (see `packages/plugin-sdk`).
 
 ### Edition hot-swap
 

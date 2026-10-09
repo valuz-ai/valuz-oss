@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://valuz.ai/schemas/valuz-plugin.schema.json",
+  "title": "Valuz plugin manifest (valuz-plugin.json)",
+  "description": "Manifest of a third-party Valuz plugin, manifestVersion 1. Rules a JSON Schema cannot express are listed in x-valuz-rules; every validator (SDK CLI, backend, control plane, Go CLI) applies them too.",
+  "x-valuz-rules": [
+    "id must not start with a reserved prefix: oss-, commercial., commercial-, finance., finance-, team., team-, edition., valuz.",
+    "every relative path (frontend.entry, frontend.styles[], automations[].entry, icon, locales) must not contain a '..' segment and must stay inside the package",
+    "frontend.entry and every frontend.styles[] file must exist in the package; frontend.entry must be an ES module",
+    "automations[].name must be unique within the manifest",
+    "backend (B-level plugins) is not supported by plugin API 1.x: validators report it as an error",
+    "config, when present, must be a JSON Schema whose type is object",
+    "automations[].input, when present, must be a JSON Schema whose type is object"
+  ],
+  "type": "object",
+  "required": ["manifestVersion", "id", "version", "name", "publisher", "engines", "frontend"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "manifestVersion": { "const": 1 },
+    "id": {
+      "type": "string",
+      "description": "<publisher>.<name>: lowercase letters, digits and '-', exactly one '.'",
+      "pattern": "^[a-z0-9][a-z0-9-]*\\.[a-z0-9][a-z0-9-]*$",
+      "maxLength": 100
+    },
+    "version": {
+      "type": "string",
+      "description": "SemVer 2.0",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "name": { "$ref": "#/$defs/localizedText" },
+    "description": { "$ref": "#/$defs/localizedText" },
+    "publisher": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "url": { "type": "string", "maxLength": 500 },
+        "email": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "engines": {
+      "type": "object",
+      "required": ["valuz-plugin-api"],
+      "additionalProperties": false,
+      "properties": {
+        "valuz-plugin-api": {
+          "type": "string",
+          "description": "npm-style SemVer range of the plugin API, e.g. ^1.0.0",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      }
+    },
+    "requires": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(edition|deployment|connector|capability):[A-Za-z0-9._-]+$"
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": { "$ref": "#/$defs/relativePath" },
+        "styles": { "type": "array", "items": { "$ref": "#/$defs/relativePath" } }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "description": "B-level plugin service. Reserved: not supported by plugin API 1.x."
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "projects:read",
+          "artifacts:read",
+          "knowledge:read",
+          "conversations:read",
+          "conversations:write",
+          "connectors:read",
+          "connectors:call",
+          "connectors:write",
+          "automations:run",
+          "storage",
+          "notifications"
+        ]
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "JSON Schema (type object) of the plugin's user settings; the host renders a form from it"
+    },
+    "automations": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["name", "runtime", "entry"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,49}$" },
+          "title": { "$ref": "#/$defs/localizedText" },
+          "runtime": { "enum": ["python", "shell"] },
+          "entry": { "$ref": "#/$defs/relativePath" },
+          "input": { "type": "object" },
+          "result": { "enum": ["conversation", "artifact"], "default": "artifact" },
+          "timeoutSec": { "type": "integer", "minimum": 1, "maximum": 3600 },
+          "trigger": {
+            "oneOf": [
+              { "const": "manual" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["cron"],
+                "properties": {
+                  "cron": { "type": "string", "minLength": 9, "maxLength": 100 },
+                  "timezone": { "type": "string", "maxLength": 64 }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["intervalSec"],
+                "properties": { "intervalSec": { "type": "integer", "minimum": 60 } }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "locales": { "$ref": "#/$defs/relativePath", "default": "locales" },
+    "icon": { "$ref": "#/$defs/relativePath" },
+    "homepage": { "type": "string", "maxLength": 500 },
+    "repository": { "type": "string", "maxLength": 500 },
+    "license": { "type": "string", "maxLength": 100 },
+    "keywords": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 40 } }
+  },
+  "$defs": {
+    "localizedText": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 200 },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[a-z]{2}(-[A-Z]{2})?$" },
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      ]
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
+      "maxLength": 300
+    }
+  }
+}

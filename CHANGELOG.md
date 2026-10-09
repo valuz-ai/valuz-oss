@@ -139,6 +139,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Desktop runs Electron 44.0.0, the release dsh's own desktop locks** —
+  dsh's native addon (`node-addon-require-builtin`) fingerprints the runtime
+  and accepts only exact Electron releases, so the desktop pins the one dsh
+  ships instead of a range, and the dsh runtime closure uses the upstream
+  addon (the `--expose-internals` stand-in is gone). **macOS 15 is now the
+  product minimum**, covering both Electron and the bundled native addon;
+  app metadata and Python wheel targets use 15.0, and the mac update manifest
+  carries `minimumSystemVersion: 24.0.0` (Darwin 24) so older Macs are
+  not offered a build they cannot open. Folder and save dialogs remember the
+  last folder again (Electron 43 stopped the OS from doing it), and a failed
+  macOS notification is logged instead of disappearing.
+
 - **The server engine's pool bounds are stated, not inherited** — unset, they
   were SQLAlchemy's 5 + 10 with a 30-second wait, which is a library default
   rather than a decision about any deployment and is invisible until a burst

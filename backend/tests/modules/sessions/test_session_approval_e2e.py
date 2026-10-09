@@ -29,7 +29,8 @@ from datetime import datetime
 from typing import Literal
 
 import pytest
-from conftest import reimported_modules
+
+from tests.module_reimports import reimported_modules
 
 
 class _FakeRuntime:

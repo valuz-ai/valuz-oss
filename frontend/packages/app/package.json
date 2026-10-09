@@ -14,6 +14,8 @@
     "./hooks": "./src/hooks/index.ts",
     "./layout": "./src/layout/index.ts",
     "./routes": "./src/routes/index.ts",
+    "./plugins": "./src/plugins/index.ts",
+    "./plugins/layout": "./src/plugins/layout.ts",
     "./lib/*": "./src/lib/*.ts"
   },
   "scripts": {
@@ -27,6 +29,7 @@
     "@valuz/a2ui": "workspace:*",
     "@valuz/core": "workspace:*",
     "@valuz/desktop-network-egress": "workspace:*",
+    "@valuz/plugin-sdk": "workspace:*",
     "@valuz/shared": "workspace:*",
     "@valuz/ui": "workspace:*",
     "dompurify": "^3.4.1",

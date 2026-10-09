@@ -54,6 +54,24 @@ class RuntimeStore:
         await self._runtime.save_session(session)
         await self._mirror_op("save_session", self._mirror.save_session(session))
 
+    async def recover_failed_session_if_current(
+        self, user_id: str, expected: Session, failed_message_id: str
+    ) -> bool:
+        """The live store alone decides CAS; mirror only its re-read current state.
+
+        A stale mirror can neither authorize recovery nor veto live success.
+        Never publish the old expected snapshot after the conditional update.
+        """
+        recover = getattr(self._runtime, "recover_failed_session_if_current", None)
+        if not callable(recover):
+            raise NotImplementedError("Live store requires manual session recovery")
+        changed = await recover(user_id, expected, failed_message_id)
+        if changed:
+            current = await self._runtime.load_session(user_id, expected.id)
+            if current is not None:
+                await self._mirror_op("recover_failed_session", self._mirror.save_session(current))
+        return bool(changed)
+
     async def save_message(self, user_id: str, message: Message) -> None:
         await self._runtime.save_message(user_id, message)
         await self._mirror_op("save_message", self._mirror.save_message(user_id, message))
@@ -117,6 +135,15 @@ class RuntimeStore:
 
     async def load_message(self, user_id: str, message_id: str) -> Message | None:
         return await self._runtime.load_message(user_id, message_id)
+
+    async def list_pending_action_session_keys(
+        self, *, after_session_id: str | None = None, limit: int = 500
+    ) -> list[tuple[str, str]] | None:
+        """Delegate the optional boot optimization to runtime authority only."""
+        candidates = getattr(self._runtime, "list_pending_action_session_keys", None)
+        if not callable(candidates):
+            return None
+        return await candidates(after_session_id=after_session_id, limit=limit)
 
     async def list_messages_for_session(
         self, user_id: str, session_id: str, *, limit: int = 50, offset: int = 0
