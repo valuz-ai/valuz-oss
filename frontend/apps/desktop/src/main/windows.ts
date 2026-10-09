@@ -1,11 +1,17 @@
 import path from "node:path";
 import { BrowserWindow, app } from "electron";
 import { openExternalIfSafe } from "./security";
+import { RENDERER_ORIGIN } from "./renderer-protocol";
 import { loadWindowState, trackWindowState } from "./window-state";
 
 const getRendererUrl = () =>
   process.env.VITE_DEV_SERVER_URL ??
-  `file://${path.join(app.getAppPath(), "dist", "index.html")}`;
+  // Packaged: serve the built renderer from our privileged custom scheme so
+  // the page has a real origin. ``file://`` pages have none, which left the
+  // desktop unable to embed Workbench sites (the backend refuses a parent
+  // that is not an origin) and every ``window.location.origin`` consumer
+  // holding a non-origin string.
+  `${RENDERER_ORIGIN}/index.html`;
 const getPreloadPath = () =>
   path.join(app.getAppPath(), "dist-electron", "preload.js");
 // Windows draws the BrowserWindow ``icon`` straight into the taskbar + title
