@@ -13,12 +13,16 @@ app.setName("Valuz");
 // Must run before app "ready".
 app.commandLine.appendSwitch("ignore-connections-limit", "127.0.0.1,localhost");
 
-// The custom scheme that serves local files to our own renderer must be
-// declared privileged BEFORE the app is ready (module-eval time).
+// Custom schemes serving our own content must be declared privileged BEFORE
+// the app is ready (module-eval time).
 import {
   LOCAL_FILE_SCHEME,
   registerLocalFileProtocolHandler,
 } from "./local-file-protocol";
+import {
+  RENDERER_SCHEME,
+  registerRendererProtocolHandler,
+} from "./renderer-protocol";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -29,6 +33,19 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       stream: true,
       bypassCSP: true,
+    },
+  },
+  {
+    scheme: RENDERER_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      // The renderer page itself is loaded from this scheme, so every fetch
+      // it makes (local sidecar, cloud planes) is a cross-origin CORS request
+      // whose Origin header is now ``valuz-app://app``.
+      corsEnabled: true,
+      stream: true,
     },
   },
 ]);
@@ -64,6 +81,7 @@ const bootstrap = async () => {
   }
 
   registerLocalFileProtocolHandler();
+  registerRendererProtocolHandler();
   registerIpcHandlers();
   // Backend log surface: register IPC channels + start tailing the
   // structured JSON file the backend writes (works in dev — where the
