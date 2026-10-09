@@ -49,8 +49,8 @@ function mimeFor(p: string): string {
 }
 
 /**
- * Every response carries this: the renderer page (``http://`` dev server,
- * ``file://`` when packaged) reads the scheme cross-origin, and Electron 44
+ * Every response carries this: the renderer page (``valuz-app://app`` packaged,
+ * ``http://localhost`` dev server) reads the scheme cross-origin, and Electron 44
  * (unlike 36) enforces CORS on that. The handler only ever sees a ``null``
  * Origin, so there is no narrower value to echo; the scheme is reachable only
  * from the app's own pages either way.
@@ -91,12 +91,16 @@ export function registerLocalFileProtocolHandler(): void {
         "content-length": String(range ? end - start + 1 : fileStat.size),
         "content-type": mimeFor(abs),
       });
-      if (range) headers.set("content-range", `bytes ${start}-${end}/${fileStat.size}`);
+      if (range)
+        headers.set("content-range", `bytes ${start}-${end}/${fileStat.size}`);
       if (request.method === "HEAD") {
         return new Response(null, { status: range ? 206 : 200, headers });
       }
 
-      const nodeStream = createReadStream(abs, range ? { start, end } : undefined);
+      const nodeStream = createReadStream(
+        abs,
+        range ? { start, end } : undefined,
+      );
       const body = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
       return new Response(body, { status: range ? 206 : 200, headers });
     } catch (err) {
