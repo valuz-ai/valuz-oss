@@ -837,9 +837,9 @@ export const DesktopSidebar = ({
   // before the show-more toggle appears.
   const RUNS_COLLAPSED = 5;
   const CHATS_COLLAPSED = 10;
-  // The project list itself collapses the same way as the Chats group: the
-  // first ten projects show, the rest sit behind a show-more toggle.
-  const PROJECTS_COLLAPSED = 10;
+  // The project list shows the first five projects; the rest sit behind
+  // a show-more toggle.
+  const PROJECTS_COLLAPSED = 5;
 
   // Collapse-on-navigate: selecting any menu item outside an open project
   // collapses it. On every navigation keep only the active project's accordion
