@@ -89,6 +89,16 @@ Hosts load `ossPlugins` BEFORE the edition overlay's plugins (overlay pages are 
 
 Tests: `composeOss()` (`plugins/testing/compose-oss.ts`) composes the OSS plugins into the shared registry for a test that renders a page; `plugins/composition.snapshot.test.ts` pins the bare personal registry and must not change when a feature moves into a plugin.
 
+Sidebar groups may opt into contextual menus with `NavGroupModule.presentation:
+"menu"` and an optional sidebar `icon`. A menu replaces the same sidebar column:
+entering opens its first available item, while Back restores the root menu
+without changing the current page. Optional `itemIds` selects and orders existing
+registered nav items without registering duplicates; unloaded items disappear
+from the menu. Without `itemIds`, membership follows `navGroup`. Only editions
+that declare a menu group enable this structure; the default OSS sidebar stays
+unchanged. Root menus retain the existing project and conversation histories,
+and collapsed rails expose equivalent menu/back navigation.
+
 ### Adding enterprise capability
 
 - Append to `enterpriseDesktopRoutes` / `enterpriseSettingsSections` / `enterpriseProjectPanels` / `enterpriseServiceOverlay`.
