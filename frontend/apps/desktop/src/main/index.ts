@@ -93,6 +93,12 @@ const bootstrap = async () => {
   registerSystemLogIpc();
   startLogTail();
 
+  // Register the deep-link manager (``open-url`` listener + protocol client)
+  // BEFORE the window loads, so a deep link that arrives while the window is
+  // still being created is not dropped. Same rule as ``set_menu_locale``
+  // below: every main-process handler first, window last.
+  const deepLinkManager = setupDeepLinkManager({ getMainWindow });
+
   const updater = setupUpdater({
     getMainWindow,
     getUpdateWindow: () => getUpdateWindow(),
@@ -156,7 +162,6 @@ const bootstrap = async () => {
     checkForUpdates: () => updater.checkForUpdates("menu"),
   });
 
-  const deepLinkManager = setupDeepLinkManager({ getMainWindow });
   if (process.platform !== "darwin") {
     for (const arg of process.argv) {
       if (arg.startsWith(`${DEEP_LINK_PROTOCOL}://`)) {
