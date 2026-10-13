@@ -4,8 +4,9 @@ For a gateway / custom model id the Claude CLI can't resolve to a Claude
 model it assumes a generic 200k window, so its auto-compaction would fire
 against the wrong size. ``_build_model_provider_env`` exports the declared
 ``max_input_tokens`` as ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` (the Claude analog
-of codex's ``model_context_window``), only when declared; the compaction
-threshold inside that window is the CLI's own.
+of codex's ``model_context_window``), only when declared. That alone does not
+turn auto-compaction on — ``_build_settings`` pairs it with an explicit
+``autoCompactWindow`` (see ``test_claude_build_settings.py``).
 """
 
 from __future__ import annotations

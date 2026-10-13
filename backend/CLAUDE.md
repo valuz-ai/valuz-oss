@@ -384,8 +384,10 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   `ModelSettings.max_input_tokens` at session create and each runtime derives
   the runtime's WINDOW declaration — the compaction *threshold* stays the
   runtime's own (deepagents langchain `profile`, whose middleware applies its
-  0.85; claude `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in the CLI env, never
-  `autoCompactWindow` — the CLI reports that key as the window in `/context`;
+  0.85; claude `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in the CLI env PLUS
+  `autoCompactWindow` = the same declared window (clamped 100k–1M) in the
+  inline settings — the SDK-hosted CLI never auto-compacts without that key,
+  and setting it to the window itself, not a fraction, keeps `/context` right;
   codex `model_context_window`, whose auto-compact limit codex derives at 90%
   and clamps any explicit value to). Never guess it from a model name.
 - **`usage_update` carries ONE TURN's increment**, never a running total. A

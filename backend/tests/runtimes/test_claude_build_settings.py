@@ -99,22 +99,35 @@ def test_project_explicit_preflight_value_wins(
     assert "skipWebFetchPreflight" not in _build(root)
 
 
-# -- autoCompactWindow: never injected from the declared window ------------
+# -- autoCompactWindow: the declared window itself ------------------------
 
 
-def test_declared_window_does_not_inject_auto_compact_window(
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [(100_000, 100_000), (200_000, 200_000), (1_000_000, 1_000_000), (2_000_000, 1_000_000)],
+)
+def test_declared_window_injects_auto_compact_window(
+    monkeypatch: pytest.MonkeyPatch, declared: int, expected: int
+) -> None:
+    """The SDK-hosted CLI never auto-compacts without an explicit
+    ``autoCompactWindow`` — ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` alone only
+    declares the window. The value is the declared window itself (not a
+    fraction), so ``/context`` still reports the real window; clamped to the
+    CLI's documented 1M ceiling."""
+    monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
+    built = _build(None, ModelSettings(max_input_tokens=declared))
+    assert built["autoCompactWindow"] == expected
+
+
+def test_no_auto_compact_window_without_a_usable_declaration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The channel-declared ``max_input_tokens`` travels as
-    ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` (env) and the CLI applies its own
-    compaction threshold inside it. Injecting ``autoCompactWindow`` here used
-    to make ``/context`` report ``0.85 x N`` as the window (``x / 850k`` for a
-    declared 1M) — the CLI treats that key as the effective window."""
+    """Undeclared → the CLI's own default. Below the CLI's 100k floor →
+    skipped: emitting the floor would place the window past the model's."""
     monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
-    for declared in (100_000, 200_000, 1_000_000, 2_000_000):
-        assert "autoCompactWindow" not in _build(None, ModelSettings(max_input_tokens=declared))
     assert "autoCompactWindow" not in _build(None)
     assert "autoCompactWindow" not in _build(None, ModelSettings(effort="high"))
+    assert "autoCompactWindow" not in _build(None, ModelSettings(max_input_tokens=64_000))
 
 
 def test_project_explicit_auto_compact_window_is_left_to_the_project(

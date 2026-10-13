@@ -221,6 +221,12 @@ _WORKFLOW_SETTINGS: dict[str, Any] = {"enableWorkflows": True}
 # should stay on wherever Anthropic is reachable.
 SKIP_WEBFETCH_PREFLIGHT_ENV = "VALUZ_SKIP_WEBFETCH_PREFLIGHT"
 
+# ``autoCompactWindow`` contributor to ``_build_settings``: the CLI's
+# documented range for the key. The SDK-hosted CLI does not auto-compact
+# without it (see ``_build_settings``).
+_AUTO_COMPACT_WINDOW_MIN = 100_000
+_AUTO_COMPACT_WINDOW_MAX = 1_000_000
+
 
 def _skip_webfetch_preflight_enabled() -> bool:
     return os.getenv(SKIP_WEBFETCH_PREFLIGHT_ENV, "").strip().lower() in ("1", "true", "yes")
@@ -2174,26 +2180,28 @@ class ClaudeAgentRuntime:
         omitted.
 
         The workspace's own settings are read once up front so each harness
-        default can defer to an explicit project value. Two defaults today:
+        default can defer to an explicit project value. Three defaults today:
 
         - dynamic workflows / ``/deep-research`` (``enableWorkflows``), which
           the ``setting_sources=["project"]`` scoping otherwise drops (it
           lives in the user surface; see ``_WORKFLOW_SETTINGS``);
         - ``skipWebFetchPreflight`` when the deployment opts in via
           ``VALUZ_SKIP_WEBFETCH_PREFLIGHT`` (see
-          ``SKIP_WEBFETCH_PREFLIGHT_ENV``).
-
-        Deliberately NOT ``autoCompactWindow``. The harness used to inject
-        ``0.85 x max_input_tokens`` here; the CLI treats that key as "how
-        full the context may get before compaction" and reports it as the
-        window in ``/context`` (``Tokens: x / 850k`` for a declared 1M),
-        which reads as a wrong window even though the model window was
-        right. The channel-declared window travels as
-        ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` instead
-        (``_build_model_provider_env``) and the CLI applies its own tuned
-        compaction threshold inside it — the same policy it uses for every
-        model it knows — so a project's / user's ``autoCompactWindow`` is
-        the only thing that ever narrows it.
+          ``SKIP_WEBFETCH_PREFLIGHT_ENV``);
+        - ``autoCompactWindow`` when the session carries a channel-declared
+          ``max_input_tokens``. Without an explicit auto-compact window the
+          SDK-hosted CLI never auto-compacts at all — verified against CLI
+          2.1.220 with ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` alone, no window at
+          all, and a resolvable ``claude-`` id: context grew past 2.6x the
+          declared window with no ``compact_boundary``, so long sessions ran
+          into the provider's hard input cap and every later request (and
+          ``/compact`` itself) failed. The value is the declared window itself,
+          not a fraction of it: the CLI subtracts its own output reserve and
+          buffer below this window to place the trigger, and reports the key
+          as the window in ``/context``, so ``max_input_tokens`` keeps both
+          the trigger and the displayed window right. Clamped to the CLI's
+          documented 100k-1M range; a sub-100k window is skipped (the 100k
+          floor would sit past the real window).
 
         Keep each a true *default*: inject it only when the project hasn't set
         the key, so a project's explicit value loaded through
@@ -2219,6 +2227,13 @@ class ClaudeAgentRuntime:
             settings.update(_WORKFLOW_SETTINGS)
         if _skip_webfetch_preflight_enabled() and "skipWebFetchPreflight" not in project:
             settings["skipWebFetchPreflight"] = True
+        max_input_tokens = getattr(self.model_settings, "max_input_tokens", None)
+        if (
+            isinstance(max_input_tokens, int)
+            and max_input_tokens >= _AUTO_COMPACT_WINDOW_MIN
+            and "autoCompactWindow" not in project
+        ):
+            settings["autoCompactWindow"] = min(max_input_tokens, _AUTO_COMPACT_WINDOW_MAX)
         if getattr(self, "_workspace_untrusted", False):
             # Workspace trust (H0): the folder's own hooks
             # (``.claude/settings.json``) must not run. Verified: the inline
@@ -2252,11 +2267,12 @@ class ClaudeAgentRuntime:
           cannot resolve to a Claude model it otherwise *assumes* a window
           for the id (its generic 200k default), so its auto-compaction
           would be measured against the wrong size. Declaring the real
-          window is the Claude analog of codex's ``model_context_window``;
-          the compaction threshold itself is left to the CLI (its own tuned
-          headroom below the window, the same policy it applies to every
-          model it knows). Documented semantics (model-config "Correct the
-          window for a gateway or custom model ID"): applies directly to an
+          window is the Claude analog of codex's ``model_context_window``.
+          It does NOT by itself turn auto-compaction on — the SDK-hosted CLI
+          only compacts with an explicit ``autoCompactWindow``, which
+          ``_build_settings`` derives from the same declaration. Documented
+          semantics (model-config "Correct the window for a gateway or
+          custom model ID"): applies directly to an
           id that neither starts with ``claude-`` nor contains ``[1m]``; a
           ``claude-`` / resolvable Claude id keeps the CLI's own tuning (the
           variable is a no-op there unless ``DISABLE_COMPACT`` is set), and
